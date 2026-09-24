@@ -19,8 +19,16 @@ def main() -> int:
     with RuntimeState(args.state_db) as state:
         snapshot = state.status_snapshot()
 
-    duration_hours = snapshot["duration_seconds_probed"] / 3600.0
-    snapshot["duration_hours_probed"] = round(duration_hours, 2)
+    snapshot["duration_hours_probed"] = round(
+        snapshot["duration_seconds_probed"] / 3600.0,
+        2,
+    )
+
+    rate = float(snapshot.get("probe_rate_per_minute_5m", 0.0))
+    pending = int(snapshot.get("processing_pending", 0))
+    snapshot["estimated_probe_minutes_remaining"] = (
+        round(pending / rate, 1) if pending > 0 and rate > 0 else None
+    )
 
     print(json.dumps(snapshot, indent=2, sort_keys=True))
     return 0
