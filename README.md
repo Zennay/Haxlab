@@ -104,3 +104,57 @@ data/
 The first milestone is complete when a Discord export can be imported repeatedly without changing raw data or creating duplicate records, every replay has a stable hash, report-to-replay matching is explainable, and parse failures are visible instead of silently skipped.
 
 No AI training is required for M0.
+
+
+## VPS quick start
+
+On Ubuntu:
+
+```bash
+git clone https://github.com/Zennay/Haxlab.git
+cd Haxlab
+sudo bash deploy/install-vps.sh
+```
+
+The installer creates:
+
+```text
+/opt/haxlab
+/var/lib/haxlab/incoming
+/var/lib/haxlab/raw/replays
+/var/lib/haxlab/derived
+/var/lib/haxlab/models
+/var/lib/haxlab/state/haxlab.sqlite3
+```
+
+It enables two systemd services:
+
+- `haxlab-ingest.service` — watches uploads, hashes, validates, deduplicates and archives new HBR2 files.
+- `haxlab-worker.service` — automatically probes archived HBR2 v3 files, validates raw-DEFLATE payloads and records frames/duration/progress.
+
+Upload future replay batches to:
+
+```text
+/var/lib/haxlab/incoming/
+```
+
+Check progress:
+
+```bash
+haxlab-status
+```
+
+Follow logs:
+
+```bash
+journalctl -u haxlab-ingest -u haxlab-worker -f
+```
+
+Update the VPS after new code lands on `main`:
+
+```bash
+cd /opt/haxlab
+sudo bash deploy/update-vps.sh
+```
+
+The deployment is incremental: already archived content hashes are not stored or processed again.
