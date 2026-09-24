@@ -31,6 +31,21 @@ CREATE TABLE IF NOT EXISTS raw_replays (
     first_archived_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS replay_processing (
+    sha256 TEXT PRIMARY KEY REFERENCES raw_replays(sha256) ON DELETE CASCADE,
+    status TEXT NOT NULL,
+    format_version INTEGER,
+    total_frames INTEGER,
+    duration_seconds REAL,
+    decompressed_bytes INTEGER,
+    parser_stage TEXT NOT NULL DEFAULT 'probe',
+    error TEXT,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_replay_processing_status
+    ON replay_processing(status);
+
 CREATE TABLE IF NOT EXISTS runtime_events (
     id INTEGER PRIMARY KEY,
     event_type TEXT NOT NULL,
@@ -48,6 +63,13 @@ class KnownSource:
     mtime_ns: int
     sha256: str | None
     status: str
+
+
+@dataclass(frozen=True)
+class RawReplayRecord:
+    sha256: str
+    archive_path: str
+    size_bytes: int
 
 
 class RuntimeState:
@@ -130,6 +152,101 @@ class RuntimeState:
             (sha256, archive_path, size_bytes),
         )
         self.connection.commit()
+
+    def list_unprocessed_replays(self, limit: int = 100) -> list[RawReplayRecord]:
+        rows = self.connection.execute(
+            """
+            SELECT r.sha256, r.archive_path, r.size_bytes
+            FROM raw_replays AS r
+            LEFT JOIN replay_processing AS p ON p.sha256 = r.sha256
+            WHERE p.sha256 IS NULL
+            ORDER BY r.first_archived_at, r.sha256
+            LIMIT ?
+            """,
+            (max(1, limit),),
+        ).fetchall()
+        return [RawReplayRecord(**dict(row)) for row in rows]
+
+    def mark_replay_processing(
+        self,
+        *,
+        sha256: str,
+        status: str,
+        format_version: int | None = None,
+        total_frames: int | None = None,
+        duration_seconds: float | None = None,
+        decompressed_bytes: int | None = None,
+        parser_stage: str = "probe",
+        error: str | None = None,
+    ) -> None:
+        self.connection.execute(
+            """
+            INSERT INTO replay_processing (
+                sha256, status, format_version, total_frames, duration_seconds,
+                decompressed_bytes, parser_stage, error
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(sha256) DO UPDATE SET
+                status = excluded.status,
+                format_version = excluded.format_version,
+                total_frames = excluded.total_frames,
+                duration_seconds = excluded.duration_seconds,
+                decompressed_bytes = excluded.decompressed_bytes,
+                parser_stage = excluded.parser_stage,
+                error = excluded.error,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                sha256,
+                status,
+                format_version,
+                total_frames,
+                duration_seconds,
+                decompressed_bytes,
+                parser_stage,
+                error,
+            ),
+        )
+        self.connection.commit()
+
+    def status_snapshot(self) -> dict[str, int | float]:
+        source = {
+            row["status"]: row["count"]
+            for row in self.connection.execute(
+                "SELECT status, COUNT(*) AS count FROM source_files GROUP BY status"
+            )
+        }
+        raw_count = self.connection.execute(
+            "SELECT COUNT(*) AS count FROM raw_replays"
+        ).fetchone()["count"]
+        processed = {
+            row["status"]: row["count"]
+            for row in self.connection.execute(
+                "SELECT status, COUNT(*) AS count FROM replay_processing GROUP BY status"
+            )
+        }
+        totals = self.connection.execute(
+            """
+            SELECT
+                COALESCE(SUM(total_frames), 0) AS total_frames,
+                COALESCE(SUM(duration_seconds), 0.0) AS duration_seconds
+            FROM replay_processing
+            WHERE status = 'ok'
+            """
+        ).fetchone()
+        processed_total = sum(processed.values())
+
+        return {
+            "source_archived": int(source.get("archived", 0)),
+            "source_duplicates": int(source.get("duplicate", 0)),
+            "source_failed": int(source.get("failed", 0)),
+            "raw_unique_replays": int(raw_count),
+            "processing_ok": int(processed.get("ok", 0)),
+            "processing_failed": int(processed.get("failed", 0)),
+            "processing_pending": max(0, int(raw_count) - int(processed_total)),
+            "total_frames_probed": int(totals["total_frames"]),
+            "duration_seconds_probed": float(totals["duration_seconds"]),
+        }
 
     def event(self, event_type: str, subject: str = "", detail: str = "") -> None:
         self.connection.execute(
