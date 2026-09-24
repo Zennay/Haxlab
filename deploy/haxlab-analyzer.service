@@ -1,0 +1,34 @@
+[Unit]
+Description=HaxLab full replay state analyzer
+After=network.target haxlab-worker.service
+Requires=haxlab-worker.service
+
+[Service]
+Type=simple
+User=haxlab
+Group=haxlab
+WorkingDirectory=/opt/haxlab
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/haxlab/.venv/bin/python -m haxlab.runtime.analyzer \
+  --state-db /var/lib/haxlab/state/haxlab.sqlite3 \
+  --derived-root /var/lib/haxlab/derived \
+  --decoder-script /opt/haxlab/tools/decode_replay.js \
+  --workers 4 \
+  --batch-size 16 \
+  --sample-every-ticks 6 \
+  --timeout-seconds 120 \
+  --interval 5
+Restart=always
+RestartSec=5
+Nice=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/var/lib/haxlab
+
+[Install]
+WantedBy=multi-user.target
