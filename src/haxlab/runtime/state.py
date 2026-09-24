@@ -235,6 +235,14 @@ class RuntimeState:
             """
         ).fetchone()
         processed_total = sum(processed.values())
+        recent_processed = self.connection.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM replay_processing
+            WHERE updated_at >= datetime('now', '-5 minutes')
+            """
+        ).fetchone()["count"]
+        probe_rate_per_minute = float(recent_processed) / 5.0
 
         return {
             "source_archived": int(source.get("archived", 0)),
@@ -246,6 +254,7 @@ class RuntimeState:
             "processing_pending": max(0, int(raw_count) - int(processed_total)),
             "total_frames_probed": int(totals["total_frames"]),
             "duration_seconds_probed": float(totals["duration_seconds"]),
+            "probe_rate_per_minute_5m": round(probe_rate_per_minute, 3),
         }
 
     def event(self, event_type: str, subject: str = "", detail: str = "") -> None:
