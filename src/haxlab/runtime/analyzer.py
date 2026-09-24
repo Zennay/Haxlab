@@ -10,10 +10,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
-from haxlab.runtime.state import RawReplayRecord, RuntimeState
+from haxlab.runtime.state import CURRENT_ANALYZER_VERSION, RawReplayRecord, RuntimeState
 
 
-ANALYZER_VERSION = "state-pass-v1"
+ANALYZER_VERSION = CURRENT_ANALYZER_VERSION
 
 
 def _analyze_one(
@@ -103,7 +103,7 @@ def analyze_batch(
     sample_every_ticks: int = 6,
     timeout_seconds: int = 120,
 ) -> dict[str, int]:
-    pending = state.list_unanalyzed_replays(limit=max(1, batch_size))
+    pending = state.list_unanalyzed_replays(\n        limit=max(1, batch_size),\n        analyzer_version=ANALYZER_VERSION,\n    )
     ok = failed = 0
 
     if not pending:
@@ -140,15 +140,38 @@ def analyze_batch(
                 continue
 
             simulation = payload.get("simulation") or {}
+            total_frames = int(payload.get("totalFrames") or 0)
+            frames_advanced = int(simulation.get("framesAdvanced") or 0)
+            sampled_states = int(simulation.get("sampledStateCount") or 0)
+
+            if total_frames > 0 and frames_advanced < max(0, total_frames - 1):
+                error = (
+                    f"incomplete_state_reconstruction:"
+                    f"{frames_advanced}/{total_frames}"
+                )
+                state.mark_replay_analysis(
+                    sha256=replay.sha256,
+                    status="failed",
+                    analyzer_version=ANALYZER_VERSION,
+                    error=error,
+                )
+                state.event(
+                    "replay_analysis_failed",
+                    subject=replay.sha256,
+                    detail=error,
+                )
+                failed += 1
+                continue
+
             state.mark_replay_analysis(
                 sha256=replay.sha256,
                 status="ok",
                 analyzer_version=ANALYZER_VERSION,
                 output_path=str(output_path) if output_path else None,
-                sampled_state_count=int(simulation.get("sampledStateCount") or 0),
+                sampled_state_count=sampled_states,
                 player_count=len(payload.get("players") or []),
                 raw_event_count=int(payload.get("rawEventCount") or 0),
-                tick_count=int(simulation.get("tickCount") or 0),
+                tick_count=frames_advanced,
             )
             state.event(
                 "replay_analysis_ok",
@@ -156,7 +179,8 @@ def analyze_batch(
                 detail=(
                     f"players={len(payload.get('players') or [])};"
                     f"events={int(payload.get('rawEventCount') or 0)};"
-                    f"samples={int(simulation.get('sampledStateCount') or 0)}"
+                    f"samples={sampled_states};"
+                    f"frames={frames_advanced}/{total_frames}"
                 ),
             )
             ok += 1
