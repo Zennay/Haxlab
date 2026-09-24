@@ -14,7 +14,37 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 
-apt-get update
+apt_update_with_recovery() {
+  if apt-get update; then
+    return 0
+  fi
+
+  echo
+  echo "apt update failed. Checking for known unsupported third-party repositories..."
+
+  mapfile -t broken_x2go_sources < <(
+    grep -RIl --include='*.list' --include='*.sources' \
+      'ppa.launchpadcontent.net/x2go/stable/ubuntu' \
+      /etc/apt/sources.list.d 2>/dev/null || true
+  )
+
+  if (( ${#broken_x2go_sources[@]} > 0 )); then
+    echo "Disabling unsupported X2Go PPA source(s):"
+    for source_file in "${broken_x2go_sources[@]}"; do
+      echo "  - ${source_file}"
+      mv "${source_file}" "${source_file}.disabled-haxlab"
+    done
+    echo "Retrying apt update..."
+    apt-get update
+    return 0
+  fi
+
+  echo "No known recoverable source was found."
+  echo "Fix the apt repository error above and rerun this installer."
+  return 1
+}
+
+apt_update_with_recovery
 apt-get install -y git python3 python3-venv python3-pip rsync sqlite3 acl
 
 if ! id "${SERVICE_USER}" >/dev/null 2>&1; then
