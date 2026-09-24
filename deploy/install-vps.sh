@@ -64,6 +64,7 @@ fi
 python3 -m venv "${APP_DIR}/.venv"
 "${APP_DIR}/.venv/bin/pip" install --upgrade pip
 "${APP_DIR}/.venv/bin/pip" install -e "${APP_DIR}"
+"${APP_DIR}/.venv/bin/python" -m compileall -q "${APP_DIR}/src/haxlab"
 
 chown -R "${SERVICE_USER}:${SERVICE_USER}" "${DATA_DIR}"
 chown -R root:root "${APP_DIR}"
@@ -91,6 +92,8 @@ systemctl enable --now haxlab-worker.service
 
 systemctl is-active --quiet haxlab-ingest.service
 systemctl is-active --quiet haxlab-worker.service
+
+haxlab-status >/dev/null
 
 echo
 echo "HaxLab installed."
