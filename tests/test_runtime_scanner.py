@@ -1,3 +1,4 @@
+import os
 import struct
 import time
 import zlib
@@ -23,6 +24,7 @@ def test_scanner_archives_once_and_skips_unchanged(tmp_path: Path) -> None:
     replay.write_bytes(_valid_hbr2())
 
     old = time.time() - 120
+    os.utime(replay, (old, old))
 
     with RuntimeState(db) as state:
         first = scan_once(
@@ -30,14 +32,14 @@ def test_scanner_archives_once_and_skips_unchanged(tmp_path: Path) -> None:
             raw,
             state,
             minimum_file_age_seconds=30,
-            now=old + 120,
+            now=time.time(),
         )
         second = scan_once(
             incoming,
             raw,
             state,
             minimum_file_age_seconds=30,
-            now=old + 121,
+            now=time.time() + 1,
         )
 
     assert first.archived == 1
