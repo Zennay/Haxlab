@@ -5,6 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+CURRENT_ANALYZER_VERSION = "state-pass-v2"
+
+
 SCHEMA = """
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
@@ -183,7 +186,11 @@ class RuntimeState:
         ).fetchall()
         return [RawReplayRecord(**dict(row)) for row in rows]
 
-    def list_unanalyzed_replays(self, limit: int = 100) -> list[RawReplayRecord]:
+    def list_unanalyzed_replays(
+        self,
+        limit: int = 100,
+        analyzer_version: str = CURRENT_ANALYZER_VERSION,
+    ) -> list[RawReplayRecord]:
         rows = self.connection.execute(
             """
             SELECT r.sha256, r.archive_path, r.size_bytes
@@ -191,11 +198,11 @@ class RuntimeState:
             JOIN replay_processing AS p
               ON p.sha256 = r.sha256 AND p.status = 'ok'
             LEFT JOIN replay_analysis AS a ON a.sha256 = r.sha256
-            WHERE a.sha256 IS NULL
+            WHERE a.sha256 IS NULL OR a.analyzer_version != ?
             ORDER BY r.first_archived_at, r.sha256
             LIMIT ?
             """,
-            (max(1, limit),),
+            (analyzer_version, max(1, limit)),
         ).fetchall()
         return [RawReplayRecord(**dict(row)) for row in rows]
 
@@ -306,7 +313,13 @@ class RuntimeState:
         analyzed = {
             row["status"]: row["count"]
             for row in self.connection.execute(
-                "SELECT status, COUNT(*) AS count FROM replay_analysis GROUP BY status"
+                """
+                SELECT status, COUNT(*) AS count
+                FROM replay_analysis
+                WHERE analyzer_version = ?
+                GROUP BY status
+                """,
+                (CURRENT_ANALYZER_VERSION,),
             )
         }
         totals = self.connection.execute(
@@ -325,8 +338,9 @@ class RuntimeState:
                 COALESCE(SUM(raw_event_count), 0) AS events,
                 COALESCE(SUM(tick_count), 0) AS ticks
             FROM replay_analysis
-            WHERE status = 'ok'
-            """
+            WHERE status = 'ok' AND analyzer_version = ?
+            """,
+            (CURRENT_ANALYZER_VERSION,),
         ).fetchone()
         processed_total = sum(processed.values())
         analyzed_total = sum(analyzed.values())
@@ -343,7 +357,9 @@ class RuntimeState:
             SELECT COUNT(*) AS count
             FROM replay_analysis
             WHERE updated_at >= datetime('now', '-5 minutes')
-            """
+              AND analyzer_version = ?
+            """,
+            (CURRENT_ANALYZER_VERSION,),
         ).fetchone()["count"]
 
         probe_rate_per_minute = float(recent_processed) / 5.0
