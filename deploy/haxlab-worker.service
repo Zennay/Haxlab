@@ -1,0 +1,22 @@
+[Unit]
+Description=HaxLab replay processing worker
+After=network.target haxlab-ingest.service
+Requires=haxlab-ingest.service
+
+[Service]
+Type=simple
+User=haxlab
+Group=haxlab
+WorkingDirectory=/opt/haxlab
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/haxlab/.venv/bin/python -m haxlab.runtime.worker \
+  --state-db /var/lib/haxlab/state/haxlab.sqlite3 \
+  --batch-size 50 \
+  --interval 5
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
