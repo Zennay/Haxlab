@@ -33,6 +33,7 @@ const ball = {
 
 let tickCount = 0;
 let sampledStateCount = 0;
+let framesAdvanced = 0;
 let gameTicks = 0;
 let gameStarts = 0;
 let gameStops = 0;
@@ -86,6 +87,9 @@ function finish(resolve, reject, error = null) {
   if (settled) return;
   settled = true;
   if (timeout) clearTimeout(timeout);
+  try {
+    framesAdvanced = Math.max(framesAdvanced, reader?.getCurrentFrameNo?.() || 0);
+  } catch (_) {}
   try {
     reader?.destroy?.();
   } catch (_) {}
@@ -201,7 +205,6 @@ function runReplay() {
       cancelAnimationFrame: fastCancelRAF,
     });
 
-    reader.onDestinationTimeReached = () => finish(resolve, reject);
     reader.onEnd = () => finish(resolve, reject);
 
     timeout = setTimeout(
@@ -209,8 +212,11 @@ function runReplay() {
       120000,
     );
 
-    // Reconstruct the full replay as quickly as the CPU can simulate it.
-    reader.setCurrentFrameNo(reader.maxFrameNo);
+    // IMPORTANT: do not use setCurrentFrameNo() here. node-haxball intentionally
+    // detaches gameplay callbacks while seeking, which would yield event metadata
+    // without reconstructed game-tick/state observations. Fast playback keeps the
+    // callbacks attached while still running as quickly as CPU allows.
+    reader.setSpeed(100000);
   });
 }
 
@@ -231,7 +237,7 @@ function runReplay() {
   }
 
   const output = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     decoder: "node-haxball@2.3.1",
     sourceFile: path.basename(replayPath),
     version: replayData.version,
@@ -241,6 +247,7 @@ function runReplay() {
     eventTypeCounts,
     simulation: {
       tickCount,
+      framesAdvanced,
       gameTicks,
       sampleEveryTicks: sampleEvery,
       sampledStateCount,
