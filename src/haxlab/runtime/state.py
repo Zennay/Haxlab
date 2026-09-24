@@ -46,6 +46,22 @@ CREATE TABLE IF NOT EXISTS replay_processing (
 CREATE INDEX IF NOT EXISTS idx_replay_processing_status
     ON replay_processing(status);
 
+CREATE TABLE IF NOT EXISTS replay_analysis (
+    sha256 TEXT PRIMARY KEY REFERENCES raw_replays(sha256) ON DELETE CASCADE,
+    status TEXT NOT NULL,
+    analyzer_version TEXT,
+    output_path TEXT,
+    sampled_state_count INTEGER,
+    player_count INTEGER,
+    raw_event_count INTEGER,
+    tick_count INTEGER,
+    error TEXT,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_replay_analysis_status
+    ON replay_analysis(status);
+
 CREATE TABLE IF NOT EXISTS runtime_events (
     id INTEGER PRIMARY KEY,
     event_type TEXT NOT NULL,
@@ -167,6 +183,22 @@ class RuntimeState:
         ).fetchall()
         return [RawReplayRecord(**dict(row)) for row in rows]
 
+    def list_unanalyzed_replays(self, limit: int = 100) -> list[RawReplayRecord]:
+        rows = self.connection.execute(
+            """
+            SELECT r.sha256, r.archive_path, r.size_bytes
+            FROM raw_replays AS r
+            JOIN replay_processing AS p
+              ON p.sha256 = r.sha256 AND p.status = 'ok'
+            LEFT JOIN replay_analysis AS a ON a.sha256 = r.sha256
+            WHERE a.sha256 IS NULL
+            ORDER BY r.first_archived_at, r.sha256
+            LIMIT ?
+            """,
+            (max(1, limit),),
+        ).fetchall()
+        return [RawReplayRecord(**dict(row)) for row in rows]
+
     def mark_replay_processing(
         self,
         *,
@@ -209,6 +241,52 @@ class RuntimeState:
         )
         self.connection.commit()
 
+    def mark_replay_analysis(
+        self,
+        *,
+        sha256: str,
+        status: str,
+        analyzer_version: str = "state-pass-v1",
+        output_path: str | None = None,
+        sampled_state_count: int | None = None,
+        player_count: int | None = None,
+        raw_event_count: int | None = None,
+        tick_count: int | None = None,
+        error: str | None = None,
+    ) -> None:
+        self.connection.execute(
+            """
+            INSERT INTO replay_analysis (
+                sha256, status, analyzer_version, output_path,
+                sampled_state_count, player_count, raw_event_count,
+                tick_count, error
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(sha256) DO UPDATE SET
+                status = excluded.status,
+                analyzer_version = excluded.analyzer_version,
+                output_path = excluded.output_path,
+                sampled_state_count = excluded.sampled_state_count,
+                player_count = excluded.player_count,
+                raw_event_count = excluded.raw_event_count,
+                tick_count = excluded.tick_count,
+                error = excluded.error,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                sha256,
+                status,
+                analyzer_version,
+                output_path,
+                sampled_state_count,
+                player_count,
+                raw_event_count,
+                tick_count,
+                error,
+            ),
+        )
+        self.connection.commit()
+
     def status_snapshot(self) -> dict[str, int | float]:
         source = {
             row["status"]: row["count"]
@@ -225,6 +303,12 @@ class RuntimeState:
                 "SELECT status, COUNT(*) AS count FROM replay_processing GROUP BY status"
             )
         }
+        analyzed = {
+            row["status"]: row["count"]
+            for row in self.connection.execute(
+                "SELECT status, COUNT(*) AS count FROM replay_analysis GROUP BY status"
+            )
+        }
         totals = self.connection.execute(
             """
             SELECT
@@ -234,7 +318,19 @@ class RuntimeState:
             WHERE status = 'ok'
             """
         ).fetchone()
+        analysis_totals = self.connection.execute(
+            """
+            SELECT
+                COALESCE(SUM(sampled_state_count), 0) AS samples,
+                COALESCE(SUM(raw_event_count), 0) AS events,
+                COALESCE(SUM(tick_count), 0) AS ticks
+            FROM replay_analysis
+            WHERE status = 'ok'
+            """
+        ).fetchone()
         processed_total = sum(processed.values())
+        analyzed_total = sum(analyzed.values())
+
         recent_processed = self.connection.execute(
             """
             SELECT COUNT(*) AS count
@@ -242,19 +338,37 @@ class RuntimeState:
             WHERE updated_at >= datetime('now', '-5 minutes')
             """
         ).fetchone()["count"]
+        recent_analyzed = self.connection.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM replay_analysis
+            WHERE updated_at >= datetime('now', '-5 minutes')
+            """
+        ).fetchone()["count"]
+
         probe_rate_per_minute = float(recent_processed) / 5.0
+        analysis_rate_per_minute = float(recent_analyzed) / 5.0
+
+        processing_ok = int(processed.get("ok", 0))
 
         return {
             "source_archived": int(source.get("archived", 0)),
             "source_duplicates": int(source.get("duplicate", 0)),
             "source_failed": int(source.get("failed", 0)),
             "raw_unique_replays": int(raw_count),
-            "processing_ok": int(processed.get("ok", 0)),
+            "processing_ok": processing_ok,
             "processing_failed": int(processed.get("failed", 0)),
             "processing_pending": max(0, int(raw_count) - int(processed_total)),
             "total_frames_probed": int(totals["total_frames"]),
             "duration_seconds_probed": float(totals["duration_seconds"]),
             "probe_rate_per_minute_5m": round(probe_rate_per_minute, 3),
+            "analysis_ok": int(analyzed.get("ok", 0)),
+            "analysis_failed": int(analyzed.get("failed", 0)),
+            "analysis_pending": max(0, processing_ok - int(analyzed_total)),
+            "analysis_sampled_states": int(analysis_totals["samples"]),
+            "analysis_raw_events": int(analysis_totals["events"]),
+            "analysis_ticks_reconstructed": int(analysis_totals["ticks"]),
+            "analysis_rate_per_minute_5m": round(analysis_rate_per_minute, 3),
         }
 
     def event(self, event_type: str, subject: str = "", detail: str = "") -> None:
