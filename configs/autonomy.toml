@@ -1,0 +1,24 @@
+[paths]
+incoming = "/var/lib/haxlab/incoming"
+raw_replays = "/var/lib/haxlab/raw/replays"
+derived = "/var/lib/haxlab/derived"
+models = "/var/lib/haxlab/models"
+state_db = "/var/lib/haxlab/state/haxlab.sqlite3"
+
+[scanner]
+interval_seconds = 60
+minimum_file_age_seconds = 30
+
+[ingestion]
+copy_chunk_size_bytes = 1048576
+
+[training]
+# Do not train just because one new replay exists.
+minimum_new_usable_matches = 250
+minimum_new_gold_or_elite_matches = 50
+automatic_training_enabled = false
+
+[evaluation]
+minimum_games_vs_champion = 500
+minimum_score_rate_lower_bound = 0.51
+minimum_frozen_scenario_pass_rate = 0.98
