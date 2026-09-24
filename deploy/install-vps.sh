@@ -45,13 +45,21 @@ apt_update_with_recovery() {
 }
 
 apt_update_with_recovery
-apt-get install -y git python3 python3-venv python3-pip rsync sqlite3 acl
+apt-get install -y git python3 python3-venv python3-pip rsync sqlite3 acl nodejs npm
 
 if ! id "${SERVICE_USER}" >/dev/null 2>&1; then
   useradd --system --home "${DATA_DIR}" --shell /usr/sbin/nologin "${SERVICE_USER}"
 fi
 
-mkdir -p   "${APP_DIR}"   "${DATA_DIR}/incoming"   "${DATA_DIR}/raw/replays"   "${DATA_DIR}/derived"   "${DATA_DIR}/models/challengers"   "${DATA_DIR}/models/champions"   "${DATA_DIR}/state"   "${DATA_DIR}/logs"
+mkdir -p \
+  "${APP_DIR}" \
+  "${DATA_DIR}/incoming" \
+  "${DATA_DIR}/raw/replays" \
+  "${DATA_DIR}/derived" \
+  "${DATA_DIR}/models/challengers" \
+  "${DATA_DIR}/models/champions" \
+  "${DATA_DIR}/state" \
+  "${DATA_DIR}/logs"
 
 if [[ ! -d "${APP_DIR}/.git" ]]; then
   find "${APP_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
@@ -66,11 +74,13 @@ python3 -m venv "${APP_DIR}/.venv"
 "${APP_DIR}/.venv/bin/pip" install -e "${APP_DIR}"
 "${APP_DIR}/.venv/bin/python" -m compileall -q "${APP_DIR}/src/haxlab"
 
+cd "${APP_DIR}"
+npm install --omit=dev --no-audit --no-fund
+node -e 'const api=require("node-haxball")(); if (!api.Replay) process.exit(1)'
+
 chown -R "${SERVICE_USER}:${SERVICE_USER}" "${DATA_DIR}"
 chown -R root:root "${APP_DIR}"
 
-# The service owns the data tree, while the SSH upload user can keep dropping
-# new replay batches into incoming/ without making the whole directory world-writable.
 chmod 2770 "${DATA_DIR}/incoming"
 if id "${UPLOAD_USER}" >/dev/null 2>&1; then
   setfacl -m "u:${UPLOAD_USER}:rwx" "${DATA_DIR}/incoming"
@@ -80,18 +90,22 @@ fi
 
 install -m 0644 "${APP_DIR}/deploy/haxlab-ingest.service" /etc/systemd/system/haxlab-ingest.service
 install -m 0644 "${APP_DIR}/deploy/haxlab-worker.service" /etc/systemd/system/haxlab-worker.service
+install -m 0644 "${APP_DIR}/deploy/haxlab-analyzer.service" /etc/systemd/system/haxlab-analyzer.service
 
 ln -sf "${APP_DIR}/.venv/bin/haxlab" /usr/local/bin/haxlab
 ln -sf "${APP_DIR}/.venv/bin/haxlab-status" /usr/local/bin/haxlab-status
 ln -sf "${APP_DIR}/.venv/bin/haxlab-worker" /usr/local/bin/haxlab-worker
 ln -sf "${APP_DIR}/.venv/bin/haxlab-daemon" /usr/local/bin/haxlab-daemon
+ln -sf "${APP_DIR}/.venv/bin/haxlab-analyzer" /usr/local/bin/haxlab-analyzer
 
 systemctl daemon-reload
 systemctl enable --now haxlab-ingest.service
 systemctl enable --now haxlab-worker.service
+systemctl enable --now haxlab-analyzer.service
 
 systemctl is-active --quiet haxlab-ingest.service
 systemctl is-active --quiet haxlab-worker.service
+systemctl is-active --quiet haxlab-analyzer.service
 
 haxlab-status >/dev/null
 
@@ -99,4 +113,5 @@ echo
 echo "HaxLab installed."
 echo "Upload replays to: ${DATA_DIR}/incoming/"
 echo "Status: haxlab-status"
-echo "Logs: journalctl -u haxlab-ingest -u haxlab-worker -f"
+echo "Full analyzer: systemctl status haxlab-analyzer --no-pager"
+echo "Logs: journalctl -u haxlab-ingest -u haxlab-worker -u haxlab-analyzer -f"
