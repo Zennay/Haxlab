@@ -20,6 +20,7 @@ haxlab = "haxlab.cli:main"
 haxlab-daemon = "haxlab.runtime.daemon:main"
 haxlab-worker = "haxlab.runtime.worker:main"
 haxlab-status = "haxlab.runtime.status:main"
+haxlab-analyzer = "haxlab.runtime.analyzer:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
