@@ -17,7 +17,14 @@ git -C "${APP_DIR}" reset --hard origin/main
 install -m 0644 "${APP_DIR}/deploy/haxlab-ingest.service" /etc/systemd/system/haxlab-ingest.service
 install -m 0644 "${APP_DIR}/deploy/haxlab-worker.service" /etc/systemd/system/haxlab-worker.service
 
+ln -sf "${APP_DIR}/.venv/bin/haxlab" /usr/local/bin/haxlab
+ln -sf "${APP_DIR}/.venv/bin/haxlab-status" /usr/local/bin/haxlab-status
+ln -sf "${APP_DIR}/.venv/bin/haxlab-worker" /usr/local/bin/haxlab-worker
+ln -sf "${APP_DIR}/.venv/bin/haxlab-daemon" /usr/local/bin/haxlab-daemon
+
 systemctl daemon-reload
 systemctl start haxlab-ingest.service haxlab-worker.service
+systemctl is-active --quiet haxlab-ingest.service
+systemctl is-active --quiet haxlab-worker.service
 
-"${APP_DIR}/.venv/bin/python" -m haxlab.runtime.status
+haxlab-status
