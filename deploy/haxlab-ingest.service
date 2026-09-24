@@ -1,0 +1,23 @@
+[Unit]
+Description=HaxLab autonomous replay ingestion
+After=network.target
+
+[Service]
+Type=simple
+User=haxlab
+Group=haxlab
+WorkingDirectory=/opt/haxlab
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/haxlab/.venv/bin/python -m haxlab.runtime.daemon \
+  --incoming /var/lib/haxlab/incoming \
+  --raw /var/lib/haxlab/raw/replays \
+  --state-db /var/lib/haxlab/state/haxlab.sqlite3 \
+  --interval 60 \
+  --minimum-file-age 30
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
