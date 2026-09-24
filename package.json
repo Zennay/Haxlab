@@ -1,0 +1,9 @@
+{
+  "name": "haxlab-replay-engine",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Node sidecar used by HaxLab for full HBR2 state reconstruction",
+  "dependencies": {
+    "node-haxball": "2.3.1"
+  }
+}
