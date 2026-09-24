@@ -103,7 +103,10 @@ def analyze_batch(
     sample_every_ticks: int = 6,
     timeout_seconds: int = 120,
 ) -> dict[str, int]:
-    pending = state.list_unanalyzed_replays(\n        limit=max(1, batch_size),\n        analyzer_version=ANALYZER_VERSION,\n    )
+    pending = state.list_unanalyzed_replays(
+        limit=max(1, batch_size),
+        analyzer_version=ANALYZER_VERSION,
+    )
     ok = failed = 0
 
     if not pending:
