@@ -423,6 +423,7 @@ def evaluate(
     mean: np.ndarray,
     std: np.ndarray,
     batch_size: int = 8192,
+    kick_threshold: float = 0.5,
 ) -> dict[str, Any]:
     total = 0
     direction_correct = 0
@@ -446,7 +447,7 @@ def evaluate(
     ):
         _, dir_prob, kick_prob = _forward(x, params)
         dir_pred = dir_prob.argmax(axis=1)
-        kick_pred = kick_prob >= 0.5
+        kick_pred = kick_prob >= float(kick_threshold)
         kick_true = kick > 0.5
 
         total += x.shape[0]
@@ -490,6 +491,7 @@ def evaluate(
 
     return {
         "samples": total,
+        "kick_threshold": float(kick_threshold),
         "direction_accuracy": direction_correct / total,
         "direction_macro_recall": direction_macro_recall,
         "direction_recall_by_class": direction_recall_by_class,
