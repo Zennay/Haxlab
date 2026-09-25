@@ -48,6 +48,17 @@ def collect(root: Path) -> list[dict]:
             "input_events": 0,
             "kick_events": 0,
             "kick_pressed_inputs": 0,
+            "touches": 0,
+            "self_retouches": 0,
+            "team_touch_transfers_out": 0,
+            "turnovers": 0,
+            "recoveries": 0,
+            "pressured_transitions": 0,
+            "retained_under_pressure": 0,
+            "touch_progression_events": 0,
+            "touch_progression_sum": 0.0,
+            "touch_goals": 0,
+            "touch_assists": 0,
         }
     )
 
@@ -57,7 +68,7 @@ def collect(root: Path) -> list[dict]:
         except (OSError, json.JSONDecodeError):
             continue
 
-        if payload.get("schemaVersion") != 3:
+        if int(payload.get("schemaVersion") or 0) not in (3, 4):
             continue
 
         seen: set[str] = set()
@@ -80,10 +91,35 @@ def collect(root: Path) -> list[dict]:
             row["input_events"] += int(player.get("inputEvents") or 0)
             row["kick_events"] += int(player.get("kickEvents") or 0)
             row["kick_pressed_inputs"] += int(player.get("kickPressedInputs") or 0)
+            row["touches"] += int(player.get("touches") or 0)
+            row["self_retouches"] += int(player.get("selfRetouches") or 0)
+            row["team_touch_transfers_out"] += int(
+                player.get("teamTouchTransfersOut") or 0
+            )
+            row["turnovers"] += int(player.get("turnovers") or 0)
+            row["recoveries"] += int(player.get("recoveries") or 0)
+            row["pressured_transitions"] += int(
+                player.get("pressuredTransitions") or 0
+            )
+            row["retained_under_pressure"] += int(
+                player.get("retainedUnderPressure") or 0
+            )
+            row["touch_progression_events"] += int(
+                player.get("touchProgressionEvents") or 0
+            )
+            row["touch_progression_sum"] += float(
+                player.get("touchProgressionSum") or 0.0
+            )
+            row["touch_goals"] += int(player.get("touchGoals") or 0)
+            row["touch_assists"] += int(player.get("touchAssists") or 0)
 
     rows: list[dict] = []
     for row in totals.values():
         active_minutes = row["samples"] / 600.0  # 10 Hz state sampling.
+        retained_touch_transitions = (
+            row["self_retouches"] + row["team_touch_transfers_out"]
+        )
+        touch_transitions = retained_touch_transitions + row["turnovers"]
         rows.append(
             {
                 **row,
@@ -94,6 +130,27 @@ def collect(root: Path) -> list[dict]:
                 * _safe_div(row["close_ball_samples"], row["samples"]),
                 "kicks_per_min": _safe_div(row["kick_events"], active_minutes),
                 "inputs_per_min": _safe_div(row["input_events"], active_minutes),
+                "touches_per_min": _safe_div(row["touches"], active_minutes),
+                "touch_retention_pct": 100.0
+                * _safe_div(retained_touch_transitions, touch_transitions),
+                "pressured_retention_pct": 100.0
+                * _safe_div(
+                    row["retained_under_pressure"],
+                    row["pressured_transitions"],
+                ),
+                "touch_progression": _safe_div(
+                    row["touch_progression_sum"],
+                    row["touch_progression_events"],
+                ),
+                "recoveries_per_min": _safe_div(
+                    row["recoveries"],
+                    active_minutes,
+                ),
+                "goal_contrib_per_10": 10.0
+                * _safe_div(
+                    row["touch_goals"] + row["touch_assists"],
+                    active_minutes,
+                ),
             }
         )
     return rows
@@ -130,6 +187,10 @@ def main() -> int:
             "kicks",
             "near-ball",
             "close-ball",
+            "touches",
+            "retention",
+            "recoveries",
+            "progression",
         ],
         default="involvement",
     )
@@ -150,6 +211,10 @@ def main() -> int:
         "kicks": "kicks_per_min",
         "near-ball": "nearest_ball_pct",
         "close-ball": "close_ball_pct",
+        "touches": "touches_per_min",
+        "retention": "touch_retention_pct",
+        "recoveries": "recoveries_per_min",
+        "progression": "touch_progression",
     }
     key = sort_keys[args.sort]
     rows.sort(key=lambda row: (row[key], row["matches"]), reverse=True)
@@ -163,23 +228,44 @@ def main() -> int:
         "are not resolved yet."
     )
     print()
-    header = (
-        f"{'#':>3}  {'Player':<24} {'M':>5} {'Min':>8} "
-        f"{'Kick/m':>8} {'Near%':>7} {'Close%':>7} {'Inv':>8}"
-    )
+    has_touch_features = any(row["touches"] > 0 for row in rows)
+    if has_touch_features:
+        header = (
+            f"{'#':>3}  {'Player':<22} {'M':>5} {'Min':>8} "
+            f"{'Touch/m':>8} {'Ret%':>7} {'Prog':>8} "
+            f"{'Rec/m':>7} {'G+A/10':>8}"
+        )
+    else:
+        header = (
+            f"{'#':>3}  {'Player':<24} {'M':>5} {'Min':>8} "
+            f"{'Kick/m':>8} {'Near%':>7} {'Close%':>7} {'Inv':>8}"
+        )
     print(header)
     print("-" * len(header))
     for index, row in enumerate(rows, 1):
-        name = row["name"][:24]
-        print(
-            f"{index:>3}  {name:<24} "
-            f"{row['matches']:>5} "
-            f"{row['active_minutes']:>8.1f} "
-            f"{row['kicks_per_min']:>8.2f} "
-            f"{row['nearest_ball_pct']:>7.2f} "
-            f"{row['close_ball_pct']:>7.2f} "
-            f"{row['involvement_score']:>8.3f}"
-        )
+        if has_touch_features:
+            name = row["name"][:22]
+            print(
+                f"{index:>3}  {name:<22} "
+                f"{row['matches']:>5} "
+                f"{row['active_minutes']:>8.1f} "
+                f"{row['touches_per_min']:>8.2f} "
+                f"{row['touch_retention_pct']:>7.2f} "
+                f"{row['touch_progression']:>8.2f} "
+                f"{row['recoveries_per_min']:>7.2f} "
+                f"{row['goal_contrib_per_10']:>8.2f}"
+            )
+        else:
+            name = row["name"][:24]
+            print(
+                f"{index:>3}  {name:<24} "
+                f"{row['matches']:>5} "
+                f"{row['active_minutes']:>8.1f} "
+                f"{row['kicks_per_min']:>8.2f} "
+                f"{row['nearest_ball_pct']:>7.2f} "
+                f"{row['close_ball_pct']:>7.2f} "
+                f"{row['involvement_score']:>8.3f}"
+            )
 
     return 0
 
