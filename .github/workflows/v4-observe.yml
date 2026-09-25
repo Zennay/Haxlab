@@ -27,3 +27,5 @@ jobs:
           echo
           echo "=== ANALYZER PROCESSES ==="
           ps -eo pid,pcpu,pmem,ni,etime,cmd --sort=-pcpu |             grep -E 'haxlab.runtime.analyzer|decode_replay.js' |             grep -v grep | head -20 || true
+
+# observe-2
