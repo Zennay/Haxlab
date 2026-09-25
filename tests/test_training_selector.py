@@ -249,3 +249,111 @@ def test_training_manifest_excludes_selected_spectator(tmp_path: Path) -> None:
 
     assert manifest["train_replays"] == []
     assert manifest["holdout_replays"] == []
+
+
+def test_train_only_player_selection_does_not_learn_from_holdout_players(
+    tmp_path: Path,
+) -> None:
+    analysis_root = tmp_path / "state-pass-v4"
+    leaderboard = tmp_path / "leaderboard.json"
+    analysis_root.mkdir()
+
+    # Precomputed all-replay leaderboard deliberately contains a holdout-only
+    # player. Strict mode must ignore this ranking input and rebuild selection
+    # only from quality train replays.
+    leaderboard.write_text(
+        json.dumps(
+            {
+                "analysis_version": "state-pass-v4",
+                "rows": [
+                    {
+                        "player_id": "name:holdoutstar",
+                        "name": "HoldoutStar",
+                        "role": "forward",
+                        "rating": 80.0,
+                        "rating_uncertainty": 0.1,
+                        "matches": 500,
+                        "minutes": 5000.0,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def player(pid: int, name: str, team: int, x: float) -> dict:
+        return {
+            "id": pid,
+            "name": name,
+            "teamId": team,
+            "samples": 1200,
+            "averageX": x,
+            "averageY": 0.0,
+            "nearestBallSamples": 250,
+            "touches": 20,
+            "teamTouchTransfersOut": 10,
+            "selfRetouches": 2,
+            "turnovers": 2,
+            "recoveries": 2,
+            "touchGoals": 0,
+            "touchAssists": 0,
+            "touchProgressionEvents": 8,
+            "touchProgressionSum": 80.0,
+            "pressuredTransitions": 5,
+            "retainedUnderPressure": 4,
+        }
+
+    train_sha = "a" * 64  # bucket 1 with modulus 2 => train.
+    holdout_sha = "d" * 64  # bucket 0 with modulus 2 => holdout.
+
+    common = {
+        "schemaVersion": 4,
+        "totalFrames": 18000,
+        "simulation": {"sampleEveryTicks": 6, "sampledStateCount": 3000},
+        "featureSummary": {"touches": 100},
+    }
+    train_payload = {
+        **common,
+        "players": [
+            player(1, "Alpha", 1, -30),
+            player(2, "Beta", 1, 30),
+            player(3, "Gamma", 2, 30),
+            player(4, "Delta", 2, -30),
+        ],
+    }
+    holdout_payload = {
+        **common,
+        "players": [
+            player(5, "HoldoutStar", 1, 35),
+            player(6, "Mate", 1, -25),
+            player(7, "OppA", 2, 25),
+            player(8, "OppB", 2, -25),
+        ],
+    }
+    (analysis_root / f"{train_sha}.json").write_text(
+        json.dumps(train_payload),
+        encoding="utf-8",
+    )
+    (analysis_root / f"{holdout_sha}.json").write_text(
+        json.dumps(holdout_payload),
+        encoding="utf-8",
+    )
+
+    manifest = build_training_manifest(
+        analysis_root=analysis_root,
+        leaderboard_path=leaderboard,
+        raw_root=tmp_path / "raw",
+        top_fraction_per_role=1.0,
+        min_players_per_role=1,
+        min_matches=1,
+        min_minutes=0.0,
+        max_uncertainty=10.0,
+        holdout_modulus=2,
+        holdout_bucket=0,
+        train_only_player_selection=True,
+    )
+
+    selected_ids = {row["player_id"] for row in manifest["selected_players"]}
+    assert manifest["selection"]["player_selection_source"] == "train_replays_only"
+    assert "name:holdoutstar" not in selected_ids
+    assert "name:alpha" in selected_ids
