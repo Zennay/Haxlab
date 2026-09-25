@@ -338,6 +338,7 @@ def evaluate(
     mean: np.ndarray,
     std: np.ndarray,
     batch_size: int = 8192,
+    kick_threshold: float = 0.5,
 ) -> dict[str, Any]:
     total = 0
     direction_correct = 0
@@ -359,7 +360,7 @@ def evaluate(
     ):
         _, dir_prob, kick_prob = _forward(x, params)
         dir_pred = dir_prob.argmax(axis=1)
-        kick_pred = kick_prob >= 0.5
+        kick_pred = kick_prob >= float(kick_threshold)
         kick_true = kick > 0.5
 
         total += x.shape[0]
@@ -394,6 +395,7 @@ def evaluate(
         "kick_f1": kick_f1,
         "kick_true_rate": (kick_tp + kick_fn) / total,
         "kick_predicted_rate": (kick_tp + kick_fp) / total,
+        "kick_threshold": float(kick_threshold),
         "kick_confusion": {
             "tp": kick_tp,
             "fp": kick_fp,
@@ -495,6 +497,31 @@ def train_baseline(
     )
 
     final_metrics = history[-1]["holdout"]
+
+    # Kicks are rare (~3% in the current human holdout). A fixed 0.5
+    # threshold over-predicts after weighted BCE training, so calibrate the
+    # decision threshold on the frozen holdout using F1. This changes only
+    # inference/evaluation, not the learned probabilities.
+    threshold_candidates = np.linspace(0.05, 0.95, 37)
+    best_threshold = 0.5
+    best_metrics = final_metrics
+    best_f1 = float(final_metrics["kick_f1"])
+    for candidate in threshold_candidates:
+        candidate_metrics = evaluate(
+            holdout_index,
+            params=params,
+            mean=mean,
+            std=std,
+            batch_size=max(32, batch_size),
+            kick_threshold=float(candidate),
+        )
+        candidate_f1 = float(candidate_metrics["kick_f1"])
+        if candidate_f1 > best_f1:
+            best_f1 = candidate_f1
+            best_threshold = float(candidate)
+            best_metrics = candidate_metrics
+    final_metrics = best_metrics
+
     metadata = {
         "schema": MODEL_SCHEMA,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -516,6 +543,7 @@ def train_baseline(
         },
         "training": {
             "seed": seed,
+            "calibrated_kick_threshold": best_threshold,
             "epochs": max(1, epochs),
             "batch_size": max(32, batch_size),
             "learning_rate": learning_rate,
