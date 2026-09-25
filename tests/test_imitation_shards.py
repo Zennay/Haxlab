@@ -42,6 +42,13 @@ def test_extract_one_uses_cached_valid_shard(
             "replay_sha256": sha,
             "raw_path": str(tmp_path / "missing.hbr2"),
             "selected_player_ids": ["name:alpha"],
+            "selected_players": [
+                {
+                    "replay_player_id": 7,
+                    "identity": "name:alpha",
+                    "samples": 100,
+                }
+            ],
         },
         node_script=tmp_path / "tools" / "extract_imitation.js",
         output_dir=output_dir,
@@ -79,6 +86,13 @@ def test_build_shards_honors_split_and_limit(
             "replay_sha256": char * 64,
             "raw_path": str(tmp_path / f"{char}.hbr2"),
             "selected_player_ids": [f"name:{char}"],
+            "selected_players": [
+                {
+                    "replay_player_id": 1,
+                    "identity": f"name:{char}",
+                    "samples": 100,
+                }
+            ],
             "example_weight": 1.0,
         }
         for char in ("a", "b", "c")
@@ -88,6 +102,13 @@ def test_build_shards_honors_split_and_limit(
             "replay_sha256": "d" * 64,
             "raw_path": str(tmp_path / "d.hbr2"),
             "selected_player_ids": ["name:d"],
+            "selected_players": [
+                {
+                    "replay_player_id": 1,
+                    "identity": "name:d",
+                    "samples": 100,
+                }
+            ],
             "example_weight": 1.0,
         }
     ]
