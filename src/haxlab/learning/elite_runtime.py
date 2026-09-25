@@ -121,6 +121,7 @@ def _serve_stdio(policy: ElitePolicy) -> int:
         try:
             request = json.loads(line)
             command = str(request.get("command") or "act")
+            request_id = request.get("request_id")
             if command == "reset":
                 agent_id = request.get("agent_id")
                 policy.reset(None if agent_id is None else str(agent_id))
@@ -128,10 +129,12 @@ def _serve_stdio(policy: ElitePolicy) -> int:
                     "ok": True,
                     "command": "reset",
                     "agent_id": agent_id,
+                    "request_id": request_id,
                 }
             elif command == "info":
                 response = {
                     "ok": True,
+                    "request_id": request_id,
                     "schema": policy.metadata.get("schema"),
                     "window": policy.window,
                     "kick_threshold": policy.kick_threshold,
@@ -140,6 +143,7 @@ def _serve_stdio(policy: ElitePolicy) -> int:
             else:
                 response = {
                     "ok": True,
+                    "request_id": request_id,
                     **policy.act(
                         agent_id=str(request.get("agent_id") or "default"),
                         role=request["role"],
