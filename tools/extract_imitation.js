@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 "use strict";
 
-const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const zlib = require("zlib");
@@ -13,50 +12,32 @@ const { Replay, Utils } = API;
 function usage() {
   console.error(
     "Usage: node tools/extract_imitation.js <replay.hbr2> <output.jsonl.gz> " +
-      "<selectedIdsJson> [sampleEveryTicks]",
+      "<selectedPlayerMapJson> [sampleEveryTicks]",
   );
   process.exit(2);
 }
 
 const replayPath = process.argv[2];
 const outputPath = process.argv[3];
-const selectedIdsJson = process.argv[4];
+const selectedPlayerMapJson = process.argv[4];
 const sampleEvery = Math.max(
   1,
   Number.parseInt(process.argv[5] || "6", 10) || 6,
 );
 
-if (!replayPath || !outputPath || !selectedIdsJson) usage();
+if (!replayPath || !outputPath || !selectedPlayerMapJson) usage();
 
-const selectedIds = new Set(JSON.parse(selectedIdsJson));
-const selectedIndex = new Map(
-  Array.from(selectedIds)
-    .sort()
-    .map((identity, index) => [identity, index]),
+const selectedByReplayId = new Map(
+  Object.entries(JSON.parse(selectedPlayerMapJson)).map(
+    ([playerId, identity]) => [Number(playerId), String(identity)],
+  ),
 );
-
-function normalizeName(value) {
-  if (value == null) return null;
-  const cleaned = String(value).trim().replace(/\s+/g, " ");
-  return cleaned ? cleaned.toLocaleLowerCase("en-US") : null;
-}
-
-function authHash(value) {
-  if (value == null || value === "") return null;
-  return crypto
-    .createHash("sha256")
-    .update(String(value))
-    .digest("hex")
-    .slice(0, 20);
-}
-
-function identityFor(player) {
-  if (!player) return null;
-  const hashed = authHash(player.auth);
-  if (hashed) return `auth:${hashed}`;
-  const name = normalizeName(player.name);
-  return name ? `name:${name}` : null;
-}
+const selectedIdentities = Array.from(
+  new Set(selectedByReplayId.values()),
+).sort();
+const selectedIndex = new Map(
+  selectedIdentities.map((identity, index) => [identity, index]),
+);
 
 function num(value) {
   const parsed = Number(value);
@@ -182,17 +163,24 @@ gzip.write(
         identity,
       ]),
     ),
+    selectedReplayPlayers: Object.fromEntries(
+      Array.from(selectedByReplayId.entries()).map(([playerId, identity]) => [
+        String(playerId),
+        identity,
+      ]),
+    ),
     columns,
   }) + "\n",
 );
 
 function writeSample(player, statePlayers, ballDisc) {
-  const identity = identityFor(player);
-  if (!identity || !selectedIds.has(identity)) return;
+  const replayPlayerId = Number(player.id);
+  const identity = selectedByReplayId.get(replayPlayerId);
+  if (!identity) return;
   if (!(player.team?.id === 1 || player.team?.id === 2)) return;
   if (!player.disc?.pos || !ballDisc?.pos) return;
 
-  selectedPlayersSeen.add(identity);
+  selectedPlayersSeen.add(replayPlayerId);
   selectedStateSamples += 1;
 
   const playerInput =
@@ -352,7 +340,7 @@ function closeOutput() {
         samples: sampleCount,
         selectedStateSamples,
         skippedUnknownInput,
-        selectedPlayersRequested: selectedIds.size,
+        selectedPlayersRequested: selectedByReplayId.size,
         selectedPlayersSeen: selectedPlayersSeen.size,
         compressedBytes: fs.statSync(outputPath).size,
       }),
