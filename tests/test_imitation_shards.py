@@ -167,3 +167,15 @@ def test_build_shards_honors_split_and_limit(
     )
     assert saved["split"] == "train"
     assert len(saved["entries"]) == 2
+
+    progress = json.loads(
+        (tmp_path / "out" / "train" / "_progress.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert progress["complete"] is True
+    assert progress["requested_replays"] == 2
+    assert progress["completed_replays"] == 2
+    assert progress["successful_replays"] == 2
+    assert progress["failed_replays"] == 0
+    assert progress["samples"] == 200
