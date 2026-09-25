@@ -249,16 +249,29 @@ def _train_batch(
     *,
     kick_pos_weight: float,
     l2: float,
+    sample_weight: np.ndarray | None = None,
 ) -> tuple[dict[str, np.ndarray], dict[str, float]]:
     batch = x.shape[0]
     hidden, dir_prob, kick_prob = _forward(x, params)
+    if sample_weight is None:
+        sample_weight = np.ones(batch, dtype=np.float32)
+    else:
+        sample_weight = np.asarray(sample_weight, dtype=np.float32).reshape(-1)
+        if sample_weight.shape[0] != batch:
+            raise ValueError("sample_weight length must match batch")
+        sample_weight = np.clip(sample_weight, 0.05, 5.0)
+    sample_weight_sum = max(1e-6, float(sample_weight.sum()))
 
     eps = 1e-7
-    dir_loss = -np.log(
+    dir_nll = -np.log(
         np.clip(dir_prob[np.arange(batch), direction], eps, 1.0)
-    ).mean()
+    )
+    dir_loss = float((dir_nll * sample_weight).sum() / sample_weight_sum)
 
-    kick_weights = np.where(kick > 0.5, kick_pos_weight, 1.0).astype(np.float32)
+    kick_weights = (
+        np.where(kick > 0.5, kick_pos_weight, 1.0).astype(np.float32)
+        * sample_weight
+    )
     kick_loss = -(
         kick_weights
         * (
@@ -269,7 +282,7 @@ def _train_batch(
 
     ddir = dir_prob.copy()
     ddir[np.arange(batch), direction] -= 1.0
-    ddir /= batch
+    ddir *= (sample_weight / sample_weight_sum).reshape(-1, 1)
 
     # Weighted BCE derivative, normalized by total sample weight.
     dkick = (
@@ -313,6 +326,7 @@ def _iter_batches(
     batch_size: int,
     rng: np.random.Generator,
     shuffle: bool,
+    include_sample_weight: bool = False,
 ):
     entries = list(index["entries"])
     if shuffle:
@@ -326,9 +340,14 @@ def _iter_batches(
         if shuffle:
             rng.shuffle(order)
 
+        replay_weight = float(entry.get("example_weight", 1.0))
         for start in range(0, x.shape[0], batch_size):
             idx = order[start : start + batch_size]
-            yield x[idx], direction[idx], kick[idx]
+            if include_sample_weight:
+                weights = np.full(idx.shape[0], replay_weight, dtype=np.float32)
+                yield x[idx], direction[idx], kick[idx], weights
+            else:
+                yield x[idx], direction[idx], kick[idx]
 
 
 def evaluate(
@@ -356,6 +375,7 @@ def evaluate(
         batch_size=batch_size,
         rng=rng,
         shuffle=False,
+        include_sample_weight=False,
     ):
         _, dir_prob, kick_prob = _forward(x, params)
         dir_pred = dir_prob.argmax(axis=1)
@@ -420,6 +440,7 @@ def train_baseline(
     learning_rate: float = 1e-3,
     l2: float = 1e-5,
     seed: int = 1337,
+    use_example_weights: bool = False,
 ) -> dict[str, Any]:
     train_index = _load_index(train_index_path, train_limit)
     holdout_index = _load_index(holdout_index_path, holdout_limit)
@@ -439,14 +460,20 @@ def train_baseline(
         dir_losses: list[float] = []
         kick_losses: list[float] = []
 
-        for x, direction, kick in _iter_batches(
+        for batch_data in _iter_batches(
             train_index,
             mean=mean,
             std=std,
             batch_size=max(32, batch_size),
             rng=rng,
             shuffle=True,
+            include_sample_weight=use_example_weights,
         ):
+            if use_example_weights:
+                x, direction, kick, sample_weight = batch_data
+            else:
+                x, direction, kick = batch_data
+                sample_weight = None
             grads, loss = _train_batch(
                 x,
                 direction,
@@ -454,6 +481,7 @@ def train_baseline(
                 params,
                 kick_pos_weight=kick_pos_weight,
                 l2=max(0.0, l2),
+                sample_weight=sample_weight,
             )
             step += 1
             _adam_update(
@@ -523,6 +551,7 @@ def train_baseline(
             "train_replays": len(train_index["entries"]),
             "holdout_replays": len(holdout_index["entries"]),
             "train_stats": train_stats,
+            "use_example_weights": bool(use_example_weights),
         },
         "history": history,
         "final_holdout": final_metrics,
@@ -556,6 +585,7 @@ def main() -> int:
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--l2", type=float, default=1e-5)
     parser.add_argument("--seed", type=int, default=1337)
+    parser.add_argument("--use-example-weights", action="store_true")
     args = parser.parse_args()
 
     result = train_baseline(
@@ -570,6 +600,7 @@ def main() -> int:
         learning_rate=max(1e-6, args.learning_rate),
         l2=max(0.0, args.l2),
         seed=args.seed,
+        use_example_weights=args.use_example_weights,
     )
     print(json.dumps(result["final_holdout"], indent=2, sort_keys=True))
     print("model:", result["model_path"])
