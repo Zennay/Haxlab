@@ -179,6 +179,8 @@ def load_match_evidence(root: Path) -> list[dict]:
             evidence.append(
                 {
                     "player_id": key,
+                    "match_id": path.stem,
+                    "team_id": int(player.get("teamId") or 0),
                     "name": " ".join(str(player.get("name")).strip().split()),
                     "role": roles.get(int(player.get("id") or -1), "unknown"),
                     "minutes": minutes,
@@ -236,32 +238,118 @@ def _normalize(
     return max(-3.0, min(3.0, (float(value) - avg) / sd))
 
 
+def _mean_or_zero(values: list[float]) -> float:
+    return mean(values) if values else 0.0
+
+
+def _bounded_match_contexts(
+    rows: list[dict],
+) -> dict[tuple[str, str], tuple[float, float]]:
+    """Estimate small teammate/opponent context from individual action evidence.
+
+    Context is deliberately derived from normalized player actions, not match
+    results. A prior toward zero and a hard [-1, 1] bound keep it subordinate
+    to the player's own observed performance.
+    """
+    strength_sum: defaultdict[str, float] = defaultdict(float)
+    strength_weight: defaultdict[str, float] = defaultdict(float)
+
+    for row in rows:
+        values = [
+            float(value)
+            for value in row["normalized"].values()
+            if value is not None and math.isfinite(value)
+        ]
+        if not values:
+            continue
+        exposure = min(2.0, max(0.25, math.sqrt(row["minutes"] / 3.0)))
+        strength_sum[row["player_id"]] += mean(values) * exposure
+        strength_weight[row["player_id"]] += exposure
+
+    player_strength: dict[str, float] = {}
+    prior_weight = 6.0
+    for player_id, total in strength_sum.items():
+        estimate = total / (strength_weight[player_id] + prior_weight)
+        player_strength[player_id] = max(-2.0, min(2.0, estimate))
+
+    by_match_team: defaultdict[tuple[str, int], set[str]] = defaultdict(set)
+    for row in rows:
+        team_id = int(row["team_id"])
+        if team_id in (1, 2):
+            by_match_team[(row["match_id"], team_id)].add(row["player_id"])
+
+    result: dict[tuple[str, str], tuple[float, float]] = {}
+    for row in rows:
+        player_id = row["player_id"]
+        match_id = row["match_id"]
+        team_id = int(row["team_id"])
+        if team_id not in (1, 2):
+            result[(match_id, player_id)] = (0.0, 0.0)
+            continue
+
+        teammate_ids = by_match_team.get((match_id, team_id), set()) - {player_id}
+        opponent_ids = by_match_team.get((match_id, 3 - team_id), set())
+
+        teammate_raw = _mean_or_zero(
+            [player_strength.get(item, 0.0) for item in teammate_ids]
+        )
+        opponent_raw = _mean_or_zero(
+            [player_strength.get(item, 0.0) for item in opponent_ids]
+        )
+
+        # Scale a +/-2 preliminary action strength into the estimator's
+        # intentionally small +/-1 context range.
+        teammate_context = max(-1.0, min(1.0, teammate_raw / 2.0))
+        opponent_context = max(-1.0, min(1.0, opponent_raw / 2.0))
+        result[(match_id, player_id)] = (teammate_context, opponent_context)
+
+    return result
+
+
 def build_leaderboard(root: Path) -> list[dict]:
     evidence = load_match_evidence(root)
     normalizers = _normalizers(evidence)
+
+    normalized_rows: list[dict] = []
+    for row in evidence:
+        normalized_rows.append(
+            {
+                **row,
+                "normalized": {
+                    dimension: _normalize(
+                        row["role"],
+                        dimension,
+                        row["metrics"].get(dimension),
+                        normalizers,
+                    )
+                    for dimension in DIMENSION_WEIGHTS
+                },
+            }
+        )
+
+    contexts = _bounded_match_contexts(normalized_rows)
 
     observations: list[SkillObservation] = []
     name_counts: defaultdict[str, Counter[str]] = defaultdict(Counter)
     matches: Counter[str] = Counter()
     minutes: defaultdict[str, float] = defaultdict(float)
     role_minutes: defaultdict[str, Counter[str]] = defaultdict(Counter)
+    teammate_contexts: defaultdict[str, list[float]] = defaultdict(list)
+    opponent_contexts: defaultdict[str, list[float]] = defaultdict(list)
 
-    for row in evidence:
+    for row in normalized_rows:
         player_id = row["player_id"]
         name_counts[player_id][row["name"]] += 1
         matches[player_id] += 1
         minutes[player_id] += row["minutes"]
         role_minutes[player_id][row["role"]] += row["minutes"]
 
-        normalized = {
-            dimension: _normalize(
-                row["role"],
-                dimension,
-                row["metrics"].get(dimension),
-                normalizers,
-            )
-            for dimension in DIMENSION_WEIGHTS
-        }
+        teammate_context, opponent_context = contexts.get(
+            (row["match_id"], player_id),
+            (0.0, 0.0),
+        )
+        teammate_contexts[player_id].append(teammate_context)
+        opponent_contexts[player_id].append(opponent_context)
 
         match_quality = min(1.0, max(0.15, row["match_minutes"] / 3.0))
         exposure = min(2.0, max(0.25, math.sqrt(row["minutes"] / 3.0)))
@@ -269,9 +357,11 @@ def build_leaderboard(root: Path) -> list[dict]:
         observations.append(
             SkillObservation(
                 player_id=player_id,
-                performance=PerformanceVector(**normalized),
+                performance=PerformanceVector(**row["normalized"]),
                 match_quality_weight=match_quality,
                 minutes_or_possessions_weight=exposure,
+                teammate_context=teammate_context,
+                opponent_context=opponent_context,
                 role=row["role"],
             )
         )
@@ -329,6 +419,12 @@ def build_leaderboard(root: Path) -> list[dict]:
                 "rating": rating,
                 "rating_uncertainty": rating_uncertainty,
                 "overall_z": overall_z,
+                "average_teammate_context": _mean_or_zero(
+                    teammate_contexts[player_id]
+                ),
+                "average_opponent_context": _mean_or_zero(
+                    opponent_contexts[player_id]
+                ),
                 "dimensions": dimensions,
             }
         )
