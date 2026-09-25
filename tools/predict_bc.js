@@ -66,6 +66,7 @@ for (let i = 0; i < hidden.length; i += 1) {
 }
 kickLogit = Math.max(-30, Math.min(30, kickLogit));
 const kickProbability = 1 / (1 + Math.exp(-kickLogit));
+const kickThreshold = Number(model.kick_threshold ?? 0.5);
 
 const direction = (model.direction_classes || []).find(
   (item) => Number(item.class_id) === directionClass,
@@ -77,10 +78,11 @@ process.stdout.write(
     {
       dir_x: Number(direction.dir_x),
       dir_y: Number(direction.dir_y),
-      kick: kickProbability >= 0.5,
+      kick: kickProbability >= kickThreshold,
       direction_class: directionClass,
       direction_confidence: directionProb[directionClass],
       kick_probability: kickProbability,
+      kick_threshold: kickThreshold,
     },
     null,
     2,
