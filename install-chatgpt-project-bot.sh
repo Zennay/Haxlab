@@ -18,6 +18,17 @@ exec "$ROOT/.venv/bin/python" "$ROOT/bot.py" "$@"
 RUN
 chmod +x "$DEST/run.sh"
 
+cat > "$DEST/login.sh" <<'LOGIN'
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+systemctl --user stop chatgpt-project-bot.service 2>/dev/null || true
+"$ROOT/run.sh" --login
+systemctl --user start chatgpt-project-bot.service
+echo "ChatGPT watchdog gestart."
+LOGIN
+chmod +x "$DEST/login.sh"
+
 echo '[2/5] Python + Playwright installeren...'
 python3 -m venv "$DEST/.venv"
 "$DEST/.venv/bin/pip" install --upgrade pip
@@ -70,13 +81,14 @@ EOF
 systemctl --user disable --now chatgpt-project-bot.timer 2>/dev/null || true
 rm -f "$HOME/.config/systemd/user/chatgpt-project-bot.timer"
 systemctl --user daemon-reload
-systemctl --user enable --now chatgpt-project-bot.service
+systemctl --user enable chatgpt-project-bot.service
+systemctl --user stop chatgpt-project-bot.service 2>/dev/null || true
 
-echo '[4/5] Watchdog-daemon gestart.'
+echo '[4/5] Watchdog-service geïnstalleerd (start na eenmalige login).'
 echo '[5/5] Installatie klaar.'
 echo
 echo "Eenmalig inloggen vanuit je Linux GUI/NoMachine:"
-echo "  $DEST/run.sh --login"
+echo "  $DEST/login.sh"
 echo
 echo 'Log in, open de juiste projectchat in gewone Chat (NIET Work), zet reasoning op High, en druk daarna Enter in de terminal.'
 echo
