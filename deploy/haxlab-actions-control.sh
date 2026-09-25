@@ -3,9 +3,10 @@ set -euo pipefail
 
 APP_DIR="${HAXLAB_APP_DIR:-/opt/haxlab}"
 STATE_DB="${HAXLAB_STATE_DB:-/var/lib/haxlab/state/haxlab.sqlite3}"
+CURRENT_ANALYZER_VERSION="$("${APP_DIR}/.venv/bin/python" -c 'from haxlab.runtime.state import CURRENT_ANALYZER_VERSION; print(CURRENT_ANALYZER_VERSION)')"
 
 usage() {
-  echo "Usage: haxlab-actions-control {status|deploy|restart-analyzer|retry-failed-analysis|player-stats|skill-leaderboard|analyzer-logs|failed-analysis}" >&2
+  echo "Usage: haxlab-actions-control {status|deploy|restart-analyzer|retry-failed-analysis|feature-smoke|player-stats|skill-leaderboard|analyzer-logs|failed-analysis}" >&2
   exit 2
 }
 
@@ -42,7 +43,7 @@ case "${action}" in
     sqlite3 "${STATE_DB}" "
       SELECT COALESCE(error, '<no error>') AS error, COUNT(*) AS count
       FROM replay_analysis
-      WHERE analyzer_version='state-pass-v3' AND status='failed'
+      WHERE analyzer_version='${CURRENT_ANALYZER_VERSION}' AND status='failed'
       GROUP BY error
       ORDER BY count DESC
       LIMIT 15;
@@ -60,12 +61,65 @@ case "${action}" in
     sqlite3 "${STATE_DB}" "
       UPDATE replay_analysis
       SET status='retry', updated_at=CURRENT_TIMESTAMP
-      WHERE analyzer_version='state-pass-v3' AND status='failed';
+      WHERE analyzer_version='${CURRENT_ANALYZER_VERSION}' AND status='failed';
       SELECT changes();
     "
     systemctl start haxlab-analyzer.service
     systemctl is-active haxlab-analyzer.service
     haxlab-status
+    ;;
+
+  feature-smoke)
+    replay_path="$(sqlite3 "${STATE_DB}" "
+      SELECT archive_path
+      FROM raw_replays
+      ORDER BY ABS(size_bytes - 40000), first_archived_at
+      LIMIT 1;
+    ")"
+    if [[ -z "${replay_path}" ]]; then
+      echo "No replay available for feature smoke test." >&2
+      exit 1
+    fi
+
+    tmp_json="$(mktemp)"
+    trap 'rm -f "${tmp_json}"' EXIT
+    node "${APP_DIR}/tools/decode_replay.js" "${replay_path}" 6 >"${tmp_json}"
+
+    "${APP_DIR}/.venv/bin/python" - "${tmp_json}" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+summary = payload.get("featureSummary") or {}
+players = payload.get("players") or []
+
+print("schemaVersion:", payload.get("schemaVersion"))
+print("featureVersion:", payload.get("featureVersion"))
+print("frames:", payload.get("totalFrames"))
+print("featureSummary:", json.dumps(summary, sort_keys=True))
+
+top = sorted(players, key=lambda p: int(p.get("touches") or 0), reverse=True)[:8]
+print("top touch players:")
+for player in top:
+    print(
+        " -",
+        player.get("name"),
+        "touches=", player.get("touches"),
+        "teamTransfers=", player.get("teamTouchTransfersOut"),
+        "turnovers=", player.get("turnovers"),
+        "pressureRate=", player.get("underPressureTouchRate"),
+    )
+
+if int(payload.get("schemaVersion") or 0) < 4:
+    raise SystemExit("feature smoke failed: expected schemaVersion >= 4")
+if int(summary.get("touches") or 0) <= 0:
+    raise SystemExit("feature smoke failed: no logical touches detected")
+if int(summary.get("ballCollisionEvents") or 0) < int(summary.get("touches") or 0):
+    raise SystemExit("feature smoke failed: collision count below logical touches")
+PY
     ;;
 
   player-stats)
@@ -94,7 +148,7 @@ case "${action}" in
     sqlite3 "${STATE_DB}" "
       SELECT COALESCE(error, '<no error>') AS error, COUNT(*) AS count
       FROM replay_analysis
-      WHERE analyzer_version='state-pass-v3' AND status='failed'
+      WHERE analyzer_version='${CURRENT_ANALYZER_VERSION}' AND status='failed'
       GROUP BY error
       ORDER BY count DESC
       LIMIT 30;
