@@ -46,8 +46,26 @@ function kickoffAction(role, player, gameState) {
   };
 }
 
+function enforceKickRange(action, player, gameState, maxDistance = 32) {
+  if (!action) return action;
+  const disc = discOf(player);
+  const ball = gameState?.physicsState?.discs?.[0];
+  if (!disc?.pos || !ball?.pos) {
+    return { ...action, kick: false };
+  }
+  const dx = num(ball.pos.x) - num(disc.pos.x);
+  const dy = num(ball.pos.y) - num(disc.pos.y);
+  const inRange = Math.hypot(dx, dy) <= maxDistance;
+  return {
+    ...action,
+    kick: Boolean(action.kick) && inRange,
+    kick_in_range: inRange,
+  };
+}
+
 module.exports = {
   discreteDirection,
   isKickoffState,
   kickoffAction,
+  enforceKickRange,
 };
