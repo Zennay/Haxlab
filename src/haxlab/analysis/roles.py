@@ -79,8 +79,19 @@ def infer_roles_4v4(players: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
         core = sorted(rows, key=lambda row: row["samples"], reverse=True)[:4]
         core.sort(key=lambda row: row["attack_x"])
         xs = [row["attack_x"] for row in core]
+        raw_span = xs[-1] - xs[0]
+        if raw_span < 25.0:
+            for row in rows:
+                result[row["id"]] = {
+                    "role": "unknown",
+                    "confidence": 0.0,
+                    "attack_x": row["attack_x"],
+                    "reason": "insufficient_positional_separation",
+                }
+            continue
+
         gaps = [max(0.0, xs[i + 1] - xs[i]) for i in range(3)]
-        span = max(1.0, xs[-1] - xs[0])
+        span = max(1.0, raw_span)
         expected_gap = span / 3.0
         separation = sum(
             _clamp(gap / max(20.0, expected_gap), 0.0, 1.0) for gap in gaps
