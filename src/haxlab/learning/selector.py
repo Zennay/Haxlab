@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 
-MANIFEST_SCHEMA = "haxlab-human-imitation-manifest-v2"
+MANIFEST_SCHEMA = "haxlab-human-imitation-manifest-v3"
 
 
 def _name_key(name: str | None) -> str | None:
@@ -174,14 +174,35 @@ def build_training_manifest(
             rejection_reasons.update(quality_reasons)
             continue
 
-        selected_in_replay: list[str] = []
+        selected_in_replay: list[dict[str, Any]] = []
         for player in payload.get("players") or []:
             identity = _identity_key(player)
-            if identity in selected_ids:
-                selected_in_replay.append(identity)
+            team_id = int(player.get("teamId") or 0)
+            samples = int(player.get("samples") or 0)
+            replay_player_id = player.get("id")
+            if (
+                identity in selected_ids
+                and team_id in (1, 2)
+                and samples > 0
+                and replay_player_id is not None
+            ):
+                selected_in_replay.append(
+                    {
+                        "replay_player_id": int(replay_player_id),
+                        "identity": identity,
+                        "samples": samples,
+                    }
+                )
 
         if not selected_in_replay:
             continue
+
+        selected_in_replay.sort(
+            key=lambda row: (row["replay_player_id"], row["identity"])
+        )
+        selected_identity_ids = sorted(
+            {row["identity"] for row in selected_in_replay}
+        )
 
         replay_sha256 = path.stem
         raw_path = (
@@ -191,7 +212,7 @@ def build_training_manifest(
             / f"{replay_sha256}.hbr2"
         )
         conservative = max(
-            score_by_id[player_id] for player_id in selected_in_replay
+            score_by_id[player_id] for player_id in selected_identity_ids
         )
         entry = {
             "replay_sha256": replay_sha256,
@@ -202,8 +223,9 @@ def build_training_manifest(
                 int(payload.get("totalFrames") or 0) / 60.0,
                 3,
             ),
-            "selected_player_ids": sorted(set(selected_in_replay)),
-            "selected_player_count": len(set(selected_in_replay)),
+            "selected_player_ids": selected_identity_ids,
+            "selected_players": selected_in_replay,
+            "selected_player_count": len(selected_in_replay),
             "quality_reasons": quality_reasons,
             "example_weight": round(
                 max(0.25, min(2.0, 1.0 + (conservative - 50.0) / 10.0)),
