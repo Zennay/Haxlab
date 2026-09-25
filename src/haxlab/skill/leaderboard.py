@@ -7,7 +7,7 @@ import math
 from collections import Counter, defaultdict
 from dataclasses import asdict
 from pathlib import Path
-from statistics import mean, pstdev
+from statistics import mean, median, pstdev
 
 from haxlab.skill.estimator import estimate_player_skill_v0
 from haxlab.skill.models import PerformanceVector, SkillObservation
@@ -202,6 +202,12 @@ def _normalizers(evidence: list[dict]) -> dict[tuple[str, str], tuple[float, flo
     global_values: dict[str, list[float]] = defaultdict(list)
 
     for row in evidence:
+        # Very short appearances can create extreme per-minute values. Keep the
+        # evidence for the player estimate, but do not let it define the
+        # population baseline used to normalize everybody else.
+        if float(row.get("minutes", 0.0)) < 1.0:
+            continue
+
         role = row["role"]
         for dimension, value in row["metrics"].items():
             if value is None or not math.isfinite(value):
@@ -217,9 +223,19 @@ def _normalizers(evidence: list[dict]) -> dict[tuple[str, str], tuple[float, flo
             source = local if len(local) >= 30 else global_values.get(dimension, [])
             if not source:
                 continue
-            avg = mean(source)
-            sd = pstdev(source)
-            result[(role, dimension)] = (avg, sd if sd > 1e-9 else 1.0)
+
+            center = median(source)
+            absolute_deviations = [abs(value - center) for value in source]
+            mad = median(absolute_deviations)
+            robust_scale = 1.4826 * mad
+
+            # Some discrete/sparse metrics have MAD=0. Fall back to standard
+            # deviation only for scale, while keeping the robust median center.
+            if robust_scale <= 1e-9:
+                fallback = pstdev(source)
+                robust_scale = fallback if fallback > 1e-9 else 1.0
+
+            result[(role, dimension)] = (center, robust_scale)
     return result
 
 
@@ -491,11 +507,11 @@ def main() -> int:
         return 0
 
     print(
-        "HAXLAB SKILL V0.2 — experimental role-normalized performance evidence; "
+        "HAXLAB SKILL V0.3 — experimental role-normalized performance evidence; "
         "not yet a definitive player ranking."
     )
     print(
-        "Uses true touch-chain evidence when schema v4 is available, with v3 "
+        "Uses robust role-normalized touch-chain evidence when schema v4 is available, with v3 "
         "kick-chain fallback. Rating includes conservative shrinkage and uncertainty."
     )
     print()
