@@ -49,7 +49,7 @@ def collect(root: Path) -> list[dict]:
         except (OSError, json.JSONDecodeError):
             continue
 
-        if payload.get("schemaVersion") != 2:
+        if payload.get("schemaVersion") != 3:
             continue
 
         seen: set[str] = set()
@@ -108,7 +108,7 @@ def main() -> int:
     parser.add_argument(
         "--root",
         type=Path,
-        default=Path("/var/lib/haxlab/derived/state-pass-v2"),
+        default=Path("/var/lib/haxlab/derived/state-pass-v3"),
     )
     parser.add_argument("--top", type=int, default=25)
     parser.add_argument("--min-matches", type=int, default=20)
