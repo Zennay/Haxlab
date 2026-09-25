@@ -440,10 +440,18 @@ def build_leaderboard(
             else "unknown"
         )
 
+        aliases = [
+            name
+            for name, _count in name_counts[player_id].most_common()
+        ]
         result.append(
             {
                 "player_id": player_id,
-                "name": name_counts[player_id].most_common(1)[0][0],
+                "identity_source": (
+                    "auth" if player_id.startswith("auth:") else "name"
+                ),
+                "name": aliases[0],
+                "aliases": aliases,
                 "matches": matches[player_id],
                 "minutes": minutes[player_id],
                 "role": primary_role,
