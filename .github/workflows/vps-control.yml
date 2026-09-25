@@ -59,6 +59,9 @@ jobs:
             skill-leaderboard)
               sudo /usr/local/sbin/haxlab-actions-control skill-leaderboard
               ;;
+            training-manifest)
+              sudo /usr/local/sbin/haxlab-actions-control training-manifest
+              ;;
             analyzer-logs)
               sudo /usr/local/sbin/haxlab-actions-control analyzer-logs
               ;;
