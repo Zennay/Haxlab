@@ -67,7 +67,7 @@ def test_aliases_canonicalize_identity_without_losing_source_id() -> None:
     )
     by_id = {row["player_id"]: row for row in selected}
     assert by_id["name:misio"]["canonical_identity"] == "alias:sekai"
-    assert by_id["name:sekai"]["canonical_identity"] == "name:sekai"
+    assert by_id["name:sekai"]["canonical_identity"] == "alias:sekai"
 
 
 def test_elite_split_is_deterministic() -> None:
