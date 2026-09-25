@@ -41,6 +41,7 @@ jobs:
             --top 10000 \
             --min-matches 1 \
             --min-minutes 0 \
+            --aliases "$GITHUB_WORKSPACE/configs/player_aliases.json" \
             --format json \
             --output /var/lib/haxlab/derived/leaderboards/state-pass-v4.json \
             >/tmp/haxlab-elite-leaderboard.json
