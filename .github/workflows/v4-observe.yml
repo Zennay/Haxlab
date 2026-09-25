@@ -87,6 +87,49 @@ jobs:
           PY
 
           echo
+          echo "=== QUALITY REJECTION DIAGNOSIS ==="
+          sudo /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          from collections import Counter
+          from pathlib import Path
+          from haxlab.learning.selector import _replay_quality
+
+          root = Path("/var/lib/haxlab/derived/state-pass-v4")
+          reasons = Counter()
+          accepted = 0
+          total = 0
+          samples = []
+
+          for path in root.rglob("*.json"):
+              if path.name.startswith("_"):
+                  continue
+              total += 1
+              with path.open(encoding="utf-8") as handle:
+                  payload = json.load(handle)
+              ok, why = _replay_quality(payload)
+              if ok:
+                  accepted += 1
+              else:
+                  reasons.update(why)
+                  if len(samples) < 5:
+                      samples.append({
+                          "path": str(path),
+                          "reasons": why,
+                          "schemaVersion": payload.get("schemaVersion"),
+                          "totalFrames": payload.get("totalFrames"),
+                          "gameStarts": (payload.get("simulation") or {}).get("gameStarts"),
+                          "playerCount": len(payload.get("players") or []),
+                          "touches": (payload.get("featureSummary") or {}).get("touches"),
+                      })
+
+          print("total:", total)
+          print("accepted:", accepted)
+          print("rejection reasons:", dict(reasons))
+          print("sample rejected:")
+          for sample in samples:
+              print(json.dumps(sample, sort_keys=True))
+          PY
+          echo
           echo "=== STORAGE ==="
           du -sh /var/lib/haxlab/derived/state-pass-v4 2>/dev/null || true
           sudo du -sh /var/lib/haxlab/derived/training 2>/dev/null || true
