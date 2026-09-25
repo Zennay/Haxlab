@@ -29,10 +29,10 @@ CHATGPT_CHAT_URL='https://chatgpt.com/c/...' bash -c "$(curl -fsSL https://raw.g
 Then, once from a Linux GUI/NoMachine session:
 
 ```bash
-~/.local/share/chatgpt-project-bot/run.sh --login
+~/.local/share/chatgpt-project-bot/login.sh
 ```
 
-Log in, open the intended chat in **Chat** (not Work), set the reasoning control to **High**, then return to the terminal and press Enter.
+Log in, open the intended chat in **Chat** (not Work), set the reasoning control to **High**, then return to the terminal and press Enter. `login.sh` then starts the watchdog service automatically.
 
 Keep the user service alive after SSH logout/reboot:
 
