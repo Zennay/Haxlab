@@ -158,12 +158,25 @@ PY
     ;;
 
   skill-leaderboard)
+    leaderboard_dir="/var/lib/haxlab/derived/leaderboards"
+    leaderboard_json="${leaderboard_dir}/${CURRENT_ANALYZER_VERSION}.json"
+    mkdir -p "${leaderboard_dir}"
+
     if command -v haxlab-skill >/dev/null 2>&1; then
-      haxlab-skill --top 30 --min-matches 20 --min-minutes 60
+      haxlab-skill \
+        --top 30 \
+        --min-matches 20 \
+        --min-minutes 60 \
+        --output "${leaderboard_json}"
     else
       "${APP_DIR}/.venv/bin/python" -m haxlab.skill.leaderboard \
-        --top 30 --min-matches 20 --min-minutes 60
+        --top 30 \
+        --min-matches 20 \
+        --min-minutes 60 \
+        --output "${leaderboard_json}"
     fi
+    echo
+    echo "Leaderboard snapshot: ${leaderboard_json}"
     ;;
 
   analyzer-logs)
