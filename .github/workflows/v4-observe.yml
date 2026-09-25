@@ -14,20 +14,80 @@ jobs:
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 5
     steps:
-      - name: Observe v4 runtime
+      - name: Observe v4 runtime and finalization
         shell: bash
         run: |
           set -euo pipefail
+
           echo "=== STATUS ==="
           sudo /usr/local/sbin/haxlab-actions-control status
+
+          completion="/var/lib/haxlab/derived/state-pass-v4/_complete.json"
+          leaderboard="/var/lib/haxlab/derived/leaderboards/state-pass-v4.json"
+          manifest="/var/lib/haxlab/derived/training/human-imitation-state-pass-v4.json"
+
+          echo
+          echo "=== WAIT FOR FINALIZATION ==="
+          for _ in {1..60}; do
+            if sudo test -s "${completion}" && sudo test -s "${leaderboard}" && sudo test -s "${manifest}"; then
+              break
+            fi
+            sleep 2
+          done
+
+          sudo test -s "${completion}"
+          sudo test -s "${leaderboard}"
+          sudo test -s "${manifest}"
+
+          echo
+          echo "=== COMPLETION ==="
+          sudo cat "${completion}"
+
+          echo
+          echo "=== SKILL V0.3 TOP 20 ==="
+          sudo python3 - "${leaderboard}" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              payload = json.load(handle)
+
+          rows = payload.get("rows") or []
+          print("players:", len(rows))
+          for i, row in enumerate(rows[:20], 1):
+              print(
+                  f"{i:>2}. {row.get('name')} | {row.get('role')} | "
+                  f"rating={float(row.get('rating', 0)):.2f} "
+                  f"±{float(row.get('rating_uncertainty', 0)):.2f} | "
+                  f"matches={int(row.get('matches', 0))} "
+                  f"minutes={float(row.get('minutes', 0)):.1f}"
+              )
+          PY
+
+          echo
+          echo "=== IMITATION MANIFEST ==="
+          sudo python3 - "${manifest}" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              payload = json.load(handle)
+
+          print(json.dumps(payload.get("stats") or {}, indent=2, sort_keys=True))
+          print("selected players:")
+          for row in (payload.get("selected_players") or [])[:30]:
+              print(
+                  " -",
+                  row.get("name"),
+                  row.get("role"),
+                  "score=", round(float(row.get("conservative_score", 0)), 2),
+                  "matches=", row.get("matches"),
+                  "minutes=", round(float(row.get("minutes", 0)), 1),
+              )
+          PY
+
           echo
           echo "=== STORAGE ==="
           du -sh /var/lib/haxlab/derived/state-pass-v4 2>/dev/null || true
+          sudo du -sh /var/lib/haxlab/derived/training 2>/dev/null || true
           df -h /var/lib/haxlab
-          echo
-          echo "=== ANALYZER PROCESSES ==="
-          ps -eo pid,pcpu,pmem,ni,etime,cmd --sort=-pcpu |             grep -E 'haxlab.runtime.analyzer|decode_replay.js' |             grep -v grep | head -20 || true
-
-# observe-2
-
-# observe-3
