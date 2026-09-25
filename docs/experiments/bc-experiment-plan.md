@@ -34,6 +34,29 @@ Record at least:
 - joint action accuracy;
 - storage and runtime.
 
+## Measured reference result
+
+First production pilot on the frozen state-pass-v4 holdout:
+
+- train replays: 200;
+- train samples: 2,135,773;
+- holdout replays: 50;
+- holdout samples: 623,627;
+- direction accuracy: 50.55%;
+- majority-direction baseline: 17.88%;
+- direction lift: +32.68 percentage points;
+- joint accuracy: 41.55%;
+- kick precision: 8.12%;
+- kick recall: 62.22%;
+- kick F1: 14.36%;
+- true kick rate: 3.17%;
+- predicted kick rate: 24.32%.
+
+Movement is clearly learnable above the trivial baseline. The kick head is heavily
+over-positive. Because training uses positive class weighting, threshold 0.5 is
+not a calibrated probability threshold; calibration must use a train-derived
+validation subset, not the frozen holdout.
+
 ## Diagnostics before optimization
 
 A single aggregate accuracy is insufficient.
