@@ -6,7 +6,7 @@ STATE_DB="${HAXLAB_STATE_DB:-/var/lib/haxlab/state/haxlab.sqlite3}"
 CURRENT_ANALYZER_VERSION="$("${APP_DIR}/.venv/bin/python" -c 'from haxlab.runtime.state import CURRENT_ANALYZER_VERSION; print(CURRENT_ANALYZER_VERSION)')"
 
 usage() {
-  echo "Usage: haxlab-actions-control {status|deploy|restart-analyzer|retry-failed-analysis|feature-smoke|player-stats|skill-leaderboard|analyzer-logs|failed-analysis}" >&2
+  echo "Usage: haxlab-actions-control {status|deploy|restart-analyzer|retry-failed-analysis|feature-smoke|player-stats|skill-leaderboard|training-manifest|analyzer-logs|failed-analysis}" >&2
   exit 2
 }
 
@@ -185,6 +185,20 @@ PY
     fi
     echo
     echo "Leaderboard snapshot: ${leaderboard_json}"
+    ;;
+
+  training-manifest)
+    leaderboard="/var/lib/haxlab/derived/leaderboards/${CURRENT_ANALYZER_VERSION}.json"
+    output="/var/lib/haxlab/derived/training/human-imitation-${CURRENT_ANALYZER_VERSION}.json"
+    if [[ ! -f "${leaderboard}" ]]; then
+      echo "Leaderboard is not finalized yet: ${leaderboard}" >&2
+      exit 1
+    fi
+    haxlab-training-manifest \
+      --analysis-root "/var/lib/haxlab/derived/${CURRENT_ANALYZER_VERSION}" \
+      --leaderboard "${leaderboard}" \
+      --raw-root /var/lib/haxlab/raw/replays \
+      --output "${output}"
     ;;
 
   analyzer-logs)
