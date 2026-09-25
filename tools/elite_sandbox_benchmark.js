@@ -201,6 +201,9 @@ function runMatch({
     eliteAttackThirdTicks: 0,
     baselineAttackThirdTicks: 0,
     sampledTicks: 0,
+    directionCounts: {},
+    roleCanonicalXSum: { gk: 0, dm: 0, am: 0, st: 0 },
+    roleCanonicalXSamples: { gk: 0, dm: 0, am: 0, st: 0 },
   };
 
   for (let tick = 0; tick < totalTicks; tick += 1) {
@@ -320,9 +323,16 @@ function runMatch({
       roles: Object.fromEntries(
         eliteBots.map((bot) => [
           bot.role,
-          { actions: bot.actions, kicks: bot.kicks },
+          {
+            actions: bot.actions,
+            kicks: bot.kicks,
+            average_canonical_x:
+              metrics.roleCanonicalXSum[bot.role] /
+              Math.max(1, metrics.roleCanonicalXSamples[bot.role]),
+          },
         ]),
       ),
+      direction_counts: metrics.directionCounts,
     },
     baseline: {
       total_actions: baselineBots.reduce((sum, bot) => sum + bot.actions, 0),
@@ -348,6 +358,40 @@ function summarize(matches, stadium, modelPath) {
   const avg = (selector) =>
     matches.reduce((sum, match) => sum + selector(match), 0) /
     Math.max(1, matches.length);
+
+  const bySide = {};
+  for (const teamId of [1, 2]) {
+    const rows = matches.filter((match) => match.elite_team_id === teamId);
+    if (!rows.length) continue;
+    bySide[String(teamId)] = {
+      matches: rows.length,
+      wins: rows.filter((match) => match.result === "win").length,
+      losses: rows.filter((match) => match.result === "loss").length,
+      draws: rows.filter((match) => match.result === "draw").length,
+      elite_goals: rows.reduce((sum, match) => sum + match.goals.elite, 0),
+      baseline_goals: rows.reduce((sum, match) => sum + match.goals.baseline, 0),
+      elite_half_rate:
+        rows.reduce((sum, match) => sum + match.territory.elite_half_rate, 0) /
+        rows.length,
+      baseline_half_rate:
+        rows.reduce((sum, match) => sum + match.territory.baseline_half_rate, 0) /
+        rows.length,
+      elite_attack_third_rate:
+        rows.reduce(
+          (sum, match) => sum + match.territory.elite_attack_third_rate,
+          0,
+        ) / rows.length,
+      baseline_attack_third_rate:
+        rows.reduce(
+          (sum, match) => sum + match.territory.baseline_attack_third_rate,
+          0,
+        ) / rows.length,
+      total_kicks: rows.reduce(
+        (sum, match) => sum + match.policy.total_kicks,
+        0,
+      ),
+    };
+  }
 
   const byProfile = {};
   for (const profile of BASELINE_PROFILES) {
@@ -395,6 +439,7 @@ function summarize(matches, stadium, modelPath) {
       ),
     },
     runtime_errors: runtimeErrors,
+    by_elite_side: bySide,
     by_profile: byProfile,
     match_results: matches,
   };
