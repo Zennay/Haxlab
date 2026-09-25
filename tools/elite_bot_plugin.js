@@ -7,6 +7,7 @@ const {
   buildFeatureObject,
   canonicalActionToWorld,
 } = require("./elite_features");
+const { kickoffAction } = require("./elite_tactics");
 
 module.exports = function(API) {
   const {
@@ -60,6 +61,10 @@ module.exports = function(API) {
     value: process.env.HAXLAB_ELITE_AUTOSPAWN === "1",
     description: "Spawn GK/DM/AM/ST automatically when the plugin initializes.",
   });
+
+  function teamIdForPlayer(player) {
+    return Number(player?.team?.id || player?.teamId || 0);
+  }
 
   function ensurePolicy() {
     if (policy) return policy;
@@ -169,6 +174,17 @@ module.exports = function(API) {
       if (!features) continue;
 
       try {
+        const tactical = kickoffAction(bot.role, player, gameState);
+        if (tactical) {
+          const canonicalTactical = {
+            dir_x: teamIdForPlayer(player) === 2 ? -tactical.dirX : tactical.dirX,
+            dir_y: tactical.dirY,
+            kick: tactical.kick,
+          };
+          applyAction(bot, canonicalTactical);
+          continue;
+        }
+
         const action = ensurePolicy().act({
           agent_id: String(bot.id),
           role: bot.role,
