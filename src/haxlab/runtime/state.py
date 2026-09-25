@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-CURRENT_ANALYZER_VERSION = "state-pass-v3"
+CURRENT_ANALYZER_VERSION = "state-pass-v4"
 
 
 SCHEMA = """
