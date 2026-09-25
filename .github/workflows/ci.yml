@@ -63,6 +63,7 @@ jobs:
           node --check tools/elite_policy_runtime.js
           node --check tools/elite_bot_plugin.js
           node --check tools/elite_sandbox_benchmark.js
+          node tests/test_elite_mirror.js
 
       - name: Test
         shell: bash
