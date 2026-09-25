@@ -24,6 +24,7 @@ DEFAULT_CONFIG = {
     "page_timeout_seconds": 45,
     "post_send_wait_seconds": 3,
     "force_after_minutes": 20,
+    "check_interval_seconds": 60,
     "require_high_reasoning": True,
 }
 
@@ -237,7 +238,44 @@ def send_prompt(page, cfg, state, forced=False):
     logging.info("Vervolgprompt verstuurd%s.", " na watchdog-stop" if forced else "")
 
 
-def normal_run(cfg):
+def inspect_and_continue(page, cfg, state):
+    if not ensure_logged_in(page):
+        raise RuntimeError("ChatGPT composer niet beschikbaar; login opnieuw vereist")
+
+    now = time.time()
+    busy = is_generating(page)
+    if busy:
+        busy_since = float(state.get("busy_since") or 0)
+        if not busy_since:
+            busy_since = now
+            state["busy_since"] = busy_since
+            save_state(state)
+
+        elapsed = now - busy_since
+        force_after = float(cfg.get("force_after_minutes", 20)) * 60
+        if elapsed < force_after:
+            logging.info(
+                "Nog bezig: %.1f min. Opnieuw controleren over ~%d sec; watchdog bij %.0f min.",
+                elapsed / 60,
+                int(cfg.get("check_interval_seconds", 60)),
+                force_after / 60,
+            )
+            return
+
+        logging.warning("Al %.1f min bezig; watchdog forceert een nieuwe ronde.", elapsed / 60)
+        stop_generation(page)
+        page.wait_for_timeout(1000)
+        send_prompt(page, cfg, state, forced=True)
+        return
+
+    state["busy_since"] = 0
+    save_state(state)
+    logging.info("ChatGPT is klaar; volgende projectstap starten.")
+    send_prompt(page, cfg, state, forced=False)
+
+
+def normal_run(cfg, once=False):
+    """Keep one browser alive so closing Chromium cannot interrupt a long generation."""
     profile = Path(os.path.expanduser(cfg["profile_dir"]))
     profile.mkdir(parents=True, exist_ok=True)
     state = load_json(STATE_PATH, {
@@ -246,6 +284,7 @@ def normal_run(cfg):
         "send_count": 0,
         "forced_restart_count": 0,
     })
+    check_interval = max(10, int(cfg.get("check_interval_seconds", 60)))
 
     with sync_playwright() as p:
         ctx = p.chromium.launch_persistent_context(
@@ -258,41 +297,24 @@ def normal_run(cfg):
             timeout_ms = int(cfg.get("page_timeout_seconds", 45)) * 1000
             page.set_default_timeout(timeout_ms)
             page.goto(cfg["chat_url"], wait_until="domcontentloaded", timeout=timeout_ms)
-            page.wait_for_timeout(2200)
+            page.wait_for_timeout(2500)
 
-            if not ensure_logged_in(page):
-                return 3
+            while True:
+                try:
+                    inspect_and_continue(page, cfg, state)
+                except Exception as exc:
+                    logging.exception("Check mislukt: %s", exc)
+                    if once:
+                        raise
+                    try:
+                        page.goto(cfg["chat_url"], wait_until="domcontentloaded", timeout=timeout_ms)
+                        page.wait_for_timeout(2500)
+                    except Exception:
+                        raise
 
-            now = time.time()
-            busy = is_generating(page)
-            if busy:
-                busy_since = float(state.get("busy_since") or 0)
-                if not busy_since:
-                    busy_since = now
-                    state["busy_since"] = busy_since
-                    save_state(state)
-
-                elapsed = now - busy_since
-                force_after = float(cfg.get("force_after_minutes", 20)) * 60
-                if elapsed < force_after:
-                    logging.info(
-                        "Nog bezig: %.1f min. Volgende check over ~1 minuut; watchdog bij %.0f min.",
-                        elapsed / 60,
-                        force_after / 60,
-                    )
+                if once:
                     return 0
-
-                logging.warning("Al %.1f min bezig; watchdog forceert een nieuwe ronde.", elapsed / 60)
-                stop_generation(page)
-                page.wait_for_timeout(1000)
-                send_prompt(page, cfg, state, forced=True)
-                return 0
-
-            state["busy_since"] = 0
-            save_state(state)
-            logging.info("ChatGPT is klaar; volgende projectstap starten.")
-            send_prompt(page, cfg, state, forced=False)
-            return 0
+                time.sleep(check_interval)
         finally:
             ctx.close()
 
@@ -317,6 +339,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--login", action="store_true")
     parser.add_argument("--status", action="store_true")
+    parser.add_argument("--once", action="store_true", help="Voer één inspectie uit en stop.")
     args = parser.parse_args()
 
     cfg = load_json(CONFIG_PATH, DEFAULT_CONFIG)
@@ -326,7 +349,7 @@ def main():
         return 0
     if args.login:
         return login_mode(cfg)
-    return normal_run(cfg)
+    return normal_run(cfg, once=args.once)
 
 
 if __name__ == "__main__":
