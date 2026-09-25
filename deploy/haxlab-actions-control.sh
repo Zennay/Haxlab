@@ -27,6 +27,26 @@ case "${action}" in
     echo
     echo "=== post-deploy status ==="
     haxlab-status
+
+    echo
+    echo "=== preliminary player leaderboard ==="
+    if command -v haxlab-players >/dev/null 2>&1; then
+      haxlab-players --top 20 --min-matches 20 --min-minutes 30 || true
+    else
+      "${APP_DIR}/.venv/bin/python" -m haxlab.runtime.player_stats \
+        --top 20 --min-matches 20 --min-minutes 30 || true
+    fi
+
+    echo
+    echo "=== top analysis failure reasons ==="
+    sqlite3 "${STATE_DB}" "
+      SELECT COALESCE(error, '<no error>') AS error, COUNT(*) AS count
+      FROM replay_analysis
+      WHERE analyzer_version='state-pass-v2' AND status='failed'
+      GROUP BY error
+      ORDER BY count DESC
+      LIMIT 15;
+    " || true
     ;;
 
   restart-analyzer)
