@@ -2,6 +2,7 @@
 "use strict";
 
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const zlib = require("zlib");
 const initAPI = require("node-haxball");
@@ -26,6 +27,9 @@ const sampleEvery = Math.max(
 );
 
 if (!replayPath || !outputPath || !selectedPlayerMapJson) usage();
+if (os.endianness() !== "LE") {
+  throw new Error("haxlab imitation shards currently require little-endian host");
+}
 
 const selectedByReplayId = new Map(
   Object.entries(JSON.parse(selectedPlayerMapJson)).map(
@@ -148,31 +152,6 @@ const columns = [
   "kick",
 ];
 
-gzip.write(
-  JSON.stringify({
-    type: "meta",
-    schema: "haxlab-imitation-shard-v1",
-    sourceFile: path.basename(replayPath),
-    replayVersion: replayData.version,
-    totalFrames: replayData.totalFrames,
-    sampleEveryTicks: sampleEvery,
-    canonicalAttackDirection: "+x",
-    selectedPlayers: Object.fromEntries(
-      Array.from(selectedIndex.entries()).map(([identity, index]) => [
-        String(index),
-        identity,
-      ]),
-    ),
-    selectedReplayPlayers: Object.fromEntries(
-      Array.from(selectedByReplayId.entries()).map(([playerId, identity]) => [
-        String(playerId),
-        identity,
-      ]),
-    ),
-    columns,
-  }) + "\n",
-);
-
 function writeSample(player, statePlayers, ballDisc) {
   const replayPlayerId = Number(player.id);
   const identity = selectedByReplayId.get(replayPlayerId);
@@ -237,7 +216,8 @@ function writeSample(player, statePlayers, ballDisc) {
     action?.kick ? 1 : 0,
   ];
 
-  gzip.write(JSON.stringify(sample) + "\n");
+  const values = new Float32Array(sample);
+  gzip.write(Buffer.from(values.buffer, values.byteOffset, values.byteLength));
   sampleCount += 1;
 }
 
@@ -332,7 +312,26 @@ function closeOutput() {
 
     process.stdout.write(
       JSON.stringify({
-        schema: "haxlab-imitation-extract-summary-v1",
+        schema: "haxlab-imitation-extract-summary-v2",
+        shardSchema: "haxlab-imitation-shard-v2",
+        format: "float32-le-gzip",
+        dtype: "float32-le",
+        rowWidth: columns.length,
+        columns,
+        canonicalAttackDirection: "+x",
+        selectedPlayers: Object.fromEntries(
+          Array.from(selectedIndex.entries()).map(([identity, index]) => [
+            String(index),
+            identity,
+          ]),
+        ),
+        selectedReplayPlayers: Object.fromEntries(
+          Array.from(selectedByReplayId.entries()).map(([playerId, identity]) => [
+            String(playerId),
+            identity,
+          ]),
+        ),
+        sourceFile: path.basename(replayPath),
         outputPath,
         totalFrames: replayData.totalFrames,
         framesAdvanced,
