@@ -328,6 +328,42 @@ def _train_batch(
     }
 
 
+def _weighted_resample_order(
+    order: np.ndarray,
+    *,
+    effective_weight: float,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Deterministically resample one replay for a weighted training epoch.
+
+    A scalar loss multiplier on a batch containing only one replay mostly
+    cancels under Adam. Resampling changes the actual example distribution:
+    weight 0.5 keeps about half the examples, weight 1 keeps all examples,
+    and weight 1.5 keeps all plus a half-sized duplicate sample.
+    """
+    if order.size == 0:
+        return order
+
+    weight = max(0.05, min(5.0, float(effective_weight)))
+    whole = int(math.floor(weight))
+    fractional = weight - whole
+
+    pieces: list[np.ndarray] = []
+    for _ in range(whole):
+        pieces.append(order.copy())
+
+    if fractional > 0.0:
+        take = max(1, min(order.size, int(round(order.size * fractional))))
+        pieces.append(rng.choice(order, size=take, replace=False))
+
+    if not pieces:
+        return np.empty(0, dtype=order.dtype)
+
+    sampled = np.concatenate(pieces)
+    rng.shuffle(sampled)
+    return sampled
+
+
 def _iter_batches(
     index: dict[str, Any],
     *,
@@ -342,6 +378,17 @@ def _iter_batches(
     if shuffle:
         rng.shuffle(entries)
 
+    raw_weights = np.asarray(
+        [float(entry.get("example_weight", 1.0)) for entry in entries],
+        dtype=np.float32,
+    )
+    mean_weight = (
+        float(raw_weights.mean())
+        if include_sample_weight and raw_weights.size
+        else 1.0
+    )
+    mean_weight = max(1e-6, mean_weight)
+
     for entry in entries:
         rows, columns = _load_shard(entry)
         x, direction, kick, _ = _extract_xy(rows, columns)
@@ -350,11 +397,20 @@ def _iter_batches(
         if shuffle:
             rng.shuffle(order)
 
-        replay_weight = float(entry.get("example_weight", 1.0))
-        for start in range(0, x.shape[0], batch_size):
+        if include_sample_weight:
+            replay_weight = float(entry.get("example_weight", 1.0))
+            order = _weighted_resample_order(
+                order,
+                effective_weight=replay_weight / mean_weight,
+                rng=rng,
+            )
+
+        for start in range(0, order.shape[0], batch_size):
             idx = order[start : start + batch_size]
             if include_sample_weight:
-                weights = np.full(idx.shape[0], replay_weight, dtype=np.float32)
+                # Weighting has already been applied by resampling. Ones keep
+                # the train-batch interface explicit without re-scaling Adam.
+                weights = np.ones(idx.shape[0], dtype=np.float32)
                 yield x[idx], direction[idx], kick[idx], weights
             else:
                 yield x[idx], direction[idx], kick[idx]
