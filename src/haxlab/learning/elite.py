@@ -487,7 +487,7 @@ def _finalize_metrics(counter: dict[str, Any], threshold: float) -> dict[str, An
         "kick_confusion": {"tp": tp, "fp": fp, "fn": fn, "tn": tn},
         "baselines": {
             "majority_direction_accuracy": int(direction_counts.max()) / total,
-            "always_no_kick_accuracy": (tn + fn) / total,
+            "always_no_kick_accuracy": (tn + fp) / total,
         },
     }
 
