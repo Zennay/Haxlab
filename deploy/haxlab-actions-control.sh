@@ -42,7 +42,7 @@ case "${action}" in
     echo "=== top analysis failure reasons ==="
     sqlite3 "${STATE_DB}" "
       SELECT COALESCE(error, '<no error>') AS error, COUNT(*) AS count
-      FROM replay_analysis
+      FROM replay_analysis_versions
       WHERE analyzer_version='${CURRENT_ANALYZER_VERSION}' AND status='failed'
       GROUP BY error
       ORDER BY count DESC
@@ -59,7 +59,7 @@ case "${action}" in
   retry-failed-analysis)
     systemctl stop haxlab-analyzer.service
     sqlite3 "${STATE_DB}" "
-      UPDATE replay_analysis
+      UPDATE replay_analysis_versions
       SET status='retry', updated_at=CURRENT_TIMESTAMP
       WHERE analyzer_version='${CURRENT_ANALYZER_VERSION}' AND status='failed';
       SELECT changes();
@@ -147,7 +147,7 @@ PY
   failed-analysis)
     sqlite3 "${STATE_DB}" "
       SELECT COALESCE(error, '<no error>') AS error, COUNT(*) AS count
-      FROM replay_analysis
+      FROM replay_analysis_versions
       WHERE analyzer_version='${CURRENT_ANALYZER_VERSION}' AND status='failed'
       GROUP BY error
       ORDER BY count DESC
