@@ -341,7 +341,7 @@ class RuntimeState:
         )
         self.connection.commit()
 
-    def status_snapshot(self) -> dict[str, int | float]:
+    def status_snapshot(self) -> dict[str, int | float | str]:
         source = {
             row["status"]: row["count"]
             for row in self.connection.execute(
@@ -415,6 +415,7 @@ class RuntimeState:
         processing_ok = int(processed.get("ok", 0))
 
         return {
+            "analysis_version": CURRENT_ANALYZER_VERSION,
             "source_archived": int(source.get("archived", 0)),
             "source_duplicates": int(source.get("duplicate", 0)),
             "source_failed": int(source.get("failed", 0)),
