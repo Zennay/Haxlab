@@ -366,6 +366,7 @@ def evaluate(
     kick_fn = 0
     kick_tn = 0
     direction_counts = np.zeros(9, dtype=np.int64)
+    direction_confusion = np.zeros((9, 9), dtype=np.int64)
 
     rng = np.random.default_rng(0)
     for x, direction, kick in _iter_batches(
@@ -392,6 +393,7 @@ def evaluate(
         kick_fn += int((~kick_pred & kick_true).sum())
         kick_tn += int((~kick_pred & ~kick_true).sum())
         direction_counts += np.bincount(direction, minlength=9)
+        np.add.at(direction_confusion, (direction, dir_pred), 1)
 
     if total <= 0:
         raise ValueError("evaluation index contains no samples")
@@ -404,10 +406,28 @@ def evaluate(
     )
     majority_direction = int(direction_counts.max())
     no_kick = kick_tn + kick_fp
+    direction_recall_by_class = []
+    for class_id in range(9):
+        support = int(direction_confusion[class_id].sum())
+        recall = (
+            float(direction_confusion[class_id, class_id]) / support
+            if support > 0
+            else None
+        )
+        direction_recall_by_class.append(recall)
+    supported_recalls = [
+        recall for recall in direction_recall_by_class if recall is not None
+    ]
+    direction_macro_recall = (
+        float(np.mean(supported_recalls)) if supported_recalls else 0.0
+    )
 
     return {
         "samples": total,
         "direction_accuracy": direction_correct / total,
+        "direction_macro_recall": direction_macro_recall,
+        "direction_recall_by_class": direction_recall_by_class,
+        "direction_confusion": direction_confusion.tolist(),
         "joint_accuracy": joint_correct / total,
         "kick_precision": kick_precision,
         "kick_recall": kick_recall,
