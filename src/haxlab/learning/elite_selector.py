@@ -99,45 +99,74 @@ def select_elite_players(
         and float(row.get("rating_uncertainty", math.inf)) <= max_uncertainty
     ]
 
-    by_role: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    by_role_canonical: defaultdict[
+        str, defaultdict[str, list[dict[str, Any]]]
+    ] = defaultdict(lambda: defaultdict(list))
     for row in eligible:
-        by_role[str(row["role"]).lower()].append(row)
+        role = str(row["role"]).lower()
+        canonical = _canonical_identity(row, aliases)
+        by_role_canonical[role][canonical].append(row)
 
     selected: list[dict[str, Any]] = []
     for role in VALID_ROLES:
-        rows = list(by_role.get(role, []))
-        rows.sort(
-            key=lambda row: (
-                _conservative_score(row),
-                float(row.get("rating", 0.0)),
-                int(row.get("matches", 0)),
+        canonical_groups = by_role_canonical.get(role, {})
+        ranked_groups: list[
+            tuple[dict[str, Any], str, list[dict[str, Any]]]
+        ] = []
+        for canonical, source_rows in canonical_groups.items():
+            representative = max(
+                source_rows,
+                key=lambda row: (
+                    _conservative_score(row),
+                    float(row.get("rating", 0.0)),
+                    int(row.get("matches", 0)),
+                ),
+            )
+            ranked_groups.append((representative, canonical, source_rows))
+
+        ranked_groups.sort(
+            key=lambda item: (
+                _conservative_score(item[0]),
+                float(item[0].get("rating", 0.0)),
+                int(item[0].get("matches", 0)),
             ),
             reverse=True,
         )
-        if not rows:
+        if not ranked_groups:
             continue
 
         count = max(
             min_players_per_role,
-            math.ceil(len(rows) * max(0.0, min(1.0, top_fraction_per_role))),
+            math.ceil(
+                len(ranked_groups)
+                * max(0.0, min(1.0, top_fraction_per_role))
+            ),
         )
-        for row in rows[: min(len(rows), count)]:
-            conservative = _conservative_score(row)
-            selected.append(
-                {
-                    "player_id": str(row["player_id"]),
-                    "canonical_identity": _canonical_identity(row, aliases),
-                    "name": row.get("name"),
-                    "role": role,
-                    "role_id": ROLE_IDS[role],
-                    "rating": float(row.get("rating", 0.0)),
-                    "rating_uncertainty": float(row.get("rating_uncertainty", 0.0)),
-                    "conservative_score": conservative,
-                    "skill_weight": _skill_weight(conservative),
-                    "matches": int(row.get("matches", 0)),
-                    "minutes": float(row.get("minutes", 0.0)),
-                }
-            )
+        for representative, canonical, source_rows in ranked_groups[
+            : min(len(ranked_groups), count)
+        ]:
+            canonical_conservative = _conservative_score(representative)
+            canonical_weight = _skill_weight(canonical_conservative)
+            for row in source_rows:
+                source_conservative = _conservative_score(row)
+                selected.append(
+                    {
+                        "player_id": str(row["player_id"]),
+                        "canonical_identity": canonical,
+                        "name": row.get("name"),
+                        "role": role,
+                        "role_id": ROLE_IDS[role],
+                        "rating": float(row.get("rating", 0.0)),
+                        "rating_uncertainty": float(
+                            row.get("rating_uncertainty", 0.0)
+                        ),
+                        "source_conservative_score": source_conservative,
+                        "conservative_score": canonical_conservative,
+                        "skill_weight": canonical_weight,
+                        "matches": int(row.get("matches", 0)),
+                        "minutes": float(row.get("minutes", 0.0)),
+                    }
+                )
 
     selected.sort(
         key=lambda row: (
@@ -361,14 +390,28 @@ def build_elite_manifest(
             "analysis_files_scanned": scanned,
             "quality_rejected": rejected,
             "quality_rejection_reasons": dict(sorted(rejection_reasons.items())),
-            "elite_player_count": len(selected_players),
+            "elite_source_profile_count": len(selected_players),
+            "elite_canonical_player_count": len(
+                {row["canonical_identity"] for row in selected_players}
+            ),
+            "elite_player_count": len(
+                {row["canonical_identity"] for row in selected_players}
+            ),
             "selected_replays": selected_replays,
             "train_replay_count": len(splits["train"]),
             "validation_replay_count": len(splits["validation"]),
             "holdout_replay_count": len(splits["holdout"]),
-            "players_by_role": dict(
-                sorted(Counter(row["role"] for row in selected_players).items())
-            ),
+            "players_by_role": {
+                role: len(
+                    {
+                        row["canonical_identity"]
+                        for row in selected_players
+                        if row["role"] == role
+                    }
+                )
+                for role in VALID_ROLES
+                if any(row["role"] == role for row in selected_players)
+            },
         },
         "train_replays": splits["train"],
         "validation_replays": splits["validation"],
