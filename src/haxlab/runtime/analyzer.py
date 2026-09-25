@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
+from haxlab.runtime.finalize import finalize_analysis_if_ready
 from haxlab.runtime.state import CURRENT_ANALYZER_VERSION, RawReplayRecord, RuntimeState
 
 
@@ -230,6 +231,20 @@ def main() -> int:
                 timeout_seconds=max(10, args.timeout_seconds),
             )
             print(json.dumps(result, sort_keys=True), flush=True)
+
+            if result["selected"] == 0:
+                finalization = finalize_analysis_if_ready(
+                    state,
+                    derived_root=args.derived_root,
+                )
+                if finalization.get("status") == "finalized":
+                    print(
+                        json.dumps(
+                            {"analysis_finalization": finalization},
+                            sort_keys=True,
+                        ),
+                        flush=True,
+                    )
 
             if args.once:
                 return 0
