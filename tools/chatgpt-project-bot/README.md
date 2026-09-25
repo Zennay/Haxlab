@@ -20,36 +20,32 @@ A small Linux watchdog that keeps a normal ChatGPT project chat moving without u
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Zennay/Haxlab/main/install-chatgpt-project-bot.sh)"
 ```
 
-The installer asks for the project-chat URL. You can also pass it non-interactively:
+The installer asks for the project-chat URL. Re-running the installer keeps an existing `config.json`.
 
-```bash
-CHATGPT_CHAT_URL='https://chatgpt.com/c/...' bash -c "$(curl -fsSL https://raw.githubusercontent.com/Zennay/Haxlab/main/install-chatgpt-project-bot.sh)"
-```
+## First ChatGPT login
 
-Then, once from a Linux GUI/NoMachine session:
+The watchdog itself is headless, but the first ChatGPT login needs a visible browser.
+
+If you use SSH, first connect to the VPS with **NoMachine** and leave that desktop session active. Then you may run this from SSH:
 
 ```bash
 ~/.local/share/chatgpt-project-bot/login.sh
 ```
 
-Log in, open the intended chat in **Chat** (not Work), set the reasoning control to **High**, then return to the terminal and press Enter. `login.sh` then starts the watchdog service automatically.
+`login.sh` automatically searches the current user's processes for an active X11/NoMachine `DISPLAY`, `XAUTHORITY` and D-Bus session. If no graphical session exists, it exits with instructions instead of crashing Playwright.
 
-Keep the user service alive after SSH logout/reboot:
+Log in, open the intended chat in **Chat** (not Work), set reasoning to **High**, then return to the terminal and press Enter. The watchdog service starts automatically.
+
+## Persistence and logs
 
 ```bash
 sudo loginctl enable-linger "$USER"
-```
-
-## Commands
-
-```bash
 systemctl --user status chatgpt-project-bot.service
 journalctl --user -u chatgpt-project-bot.service -f
 ~/.local/share/chatgpt-project-bot/run.sh --status
-systemctl --user disable --now chatgpt-project-bot.service
 ```
 
-Edit configuration at:
+Configuration lives at:
 
 ```text
 ~/.local/share/chatgpt-project-bot/config.json
