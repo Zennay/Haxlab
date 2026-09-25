@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from statistics import mean, pstdev
 
@@ -41,6 +41,7 @@ def collect(root: Path) -> list[dict]:
     totals: dict[str, dict] = defaultdict(
         lambda: {
             "name": "",
+            "name_counts": Counter(),
             "matches": 0,
             "samples": 0,
             "nearest_ball_samples": 0,
@@ -78,8 +79,9 @@ def collect(root: Path) -> list[dict]:
                 continue
 
             row = totals[key]
-            if not row["name"]:
-                row["name"] = str(player.get("name")).strip()
+            display_name = " ".join(str(player.get("name")).strip().split())
+            if display_name:
+                row["name_counts"][display_name] += 1
 
             if key not in seen:
                 row["matches"] += 1
@@ -115,14 +117,17 @@ def collect(root: Path) -> list[dict]:
 
     rows: list[dict] = []
     for row in totals.values():
+        if row["name_counts"]:
+            row["name"] = row["name_counts"].most_common(1)[0][0]
         active_minutes = row["samples"] / 600.0  # 10 Hz state sampling.
         retained_touch_transitions = (
             row["self_retouches"] + row["team_touch_transfers_out"]
         )
         touch_transitions = retained_touch_transitions + row["turnovers"]
+        output_row = {key: value for key, value in row.items() if key != "name_counts"}
         rows.append(
             {
-                **row,
+                **output_row,
                 "active_minutes": active_minutes,
                 "nearest_ball_pct": 100.0
                 * _safe_div(row["nearest_ball_samples"], row["samples"]),
