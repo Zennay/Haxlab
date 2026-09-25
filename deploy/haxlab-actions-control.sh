@@ -5,7 +5,7 @@ APP_DIR="${HAXLAB_APP_DIR:-/opt/haxlab}"
 STATE_DB="${HAXLAB_STATE_DB:-/var/lib/haxlab/state/haxlab.sqlite3}"
 
 usage() {
-  echo "Usage: haxlab-actions-control {status|deploy|restart-analyzer|retry-failed-analysis|player-stats|analyzer-logs|failed-analysis}" >&2
+  echo "Usage: haxlab-actions-control {status|deploy|restart-analyzer|retry-failed-analysis|player-stats|skill-leaderboard|analyzer-logs|failed-analysis}" >&2
   exit 2
 }
 
@@ -74,6 +74,15 @@ case "${action}" in
     else
       "${APP_DIR}/.venv/bin/python" -m haxlab.runtime.player_stats \
         --top 30 --min-matches 20 --min-minutes 30
+    fi
+    ;;
+
+  skill-leaderboard)
+    if command -v haxlab-skill >/dev/null 2>&1; then
+      haxlab-skill --top 30 --min-matches 20 --min-minutes 60
+    else
+      "${APP_DIR}/.venv/bin/python" -m haxlab.skill.leaderboard \
+        --top 30 --min-matches 20 --min-minutes 60
     fi
     ;;
 
