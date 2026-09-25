@@ -9,6 +9,7 @@ on:
       - "tools/extract_elite_imitation.js"
       - "tools/extract_stadium_from_replay.js"
       - "tools/elite_features.js"
+      - "tools/elite_tactics.js"
       - "tools/elite_policy_runtime.js"
       - "tools/elite_bot_plugin.js"
       - "tools/elite_sandbox_benchmark.js"
