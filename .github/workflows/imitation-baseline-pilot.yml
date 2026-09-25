@@ -1,0 +1,114 @@
+name: HaxLab BC Pilot
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/imitation-baseline-pilot.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  pilot:
+    name: Train first behavior cloning challenger
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 30
+
+    steps:
+      - name: Wait for this exact commit to be deployed
+        shell: bash
+        run: |
+          set -euo pipefail
+          for _ in {1..180}; do
+            deployed="$(git -C /opt/haxlab rev-parse HEAD 2>/dev/null || true)"
+            echo "deployed=$deployed target=$GITHUB_SHA"
+            if [[ "$deployed" == "$GITHUB_SHA" ]]; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Timed out waiting for tested commit to reach /opt/haxlab." >&2
+          exit 1
+
+      - name: Build Float32 pilot shards
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="/var/lib/haxlab/derived/training/human-imitation-state-pass-v4.json"
+          output_root="/var/lib/haxlab/derived/training/shards-bc-pilot/state-pass-v4"
+
+          echo "=== TRAIN SHARDS ==="
+          sudo -u haxlab /usr/local/bin/haxlab-build-shards             --manifest "$manifest"             --split train             --limit 200             --workers 4             --sample-every-ticks 6             --output-root "$output_root"
+
+          echo
+          echo "=== HOLDOUT SHARDS ==="
+          sudo -u haxlab /usr/local/bin/haxlab-build-shards             --manifest "$manifest"             --split holdout             --limit 50             --workers 4             --sample-every-ticks 6             --output-root "$output_root"
+
+      - name: Train NumPy MLP challenger
+        shell: bash
+        run: |
+          set -euo pipefail
+          output_root="/var/lib/haxlab/derived/training/shards-bc-pilot/state-pass-v4"
+          model_dir="/var/lib/haxlab/models/challengers/bc-pilot-v1"
+
+          sudo rm -rf "$model_dir"
+          sudo mkdir -p "$model_dir"
+          sudo chown -R haxlab:haxlab "$model_dir"
+
+          sudo -u haxlab /usr/local/bin/haxlab-train-bc             --train-index "$output_root/train/_index.json"             --holdout-index "$output_root/holdout/_index.json"             --output-dir "$model_dir"             --hidden-dim 64             --epochs 4             --batch-size 8192             --learning-rate 0.001             --l2 0.00001             --seed 1337
+
+      - name: Report pilot metrics
+        shell: bash
+        run: |
+          set -euo pipefail
+          model_dir="/var/lib/haxlab/models/challengers/bc-pilot-v1"
+          train_index="/var/lib/haxlab/derived/training/shards-bc-pilot/state-pass-v4/train/_index.json"
+          holdout_index="/var/lib/haxlab/derived/training/shards-bc-pilot/state-pass-v4/holdout/_index.json"
+
+          sudo /opt/haxlab/.venv/bin/python - "$model_dir/metrics.json" "$train_index" "$holdout_index" <<'PY'
+          import json
+          import math
+          import sys
+
+          metrics = json.load(open(sys.argv[1], encoding="utf-8"))
+          train_index = json.load(open(sys.argv[2], encoding="utf-8"))
+          holdout_index = json.load(open(sys.argv[3], encoding="utf-8"))
+          final = metrics["final_holdout"]
+
+          report = {
+              "model_schema": metrics["schema"],
+              "architecture": metrics["architecture"],
+              "train_replays": train_index["successful_replays"],
+              "train_samples": train_index["samples"],
+              "holdout_replays": holdout_index["successful_replays"],
+              "holdout_samples": holdout_index["samples"],
+              "direction_accuracy": final["direction_accuracy"],
+              "majority_direction_accuracy": final["baselines"]["majority_direction_accuracy"],
+              "direction_lift": (
+                  final["direction_accuracy"]
+                  - final["baselines"]["majority_direction_accuracy"]
+              ),
+              "kick_f1": final["kick_f1"],
+              "kick_precision": final["kick_precision"],
+              "kick_recall": final["kick_recall"],
+              "kick_true_rate": final["kick_true_rate"],
+              "kick_predicted_rate": final["kick_predicted_rate"],
+              "joint_accuracy": final["joint_accuracy"],
+          }
+          print(json.dumps(report, indent=2, sort_keys=True))
+
+          for key in (
+              "direction_accuracy",
+              "kick_f1",
+              "kick_precision",
+              "kick_recall",
+              "joint_accuracy",
+          ):
+              assert math.isfinite(float(report[key]))
+          PY
+
+          echo
+          echo "=== STORAGE ==="
+          sudo du -sh /var/lib/haxlab/derived/training/shards-bc-pilot/state-pass-v4
+          sudo du -sh "$model_dir"
