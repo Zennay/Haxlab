@@ -93,3 +93,46 @@ def test_analysis_versions_are_preserved(tmp_path: Path) -> None:
     ]
     assert snapshot["analysis_versions"]["state-pass-v3"]["ok"] == 1
     assert snapshot["analysis_versions"]["state-pass-v4"]["failed"] == 1
+
+
+def test_recent_analysis_rate_uses_elapsed_window(tmp_path: Path) -> None:
+    db = tmp_path / "state.sqlite3"
+    replay = tmp_path / "rate.hbr2"
+    replay.write_bytes(b"x")
+
+    with RuntimeState(db) as state:
+        state.register_raw(
+            sha256="c" * 64,
+            archive_path=str(replay),
+            size_bytes=1,
+        )
+        state.mark_replay_processing(
+            sha256="c" * 64,
+            status="ok",
+            format_version=3,
+            total_frames=600,
+            duration_seconds=10.0,
+            decompressed_bytes=10,
+        )
+        state.mark_replay_analysis(
+            sha256="c" * 64,
+            status="ok",
+            sampled_state_count=100,
+            player_count=6,
+            raw_event_count=50,
+            tick_count=600,
+        )
+        state.connection.execute(
+            """
+            UPDATE replay_analysis_versions
+            SET updated_at = datetime('now', '-60 seconds')
+            WHERE sha256 = ?
+            """,
+            ("c" * 64,),
+        )
+        state.connection.commit()
+
+        snapshot = state.status_snapshot()
+
+    rate = float(snapshot["analysis_rate_per_minute_5m"])
+    assert 0.95 <= rate <= 1.05
