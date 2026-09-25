@@ -8,6 +8,27 @@ const initAPI = require("node-haxball");
 const API = initAPI();
 const { Replay, Utils } = API;
 
+function formatFatal(error) {
+  if (error == null) return "<null>";
+  if (typeof error === "string") return error;
+  if (error instanceof Error) return error.stack || error.message || String(error);
+  try {
+    return JSON.stringify(error);
+  } catch (_) {
+    return String(error);
+  }
+}
+
+process.on("uncaughtException", (error) => {
+  console.error("HAXLAB_UNCAUGHT:", formatFatal(error));
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (error) => {
+  console.error("HAXLAB_UNHANDLED_REJECTION:", formatFatal(error));
+  process.exit(1);
+});
+
 function usage() {
   console.error("Usage: node tools/decode_replay.js <replay.hbr2> [sampleEveryTicks]");
   process.exit(2);
