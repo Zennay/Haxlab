@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import json
 import math
 import os
@@ -62,6 +63,72 @@ def _load_index(index_path: Path, limit: int | None = None) -> dict[str, Any]:
     if limit is not None:
         entries = entries[: max(0, limit)]
     return {**payload, "entries": entries}
+
+
+def _validation_bucket(replay_sha256: str, seed: int) -> int:
+    digest = hashlib.sha256(
+        f"haxlab-bc-validation-v1:{seed}:{replay_sha256}".encode("utf-8")
+    ).digest()
+    return int.from_bytes(digest[:8], "big") % 10000
+
+
+def _split_train_validation(
+    index: dict[str, Any],
+    *,
+    validation_fraction: float,
+    seed: int,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    entries = list(index.get("entries") or [])
+    if len(entries) < 2:
+        raise ValueError("at least two training replays are required")
+
+    fraction = max(0.01, min(0.5, float(validation_fraction)))
+    threshold = int(round(fraction * 10000))
+    validation = [
+        entry
+        for entry in entries
+        if _validation_bucket(str(entry["replay_sha256"]), seed) < threshold
+    ]
+    fit = [entry for entry in entries if entry not in validation]
+
+    # Tiny pilot datasets can miss the hash bucket. Keep the split deterministic
+    # and non-empty by moving the lowest bucket(s) when needed.
+    ranked = sorted(
+        entries,
+        key=lambda entry: (
+            _validation_bucket(str(entry["replay_sha256"]), seed),
+            str(entry["replay_sha256"]),
+        ),
+    )
+    target_validation = max(1, min(len(entries) - 1, round(len(entries) * fraction)))
+    if len(validation) < target_validation:
+        validation_ids = {str(entry["replay_sha256"]) for entry in validation}
+        for entry in ranked:
+            replay_id = str(entry["replay_sha256"])
+            if replay_id in validation_ids:
+                continue
+            validation.append(entry)
+            validation_ids.add(replay_id)
+            if len(validation) >= target_validation:
+                break
+        fit = [
+            entry
+            for entry in entries
+            if str(entry["replay_sha256"]) not in validation_ids
+        ]
+    elif not fit:
+        validation = ranked[: len(entries) - 1]
+        validation_ids = {str(entry["replay_sha256"]) for entry in validation}
+        fit = [
+            entry
+            for entry in entries
+            if str(entry["replay_sha256"]) not in validation_ids
+        ]
+
+    return (
+        {**index, "entries": fit},
+        {**index, "entries": validation},
+    )
 
 
 def _load_shard(entry: dict[str, Any]) -> tuple[np.ndarray, list[str]]:
@@ -338,6 +405,7 @@ def evaluate(
     mean: np.ndarray,
     std: np.ndarray,
     batch_size: int = 8192,
+    kick_threshold: float = 0.5,
 ) -> dict[str, Any]:
     total = 0
     direction_correct = 0
@@ -359,7 +427,7 @@ def evaluate(
     ):
         _, dir_prob, kick_prob = _forward(x, params)
         dir_pred = dir_prob.argmax(axis=1)
-        kick_pred = kick_prob >= 0.5
+        kick_pred = kick_prob >= float(kick_threshold)
         kick_true = kick > 0.5
 
         total += x.shape[0]
@@ -394,6 +462,7 @@ def evaluate(
         "kick_f1": kick_f1,
         "kick_true_rate": (kick_tp + kick_fn) / total,
         "kick_predicted_rate": (kick_tp + kick_fp) / total,
+        "kick_threshold": float(kick_threshold),
         "kick_confusion": {
             "tp": kick_tp,
             "fp": kick_fp,
@@ -420,9 +489,15 @@ def train_baseline(
     learning_rate: float = 1e-3,
     l2: float = 1e-5,
     seed: int = 1337,
+    validation_fraction: float = 0.10,
 ) -> dict[str, Any]:
-    train_index = _load_index(train_index_path, train_limit)
+    full_train_index = _load_index(train_index_path, train_limit)
     holdout_index = _load_index(holdout_index_path, holdout_limit)
+    train_index, validation_index = _split_train_validation(
+        full_train_index,
+        validation_fraction=validation_fraction,
+        seed=seed,
+    )
     mean, std, input_columns, train_stats = _normalization(train_index)
 
     rng = np.random.default_rng(seed)
@@ -468,12 +543,13 @@ def train_baseline(
             dir_losses.append(loss["direction_loss"])
             kick_losses.append(loss["kick_loss"])
 
-        holdout_metrics = evaluate(
-            holdout_index,
+        validation_metrics = evaluate(
+            validation_index,
             params=params,
             mean=mean,
             std=std,
             batch_size=max(32, batch_size),
+            kick_threshold=0.5,
         )
         history.append(
             {
@@ -481,9 +557,45 @@ def train_baseline(
                 "train_loss_mean": float(np.mean(losses)),
                 "direction_loss_mean": float(np.mean(dir_losses)),
                 "kick_loss_mean": float(np.mean(kick_losses)),
-                "holdout": holdout_metrics,
+                "validation": validation_metrics,
             }
         )
+
+    threshold_candidates = [
+        round(value, 2)
+        for value in np.linspace(0.10, 0.90, 17).tolist()
+    ]
+    validation_thresholds = [
+        evaluate(
+            validation_index,
+            params=params,
+            mean=mean,
+            std=std,
+            batch_size=max(32, batch_size),
+            kick_threshold=threshold,
+        )
+        for threshold in threshold_candidates
+    ]
+    selected_validation = max(
+        validation_thresholds,
+        key=lambda row: (
+            float(row["kick_f1"]),
+            float(row["joint_accuracy"]),
+            -abs(float(row["kick_threshold"]) - 0.5),
+        ),
+    )
+    kick_threshold = float(selected_validation["kick_threshold"])
+
+    # Frozen holdout is evaluated exactly once after all train/validation
+    # decisions have been made.
+    final_holdout = evaluate(
+        holdout_index,
+        params=params,
+        mean=mean,
+        std=std,
+        batch_size=max(32, batch_size),
+        kick_threshold=kick_threshold,
+    )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     model_path = output_dir / "model.npz"
@@ -494,9 +606,9 @@ def train_baseline(
         **params,
     )
 
-    final_metrics = history[-1]["holdout"]
+    final_metrics = final_holdout
     metadata = {
-        "schema": MODEL_SCHEMA,
+        "schema": "haxlab-bc-baseline-v2",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "model_path": str(model_path),
         "train_index": str(train_index_path),
@@ -520,11 +632,17 @@ def train_baseline(
             "batch_size": max(32, batch_size),
             "learning_rate": learning_rate,
             "l2": max(0.0, l2),
-            "train_replays": len(train_index["entries"]),
+            "train_replays_total": len(full_train_index["entries"]),
+            "train_replays_fit": len(train_index["entries"]),
+            "validation_replays": len(validation_index["entries"]),
             "holdout_replays": len(holdout_index["entries"]),
+            "validation_fraction": max(0.01, min(0.5, validation_fraction)),
             "train_stats": train_stats,
+            "selected_kick_threshold": kick_threshold,
         },
         "history": history,
+        "validation_threshold_sweep": validation_thresholds,
+        "selected_validation": selected_validation,
         "final_holdout": final_metrics,
     }
     _atomic_json(output_dir / "metrics.json", metadata)
@@ -556,6 +674,7 @@ def main() -> int:
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--l2", type=float, default=1e-5)
     parser.add_argument("--seed", type=int, default=1337)
+    parser.add_argument("--validation-fraction", type=float, default=0.10)
     args = parser.parse_args()
 
     result = train_baseline(
@@ -570,6 +689,7 @@ def main() -> int:
         learning_rate=max(1e-6, args.learning_rate),
         l2=max(0.0, args.l2),
         seed=args.seed,
+        validation_fraction=max(0.01, min(0.5, args.validation_fraction)),
     )
     print(json.dumps(result["final_holdout"], indent=2, sort_keys=True))
     print("model:", result["model_path"])
