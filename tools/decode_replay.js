@@ -2,6 +2,7 @@
 "use strict";
 
 const fs = require("fs");
+const crypto = require("crypto");
 const path = require("path");
 const initAPI = require("node-haxball");
 
@@ -84,6 +85,15 @@ function bump(obj, key, amount = 1) {
   obj[key] = (obj[key] || 0) + amount;
 }
 
+function authHash(value) {
+  if (value == null || value === "") return null;
+  return crypto
+    .createHash("sha256")
+    .update(String(value))
+    .digest("hex")
+    .slice(0, 20);
+}
+
 function attackAxisX(teamId, x) {
   if (teamId === 1) return x;
   if (teamId === 2) return -x;
@@ -156,6 +166,7 @@ function ensurePlayer(id, fallback = null) {
     value = {
       id: numericId,
       name: fallback?.name ?? null,
+      authHash: authHash(fallback?.auth),
       teamId: fallback?.team?.id ?? null,
       samples: 0,
       sumX: 0,
@@ -201,6 +212,9 @@ function ensurePlayer(id, fallback = null) {
     players.set(numericId, value);
   } else {
     if (value.name == null && fallback?.name != null) value.name = fallback.name;
+    if (value.authHash == null && fallback?.auth != null) {
+      value.authHash = authHash(fallback.auth);
+    }
     if (fallback?.team?.id != null) value.teamId = fallback.team.id;
   }
   return value;
@@ -685,6 +699,10 @@ function runReplay() {
       ),
       touchGoals: playerRows.reduce((sum, p) => sum + p.touchGoals, 0),
       touchAssists: playerRows.reduce((sum, p) => sum + p.touchAssists, 0),
+      playersWithAuthHash: playerRows.reduce(
+        (sum, p) => sum + (p.authHash ? 1 : 0),
+        0,
+      ),
     },
     players: playerRows,
   };
