@@ -423,6 +423,7 @@ def evaluate_thresholds(
     total = 0
     direction_correct = 0
     direction_counts = np.zeros(9, dtype=np.int64)
+    direction_confusion = np.zeros((9, 9), dtype=np.int64)
     kick_tp = np.zeros(len(thresholds), dtype=np.int64)
     kick_fp = np.zeros(len(thresholds), dtype=np.int64)
     kick_fn = np.zeros(len(thresholds), dtype=np.int64)
@@ -447,6 +448,7 @@ def evaluate_thresholds(
         total += x.shape[0]
         direction_correct += int(direction_match.sum())
         direction_counts += np.bincount(direction, minlength=9)
+        np.add.at(direction_confusion, (direction, dir_pred), 1)
 
         true_matrix = kick_true[:, None]
         kick_tp += np.sum(kick_pred & true_matrix, axis=0)
@@ -463,6 +465,23 @@ def evaluate_thresholds(
 
     majority_direction = int(direction_counts.max())
     actual_negative = total - int(kick_tp[0] + kick_fn[0])
+    per_class_recall = []
+    for class_id in range(9):
+        support = int(direction_confusion[class_id].sum())
+        recall = (
+            int(direction_confusion[class_id, class_id]) / support
+            if support > 0
+            else None
+        )
+        per_class_recall.append(recall)
+    supported_recalls = [
+        value for value in per_class_recall if value is not None
+    ]
+    direction_macro_recall = (
+        float(np.mean(supported_recalls))
+        if supported_recalls
+        else 0.0
+    )
 
     results: list[dict[str, Any]] = []
     for i, threshold in enumerate(thresholds):
@@ -478,6 +497,9 @@ def evaluate_thresholds(
             {
                 "samples": total,
                 "direction_accuracy": direction_correct / total,
+                "direction_macro_recall": direction_macro_recall,
+                "direction_per_class_recall": per_class_recall,
+                "direction_confusion": direction_confusion.tolist(),
                 "joint_accuracy": int(joint_correct[i]) / total,
                 "kick_precision": precision,
                 "kick_recall": recall,
