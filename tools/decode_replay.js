@@ -305,21 +305,22 @@ function recordBallTouch(playerId) {
 
   aggregate.ballCollisionEvents += 1;
 
+  // Collapse repeated collision callbacks before calculating pressure context.
+  // Continuous ball contact can emit a callback on successive physics frames.
+  const frameNo = Number(reader?.getCurrentFrameNo?.() ?? 0);
+  if (
+    lastContact &&
+    lastContact.playerId === Number(playerId) &&
+    frameNo - lastContact.frameNo <= TOUCH_GAP_FRAMES
+  ) {
+    lastContact.frameNo = frameNo;
+    return;
+  }
+  lastContact = { playerId: Number(playerId), frameNo };
+
   const touch = currentTouchSnapshot(playerId);
   aggregate.teamId = touch.teamId ?? aggregate.teamId;
   if (!(touch.teamId === 1 || touch.teamId === 2)) return;
-
-  // Collapse the repeated collision callbacks generated while a player remains
-  // continuously in contact with the ball into one logical touch.
-  if (
-    lastContact &&
-    lastContact.playerId === touch.playerId &&
-    touch.frameNo - lastContact.frameNo <= TOUCH_GAP_FRAMES
-  ) {
-    lastContact.frameNo = touch.frameNo;
-    return;
-  }
-  lastContact = { playerId: touch.playerId, frameNo: touch.frameNo };
 
   aggregate.touches += 1;
   if (touch.pressureDistance != null) {
