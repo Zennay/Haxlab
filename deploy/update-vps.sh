@@ -31,6 +31,7 @@ ln -sf "${APP_DIR}/.venv/bin/haxlab-worker" /usr/local/bin/haxlab-worker
 ln -sf "${APP_DIR}/.venv/bin/haxlab-daemon" /usr/local/bin/haxlab-daemon
 ln -sf "${APP_DIR}/.venv/bin/haxlab-analyzer" /usr/local/bin/haxlab-analyzer
 ln -sf "${APP_DIR}/.venv/bin/haxlab-players" /usr/local/bin/haxlab-players
+install -o root -g root -m 0755 "${APP_DIR}/deploy/haxlab-actions-control.sh" /usr/local/sbin/haxlab-actions-control
 
 systemctl daemon-reload
 systemctl enable haxlab-ingest.service haxlab-worker.service haxlab-analyzer.service
