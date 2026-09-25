@@ -33,11 +33,42 @@ def _name_key(name: str | None) -> str | None:
     return cleaned.casefold() or None
 
 
-def _identity_key(player: dict) -> str | None:
+def _load_aliases(path: Path | None) -> dict[str, str]:
+    if path is None or not path.exists():
+        return {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    aliases = payload.get("aliases") if isinstance(payload, dict) else None
+    if aliases is None and isinstance(payload, dict):
+        aliases = payload
+    result: dict[str, str] = {}
+    for source, target in (aliases or {}).items():
+        source_key = _name_key(str(source))
+        target_key = _name_key(str(target))
+        if source_key and target_key:
+            result[source_key] = target_key
+    return result
+
+
+def _identity_key(
+    player: dict,
+    aliases: dict[str, str] | None = None,
+) -> str | None:
+    aliases = aliases or {}
+    name = _name_key(player.get("name"))
+
+    # Explicit human-confirmed aliases override replay auth identity. This is
+    # intentional: an alias is used precisely when HaxLab has already split one
+    # real player into multiple profiles.
+    if name:
+        target = aliases.get(name)
+        if target:
+            return f"alias:{target}"
+        if name in set(aliases.values()):
+            return f"alias:{name}"
+
     auth_hash = player.get("authHash")
     if auth_hash:
         return f"auth:{auth_hash}"
-    name = _name_key(player.get("name"))
     return f"name:{name}" if name else None
 
 
@@ -125,8 +156,12 @@ def _raw_metrics(
     }
 
 
-def load_match_evidence(root: Path) -> list[dict]:
+def load_match_evidence(
+    root: Path,
+    aliases: dict[str, str] | None = None,
+) -> list[dict]:
     evidence: list[dict] = []
+    aliases = aliases or {}
 
     for path in root.rglob("*.json"):
         try:
@@ -144,7 +179,7 @@ def load_match_evidence(root: Path) -> list[dict]:
         match_minutes = total_frames / 3600.0
 
         for player in players:
-            key = _identity_key(player)
+            key = _identity_key(player, aliases)
             if key is None:
                 continue
             minutes = _player_minutes(player, payload)
@@ -301,8 +336,11 @@ def _bounded_match_contexts(
     return result
 
 
-def build_leaderboard(root: Path) -> list[dict]:
-    evidence = load_match_evidence(root)
+def build_leaderboard(
+    root: Path,
+    aliases: dict[str, str] | None = None,
+) -> list[dict]:
+    evidence = load_match_evidence(root, aliases)
     normalizers = _normalizers(evidence)
 
     normalized_rows: list[dict] = []
@@ -446,6 +484,12 @@ def main() -> int:
     parser.add_argument("--min-matches", type=int, default=20)
     parser.add_argument("--min-minutes", type=float, default=60.0)
     parser.add_argument(
+        "--aliases",
+        type=Path,
+        default=Path("/opt/haxlab/configs/player_aliases.json"),
+        help="Optional JSON file of confirmed display-name aliases.",
+    )
+    parser.add_argument(
         "--format",
         choices=["table", "json"],
         default="table",
@@ -458,9 +502,10 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    aliases = _load_aliases(args.aliases if args.aliases.exists() else None)
     rows = [
         row
-        for row in build_leaderboard(args.root)
+        for row in build_leaderboard(args.root, aliases)
         if row["matches"] >= max(1, args.min_matches)
         and row["minutes"] >= max(0.0, args.min_minutes)
     ][: max(1, args.top)]
@@ -469,6 +514,8 @@ def main() -> int:
         "schema": "haxlab-skill-leaderboard-v1",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source_root": str(args.root),
+        "aliases_path": str(args.aliases) if args.aliases.exists() else None,
+        "alias_count": len(aliases),
         "min_matches": max(1, args.min_matches),
         "min_minutes": max(0.0, args.min_minutes),
         "rows": rows,
