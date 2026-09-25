@@ -14,6 +14,7 @@ on:
           - restart-analyzer
           - retry-failed-analysis
           - player-stats
+          - skill-leaderboard
           - analyzer-logs
           - failed-analysis
 
@@ -50,6 +51,9 @@ jobs:
               ;;
             player-stats)
               sudo /usr/local/sbin/haxlab-actions-control player-stats
+              ;;
+            skill-leaderboard)
+              sudo /usr/local/sbin/haxlab-actions-control skill-leaderboard
               ;;
             analyzer-logs)
               sudo /usr/local/sbin/haxlab-actions-control analyzer-logs
