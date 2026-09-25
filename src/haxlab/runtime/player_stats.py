@@ -15,6 +15,14 @@ def _name_key(name: str | None) -> str | None:
     return cleaned.casefold() or None
 
 
+def _identity_key(player: dict) -> str | None:
+    auth_hash = player.get("authHash")
+    if auth_hash:
+        return f"auth:{auth_hash}"
+    name = _name_key(player.get("name"))
+    return f"name:{name}" if name else None
+
+
 def _safe_div(num: float, den: float) -> float:
     return num / den if den > 0 else 0.0
 
@@ -54,7 +62,7 @@ def collect(root: Path) -> list[dict]:
 
         seen: set[str] = set()
         for player in payload.get("players") or []:
-            key = _name_key(player.get("name"))
+            key = _identity_key(player)
             if key is None:
                 continue
 
