@@ -98,10 +98,10 @@ def test_training_manifest_selects_quality_replays_and_freezes_split(
     good_sha = "aabb" + "1" * 60
     bad_sha = "aabb" + "2" * 60
     players = [
-        {"name": "Alpha", "teamId": 1},
-        {"name": "Mate", "teamId": 1},
-        {"name": "Opp A", "teamId": 2},
-        {"name": "Opp B", "teamId": 2},
+        {"id": 7, "name": "Alpha", "teamId": 1, "samples": 900},
+        {"id": 8, "name": "Mate", "teamId": 1, "samples": 900},
+        {"id": 9, "name": "Opp A", "teamId": 2, "samples": 900},
+        {"id": 10, "name": "Opp B", "teamId": 2, "samples": 900},
     ]
     good = {
         "schemaVersion": 4,
@@ -146,6 +146,14 @@ def test_training_manifest_selects_quality_replays_and_freezes_split(
 
     assert len(first_selected) == 1
     assert first_selected[0]["replay_sha256"] == good_sha
+    assert first_selected[0]["selected_player_ids"] == ["name:alpha"]
+    assert first_selected[0]["selected_players"] == [
+        {
+            "replay_player_id": 7,
+            "identity": "name:alpha",
+            "samples": 900,
+        }
+    ]
     assert first["stats"]["quality_rejected"] == 1
     assert [
         row["replay_sha256"] for row in first["train_replays"]
@@ -182,3 +190,62 @@ def test_quality_accepts_replay_without_game_start_when_state_exists() -> None:
 
     assert ok is True
     assert reasons == []
+
+
+def test_training_manifest_excludes_selected_spectator(tmp_path: Path) -> None:
+    analysis_root = tmp_path / "state-pass-v4"
+    leaderboard = tmp_path / "leaderboard.json"
+    analysis_root.mkdir()
+
+    leaderboard.write_text(
+        json.dumps(
+            {
+                "analysis_version": "state-pass-v4",
+                "rows": [
+                    {
+                        "player_id": "name:alpha",
+                        "name": "Alpha",
+                        "role": "midfield",
+                        "rating": 55.0,
+                        "rating_uncertainty": 0.5,
+                        "matches": 50,
+                        "minutes": 300.0,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    sha = "f" * 64
+    (analysis_root / f"{sha}.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 4,
+                "totalFrames": 18000,
+                "simulation": {"sampledStateCount": 3000},
+                "featureSummary": {"touches": 100},
+                "players": [
+                    {"id": 1, "name": "Alpha", "teamId": 0, "samples": 0},
+                    {"id": 2, "name": "B", "teamId": 1, "samples": 900},
+                    {"id": 3, "name": "C", "teamId": 1, "samples": 900},
+                    {"id": 4, "name": "D", "teamId": 2, "samples": 900},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = build_training_manifest(
+        analysis_root=analysis_root,
+        leaderboard_path=leaderboard,
+        raw_root=tmp_path / "raw",
+        top_fraction_per_role=1.0,
+        min_players_per_role=1,
+        min_matches=1,
+        min_minutes=0.0,
+        max_uncertainty=10.0,
+    )
+
+    assert manifest["train_replays"] == []
+    assert manifest["holdout_replays"] == []
