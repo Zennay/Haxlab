@@ -7,7 +7,7 @@ const {
   buildFeatureObject,
   canonicalActionToWorld,
 } = require("./elite_features");
-const { kickoffAction } = require("./elite_tactics");
+const { kickoffAction, enforceKickRange } = require("./elite_tactics");
 
 module.exports = function(API) {
   const {
@@ -80,7 +80,11 @@ module.exports = function(API) {
     if (!player) return;
 
     const teamId = Number(player.team?.id || 0);
-    const worldAction = canonicalActionToWorld(action, teamId);
+    const worldAction = enforceKickRange(
+      canonicalActionToWorld(action, teamId),
+      player,
+      that.room?.gameStateExt || that.room?.gameState,
+    );
     const kick = worldAction.kick;
     const keyState = Utils.keyState(
       worldAction.dirX,
