@@ -1,16 +1,6 @@
 name: HaxLab VPS
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "src/**"
-      - "tools/**"
-      - "deploy/**"
-      - "pyproject.toml"
-      - "package.json"
-      - "package-lock.json"
-      - ".github/workflows/vps-control.yml"
   workflow_dispatch:
     inputs:
       action:
@@ -30,7 +20,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: haxlab-vps
+  group: haxlab-vps-manual
   cancel-in-progress: false
 
 jobs:
@@ -40,21 +30,11 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Select action
-        id: select
-        shell: bash
-        run: |
-          if [[ "${{ github.event_name }}" == "push" ]]; then
-            echo "action=deploy" >> "$GITHUB_OUTPUT"
-          else
-            echo "action=${{ inputs.action }}" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Run HaxLab action
         shell: bash
         run: |
           set -euo pipefail
-          case "${{ steps.select.outputs.action }}" in
+          case "${{ inputs.action }}" in
             status)
               sudo /usr/local/sbin/haxlab-actions-control status
               ;;
