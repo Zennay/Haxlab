@@ -700,6 +700,28 @@ def train_baseline(
         ] = monitor_metrics
         history.append(history_row)
 
+    calibration_result: dict[str, float] | None = None
+    kick_threshold = 0.5
+    if calibration_index is not None:
+        calibration_result = calibrate_kick_threshold(
+            calibration_index,
+            params=params,
+            mean=mean,
+            std=std,
+            batch_size=max(32, batch_size),
+        )
+        kick_threshold = float(calibration_result["threshold"])
+
+    # Frozen holdout is evaluated only after training/calibration completes.
+    final_metrics = evaluate(
+        holdout_index,
+        params=params,
+        mean=mean,
+        std=std,
+        batch_size=max(32, batch_size),
+        kick_threshold=kick_threshold,
+    )
+
     output_dir.mkdir(parents=True, exist_ok=True)
     model_path = output_dir / "model.npz"
     np.savez_compressed(
@@ -715,6 +737,7 @@ def train_baseline(
         {
             "schema": PORTABLE_MODEL_SCHEMA,
             "input_columns": input_columns,
+            "kick_threshold": kick_threshold,
             "direction_classes": [
                 {"class_id": i, "dir_x": dx, "dir_y": dy}
                 for i, (dx, dy) in enumerate(ACTION_DIRS)
@@ -730,7 +753,6 @@ def train_baseline(
         },
     )
 
-    final_metrics = history[-1]["holdout"]
     metadata = {
         "schema": MODEL_SCHEMA,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -741,9 +763,25 @@ def train_baseline(
             "portable_model_sha256": _sha256_file(portable_path),
             "train_index_sha256": _sha256_file(train_index_path),
             "holdout_index_sha256": _sha256_file(holdout_index_path),
+            **(
+                {
+                    "calibration_index_sha256": _sha256_file(
+                        calibration_index_path
+                    )
+                }
+                if calibration_index_path is not None
+                else {}
+            ),
         },
         "train_index": str(train_index_path),
         "holdout_index": str(holdout_index_path),
+        "calibration_index": (
+            str(calibration_index_path)
+            if calibration_index_path is not None
+            else None
+        ),
+        "kick_threshold": kick_threshold,
+        "calibration": calibration_result,
         "input_columns": input_columns,
         "excluded_input_columns": list(EXCLUDED_INPUT_COLUMNS),
         "direction_classes": [
@@ -765,6 +803,11 @@ def train_baseline(
             "l2": max(0.0, l2),
             "train_replays": len(train_index["entries"]),
             "holdout_replays": len(holdout_index["entries"]),
+            "calibration_replays": (
+                len(calibration_index["entries"])
+                if calibration_index is not None
+                else 0
+            ),
             "train_stats": train_stats,
             "use_example_weights": bool(use_example_weights),
         },
