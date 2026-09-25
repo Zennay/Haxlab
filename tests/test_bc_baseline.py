@@ -171,6 +171,10 @@ def test_baseline_trains_and_writes_holdout_metrics(tmp_path: Path) -> None:
     assert (output / "metrics.json").exists()
     assert metrics["samples"] == 1200
     assert 0.0 <= metrics["direction_accuracy"] <= 1.0
+    assert 0.0 <= metrics["direction_macro_recall"] <= 1.0
+    assert len(metrics["direction_recall_by_class"]) == 9
+    assert len(metrics["direction_confusion"]) == 9
+    assert all(len(row) == 9 for row in metrics["direction_confusion"])
     assert 0.0 <= metrics["kick_f1"] <= 1.0
     assert metrics["direction_accuracy"] > metrics["baselines"][
         "majority_direction_accuracy"
