@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import datetime, timezone
 import math
 from collections import Counter, defaultdict
 from dataclasses import asdict
@@ -353,6 +354,17 @@ def main() -> int:
     parser.add_argument("--top", type=int, default=30)
     parser.add_argument("--min-matches", type=int, default=20)
     parser.add_argument("--min-minutes", type=float, default=60.0)
+    parser.add_argument(
+        "--format",
+        choices=["table", "json"],
+        default="table",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Optional path to write the complete leaderboard snapshot as JSON.",
+    )
     args = parser.parse_args()
 
     rows = [
@@ -361,6 +373,26 @@ def main() -> int:
         if row["matches"] >= max(1, args.min_matches)
         and row["minutes"] >= max(0.0, args.min_minutes)
     ][: max(1, args.top)]
+
+    snapshot = {
+        "schema": "haxlab-skill-leaderboard-v1",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source_root": str(args.root),
+        "min_matches": max(1, args.min_matches),
+        "min_minutes": max(0.0, args.min_minutes),
+        "rows": rows,
+    }
+
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(
+            json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    if args.format == "json":
+        print(json.dumps(snapshot, ensure_ascii=False, indent=2))
+        return 0
 
     print(
         "HAXLAB SKILL V0.2 — experimental role-normalized performance evidence; "
