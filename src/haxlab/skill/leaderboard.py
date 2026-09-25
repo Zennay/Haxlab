@@ -31,6 +31,14 @@ def _name_key(name: str | None) -> str | None:
     return cleaned.casefold() or None
 
 
+def _identity_key(player: dict) -> str | None:
+    auth_hash = player.get("authHash")
+    if auth_hash:
+        return f"auth:{auth_hash}"
+    name = _name_key(player.get("name"))
+    return f"name:{name}" if name else None
+
+
 def _safe_div(num: float, den: float) -> float | None:
     if den <= 0:
         return None
@@ -158,7 +166,7 @@ def load_match_evidence(root: Path) -> list[dict]:
         match_minutes = total_frames / 3600.0
 
         for player in players:
-            key = _name_key(player.get("name"))
+            key = _identity_key(player)
             if key is None:
                 continue
             minutes = _player_minutes(player, payload)
