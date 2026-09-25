@@ -348,7 +348,7 @@ def main() -> int:
     parser.add_argument(
         "--root",
         type=Path,
-        default=Path("/var/lib/haxlab/derived/state-pass-v3"),
+        default=Path("/var/lib/haxlab/derived/state-pass-v4"),
     )
     parser.add_argument("--top", type=int, default=30)
     parser.add_argument("--min-matches", type=int, default=20)
