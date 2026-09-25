@@ -63,6 +63,8 @@ let gameTicks = 0;
 let gameStarts = 0;
 let gameStops = 0;
 let teamGoalEvents = 0;
+let lastKick = null;
+let kickHistory = [];
 
 function heatKey(x, y, size = 20) {
   return `${Math.floor(x / size)}:${Math.floor(y / size)}`;
@@ -70,6 +72,26 @@ function heatKey(x, y, size = 20) {
 
 function bump(obj, key, amount = 1) {
   obj[key] = (obj[key] || 0) + amount;
+}
+
+function attackAxisX(teamId, x) {
+  if (teamId === 1) return x;
+  if (teamId === 2) return -x;
+  return 0;
+}
+
+function currentKickSnapshot(id) {
+  const playerObj = reader?.state?.players?.find((p) => p.id === id);
+  const teamId = playerObj?.team?.id ?? null;
+  const ballDisc = reader?.gameState?.physicsState?.discs?.[0];
+  const frameNo = reader?.getCurrentFrameNo?.() ?? 0;
+  return {
+    playerId: Number(id),
+    teamId,
+    frameNo: Number(frameNo),
+    ballX: ballDisc?.pos ? Number(ballDisc.pos.x) : null,
+    ballY: ballDisc?.pos ? Number(ballDisc.pos.y) : null,
+  };
 }
 
 function ensurePlayer(id, fallback = null) {
@@ -89,6 +111,13 @@ function ensurePlayer(id, fallback = null) {
       inputEvents: 0,
       kickEvents: 0,
       kickPressedInputs: 0,
+      inferredRetainedChains: 0,
+      inferredLostChains: 0,
+      inferredRecoveries: 0,
+      inferredGoals: 0,
+      inferredAssists: 0,
+      progressionEvents: 0,
+      progressionSum: 0,
       directionHistogram: Object.create(null),
       heatmap: Object.create(null),
     };
@@ -205,20 +234,96 @@ function runReplay() {
         } catch (_) {}
       },
       onPlayerBallKick: (id) => {
-        const p = ensurePlayer(id);
-        if (p) p.kickEvents += 1;
+        const playerObj = reader?.state?.players?.find((p) => p.id === id);
+        const p = ensurePlayer(id, playerObj);
+        if (!p) return;
+        p.kickEvents += 1;
+
+        const kick = currentKickSnapshot(id);
+        p.teamId = kick.teamId ?? p.teamId;
+
+        if (
+          lastKick &&
+          lastKick.teamId != null &&
+          kick.teamId != null &&
+          (lastKick.teamId === 1 || lastKick.teamId === 2) &&
+          (kick.teamId === 1 || kick.teamId === 2)
+        ) {
+          const previous = ensurePlayer(lastKick.playerId);
+          if (previous) {
+            if (lastKick.teamId === kick.teamId) {
+              previous.inferredRetainedChains += 1;
+              if (lastKick.ballX != null && kick.ballX != null) {
+                previous.progressionEvents += 1;
+                previous.progressionSum +=
+                  attackAxisX(lastKick.teamId, kick.ballX) -
+                  attackAxisX(lastKick.teamId, lastKick.ballX);
+              }
+            } else {
+              previous.inferredLostChains += 1;
+              p.inferredRecoveries += 1;
+            }
+          }
+        }
+
+        lastKick = kick;
+        kickHistory.push(kick);
+        if (kickHistory.length > 12) kickHistory.shift();
       },
       onTeamGoal: (teamId) => {
         teamGoalEvents += 1;
         if (teamId === 1) teamGoals.red += 1;
         else if (teamId === 2) teamGoals.blue += 1;
         else teamGoals.other += 1;
+
+        const goalFrame = Number(reader?.getCurrentFrameNo?.() ?? 0);
+        let scorerKick = null;
+        let assistKick = null;
+
+        for (let i = kickHistory.length - 1; i >= 0; i -= 1) {
+          const kick = kickHistory[i];
+          if (goalFrame - kick.frameNo > 600) break;
+          if (kick.teamId !== teamId) {
+            if (scorerKick) break;
+            continue;
+          }
+
+          if (!scorerKick && goalFrame - kick.frameNo <= 300) {
+            scorerKick = kick;
+            continue;
+          }
+
+          if (
+            scorerKick &&
+            kick.playerId !== scorerKick.playerId &&
+            goalFrame - kick.frameNo <= 600
+          ) {
+            assistKick = kick;
+            break;
+          }
+        }
+
+        if (scorerKick) {
+          const scorer = ensurePlayer(scorerKick.playerId);
+          if (scorer) scorer.inferredGoals += 1;
+        }
+        if (assistKick) {
+          const assister = ensurePlayer(assistKick.playerId);
+          if (assister) assister.inferredAssists += 1;
+        }
+
+        lastKick = null;
+        kickHistory = [];
       },
       onGameStart: () => {
         gameStarts += 1;
+        lastKick = null;
+        kickHistory = [];
       },
       onGameStop: () => {
         gameStops += 1;
+        lastKick = null;
+        kickHistory = [];
       },
     };
 
@@ -254,6 +359,13 @@ function runReplay() {
       ...p,
       averageX: p.samples ? p.sumX / p.samples : null,
       averageY: p.samples ? p.sumY / p.samples : null,
+      inferredRetentionRate:
+        (p.inferredRetainedChains + p.inferredLostChains) > 0
+          ? p.inferredRetainedChains /
+            (p.inferredRetainedChains + p.inferredLostChains)
+          : null,
+      averageProgression:
+        p.progressionEvents > 0 ? p.progressionSum / p.progressionEvents : null,
     }));
 
   const eventTypeCounts = Object.create(null);
@@ -262,7 +374,7 @@ function runReplay() {
   }
 
   const output = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     decoder: "node-haxball@2.3.1",
     sourceFile: path.basename(replayPath),
     version: replayData.version,
