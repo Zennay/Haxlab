@@ -1,0 +1,49 @@
+name: HaxLab CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - ".github/workflows/ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-ci
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python tests
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .ci-venv
+          python3 -m venv .ci-venv
+          .ci-venv/bin/pip install --upgrade pip
+          .ci-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile
+        shell: bash
+        run: |
+          set -euo pipefail
+          .ci-venv/bin/python -m compileall -q src/haxlab
+
+      - name: Test
+        shell: bash
+        run: |
+          set -euo pipefail
+          .ci-venv/bin/pytest -q
