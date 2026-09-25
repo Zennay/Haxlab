@@ -668,11 +668,32 @@ def train_baseline(
         **params,
     )
 
+    policy_path = output_dir / "policy.json"
+    policy = {
+        "schema": "haxlab-bc-policy-v1",
+        "input_columns": input_columns,
+        "normalization": {
+            "mean": mean.tolist(),
+            "std": std.tolist(),
+        },
+        "direction_classes": [
+            {"class_id": i, "dir_x": dx, "dir_y": dy}
+            for i, (dx, dy) in enumerate(ACTION_DIRS)
+        ],
+        "kick_threshold": kick_threshold,
+        "weights": {
+            key: value.tolist()
+            for key, value in params.items()
+        },
+    }
+    _atomic_json(policy_path, policy)
+
     final_metrics = final_holdout
     metadata = {
         "schema": "haxlab-bc-baseline-v2",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "model_path": str(model_path),
+        "policy_path": str(policy_path),
         "train_index": str(train_index_path),
         "holdout_index": str(holdout_index_path),
         "input_columns": input_columns,
