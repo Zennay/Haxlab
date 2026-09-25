@@ -398,23 +398,27 @@ def _iter_batches(
             yield x[idx], direction[idx], kick[idx]
 
 
-def evaluate(
+def evaluate_thresholds(
     index: dict[str, Any],
     *,
     params: dict[str, np.ndarray],
     mean: np.ndarray,
     std: np.ndarray,
+    thresholds: list[float],
     batch_size: int = 8192,
-    kick_threshold: float = 0.5,
-) -> dict[str, Any]:
+) -> list[dict[str, Any]]:
+    if not thresholds:
+        raise ValueError("at least one kick threshold is required")
+
+    threshold_values = np.asarray(thresholds, dtype=np.float32)
     total = 0
     direction_correct = 0
-    joint_correct = 0
-    kick_tp = 0
-    kick_fp = 0
-    kick_fn = 0
-    kick_tn = 0
     direction_counts = np.zeros(9, dtype=np.int64)
+    kick_tp = np.zeros(len(thresholds), dtype=np.int64)
+    kick_fp = np.zeros(len(thresholds), dtype=np.int64)
+    kick_fn = np.zeros(len(thresholds), dtype=np.int64)
+    kick_tn = np.zeros(len(thresholds), dtype=np.int64)
+    joint_correct = np.zeros(len(thresholds), dtype=np.int64)
 
     rng = np.random.default_rng(0)
     for x, direction, kick in _iter_batches(
@@ -427,54 +431,83 @@ def evaluate(
     ):
         _, dir_prob, kick_prob = _forward(x, params)
         dir_pred = dir_prob.argmax(axis=1)
-        kick_pred = kick_prob >= float(kick_threshold)
+        direction_match = dir_pred == direction
         kick_true = kick > 0.5
+        kick_pred = kick_prob[:, None] >= threshold_values[None, :]
 
         total += x.shape[0]
-        direction_correct += int((dir_pred == direction).sum())
-        joint_correct += int(
-            ((dir_pred == direction) & (kick_pred == kick_true)).sum()
-        )
-        kick_tp += int((kick_pred & kick_true).sum())
-        kick_fp += int((kick_pred & ~kick_true).sum())
-        kick_fn += int((~kick_pred & kick_true).sum())
-        kick_tn += int((~kick_pred & ~kick_true).sum())
+        direction_correct += int(direction_match.sum())
         direction_counts += np.bincount(direction, minlength=9)
+
+        true_matrix = kick_true[:, None]
+        kick_tp += np.sum(kick_pred & true_matrix, axis=0)
+        kick_fp += np.sum(kick_pred & ~true_matrix, axis=0)
+        kick_fn += np.sum(~kick_pred & true_matrix, axis=0)
+        kick_tn += np.sum(~kick_pred & ~true_matrix, axis=0)
+        joint_correct += np.sum(
+            direction_match[:, None] & (kick_pred == true_matrix),
+            axis=0,
+        )
 
     if total <= 0:
         raise ValueError("evaluation index contains no samples")
 
-    kick_precision = kick_tp / max(1, kick_tp + kick_fp)
-    kick_recall = kick_tp / max(1, kick_tp + kick_fn)
-    kick_f1 = (
-        2.0 * kick_precision * kick_recall
-        / max(1e-12, kick_precision + kick_recall)
-    )
     majority_direction = int(direction_counts.max())
-    no_kick = kick_tn + kick_fp
+    actual_negative = total - int(kick_tp[0] + kick_fn[0])
 
-    return {
-        "samples": total,
-        "direction_accuracy": direction_correct / total,
-        "joint_accuracy": joint_correct / total,
-        "kick_precision": kick_precision,
-        "kick_recall": kick_recall,
-        "kick_f1": kick_f1,
-        "kick_true_rate": (kick_tp + kick_fn) / total,
-        "kick_predicted_rate": (kick_tp + kick_fp) / total,
-        "kick_threshold": float(kick_threshold),
-        "kick_confusion": {
-            "tp": kick_tp,
-            "fp": kick_fp,
-            "fn": kick_fn,
-            "tn": kick_tn,
-        },
-        "baselines": {
-            "majority_direction_accuracy": majority_direction / total,
-            "always_no_kick_accuracy": no_kick / total,
-        },
-    }
+    results: list[dict[str, Any]] = []
+    for i, threshold in enumerate(thresholds):
+        tp = int(kick_tp[i])
+        fp = int(kick_fp[i])
+        fn = int(kick_fn[i])
+        tn = int(kick_tn[i])
+        precision = tp / max(1, tp + fp)
+        recall = tp / max(1, tp + fn)
+        f1 = 2.0 * precision * recall / max(1e-12, precision + recall)
 
+        results.append(
+            {
+                "samples": total,
+                "direction_accuracy": direction_correct / total,
+                "joint_accuracy": int(joint_correct[i]) / total,
+                "kick_precision": precision,
+                "kick_recall": recall,
+                "kick_f1": f1,
+                "kick_true_rate": (tp + fn) / total,
+                "kick_predicted_rate": (tp + fp) / total,
+                "kick_threshold": float(threshold),
+                "kick_confusion": {
+                    "tp": tp,
+                    "fp": fp,
+                    "fn": fn,
+                    "tn": tn,
+                },
+                "baselines": {
+                    "majority_direction_accuracy": majority_direction / total,
+                    "always_no_kick_accuracy": actual_negative / total,
+                },
+            }
+        )
+    return results
+
+
+def evaluate(
+    index: dict[str, Any],
+    *,
+    params: dict[str, np.ndarray],
+    mean: np.ndarray,
+    std: np.ndarray,
+    batch_size: int = 8192,
+    kick_threshold: float = 0.5,
+) -> dict[str, Any]:
+    return evaluate_thresholds(
+        index,
+        params=params,
+        mean=mean,
+        std=std,
+        thresholds=[float(kick_threshold)],
+        batch_size=batch_size,
+    )[0]
 
 def train_baseline(
     *,
@@ -565,17 +598,14 @@ def train_baseline(
         round(value, 2)
         for value in np.linspace(0.10, 0.90, 17).tolist()
     ]
-    validation_thresholds = [
-        evaluate(
-            validation_index,
-            params=params,
-            mean=mean,
-            std=std,
-            batch_size=max(32, batch_size),
-            kick_threshold=threshold,
-        )
-        for threshold in threshold_candidates
-    ]
+    validation_thresholds = evaluate_thresholds(
+        validation_index,
+        params=params,
+        mean=mean,
+        std=std,
+        thresholds=threshold_candidates,
+        batch_size=max(32, batch_size),
+    )
     selected_validation = max(
         validation_thresholds,
         key=lambda row: (
