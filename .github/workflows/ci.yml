@@ -13,6 +13,7 @@ on:
       - "package-lock.json"
       - ".github/workflows/ci.yml"
       - ".github/workflows/vps-control.yml"
+      - ".github/workflows/imitation-baseline-pilot.yml"
   workflow_dispatch:
 
 permissions:
