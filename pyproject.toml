@@ -27,6 +27,10 @@ haxlab-coach = "haxlab.coaching.replay_coach:main"
 haxlab-training-manifest = "haxlab.learning.selector:main"
 haxlab-build-shards = "haxlab.learning.shards:main"
 haxlab-train-bc = "haxlab.learning.baseline:main"
+haxlab-elite-manifest = "haxlab.learning.elite_selector:main"
+haxlab-elite-shards = "haxlab.learning.elite_shards:main"
+haxlab-train-elite = "haxlab.learning.elite:main"
+haxlab-elite-agent = "haxlab.learning.elite_runtime:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
