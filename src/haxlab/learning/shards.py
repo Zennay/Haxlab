@@ -64,9 +64,14 @@ def _extract_one(
         ):
             return {**previous, "status": "cached"}
 
-    selected_ids = list(entry.get("selected_player_ids") or [])
-    if not selected_ids:
-        raise ValueError(f"{replay_sha256}: no selected player identities")
+    selected_players = list(entry.get("selected_players") or [])
+    if not selected_players:
+        raise ValueError(f"{replay_sha256}: no active selected replay players")
+
+    selected_player_map = {
+        str(int(row["replay_player_id"])): str(row["identity"])
+        for row in selected_players
+    }
 
     raw_path = Path(str(entry["raw_path"]))
     if not raw_path.exists():
@@ -78,7 +83,11 @@ def _extract_one(
         str(node_script),
         str(raw_path),
         str(shard_path),
-        json.dumps(selected_ids, ensure_ascii=False, separators=(",", ":")),
+        json.dumps(
+            selected_player_map,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
         str(sample_every_ticks),
     ]
 
@@ -111,7 +120,8 @@ def _extract_one(
             "replay_sha256": replay_sha256,
             "raw_path": str(raw_path),
             "shard_path": str(shard_path),
-            "selected_player_ids": selected_ids,
+            "selected_player_ids": sorted(set(selected_player_map.values())),
+            "selected_players": selected_players,
             "example_weight": float(entry.get("example_weight", 1.0)),
             "status": "ok",
         }
