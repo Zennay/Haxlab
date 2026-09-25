@@ -161,6 +161,32 @@ def build_shards(
 
     results: list[dict[str, Any]] = []
     failures: list[dict[str, str]] = []
+    progress_path = output_dir / "_progress.json"
+
+    def write_progress(*, complete: bool) -> None:
+        _atomic_json(
+            progress_path,
+            {
+                "schema": "haxlab-imitation-shard-progress-v1",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "split": split,
+                "requested_replays": len(entries),
+                "completed_replays": len(results) + len(failures),
+                "successful_replays": len(results),
+                "failed_replays": len(failures),
+                "samples": sum(
+                    int(row.get("samples", 0))
+                    for row in results
+                ),
+                "compressed_bytes": sum(
+                    int(row.get("compressedBytes", 0))
+                    for row in results
+                ),
+                "complete": complete,
+            },
+        )
+
+    write_progress(complete=False)
 
     with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
         future_map = {
@@ -187,6 +213,10 @@ def build_shards(
                         "error": str(exc),
                     }
                 )
+
+            completed = len(results) + len(failures)
+            if completed == len(entries) or completed % 25 == 0:
+                write_progress(complete=False)
 
     results.sort(key=lambda row: row["replay_sha256"])
     failures.sort(key=lambda row: row["replay_sha256"])
@@ -216,6 +246,7 @@ def build_shards(
         "failures": failures,
     }
     _atomic_json(output_dir / "_index.json", index)
+    write_progress(complete=True)
     return index
 
 
