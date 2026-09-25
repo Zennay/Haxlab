@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from haxlab.learning.selector import MANIFEST_SCHEMA
 from haxlab.runtime.finalize import finalize_analysis_if_ready
 from haxlab.runtime.state import CURRENT_ANALYZER_VERSION, RuntimeState
 
@@ -168,3 +169,73 @@ def test_finalize_refreshes_when_dataset_grows(tmp_path: Path) -> None:
             assert completion["raw_unique_replays"] == index
             assert completion["analysis_ok"] == index
             assert completion["analysis_ticks_reconstructed"] == index * 600
+
+
+def test_finalize_refreshes_stale_training_manifest_schema(tmp_path: Path) -> None:
+    db = tmp_path / "state.sqlite3"
+    derived = tmp_path / "derived"
+    replay = tmp_path / "stale.hbr2"
+    replay.write_bytes(b"x")
+    sha = "e" * 64
+
+    analysis_root = derived / CURRENT_ANALYZER_VERSION / sha[:2] / sha[2:4]
+    analysis_root.mkdir(parents=True)
+    output = analysis_root / f"{sha}.json"
+    output.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 4,
+                "totalFrames": 18000,
+                "simulation": {
+                    "sampleEveryTicks": 6,
+                    "sampledStateCount": 3000,
+                },
+                "featureSummary": {"touches": 100},
+                "players": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with RuntimeState(db) as state:
+        state.register_raw(
+            sha256=sha,
+            archive_path=str(replay),
+            size_bytes=1,
+        )
+        state.mark_replay_processing(
+            sha256=sha,
+            status="ok",
+            format_version=3,
+            total_frames=18000,
+            duration_seconds=300.0,
+            decompressed_bytes=10,
+        )
+        state.mark_replay_analysis(
+            sha256=sha,
+            analyzer_version=CURRENT_ANALYZER_VERSION,
+            status="ok",
+            output_path=str(output),
+            sampled_state_count=3000,
+            player_count=0,
+            raw_event_count=50,
+            tick_count=18000,
+        )
+
+        first = finalize_analysis_if_ready(state, derived_root=derived)
+        assert first["status"] == "finalized"
+
+        manifest_path = (
+            derived
+            / "training"
+            / f"human-imitation-{CURRENT_ANALYZER_VERSION}.json"
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["schema"] = "haxlab-human-imitation-manifest-v1"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        second = finalize_analysis_if_ready(state, derived_root=derived)
+
+    assert second["status"] == "finalized"
+    refreshed = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert refreshed["schema"] == MANIFEST_SCHEMA
