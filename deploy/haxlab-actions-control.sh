@@ -71,9 +71,17 @@ case "${action}" in
 
   feature-smoke)
     replay_path="$(sqlite3 "${STATE_DB}" "
-      SELECT archive_path
-      FROM raw_replays
-      ORDER BY ABS(size_bytes - 40000), first_archived_at
+      SELECT r.archive_path
+      FROM raw_replays AS r
+      JOIN replay_processing AS p
+        ON p.sha256 = r.sha256 AND p.status = 'ok'
+      JOIN replay_analysis_versions AS a
+        ON a.sha256 = r.sha256
+       AND a.analyzer_version = '${CURRENT_ANALYZER_VERSION}'
+       AND a.status = 'ok'
+      WHERE COALESCE(a.player_count, 0) >= 6
+        AND COALESCE(p.total_frames, 0) >= 10000
+      ORDER BY ABS(r.size_bytes - 40000), r.first_archived_at
       LIMIT 1;
     ")"
     if [[ -z "${replay_path}" ]]; then
