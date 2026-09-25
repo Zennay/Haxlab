@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -159,3 +160,62 @@ def test_temporal_elite_policy_trains_with_validation_only_calibration(
     assert action["dir_y"] in (-1, 0, 1)
     assert isinstance(action["kick"], bool)
     assert 0.0 <= action["kick_probability"] <= 1.0
+
+    node_script = Path(__file__).parents[1] / "tools" / "elite_policy_runtime.js"
+    requests = []
+    expected = []
+    policy.reset("parity-dm")
+    for step in range(3):
+        state = {
+            name: (step + 1) * (index + 1) * 0.01
+            for index, name in enumerate(policy.input_columns)
+        }
+        request = {
+            "command": "act",
+            "request_id": step + 1,
+            "agent_id": "parity-dm",
+            "role": "dm",
+            "features": state,
+        }
+        requests.append(json.dumps(request))
+        expected.append(
+            policy.act(
+                agent_id="parity-dm",
+                role="dm",
+                features=state,
+            )
+        )
+
+    completed = subprocess.run(
+        [
+            "node",
+            str(node_script),
+            str(output / "runtime-model.json"),
+        ],
+        input="\n".join(requests) + "\n",
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+    actual = [
+        json.loads(line)
+        for line in completed.stdout.splitlines()
+        if line.strip()
+    ]
+    assert len(actual) == len(expected)
+
+    for node_action, python_action in zip(actual, expected):
+        assert node_action["ok"] is True
+        assert node_action["dir_x"] == python_action["dir_x"]
+        assert node_action["dir_y"] == python_action["dir_y"]
+        assert node_action["kick"] == python_action["kick"]
+        assert node_action["direction_class"] == python_action["direction_class"]
+        assert abs(
+            node_action["kick_probability"]
+            - python_action["kick_probability"]
+        ) < 1e-4
+        assert abs(
+            node_action["direction_probability"]
+            - python_action["direction_probability"]
+        ) < 1e-4
