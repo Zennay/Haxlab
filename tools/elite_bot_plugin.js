@@ -1,7 +1,7 @@
 "use strict";
 
-const { spawn } = require("child_process");
-const readline = require("readline");
+const path = require("path");
+const { ElitePolicyRuntime } = require("./elite_policy_runtime");
 
 module.exports = function(API) {
   const {
@@ -13,21 +13,19 @@ module.exports = function(API) {
 
   Object.setPrototypeOf(this, Plugin.prototype);
   Plugin.call(this, "haxlabElite4v4", true, {
-    version: "0.1.0",
+    version: "0.2.0",
     author: "HaxLab",
     description:
-      "Role-conditioned elite imitation team (GK/DM/AM/ST) backed by the HaxLab temporal policy.",
+      "Role-conditioned elite imitation team (GK/DM/AM/ST) with in-process Node inference.",
     allowFlags: AllowFlags.CreateRoom,
   });
 
   const that = this;
   const roles = ["gk", "dm", "am", "st"];
-  let processHandle = null;
-  let lineReader = null;
-  let requestCounter = 0;
   let tickCounter = 0;
   let bots = [];
-  const pendingByRequest = new Map();
+  let policy = null;
+  let runtimeErrorCount = 0;
 
   this.defineVariable({
     name: "modelDir",
@@ -35,22 +33,14 @@ module.exports = function(API) {
     value:
       process.env.HAXLAB_ELITE_MODEL_DIR ||
       "/var/lib/haxlab/derived/training/elite-player-v01/model",
-    description: "Directory containing model.npz and metrics.json.",
-  });
-  this.defineVariable({
-    name: "pythonPath",
-    type: VariableType.String,
-    value:
-      process.env.HAXLAB_ELITE_PYTHON ||
-      "/opt/haxlab/.venv/bin/python",
-    description: "Python executable used for the elite policy runtime.",
+    description: "Directory containing runtime-model.json and metrics.json.",
   });
   this.defineVariable({
     name: "sampleEveryTicks",
     type: VariableType.Integer,
     value: 6,
     range: { min: 1, max: 60, step: 1 },
-    description: "How often the model receives a new state.",
+    description: "How often the policy receives a new state.",
   });
   this.defineVariable({
     name: "teamId",
@@ -182,118 +172,53 @@ module.exports = function(API) {
       "score_diff",
     ];
 
-    return Object.fromEntries(names.map((name, index) => [name, values[index]]));
-  }
-
-  function sendRequest(bot, features) {
-    if (!processHandle?.stdin?.writable || bot.inflight) return;
-    const requestId = ++requestCounter;
-    bot.inflight = true;
-    pendingByRequest.set(requestId, bot);
-    processHandle.stdin.write(
-      JSON.stringify({
-        command: "act",
-        request_id: requestId,
-        agent_id: String(bot.id),
-        role: bot.role,
-        features,
-      }) + "\n",
+    return Object.fromEntries(
+      names.map((name, index) => [name, values[index]]),
     );
   }
 
-  function applyAction(bot, response) {
+  function ensurePolicy() {
+    if (policy) return policy;
+    policy = ElitePolicyRuntime.fromFile(
+      path.join(String(that.modelDir), "runtime-model.json"),
+    );
+    return policy;
+  }
+
+  function applyAction(bot, action) {
     const state = that.room?.state;
     const player = state?.getPlayer?.(bot.id);
     if (!player) return;
 
     const canonicalDirX = Math.max(
       -1,
-      Math.min(1, Number(response.dir_x) || 0),
+      Math.min(1, Number(action.dir_x) || 0),
     );
-    const dirY = Math.max(-1, Math.min(1, Number(response.dir_y) || 0));
+    const dirY = Math.max(-1, Math.min(1, Number(action.dir_y) || 0));
     const teamId = Number(player.team?.id || 0);
-    // Training labels use a canonical attack axis (+X for both teams).
-    // Convert the policy action back to world coordinates for Blue.
     const dirX = teamId === 2 ? -canonicalDirX : canonicalDirX;
-    const kick = Boolean(response.kick);
+    const kick = Boolean(action.kick);
     const keyState = Utils.keyState(dirX, dirY, kick);
 
     if (keyState !== bot.keyState || kick !== Boolean(player.isKicking)) {
-      if (
-        keyState === bot.keyState &&
-        kick &&
-        !player.isKicking
-      ) {
+      if (keyState === bot.keyState && kick && !player.isKicking) {
         that.room.fakeSendPlayerInput(keyState & -17, bot.id);
       }
       that.room.fakeSendPlayerInput(keyState, bot.id);
       bot.keyState = keyState;
     }
-    bot.lastAction = response;
-  }
-
-  function startPolicyProcess() {
-    if (processHandle) return;
-    processHandle = spawn(
-      that.pythonPath,
-      [
-        "-m",
-        "haxlab.learning.elite_runtime",
-        "--model-dir",
-        that.modelDir,
-        "--stdio",
-      ],
-      {
-        env: {
-          ...process.env,
-          PYTHONPATH:
-            process.env.PYTHONPATH || "/opt/haxlab/src",
-        },
-        stdio: ["pipe", "pipe", "pipe"],
-      },
-    );
-
-    lineReader = readline.createInterface({ input: processHandle.stdout });
-    lineReader.on("line", (line) => {
-      let response;
-      try {
-        response = JSON.parse(line);
-      } catch (_) {
-        return;
-      }
-      const bot = pendingByRequest.get(Number(response.request_id));
-      if (!bot) return;
-      pendingByRequest.delete(Number(response.request_id));
-      bot.inflight = false;
-      if (response.ok) applyAction(bot, response);
-      else {
-        console.error("HaxLab elite policy error:", response.message || response);
-      }
-    });
-
-    processHandle.stderr.on("data", (chunk) => {
-      console.error("HaxLab elite runtime:", String(chunk).trim());
-    });
-    processHandle.on("exit", (code, signal) => {
-      console.error(
-        `HaxLab elite runtime exited code=${code} signal=${signal}`,
-      );
-      processHandle = null;
-      pendingByRequest.clear();
-      for (const bot of bots) bot.inflight = false;
-    });
+    bot.lastAction = action;
   }
 
   this.spawnEliteTeam = function(teamId = that.teamId) {
     if (bots.length) return bots.map((bot) => bot.id);
-    startPolicyProcess();
+    ensurePolicy();
 
     const firstId = 65000;
     bots = roles.map((role, index) => ({
       id: firstId - index,
       role,
       keyState: 0,
-      inflight: false,
       lastAction: null,
     }));
 
@@ -318,47 +243,34 @@ module.exports = function(API) {
       } catch (_) {}
     }
     bots = [];
-    pendingByRequest.clear();
+    policy?.reset();
   };
 
   this.initialize = function() {
-    startPolicyProcess();
+    ensurePolicy();
     if (that.autoSpawn) that.spawnEliteTeam(that.teamId);
   };
 
   this.finalize = function() {
     that.removeEliteTeam();
-    try {
-      lineReader?.close();
-    } catch (_) {}
-    try {
-      processHandle?.kill();
-    } catch (_) {}
-    processHandle = null;
-    lineReader = null;
+    policy = null;
   };
 
   this.onGameStart = function() {
     tickCounter = 0;
+    runtimeErrorCount = 0;
     for (const bot of bots) {
-      bot.inflight = false;
       bot.keyState = 0;
-      try {
-        processHandle?.stdin?.write(
-          JSON.stringify({
-            command: "reset",
-            request_id: ++requestCounter,
-            agent_id: String(bot.id),
-          }) + "\n",
-        );
-      } catch (_) {}
+      policy?.reset(String(bot.id));
     }
   };
 
   this.onGameTick = function() {
-    if (!bots.length || !processHandle) return;
+    if (!bots.length) return;
     tickCounter += 1;
-    if (tickCounter % Math.max(1, Number(that.sampleEveryTicks) || 6) !== 0) {
+    if (
+      tickCounter % Math.max(1, Number(that.sampleEveryTicks) || 6) !== 0
+    ) {
       return;
     }
 
@@ -371,7 +283,24 @@ module.exports = function(API) {
       const player = state.getPlayer?.(bot.id);
       if (!player || !discOf(player)?.pos) continue;
       const features = featureObject(player, state, gameState);
-      if (features) sendRequest(bot, features);
+      if (!features) continue;
+
+      try {
+        const action = ensurePolicy().act({
+          agent_id: String(bot.id),
+          role: bot.role,
+          features,
+        });
+        applyAction(bot, action);
+      } catch (error) {
+        runtimeErrorCount += 1;
+        if (runtimeErrorCount <= 5) {
+          console.error(
+            "HaxLab elite in-process runtime error:",
+            error?.stack || String(error),
+          );
+        }
+      }
     }
   };
 };
