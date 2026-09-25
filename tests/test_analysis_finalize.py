@@ -102,3 +102,69 @@ def test_finalize_writes_versioned_snapshot_and_manifest(tmp_path: Path) -> None
     assert completion_payload["analysis_failed"] == 0
     assert completion_payload["analysis_pending"] == 0
     assert completion_payload["analysis_ticks_reconstructed"] == 600
+
+
+def test_finalize_refreshes_when_dataset_grows(tmp_path: Path) -> None:
+    db = tmp_path / "state.sqlite3"
+    derived = tmp_path / "derived"
+
+    with RuntimeState(db) as state:
+        for index, char in enumerate(("c", "d"), start=1):
+            sha = char * 64
+            replay = tmp_path / f"{char}.hbr2"
+            replay.write_bytes(b"x")
+
+            analysis_root = (
+                derived / CURRENT_ANALYZER_VERSION / sha[:2] / sha[2:4]
+            )
+            analysis_root.mkdir(parents=True, exist_ok=True)
+            output = analysis_root / f"{sha}.json"
+            output.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 4,
+                        "totalFrames": 600,
+                        "simulation": {"sampleEveryTicks": 6},
+                        "players": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            state.register_raw(
+                sha256=sha,
+                archive_path=str(replay),
+                size_bytes=1,
+            )
+            state.mark_replay_processing(
+                sha256=sha,
+                status="ok",
+                format_version=3,
+                total_frames=600,
+                duration_seconds=10.0,
+                decompressed_bytes=10,
+            )
+            state.mark_replay_analysis(
+                sha256=sha,
+                analyzer_version=CURRENT_ANALYZER_VERSION,
+                status="ok",
+                output_path=str(output),
+                sampled_state_count=100,
+                player_count=0,
+                raw_event_count=50,
+                tick_count=600,
+            )
+
+            result = finalize_analysis_if_ready(state, derived_root=derived)
+            assert result["status"] == "finalized"
+
+            completion = json.loads(
+                (
+                    derived
+                    / CURRENT_ANALYZER_VERSION
+                    / "_complete.json"
+                ).read_text(encoding="utf-8")
+            )
+            assert completion["raw_unique_replays"] == index
+            assert completion["analysis_ok"] == index
+            assert completion["analysis_ticks_reconstructed"] == index * 600
