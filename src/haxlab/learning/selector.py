@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from haxlab.skill.leaderboard import build_leaderboard
+
 
 MANIFEST_SCHEMA = "haxlab-human-imitation-manifest-v3"
 
@@ -137,10 +139,39 @@ def build_training_manifest(
     max_uncertainty: float = 1.5,
     holdout_modulus: int = 10,
     holdout_bucket: int = 0,
+    train_only_player_selection: bool = False,
 ) -> dict[str, Any]:
+    if holdout_bucket >= holdout_modulus:
+        raise ValueError("holdout_bucket must be smaller than holdout_modulus")
+
     leaderboard = json.loads(leaderboard_path.read_text(encoding="utf-8"))
+    leaderboard_rows = list(leaderboard.get("rows") or [])
+    selection_source = "precomputed_all_replays"
+
+    if train_only_player_selection:
+        eligible_train_match_ids: set[str] = set()
+        for path in analysis_root.rglob("*.json"):
+            if path.name.startswith("_"):
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            quality_ok, _ = _replay_quality(payload)
+            if not quality_ok:
+                continue
+            if _holdout_bucket(path.stem, holdout_modulus) == holdout_bucket:
+                continue
+            eligible_train_match_ids.add(path.stem)
+
+        leaderboard_rows = build_leaderboard(
+            analysis_root,
+            allowed_match_ids=eligible_train_match_ids,
+        )
+        selection_source = "train_replays_only"
+
     selected_players = select_players(
-        list(leaderboard.get("rows") or []),
+        leaderboard_rows,
         top_fraction_per_role=top_fraction_per_role,
         min_players_per_role=min_players_per_role,
         min_matches=min_matches,
@@ -244,7 +275,11 @@ def build_training_manifest(
     return {
         "schema": MANIFEST_SCHEMA,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "analysis_version": leaderboard.get("analysis_version"),
+        "analysis_version": (
+            analysis_root.name
+            if train_only_player_selection
+            else leaderboard.get("analysis_version")
+        ),
         "analysis_root": str(analysis_root),
         "leaderboard_path": str(leaderboard_path),
         "raw_root": str(raw_root),
@@ -256,6 +291,7 @@ def build_training_manifest(
             "max_uncertainty": max_uncertainty,
             "holdout_modulus": holdout_modulus,
             "holdout_bucket": holdout_bucket,
+            "player_selection_source": selection_source,
         },
         "selected_players": selected_players,
         "stats": {
@@ -307,6 +343,14 @@ def main() -> int:
     parser.add_argument("--max-uncertainty", type=float, default=1.5)
     parser.add_argument("--holdout-modulus", type=int, default=10)
     parser.add_argument("--holdout-bucket", type=int, default=0)
+    parser.add_argument(
+        "--train-only-player-selection",
+        action="store_true",
+        help=(
+            "Freeze replay split first and derive elite-player selection only "
+            "from quality train replays, keeping holdout blind."
+        ),
+    )
     args = parser.parse_args()
 
     manifest = build_training_manifest(
@@ -320,6 +364,7 @@ def main() -> int:
         max_uncertainty=max(0.0, args.max_uncertainty),
         holdout_modulus=max(2, args.holdout_modulus),
         holdout_bucket=max(0, args.holdout_bucket),
+        train_only_player_selection=args.train_only_player_selection,
     )
     if manifest["selection"]["holdout_bucket"] >= manifest["selection"]["holdout_modulus"]:
         raise SystemExit("holdout-bucket must be smaller than holdout-modulus")
