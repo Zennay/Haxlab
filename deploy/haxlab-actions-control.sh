@@ -102,12 +102,24 @@ with open(path, encoding="utf-8") as handle:
     payload = json.load(handle)
 
 summary = payload.get("featureSummary") or {}
+sparse = payload.get("sparseEvents") or {}
 players = payload.get("players") or []
 
 print("schemaVersion:", payload.get("schemaVersion"))
 print("featureVersion:", payload.get("featureVersion"))
 print("frames:", payload.get("totalFrames"))
 print("featureSummary:", json.dumps(summary, sort_keys=True))
+print(
+    "sparseCounts:",
+    json.dumps(
+        {
+            "touches": len(sparse.get("touches") or []),
+            "kicks": len(sparse.get("kicks") or []),
+            "goals": len(sparse.get("goals") or []),
+        },
+        sort_keys=True,
+    ),
+)
 
 top = sorted(players, key=lambda p: int(p.get("touches") or 0), reverse=True)[:8]
 print("top touch players:")
@@ -127,6 +139,12 @@ if int(summary.get("touches") or 0) <= 0:
     raise SystemExit("feature smoke failed: no logical touches detected")
 if int(summary.get("ballCollisionEvents") or 0) < int(summary.get("touches") or 0):
     raise SystemExit("feature smoke failed: collision count below logical touches")
+
+touch_rows = sparse.get("touches") or []
+if len(touch_rows) != int(summary.get("touches") or 0):
+    raise SystemExit("feature smoke failed: sparse touch count mismatch")
+if not any(int(row[7] or 0) in (2, 3) for row in touch_rows if len(row) > 7):
+    raise SystemExit("feature smoke failed: no teammate/opponent touch transitions")
 PY
     ;;
 
