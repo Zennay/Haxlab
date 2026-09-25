@@ -834,10 +834,32 @@ def train_elite_policy(
         **params,
     )
 
+    runtime_model_path = output_dir / "runtime-model.json"
+    runtime_model = {
+        "schema": "haxlab-elite-js-runtime-v1",
+        "source_model_schema": MODEL_SCHEMA,
+        "window": window,
+        "base_input_columns": input_columns,
+        "role_ids": {name: role_id for role_id, name in ROLE_NAMES.items()},
+        "direction_classes": [
+            {"class_id": i, "dir_x": dx, "dir_y": dy}
+            for i, (dx, dy) in enumerate(ACTION_DIRS)
+        ],
+        "kick_threshold": float(best_threshold),
+        "mean": mean.astype(float).tolist(),
+        "std": std.astype(float).tolist(),
+        "weights": {
+            key: value.astype(float).tolist()
+            for key, value in params.items()
+        },
+    }
+    _atomic_json(runtime_model_path, runtime_model)
+
     metadata = {
         "schema": MODEL_SCHEMA,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "model_path": str(model_path),
+        "runtime_model_path": str(runtime_model_path),
         "train_index": str(train_index_path),
         "validation_index": str(validation_index_path),
         "holdout_index": str(holdout_index_path),
