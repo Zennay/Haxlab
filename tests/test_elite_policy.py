@@ -219,3 +219,37 @@ def test_temporal_elite_policy_trains_with_validation_only_calibration(
             node_action["direction_probability"]
             - python_action["direction_probability"]
         ) < 1e-4
+
+
+    far_features = {name: 0.0 for name in policy.input_columns}
+    far_features["ball_dx"] = 100.0
+    far_features["ball_dy"] = 0.0
+    far_python = policy.act(
+        agent_id="far-ball",
+        role="st",
+        features=far_features,
+    )
+    assert far_python["kick"] is False
+    assert far_python["kick_in_range"] is False
+    assert far_python["kick_max_distance"] == 31.0
+
+    far_request = json.dumps({
+        "command": "act",
+        "request_id": 999,
+        "agent_id": "far-ball",
+        "role": "st",
+        "features": far_features,
+    }) + "\n"
+    far_node = subprocess.run(
+        ["node", str(node_script), str(output / "runtime-model.json")],
+        input=far_request,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+    far_node_action = json.loads(far_node.stdout.strip())
+    assert far_node_action["ok"] is True
+    assert far_node_action["kick"] is False
+    assert far_node_action["kick_in_range"] is False
+    assert abs(far_node_action["kick_max_distance"] - 31.0) < 1e-9
