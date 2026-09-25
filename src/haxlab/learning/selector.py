@@ -4,13 +4,13 @@ import argparse
 import hashlib
 import json
 import math
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 
-MANIFEST_SCHEMA = "haxlab-human-imitation-manifest-v1"
+MANIFEST_SCHEMA = "haxlab-human-imitation-manifest-v2"
 
 
 def _name_key(name: str | None) -> str | None:
@@ -115,8 +115,8 @@ def _replay_quality(payload: dict[str, Any]) -> tuple[bool, list[str]]:
         reasons.append("schema_before_v4")
     if duration_seconds < 120.0:
         reasons.append("shorter_than_2m")
-    if int(simulation.get("gameStarts") or 0) <= 0:
-        reasons.append("no_game_start")
+    if int(simulation.get("sampledStateCount") or 0) <= 0:
+        reasons.append("no_sampled_state")
     if len(players) < 4:
         reasons.append("fewer_than_4_players")
     if int(feature_summary.get("touches") or 0) <= 0:
@@ -155,6 +155,7 @@ def build_training_manifest(
     train: list[dict[str, Any]] = []
     holdout: list[dict[str, Any]] = []
     rejected = 0
+    rejection_reasons: Counter[str] = Counter()
     scanned = 0
 
     for path in analysis_root.rglob("*.json"):
@@ -170,6 +171,7 @@ def build_training_manifest(
         quality_ok, quality_reasons = _replay_quality(payload)
         if not quality_ok:
             rejected += 1
+            rejection_reasons.update(quality_reasons)
             continue
 
         selected_in_replay: list[str] = []
@@ -237,6 +239,9 @@ def build_training_manifest(
         "stats": {
             "analysis_files_scanned": scanned,
             "quality_rejected": rejected,
+            "quality_rejection_reasons": dict(
+                sorted(rejection_reasons.items())
+            ),
             "selected_player_count": len(selected_players),
             "train_replay_count": len(train),
             "holdout_replay_count": len(holdout),
