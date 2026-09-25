@@ -42,12 +42,13 @@ json.dump({
   "page_timeout_seconds": 45,
   "post_send_wait_seconds": 3,
   "force_after_minutes": 20,
+  "check_interval_seconds": 60,
   "require_high_reasoning": True
 }, open(path, "w"), indent=2)
 PY
 fi
 
-echo '[3/5] systemd watchdog instellen...'
+echo '[3/5] systemd daemon instellen...'
 mkdir -p "$HOME/.config/systemd/user"
 cat > "$HOME/.config/systemd/user/chatgpt-project-bot.service" <<EOF
 [Unit]
@@ -56,29 +57,22 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=oneshot
+Type=simple
 WorkingDirectory=$DEST
 ExecStart=$DEST/run.sh
-EOF
-
-cat > "$HOME/.config/systemd/user/chatgpt-project-bot.timer" <<EOF
-[Unit]
-Description=Check ChatGPT project every minute
-
-[Timer]
-OnBootSec=30s
-OnUnitActiveSec=1min
-AccuracySec=1s
-Persistent=true
+Restart=always
+RestartSec=10
 
 [Install]
-WantedBy=timers.target
+WantedBy=default.target
 EOF
 
+systemctl --user disable --now chatgpt-project-bot.timer 2>/dev/null || true
+rm -f "$HOME/.config/systemd/user/chatgpt-project-bot.timer"
 systemctl --user daemon-reload
-systemctl --user enable --now chatgpt-project-bot.timer
+systemctl --user enable --now chatgpt-project-bot.service
 
-echo '[4/5] Timer gestart.'
+echo '[4/5] Watchdog-daemon gestart.'
 echo '[5/5] Installatie klaar.'
 echo
 echo "Eenmalig inloggen vanuit je Linux GUI/NoMachine:"
