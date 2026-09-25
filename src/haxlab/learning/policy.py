@@ -36,6 +36,7 @@ class NumpyBCPolicy:
             )
 
         self.metadata = metadata
+        self.kick_threshold = float(metadata.get("kick_threshold", 0.5))
         self.input_columns = tuple(metadata.get("input_columns") or ())
         if not self.input_columns:
             raise ValueError("model metadata has no input_columns")
@@ -85,7 +86,7 @@ class NumpyBCPolicy:
         self,
         features: Mapping[str, float],
         *,
-        kick_threshold: float = 0.5,
+        kick_threshold: float | None = None,
     ) -> ActionPrediction:
         x = self.vectorize(features)
         normalized = (x - self.mean) / self.std
@@ -97,11 +98,16 @@ class NumpyBCPolicy:
 
         kick_logit = float((hidden @ self.wk + self.bk).reshape(-1)[0])
         kick_probability = self._sigmoid(kick_logit)
+        threshold = (
+            self.kick_threshold
+            if kick_threshold is None
+            else float(kick_threshold)
+        )
 
         return ActionPrediction(
             dir_x=dir_x,
             dir_y=dir_y,
-            kick=kick_probability >= float(kick_threshold),
+            kick=kick_probability >= threshold,
             direction_class=direction_class,
             direction_confidence=float(direction_prob[direction_class]),
             kick_probability=kick_probability,
@@ -116,7 +122,7 @@ def main() -> int:
         required=True,
         help="JSON object keyed by the model's input column names.",
     )
-    parser.add_argument("--kick-threshold", type=float, default=0.5)
+    parser.add_argument("--kick-threshold", type=float, default=None)
     args = parser.parse_args()
 
     features: dict[str, Any] = json.loads(args.features_json)
@@ -126,7 +132,11 @@ def main() -> int:
     policy = NumpyBCPolicy(args.model_dir)
     prediction = policy.predict(
         features,
-        kick_threshold=max(0.0, min(1.0, args.kick_threshold)),
+        kick_threshold=(
+            max(0.0, min(1.0, args.kick_threshold))
+            if args.kick_threshold is not None
+            else None
+        ),
     )
     print(json.dumps(asdict(prediction), indent=2, sort_keys=True))
     return 0
