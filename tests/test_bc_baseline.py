@@ -179,6 +179,11 @@ def test_baseline_trains_and_writes_holdout_metrics(tmp_path: Path) -> None:
     assert metrics["direction_accuracy"] > metrics["baselines"][
         "majority_direction_accuracy"
     ]
+    assert len(metrics["direction_confusion"]) == 9
+    assert all(len(row) == 9 for row in metrics["direction_confusion"])
+    assert 0.0 <= metrics["direction_macro_recall"] <= 1.0
+    assert all("validation" in epoch for epoch in result["history"])
+    assert all("holdout" not in epoch for epoch in result["history"])
 
 
 def test_validation_split_is_deterministic() -> None:
