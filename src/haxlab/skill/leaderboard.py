@@ -9,6 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 from statistics import mean, median, pstdev
 
+from haxlab.analysis.roles import infer_roles_4v4, role_map_4v4
 from haxlab.skill.estimator import estimate_player_skill_v0
 from haxlab.skill.models import PerformanceVector, SkillObservation
 
@@ -56,36 +57,8 @@ def _player_minutes(player: dict, payload: dict) -> float:
 
 
 def _role_map(players: list[dict]) -> dict[int, str]:
-    by_team: dict[int, list[tuple[int, float]]] = defaultdict(list)
-    for player in players:
-        team_id = int(player.get("teamId") or 0)
-        if team_id not in (1, 2):
-            continue
-        if int(player.get("samples") or 0) <= 0:
-            continue
-        average_x = player.get("averageX")
-        if average_x is None:
-            continue
-        attack_x = float(average_x) if team_id == 1 else -float(average_x)
-        by_team[team_id].append((int(player["id"]), attack_x))
-
-    result: dict[int, str] = {}
-    for team_players in by_team.values():
-        team_players.sort(key=lambda item: item[1])
-        n = len(team_players)
-        for index, (player_id, _) in enumerate(team_players):
-            if n < 3:
-                role = "unknown"
-            else:
-                percentile = index / max(1, n - 1)
-                if percentile <= 0.33:
-                    role = "defender"
-                elif percentile >= 0.67:
-                    role = "forward"
-                else:
-                    role = "midfield"
-            result[player_id] = role
-    return result
+    """Compatibility wrapper for the fixed 4v4 GK/DM/AM/ST role model."""
+    return role_map_4v4(players)
 
 
 def _raw_metrics(
@@ -165,7 +138,8 @@ def load_match_evidence(root: Path) -> list[dict]:
             continue
 
         players = list(payload.get("players") or [])
-        roles = _role_map(players)
+        role_evidence = infer_roles_4v4(players)
+        roles = {player_id: row["role"] for player_id, row in role_evidence.items()}
         total_frames = int(payload.get("totalFrames") or 0)
         match_minutes = total_frames / 3600.0
 
@@ -183,6 +157,11 @@ def load_match_evidence(root: Path) -> list[dict]:
                     "team_id": int(player.get("teamId") or 0),
                     "name": " ".join(str(player.get("name")).strip().split()),
                     "role": roles.get(int(player.get("id") or -1), "unknown"),
+                    "role_confidence": float(
+                        role_evidence.get(int(player.get("id") or -1), {}).get(
+                            "confidence", 0.0
+                        )
+                    ),
                     "minutes": minutes,
                     "match_minutes": match_minutes,
                     "schema_version": schema_version,
