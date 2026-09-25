@@ -574,18 +574,69 @@ def evaluate(
     return metrics, probs, truth
 
 
-def _kick_f1_at_threshold(
+def _kick_threshold_metrics(
     probs: np.ndarray,
     truth: np.ndarray,
     threshold: float,
-) -> float:
+) -> dict[str, float]:
     pred = probs >= threshold
     tp = int((pred & truth).sum())
     fp = int((pred & ~truth).sum())
     fn = int((~pred & truth).sum())
     precision = tp / max(1, tp + fp)
     recall = tp / max(1, tp + fn)
-    return 2.0 * precision * recall / max(1e-12, precision + recall)
+    f1 = 2.0 * precision * recall / max(1e-12, precision + recall)
+    return {
+        "threshold": float(threshold),
+        "f1": float(f1),
+        "precision": float(precision),
+        "recall": float(recall),
+        "predicted_rate": float(pred.mean()),
+        "true_rate": float(truth.mean()),
+    }
+
+
+def _calibrate_kick_threshold(
+    probs: np.ndarray,
+    truth: np.ndarray,
+    *,
+    max_rate_multiplier: float = 1.5,
+) -> tuple[float, dict[str, float], list[dict[str, float]]]:
+    """Choose a validation-only kick threshold without allowing kick spam.
+
+    Pure F1 calibration can prefer a threshold that predicts several times the
+    human kick frequency. That may look acceptable offline while producing an
+    obnoxious live agent. Keep candidates whose predicted kick rate is at most
+    1.5x the validation human rate (with a 1% floor for very tiny samples), then
+    choose the best F1 within that gameplay-safe set.
+    """
+    thresholds = np.linspace(0.05, 0.95, 37)
+    candidates = [
+        _kick_threshold_metrics(probs, truth, float(threshold))
+        for threshold in thresholds
+    ]
+    true_rate = float(truth.mean())
+    rate_cap = max(0.01, true_rate * max_rate_multiplier)
+    feasible = [
+        row for row in candidates
+        if row["predicted_rate"] <= rate_cap
+    ]
+    pool = feasible or candidates
+    best = max(
+        pool,
+        key=lambda row: (
+            row["f1"],
+            -abs(row["predicted_rate"] - true_rate),
+            -abs(row["threshold"] - 0.5),
+        ),
+    )
+    best = {
+        **best,
+        "predicted_rate_cap": float(rate_cap),
+        "max_rate_multiplier": float(max_rate_multiplier),
+        "constraint_satisfied": bool(best["predicted_rate"] <= rate_cap),
+    }
+    return float(best["threshold"]), best, candidates
 
 
 def train_elite_policy(
@@ -736,15 +787,14 @@ def train_elite_policy(
     if kick_probs is None or kick_truth is None:
         raise ValueError("validation split has no kick predictions")
 
-    thresholds = np.linspace(0.05, 0.95, 37)
-    threshold_scores = [
-        (float(threshold), _kick_f1_at_threshold(kick_probs, kick_truth, float(threshold)))
-        for threshold in thresholds
-    ]
-    best_threshold, best_kick_f1 = max(
-        threshold_scores,
-        key=lambda item: (item[1], -abs(item[0] - 0.5)),
+    best_threshold, kick_calibration, threshold_candidates = (
+        _calibrate_kick_threshold(
+            kick_probs,
+            kick_truth,
+            max_rate_multiplier=1.5,
+        )
     )
+    best_kick_f1 = float(kick_calibration["f1"])
 
     validation_final, _, _ = evaluate(
         validation_index,
@@ -827,6 +877,8 @@ def train_elite_policy(
             "kick_threshold_source": "validation_only",
             "calibrated_kick_threshold": best_threshold,
             "validation_best_kick_f1": best_kick_f1,
+            "kick_calibration": kick_calibration,
+            "kick_threshold_candidates": threshold_candidates,
             "frozen_holdout_used_for_selection": False,
         },
         "history": history,
