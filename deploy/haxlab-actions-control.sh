@@ -5,7 +5,7 @@ APP_DIR="${HAXLAB_APP_DIR:-/opt/haxlab}"
 STATE_DB="${HAXLAB_STATE_DB:-/var/lib/haxlab/state/haxlab.sqlite3}"
 
 usage() {
-  echo "Usage: haxlab-actions-control {status|deploy|restart-analyzer|player-stats|analyzer-logs|failed-analysis}" >&2
+  echo "Usage: haxlab-actions-control {status|deploy|restart-analyzer|retry-failed-analysis|player-stats|analyzer-logs|failed-analysis}" >&2
   exit 2
 }
 
@@ -51,6 +51,19 @@ case "${action}" in
 
   restart-analyzer)
     systemctl restart haxlab-analyzer.service
+    systemctl is-active haxlab-analyzer.service
+    haxlab-status
+    ;;
+
+  retry-failed-analysis)
+    systemctl stop haxlab-analyzer.service
+    sqlite3 "${STATE_DB}" "
+      UPDATE replay_analysis
+      SET status='retry', updated_at=CURRENT_TIMESTAMP
+      WHERE analyzer_version='state-pass-v2' AND status='failed';
+      SELECT changes();
+    "
+    systemctl start haxlab-analyzer.service
     systemctl is-active haxlab-analyzer.service
     haxlab-status
     ;;
