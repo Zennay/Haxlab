@@ -15,7 +15,7 @@ const {
   canonicalActionToWorld,
   num,
 } = require("./elite_features");
-const { kickoffAction } = require("./elite_tactics");
+const { kickoffAction, enforceKickRange } = require("./elite_tactics");
 
 const ROLES = ["gk", "dm", "am", "st"];
 const BASELINE_PROFILES = ["balanced", "compact", "press"];
@@ -230,6 +230,7 @@ function runMatch({
               });
               action = canonicalActionToWorld(canonical, eliteTeamId);
             }
+            action = enforceKickRange(action, player, gameState);
             const keyState = Utils.keyState(action.dirX, action.dirY, action.kick);
             room.playerInput(keyState, bot.id);
             bot.keyState = keyState;
