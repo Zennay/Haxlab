@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from haxlab.skill.leaderboard import build_leaderboard
+from haxlab.skill.leaderboard import _raw_metrics, build_leaderboard
 
 
 def _player(
@@ -141,3 +141,35 @@ def test_skill_leaderboard_builds_conservative_player_estimates(tmp_path: Path) 
     assert by_name["Alpha"]["rating"] > by_name["Beta"]["rating"]
     assert by_name["Alpha"]["rating_uncertainty"] > 0
     assert by_name["Alpha"]["dimensions"]["retention"]["effective_weight"] > 0
+
+
+def test_schema_v4_prefers_touch_chain_evidence() -> None:
+    player = {
+        "teamTouchTransfersOut": 9,
+        "turnovers": 1,
+        "recoveries": 4,
+        "touchGoals": 2,
+        "touchAssists": 3,
+        "touchProgressionEvents": 5,
+        "touchProgressionSum": 50.0,
+        "pressuredTransitions": 4,
+        "retainedUnderPressure": 3,
+        "samples": 600,
+        "nearestBallSamples": 120,
+        # Deliberately contradictory v3 fallback values.
+        "inferredRetainedChains": 0,
+        "inferredLostChains": 10,
+        "inferredRecoveries": 0,
+        "inferredGoals": 0,
+        "inferredAssists": 0,
+        "progressionEvents": 5,
+        "progressionSum": -50.0,
+    }
+
+    metrics = _raw_metrics(player, 10.0, schema_version=4)
+
+    assert metrics["retention"] == 0.9
+    assert metrics["progression"] == 10.0
+    assert metrics["defending"] == 0.4
+    assert metrics["pressure_recovery"] == 0.75
+    assert metrics["risk_management"] == -0.1
