@@ -152,10 +152,18 @@ def _raw_metrics(
     }
 
 
-def load_match_evidence(root: Path) -> list[dict]:
+def load_match_evidence(
+    root: Path,
+    *,
+    allowed_match_ids: set[str] | None = None,
+) -> list[dict]:
     evidence: list[dict] = []
 
     for path in root.rglob("*.json"):
+        if path.name.startswith("_"):
+            continue
+        if allowed_match_ids is not None and path.stem not in allowed_match_ids:
+            continue
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -322,8 +330,15 @@ def _bounded_match_contexts(
     return result
 
 
-def build_leaderboard(root: Path) -> list[dict]:
-    evidence = load_match_evidence(root)
+def build_leaderboard(
+    root: Path,
+    *,
+    allowed_match_ids: set[str] | None = None,
+) -> list[dict]:
+    evidence = load_match_evidence(
+        root,
+        allowed_match_ids=allowed_match_ids,
+    )
     normalizers = _normalizers(evidence)
 
     normalized_rows: list[dict] = []
