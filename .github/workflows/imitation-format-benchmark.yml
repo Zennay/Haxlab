@@ -1,0 +1,93 @@
+name: HaxLab Imitation Format Benchmark
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/imitation-format-benchmark.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 10
+
+    steps:
+      - name: Compare gzip JSONL with gzip Float32
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo /opt/haxlab/.venv/bin/python - <<'PY'
+          import array
+          import gzip
+          import json
+          import os
+          import tempfile
+          import time
+          from pathlib import Path
+
+          root = Path(
+              "/var/lib/haxlab/derived/training/"
+              "shards-pilot/state-pass-v4/train"
+          )
+          source = sorted(root.glob("*.jsonl.gz"))[0]
+          target = Path("/tmp/haxlab-format-benchmark.f32.gz")
+
+          t0 = time.perf_counter()
+          rows = 0
+          values = 0
+          with gzip.open(source, "rt", encoding="utf-8") as inp:
+              meta = json.loads(next(inp))
+              columns = meta["columns"]
+              with gzip.open(target, "wb", compresslevel=6) as out:
+                  for line in inp:
+                      row = json.loads(line)
+                      assert len(row) == len(columns)
+                      data = array.array("f", (float(v) for v in row))
+                      out.write(data.tobytes())
+                      rows += 1
+                      values += len(row)
+          convert_seconds = time.perf_counter() - t0
+
+          json_bytes = source.stat().st_size
+          float_bytes = target.stat().st_size
+          uncompressed_float_bytes = rows * len(columns) * 4
+
+          t1 = time.perf_counter()
+          binary_bytes_read = 0
+          with gzip.open(target, "rb") as handle:
+              while True:
+                  chunk = handle.read(1024 * 1024)
+                  if not chunk:
+                      break
+                  binary_bytes_read += len(chunk)
+          binary_read_seconds = time.perf_counter() - t1
+
+          t2 = time.perf_counter()
+          json_rows_read = 0
+          with gzip.open(source, "rt", encoding="utf-8") as handle:
+              next(handle)
+              for line in handle:
+                  json.loads(line)
+                  json_rows_read += 1
+          json_read_seconds = time.perf_counter() - t2
+
+          result = {
+              "source": str(source),
+              "rows": rows,
+              "columns": len(columns),
+              "json_gzip_bytes": json_bytes,
+              "float32_gzip_bytes": float_bytes,
+              "float32_uncompressed_bytes": uncompressed_float_bytes,
+              "float32_vs_json_ratio": round(float_bytes / json_bytes, 4),
+              "conversion_seconds": round(convert_seconds, 4),
+              "json_parse_read_seconds": round(json_read_seconds, 4),
+              "float32_decompress_read_seconds": round(binary_read_seconds, 4),
+              "binary_bytes_read": binary_bytes_read,
+              "json_rows_read": json_rows_read,
+          }
+          print(json.dumps(result, indent=2))
+          os.unlink(target)
+          PY
