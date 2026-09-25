@@ -134,3 +134,5 @@ jobs:
           du -sh /var/lib/haxlab/derived/state-pass-v4 2>/dev/null || true
           sudo du -sh /var/lib/haxlab/derived/training 2>/dev/null || true
           df -h /var/lib/haxlab
+
+# observe-6
