@@ -11,44 +11,85 @@ permissions:
 
 jobs:
   diagnose:
-    name: Diagnose one failed replay
+    name: Diagnose failed replay cohort
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 5
 
     steps:
-      - name: Inspect failed replay
+      - name: Inspect failed replay cohort
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           import sqlite3
           import subprocess
-          from pathlib import Path
 
           db = "/var/lib/haxlab/state/haxlab.sqlite3"
           conn = sqlite3.connect(db)
           conn.row_factory = sqlite3.Row
 
+          print("=== cohort summary ===")
+          for status in ("ok", "failed"):
+              row = conn.execute("""
+                  SELECT COUNT(*) AS n,
+                         ROUND(AVG(r.size_bytes),1) AS avg_bytes,
+                         MIN(r.size_bytes) AS min_bytes,
+                         MAX(r.size_bytes) AS max_bytes,
+                         ROUND(AVG(p.duration_seconds),2) AS avg_seconds,
+                         SUM(CASE WHEN r.size_bytes < 5000 THEN 1 ELSE 0 END) AS under_5kb,
+                         SUM(CASE WHEN r.size_bytes < 10000 THEN 1 ELSE 0 END) AS under_10kb
+                  FROM replay_analysis a
+                  JOIN raw_replays r ON r.sha256=a.sha256
+                  JOIN replay_processing p ON p.sha256=a.sha256
+                  WHERE a.analyzer_version='state-pass-v2'
+                    AND a.status=?
+              """, (status,)).fetchone()
+              print(status, dict(row))
+
+          print("\n=== failed size buckets ===")
           rows = conn.execute("""
-              SELECT a.sha256, r.archive_path, r.size_bytes,
-                     p.total_frames, p.duration_seconds, a.error
+              SELECT
+                CASE
+                  WHEN r.size_bytes < 1000 THEN '<1KB'
+                  WHEN r.size_bytes < 2500 THEN '1-2.5KB'
+                  WHEN r.size_bytes < 5000 THEN '2.5-5KB'
+                  WHEN r.size_bytes < 10000 THEN '5-10KB'
+                  WHEN r.size_bytes < 25000 THEN '10-25KB'
+                  ELSE '25KB+'
+                END AS bucket,
+                COUNT(*) AS n,
+                ROUND(AVG(p.duration_seconds),1) AS avg_seconds
               FROM replay_analysis a
-              JOIN raw_replays r ON r.sha256 = a.sha256
-              JOIN replay_processing p ON p.sha256 = a.sha256
+              JOIN raw_replays r ON r.sha256=a.sha256
+              JOIN replay_processing p ON p.sha256=a.sha256
+              WHERE a.analyzer_version='state-pass-v2'
+                AND a.status='failed'
+              GROUP BY bucket
+              ORDER BY MIN(r.size_bytes)
+          """).fetchall()
+          for row in rows:
+              print(dict(row))
+
+          samples = conn.execute("""
+              SELECT a.sha256, r.archive_path, r.size_bytes,
+                     p.total_frames, p.duration_seconds
+              FROM replay_analysis a
+              JOIN raw_replays r ON r.sha256=a.sha256
+              JOIN replay_processing p ON p.sha256=a.sha256
               WHERE a.analyzer_version='state-pass-v2'
                 AND a.status='failed'
               ORDER BY p.total_frames DESC
               LIMIT 5
           """).fetchall()
 
-          print("=== failed replay sample ===")
-          for row in rows:
-              print(dict(row) | {"error": str(row["error"] or "")[:180]})
+          print("\n=== failed replay sample ===")
+          for row in samples:
+              print(dict(row))
 
-          if not rows:
-              raise SystemExit("No failed replay found")
+          if not samples:
+              raise SystemExit(0)
 
-          replay = rows[0]["archive_path"]
+          replay = samples[0]["archive_path"]
           print("\n=== decoder diagnostic ===")
           print("replay:", replay)
 
@@ -65,22 +106,21 @@ jobs:
               print("stdout chars:", len(proc.stdout))
               print("stderr chars:", len(proc.stderr))
 
-              useful = []
+              print("\n=== concise decoder error ===")
+              candidates = []
               for line in proc.stderr.splitlines():
                   stripped = line.strip()
                   if not stripped:
                       continue
-                  if len(stripped) <= 800:
-                      useful.append(stripped)
+                  if "HAXLAB_" in stripped or len(stripped) <= 500:
+                      candidates.append(stripped)
 
-              print("\n=== useful stderr lines ===")
-              if useful:
-                  for line in useful[-40:]:
+              if candidates:
+                  for line in candidates[-40:]:
                       print(line)
               else:
-                  print("<no short stderr lines>")
                   print(proc.stderr[-2000:])
           except subprocess.TimeoutExpired as exc:
               print("decoder timed out after 30s")
-              print("stderr:", (exc.stderr or "")[-2000:])
+              print((exc.stderr or "")[-2000:])
           PY
