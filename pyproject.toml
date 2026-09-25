@@ -25,6 +25,7 @@ haxlab-players = "haxlab.runtime.player_stats:main"
 haxlab-skill = "haxlab.skill.leaderboard:main"
 haxlab-training-manifest = "haxlab.learning.selector:main"
 haxlab-build-shards = "haxlab.learning.shards:main"
+haxlab-materialize-shards = "haxlab.learning.materialize:main"
 haxlab-train-bc = "haxlab.learning.baseline:main"
 
 [tool.setuptools]
