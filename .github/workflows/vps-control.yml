@@ -12,6 +12,7 @@ on:
           - status
           - deploy
           - restart-analyzer
+          - retry-failed-analysis
           - player-stats
           - analyzer-logs
           - failed-analysis
@@ -43,6 +44,9 @@ jobs:
               ;;
             restart-analyzer)
               sudo /usr/local/sbin/haxlab-actions-control restart-analyzer
+              ;;
+            retry-failed-analysis)
+              sudo /usr/local/sbin/haxlab-actions-control retry-failed-analysis
               ;;
             player-stats)
               sudo /usr/local/sbin/haxlab-actions-control player-stats
