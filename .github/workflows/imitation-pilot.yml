@@ -20,6 +20,19 @@ jobs:
         run: |
           set -euo pipefail
           output_root="/var/lib/haxlab/derived/training/shards-pilot/state-pass-v4"
+          manifest="/var/lib/haxlab/derived/training/human-imitation-state-pass-v4.json"
+
+          echo "Waiting for manifest v3 with active replay player IDs..."
+          for _ in {1..60}; do
+            schema="$(sudo python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["schema"])' "${manifest}" 2>/dev/null || true)"
+            if [[ "${schema}" == "haxlab-human-imitation-manifest-v3" ]]; then
+              break
+            fi
+            sleep 2
+          done
+          schema="$(sudo python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["schema"])' "${manifest}")"
+          test "${schema}" = "haxlab-human-imitation-manifest-v3"
+
           sudo rm -rf "${output_root}"
           sudo -u haxlab /usr/local/bin/haxlab-build-shards             --split train             --limit 20             --workers 2             --sample-every-ticks 6             --output-root "${output_root}"
 
@@ -82,6 +95,7 @@ jobs:
 
           assert seen > 0
           assert requested > 0
+          assert seen == requested
 
           first = shards[0]
           actions = Counter()
