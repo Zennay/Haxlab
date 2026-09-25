@@ -124,3 +124,5 @@ jobs:
               print("decoder timed out after 30s")
               print((exc.stderr or "")[-2000:])
           PY
+
+# rerun-after-buffer-fix
