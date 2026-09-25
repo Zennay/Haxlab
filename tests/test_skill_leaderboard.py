@@ -348,3 +348,41 @@ def test_role_normalizer_is_robust_to_extreme_short_match_outlier() -> None:
 
     assert 0.45 <= center <= 0.55
     assert 0.0 < scale < 1.0
+
+
+def test_confirmed_aliases_merge_before_skill_estimation(tmp_path: Path) -> None:
+    for i in range(40):
+        alias_name = "misio" if i < 20 else "sekai"
+        _write_match(
+            tmp_path / f"alias-{i}.json",
+            [
+                _player(
+                    1,
+                    alias_name,
+                    1,
+                    -120,
+                    retained=25,
+                    lost=3,
+                    recoveries=8,
+                    goals=1,
+                    assists=1,
+                    progression=300,
+                ),
+                _player(2, "DM", 1, -30, retained=15, lost=7, recoveries=4, goals=0, assists=0, progression=80),
+                _player(3, "AM", 1, 40, retained=17, lost=6, recoveries=2, goals=0, assists=1, progression=120),
+                _player(4, "ST", 1, 130, retained=12, lost=6, recoveries=1, goals=1, assists=0, progression=90),
+                _player(5, "Opp GK", 2, 120, retained=15, lost=7, recoveries=4, goals=0, assists=0, progression=70),
+                _player(6, "Opp DM", 2, 30, retained=15, lost=7, recoveries=4, goals=0, assists=0, progression=70),
+                _player(7, "Opp AM", 2, -40, retained=15, lost=7, recoveries=4, goals=0, assists=0, progression=70),
+                _player(8, "Opp ST", 2, -130, retained=15, lost=7, recoveries=4, goals=0, assists=0, progression=70),
+            ],
+        )
+
+    rows = build_leaderboard(tmp_path, {"misio": "sekai"})
+    merged = [row for row in rows if row["player_id"] == "alias:sekai"]
+
+    assert len(merged) == 1
+    assert merged[0]["matches"] == 40
+    assert merged[0]["role"] == "gk"
+    assert not any(row["player_id"] == "name:misio" for row in rows)
+    assert not any(row["player_id"] == "name:sekai" for row in rows)
