@@ -253,7 +253,7 @@ class RuntimeState:
         *,
         sha256: str,
         status: str,
-        analyzer_version: str = "state-pass-v1",
+        analyzer_version: str = CURRENT_ANALYZER_VERSION,
         output_path: str | None = None,
         sampled_state_count: int | None = None,
         player_count: int | None = None,
