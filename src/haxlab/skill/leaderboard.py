@@ -79,18 +79,46 @@ def _role_map(players: list[dict]) -> dict[int, str]:
     return result
 
 
-def _raw_metrics(player: dict, minutes: float) -> dict[str, float | None]:
-    retained = int(player.get("inferredRetainedChains") or 0)
-    lost = int(player.get("inferredLostChains") or 0)
+def _raw_metrics(
+    player: dict,
+    minutes: float,
+    *,
+    schema_version: int,
+) -> dict[str, float | None]:
+    use_touch_features = schema_version >= 4 and (
+        "teamTouchTransfersOut" in player or "touches" in player
+    )
+
+    if use_touch_features:
+        retained = int(player.get("teamTouchTransfersOut") or 0)
+        lost = int(player.get("turnovers") or 0)
+        recoveries = int(player.get("recoveries") or 0)
+        goals = int(player.get("touchGoals") or 0)
+        assists = int(player.get("touchAssists") or 0)
+        progression_events = int(player.get("touchProgressionEvents") or 0)
+        progression_sum = float(player.get("touchProgressionSum") or 0.0)
+        pressured_transitions = int(player.get("pressuredTransitions") or 0)
+        retained_under_pressure = int(player.get("retainedUnderPressure") or 0)
+        pressure_recovery = (
+            retained_under_pressure / pressured_transitions
+            if pressured_transitions >= 3
+            else None
+        )
+    else:
+        retained = int(player.get("inferredRetainedChains") or 0)
+        lost = int(player.get("inferredLostChains") or 0)
+        recoveries = int(player.get("inferredRecoveries") or 0)
+        goals = int(player.get("inferredGoals") or 0)
+        assists = int(player.get("inferredAssists") or 0)
+        progression_events = int(player.get("progressionEvents") or 0)
+        progression_sum = float(player.get("progressionSum") or 0.0)
+        samples = int(player.get("samples") or 0)
+        close = int(player.get("closeBallSamples") or 0)
+        pressure_recovery = close / samples if samples >= 30 else None
+
     transitions = retained + lost
-    recoveries = int(player.get("inferredRecoveries") or 0)
-    goals = int(player.get("inferredGoals") or 0)
-    assists = int(player.get("inferredAssists") or 0)
-    progression_events = int(player.get("progressionEvents") or 0)
-    progression_sum = float(player.get("progressionSum") or 0.0)
     samples = int(player.get("samples") or 0)
     near = int(player.get("nearestBallSamples") or 0)
-    close = int(player.get("closeBallSamples") or 0)
 
     return {
         "retention": retained / transitions if transitions >= 3 else None,
@@ -107,7 +135,7 @@ def _raw_metrics(player: dict, minutes: float) -> dict[str, float | None]:
         "finishing": goals * 10.0 / minutes if minutes >= 0.5 else None,
         "defending": recoveries / minutes if minutes >= 0.5 else None,
         "positioning": near / samples if samples >= 30 else None,
-        "pressure_recovery": close / samples if samples >= 30 else None,
+        "pressure_recovery": pressure_recovery,
         "risk_management": -(lost / minutes) if minutes >= 0.5 else None,
     }
 
@@ -120,7 +148,8 @@ def load_match_evidence(root: Path) -> list[dict]:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        if payload.get("schemaVersion") != 3:
+        schema_version = int(payload.get("schemaVersion") or 0)
+        if schema_version not in (3, 4):
             continue
 
         players = list(payload.get("players") or [])
@@ -142,7 +171,12 @@ def load_match_evidence(root: Path) -> list[dict]:
                     "role": roles.get(int(player.get("id") or -1), "unknown"),
                     "minutes": minutes,
                     "match_minutes": match_minutes,
-                    "metrics": _raw_metrics(player, minutes),
+                    "schema_version": schema_version,
+                    "metrics": _raw_metrics(
+                        player,
+                        minutes,
+                        schema_version=schema_version,
+                    ),
                 }
             )
 
@@ -318,12 +352,12 @@ def main() -> int:
     ][: max(1, args.top)]
 
     print(
-        "HAXLAB SKILL V0.1 — experimental, role-normalized kick-chain evidence; "
+        "HAXLAB SKILL V0.2 — experimental role-normalized performance evidence; "
         "not yet a definitive player ranking."
     )
     print(
-        "Goals/assists, retention, recoveries and progression are inferred from "
-        "replay kick chains. Rating includes conservative shrinkage and uncertainty."
+        "Uses true touch-chain evidence when schema v4 is available, with v3 "
+        "kick-chain fallback. Rating includes conservative shrinkage and uncertainty."
     )
     print()
 
