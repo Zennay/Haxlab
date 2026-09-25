@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from haxlab.learning.selector import build_training_manifest
+from haxlab.learning.selector import MANIFEST_SCHEMA, build_training_manifest
 from haxlab.runtime.state import CURRENT_ANALYZER_VERSION, RuntimeState
 from haxlab.skill.leaderboard import build_leaderboard
 
@@ -82,6 +82,12 @@ def finalize_analysis_if_ready(
             previous = json.loads(completion_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             previous = {}
+        try:
+            previous_manifest = json.loads(
+                training_manifest_path.read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError):
+            previous_manifest = {}
 
         current_ticks = int(snapshot.get("analysis_ticks_reconstructed", 0))
         if (
@@ -90,6 +96,7 @@ def finalize_analysis_if_ready(
             and int(previous.get("analysis_ok", -1)) == analysis_ok
             and int(previous.get("analysis_ticks_reconstructed", -1))
             == current_ticks
+            and previous_manifest.get("schema") == MANIFEST_SCHEMA
         ):
             return {
                 "status": "already_finalized",
