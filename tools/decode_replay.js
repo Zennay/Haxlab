@@ -70,6 +70,11 @@ let lastContact = null;
 let lastTouch = null;
 let touchHistory = [];
 let pendingKick = null;
+let lastTouchEvent = null;
+
+const sparseTouchEvents = [];
+const sparseKickEvents = [];
+const sparseGoalEvents = [];
 
 const TOUCH_GAP_FRAMES = 3;
 const KICK_OUTCOME_WINDOW_FRAMES = 240;
@@ -323,6 +328,24 @@ function recordBallTouch(playerId) {
   if (!(touch.teamId === 1 || touch.teamId === 2)) return;
 
   aggregate.touches += 1;
+
+  // Compact sparse event layout:
+  // [frame, player, team, ballX, ballY, pressureDistance,
+  //  underPressure, outcome, nextPlayer, progression]
+  const touchEvent = [
+    touch.frameNo,
+    touch.playerId,
+    touch.teamId,
+    touch.ballX,
+    touch.ballY,
+    touch.pressureDistance,
+    touch.underPressure ? 1 : 0,
+    0,
+    null,
+    null,
+  ];
+  sparseTouchEvents.push(touchEvent);
+
   if (touch.pressureDistance != null) {
     aggregate.pressureObservations += 1;
     aggregate.pressureDistanceSum += touch.pressureDistance;
@@ -332,8 +355,21 @@ function recordBallTouch(playerId) {
   const previous = lastTouch;
   if (previous) {
     const previousPlayer = ensurePlayer(previous.playerId);
+    let progression = null;
+
+    if (previous.ballX != null && touch.ballX != null) {
+      progression =
+        attackAxisX(previous.teamId, touch.ballX) -
+        attackAxisX(previous.teamId, previous.ballX);
+    }
+
     if (previous.playerId === touch.playerId) {
       aggregate.selfRetouches += 1;
+      if (lastTouchEvent) {
+        lastTouchEvent[7] = 1;
+        lastTouchEvent[8] = touch.playerId;
+        lastTouchEvent[9] = progression;
+      }
     } else if (previousPlayer) {
       const sameTeam =
         previous.teamId != null &&
@@ -348,17 +384,21 @@ function recordBallTouch(playerId) {
         aggregate.recoveries += 1;
       }
 
-      if (previous.ballX != null && touch.ballX != null) {
+      if (progression != null) {
         previousPlayer.touchProgressionEvents += 1;
-        previousPlayer.touchProgressionSum +=
-          attackAxisX(previous.teamId, touch.ballX) -
-          attackAxisX(previous.teamId, previous.ballX);
+        previousPlayer.touchProgressionSum += progression;
       }
 
       if (previous.underPressure) {
         previousPlayer.pressuredTransitions += 1;
         if (sameTeam) previousPlayer.retainedUnderPressure += 1;
         else previousPlayer.lostUnderPressure += 1;
+      }
+
+      if (lastTouchEvent) {
+        lastTouchEvent[7] = sameTeam ? 2 : 3;
+        lastTouchEvent[8] = touch.playerId;
+        lastTouchEvent[9] = progression;
       }
     }
   }
@@ -375,15 +415,22 @@ function recordBallTouch(playerId) {
           age > TOUCH_GAP_FRAMES
         ) {
           kicker.kickSelfRetouches += 1;
+          if (pendingKick.event) {
+            pendingKick.event[7] = 1;
+            pendingKick.event[8] = touch.playerId;
+          }
           pendingKick = null;
         } else if (touch.playerId !== pendingKick.playerId) {
           if (touch.teamId === pendingKick.teamId) {
             kicker.kickTransfersToTeammate += 1;
             aggregate.receivedKickTransfers += 1;
+            if (pendingKick.event) pendingKick.event[7] = 2;
           } else {
             kicker.kickTransfersToOpponent += 1;
             aggregate.interceptedKickTransfers += 1;
+            if (pendingKick.event) pendingKick.event[7] = 3;
           }
+          if (pendingKick.event) pendingKick.event[8] = touch.playerId;
           pendingKick = null;
         }
       }
@@ -391,6 +438,8 @@ function recordBallTouch(playerId) {
   }
 
   lastTouch = touch;
+  lastTouchEvent = touchEvent;
+  touch.event = touchEvent;
   if (
     touchHistory.length > 0 &&
     touchHistory[touchHistory.length - 1].playerId === touch.playerId
@@ -450,7 +499,22 @@ function runReplay() {
         const kick = currentKickSnapshot(id);
         p.teamId = kick.teamId ?? p.teamId;
         if (kick.underPressure) p.underPressureKickEvents += 1;
-        pendingKick = kick;
+
+        // [frame, player, team, ballX, ballY, pressureDistance,
+        //  underPressure, outcome, nextPlayer]
+        const kickEvent = [
+          kick.frameNo,
+          kick.playerId,
+          kick.teamId,
+          kick.ballX,
+          kick.ballY,
+          kick.pressureDistance,
+          kick.underPressure ? 1 : 0,
+          0,
+          null,
+        ];
+        sparseKickEvents.push(kickEvent);
+        pendingKick = { ...kick, event: kickEvent };
 
         if (
           lastKick &&
@@ -552,17 +616,37 @@ function runReplay() {
         if (scorerTouch) {
           const scorer = ensurePlayer(scorerTouch.playerId);
           if (scorer) scorer.touchGoals += 1;
+          if (scorerTouch.event && scorerTouch.event[7] === 0) {
+            scorerTouch.event[7] = 4;
+          }
         }
         if (assistTouch) {
           const assister = ensurePlayer(assistTouch.playerId);
           if (assister) assister.touchAssists += 1;
         }
 
+        if (
+          pendingKick &&
+          pendingKick.teamId === teamId &&
+          goalFrame - pendingKick.frameNo <= GOAL_TOUCH_WINDOW_FRAMES &&
+          pendingKick.event
+        ) {
+          pendingKick.event[7] = 4;
+        }
+
+        sparseGoalEvents.push([
+          goalFrame,
+          teamId,
+          scorerTouch?.playerId ?? null,
+          assistTouch?.playerId ?? null,
+        ]);
+
         lastKick = null;
         kickHistory = [];
         pendingKick = null;
         lastContact = null;
         lastTouch = null;
+        lastTouchEvent = null;
         touchHistory = [];
       },
       onGameStart: () => {
@@ -572,6 +656,7 @@ function runReplay() {
         pendingKick = null;
         lastContact = null;
         lastTouch = null;
+        lastTouchEvent = null;
         touchHistory = [];
       },
       onGameStop: () => {
@@ -581,6 +666,7 @@ function runReplay() {
         pendingKick = null;
         lastContact = null;
         lastTouch = null;
+        lastTouchEvent = null;
         touchHistory = [];
       },
     };
@@ -678,6 +764,49 @@ function runReplay() {
       averageX: ball.samples ? ball.sumX / ball.samples : null,
       averageY: ball.samples ? ball.sumY / ball.samples : null,
       averageSpeed: ball.samples ? ball.sumSpeed / ball.samples : null,
+    },
+    sparseEvents: {
+      touchColumns: [
+        "frame",
+        "playerId",
+        "teamId",
+        "ballX",
+        "ballY",
+        "pressureDistance",
+        "underPressure",
+        "outcome",
+        "nextPlayerId",
+        "progression",
+      ],
+      touchOutcomeCodes: {
+        unresolved: 0,
+        selfRetouch: 1,
+        teammate: 2,
+        opponent: 3,
+        goal: 4,
+      },
+      kickColumns: [
+        "frame",
+        "playerId",
+        "teamId",
+        "ballX",
+        "ballY",
+        "pressureDistance",
+        "underPressure",
+        "outcome",
+        "nextPlayerId",
+      ],
+      kickOutcomeCodes: {
+        unresolved: 0,
+        selfRetouch: 1,
+        teammate: 2,
+        opponent: 3,
+        goal: 4,
+      },
+      goalColumns: ["frame", "teamId", "scorerPlayerId", "assistPlayerId"],
+      touches: sparseTouchEvents,
+      kicks: sparseKickEvents,
+      goals: sparseGoalEvents,
     },
     featureSummary: {
       touches: playerRows.reduce((sum, p) => sum + p.touches, 0),
