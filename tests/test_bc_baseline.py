@@ -244,3 +244,62 @@ def test_example_weights_change_training_when_enabled(tmp_path: Path) -> None:
         weighted_wd = weighted_model["wd"].copy()
 
     assert not np.allclose(plain_wd, weighted_wd)
+
+
+def test_calibration_split_sets_threshold_before_final_holdout(
+    tmp_path: Path,
+) -> None:
+    train_dir = tmp_path / "train-cal"
+    calibration_dir = tmp_path / "calibration"
+    holdout_dir = tmp_path / "holdout-cal"
+
+    train_entries = [
+        _write_shard(train_dir, "train-a", _synthetic_rows(1200, 31)),
+        _write_shard(train_dir, "train-b", _synthetic_rows(1200, 32)),
+    ]
+    calibration_entries = [
+        _write_shard(
+            calibration_dir,
+            "cal-a",
+            _synthetic_rows(600, 33),
+        )
+    ]
+    holdout_entries = [
+        _write_shard(
+            holdout_dir,
+            "holdout-a",
+            _synthetic_rows(600, 34),
+        )
+    ]
+
+    train_index = tmp_path / "train-cal-index.json"
+    calibration_index = tmp_path / "cal-index.json"
+    holdout_index = tmp_path / "holdout-cal-index.json"
+    _write_index(train_index, train_entries)
+    _write_index(calibration_index, calibration_entries)
+    _write_index(holdout_index, holdout_entries)
+
+    output = tmp_path / "calibrated-model"
+    result = train_baseline(
+        train_index_path=train_index,
+        calibration_index_path=calibration_index,
+        holdout_index_path=holdout_index,
+        output_dir=output,
+        hidden_dim=20,
+        epochs=3,
+        batch_size=256,
+        learning_rate=0.004,
+        seed=23,
+    )
+
+    assert result["calibration"] is not None
+    assert result["calibration"]["samples"] == 600.0
+    assert 0.0 <= result["kick_threshold"] <= 1.0
+    assert result["final_holdout"]["kick_threshold"] == result["kick_threshold"]
+    assert result["final_holdout"]["samples"] == 600
+    assert len(result["artifact_hashes"]["calibration_index_sha256"]) == 64
+    assert result["training"]["calibration_replays"] == 1
+
+    for epoch in result["history"]:
+        assert "calibration" in epoch
+        assert "holdout" not in epoch
