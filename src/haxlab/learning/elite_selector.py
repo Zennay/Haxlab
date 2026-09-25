@@ -63,8 +63,19 @@ def _canonical_identity(
 ) -> str:
     player_id = str(row["player_id"])
     name = _name_key(row.get("name"))
-    if name and name in aliases:
-        return f"alias:{aliases[name]}"
+    if not name:
+        return player_id
+
+    target = aliases.get(name)
+    if target:
+        return f"alias:{target}"
+
+    # Canonical display names that are alias targets must collapse into the
+    # exact same identity as their alternate spelling. This makes
+    # misio/sekai and sw1zy/swizy one training identity instead of two.
+    if name in set(aliases.values()):
+        return f"alias:{name}"
+
     return player_id
 
 
