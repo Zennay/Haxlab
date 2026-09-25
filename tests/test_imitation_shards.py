@@ -16,13 +16,13 @@ def test_extract_one_uses_cached_valid_shard(
     sha = "a" * 64
     output_dir = tmp_path / "train"
     output_dir.mkdir()
-    shard = output_dir / f"{sha}.jsonl.gz"
+    shard = output_dir / f"{sha}.f32.gz"
     meta = output_dir / f"{sha}.meta.json"
     shard.write_bytes(b"cached")
     meta.write_text(
         json.dumps(
             {
-                "schema": "haxlab-imitation-extract-summary-v1",
+                "schema": "haxlab-imitation-extract-summary-v2",
                 "sampleEveryTicks": 6,
                 "samples": 123,
                 "compressedBytes": 6,
@@ -131,7 +131,7 @@ def test_build_shards_honors_split_and_limit(
         sha = str(entry["replay_sha256"])
         seen.append(sha)
         return {
-            "schema": "haxlab-imitation-extract-summary-v1",
+            "schema": "haxlab-imitation-extract-summary-v2",
             "replay_sha256": sha,
             "samples": 100,
             "compressedBytes": 1000,
