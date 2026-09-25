@@ -65,6 +65,16 @@ let gameStops = 0;
 let teamGoalEvents = 0;
 let lastKick = null;
 let kickHistory = [];
+let lastContact = null;
+let lastTouch = null;
+let touchHistory = [];
+let pendingKick = null;
+
+const TOUCH_GAP_FRAMES = 3;
+const KICK_OUTCOME_WINDOW_FRAMES = 240;
+const GOAL_TOUCH_WINDOW_FRAMES = 300;
+const ASSIST_TOUCH_WINDOW_FRAMES = 600;
+const UNDER_PRESSURE_DISTANCE = 45;
 
 function heatKey(x, y, size = 20) {
   return `${Math.floor(x / size)}:${Math.floor(y / size)}`;
@@ -80,17 +90,61 @@ function attackAxisX(teamId, x) {
   return 0;
 }
 
+function nearestOpponentDistance(playerId, teamId) {
+  if (!(teamId === 1 || teamId === 2)) return null;
+  const statePlayers = reader?.state?.players || [];
+  const playerObj = statePlayers.find((p) => p.id === playerId);
+  const ownPos = playerObj?.disc?.pos;
+  if (!ownPos) return null;
+
+  let best = Infinity;
+  for (const opponent of statePlayers) {
+    if (opponent.id === playerId || opponent.team?.id === teamId) continue;
+    if (!(opponent.team?.id === 1 || opponent.team?.id === 2)) continue;
+    const pos = opponent.disc?.pos;
+    if (!pos) continue;
+    const distance = Math.hypot(
+      Number(pos.x) - Number(ownPos.x),
+      Number(pos.y) - Number(ownPos.y),
+    );
+    if (distance < best) best = distance;
+  }
+  return Number.isFinite(best) ? best : null;
+}
+
 function currentKickSnapshot(id) {
   const playerObj = reader?.state?.players?.find((p) => p.id === id);
   const teamId = playerObj?.team?.id ?? null;
   const ballDisc = reader?.gameState?.physicsState?.discs?.[0];
   const frameNo = reader?.getCurrentFrameNo?.() ?? 0;
+  const pressureDistance = nearestOpponentDistance(Number(id), teamId);
   return {
     playerId: Number(id),
     teamId,
     frameNo: Number(frameNo),
     ballX: ballDisc?.pos ? Number(ballDisc.pos.x) : null,
     ballY: ballDisc?.pos ? Number(ballDisc.pos.y) : null,
+    pressureDistance,
+    underPressure:
+      pressureDistance != null && pressureDistance <= UNDER_PRESSURE_DISTANCE,
+  };
+}
+
+function currentTouchSnapshot(id) {
+  const playerObj = reader?.state?.players?.find((p) => p.id === id);
+  const teamId = playerObj?.team?.id ?? null;
+  const ballDisc = reader?.gameState?.physicsState?.discs?.[0];
+  const frameNo = Number(reader?.getCurrentFrameNo?.() ?? 0);
+  const pressureDistance = nearestOpponentDistance(Number(id), teamId);
+  return {
+    playerId: Number(id),
+    teamId,
+    frameNo,
+    ballX: ballDisc?.pos ? Number(ballDisc.pos.x) : null,
+    ballY: ballDisc?.pos ? Number(ballDisc.pos.y) : null,
+    pressureDistance,
+    underPressure:
+      pressureDistance != null && pressureDistance <= UNDER_PRESSURE_DISTANCE,
   };
 }
 
@@ -111,6 +165,29 @@ function ensurePlayer(id, fallback = null) {
       inputEvents: 0,
       kickEvents: 0,
       kickPressedInputs: 0,
+      ballCollisionEvents: 0,
+      touches: 0,
+      selfRetouches: 0,
+      teamTouchTransfersOut: 0,
+      teamTouchReceipts: 0,
+      turnovers: 0,
+      recoveries: 0,
+      kickTransfersToTeammate: 0,
+      kickTransfersToOpponent: 0,
+      kickSelfRetouches: 0,
+      receivedKickTransfers: 0,
+      interceptedKickTransfers: 0,
+      pressureObservations: 0,
+      pressureDistanceSum: 0,
+      underPressureTouches: 0,
+      underPressureKickEvents: 0,
+      pressuredTransitions: 0,
+      retainedUnderPressure: 0,
+      lostUnderPressure: 0,
+      touchProgressionEvents: 0,
+      touchProgressionSum: 0,
+      touchGoals: 0,
+      touchAssists: 0,
       inferredRetainedChains: 0,
       inferredLostChains: 0,
       inferredRecoveries: 0,
@@ -206,6 +283,110 @@ function sampleState() {
   }
 }
 
+
+function recordBallTouch(playerId) {
+  const playerObj = reader?.state?.players?.find((p) => p.id === playerId);
+  const aggregate = ensurePlayer(playerId, playerObj);
+  if (!aggregate) return;
+
+  aggregate.ballCollisionEvents += 1;
+
+  const touch = currentTouchSnapshot(playerId);
+  aggregate.teamId = touch.teamId ?? aggregate.teamId;
+  if (!(touch.teamId === 1 || touch.teamId === 2)) return;
+
+  // Collapse the repeated collision callbacks generated while a player remains
+  // continuously in contact with the ball into one logical touch.
+  if (
+    lastContact &&
+    lastContact.playerId === touch.playerId &&
+    touch.frameNo - lastContact.frameNo <= TOUCH_GAP_FRAMES
+  ) {
+    lastContact.frameNo = touch.frameNo;
+    return;
+  }
+  lastContact = { playerId: touch.playerId, frameNo: touch.frameNo };
+
+  aggregate.touches += 1;
+  if (touch.pressureDistance != null) {
+    aggregate.pressureObservations += 1;
+    aggregate.pressureDistanceSum += touch.pressureDistance;
+    if (touch.underPressure) aggregate.underPressureTouches += 1;
+  }
+
+  const previous = lastTouch;
+  if (previous) {
+    const previousPlayer = ensurePlayer(previous.playerId);
+    if (previous.playerId === touch.playerId) {
+      aggregate.selfRetouches += 1;
+    } else if (previousPlayer) {
+      const sameTeam =
+        previous.teamId != null &&
+        touch.teamId != null &&
+        previous.teamId === touch.teamId;
+
+      if (sameTeam) {
+        previousPlayer.teamTouchTransfersOut += 1;
+        aggregate.teamTouchReceipts += 1;
+      } else {
+        previousPlayer.turnovers += 1;
+        aggregate.recoveries += 1;
+      }
+
+      if (previous.ballX != null && touch.ballX != null) {
+        previousPlayer.touchProgressionEvents += 1;
+        previousPlayer.touchProgressionSum +=
+          attackAxisX(previous.teamId, touch.ballX) -
+          attackAxisX(previous.teamId, previous.ballX);
+      }
+
+      if (previous.underPressure) {
+        previousPlayer.pressuredTransitions += 1;
+        if (sameTeam) previousPlayer.retainedUnderPressure += 1;
+        else previousPlayer.lostUnderPressure += 1;
+      }
+    }
+  }
+
+  if (pendingKick) {
+    const age = touch.frameNo - pendingKick.frameNo;
+    if (age > KICK_OUTCOME_WINDOW_FRAMES) {
+      pendingKick = null;
+    } else if (age >= 0) {
+      const kicker = ensurePlayer(pendingKick.playerId);
+      if (kicker) {
+        if (
+          touch.playerId === pendingKick.playerId &&
+          age > TOUCH_GAP_FRAMES
+        ) {
+          kicker.kickSelfRetouches += 1;
+          pendingKick = null;
+        } else if (touch.playerId !== pendingKick.playerId) {
+          if (touch.teamId === pendingKick.teamId) {
+            kicker.kickTransfersToTeammate += 1;
+            aggregate.receivedKickTransfers += 1;
+          } else {
+            kicker.kickTransfersToOpponent += 1;
+            aggregate.interceptedKickTransfers += 1;
+          }
+          pendingKick = null;
+        }
+      }
+    }
+  }
+
+  lastTouch = touch;
+  if (
+    touchHistory.length > 0 &&
+    touchHistory[touchHistory.length - 1].playerId === touch.playerId
+  ) {
+    touchHistory[touchHistory.length - 1] = touch;
+  } else {
+    touchHistory.push(touch);
+    if (touchHistory.length > 24) touchHistory.shift();
+  }
+}
+
 function runReplay() {
   return new Promise((resolve, reject) => {
     const callbacks = {
@@ -233,6 +414,18 @@ function runReplay() {
           if (kick) p.kickPressedInputs += 1;
         } catch (_) {}
       },
+      onCollisionDiscVsDisc: (
+        discId1,
+        discPlayerId1,
+        discId2,
+        discPlayerId2,
+      ) => {
+        if (discId1 === 0 && discPlayerId2 != null) {
+          recordBallTouch(discPlayerId2);
+        } else if (discId2 === 0 && discPlayerId1 != null) {
+          recordBallTouch(discPlayerId1);
+        }
+      },
       onPlayerBallKick: (id) => {
         const playerObj = reader?.state?.players?.find((p) => p.id === id);
         const p = ensurePlayer(id, playerObj);
@@ -241,6 +434,8 @@ function runReplay() {
 
         const kick = currentKickSnapshot(id);
         p.teamId = kick.teamId ?? p.teamId;
+        if (kick.underPressure) p.underPressureKickEvents += 1;
+        pendingKick = kick;
 
         if (
           lastKick &&
@@ -312,18 +507,66 @@ function runReplay() {
           if (assister) assister.inferredAssists += 1;
         }
 
+        let scorerTouch = null;
+        let assistTouch = null;
+        for (let i = touchHistory.length - 1; i >= 0; i -= 1) {
+          const touch = touchHistory[i];
+          const age = goalFrame - touch.frameNo;
+          if (age > ASSIST_TOUCH_WINDOW_FRAMES) break;
+
+          if (!scorerTouch) {
+            if (
+              touch.teamId === teamId &&
+              age <= GOAL_TOUCH_WINDOW_FRAMES
+            ) {
+              scorerTouch = touch;
+              continue;
+            }
+            // If the last relevant touch belongs to the conceding team, avoid
+            // inventing a scorer for a possible own-goal/deflection.
+            if (touch.teamId !== teamId) break;
+          } else {
+            if (touch.teamId !== teamId) break;
+            if (touch.playerId !== scorerTouch.playerId) {
+              assistTouch = touch;
+              break;
+            }
+          }
+        }
+
+        if (scorerTouch) {
+          const scorer = ensurePlayer(scorerTouch.playerId);
+          if (scorer) scorer.touchGoals += 1;
+        }
+        if (assistTouch) {
+          const assister = ensurePlayer(assistTouch.playerId);
+          if (assister) assister.touchAssists += 1;
+        }
+
         lastKick = null;
         kickHistory = [];
+        pendingKick = null;
+        lastContact = null;
+        lastTouch = null;
+        touchHistory = [];
       },
       onGameStart: () => {
         gameStarts += 1;
         lastKick = null;
         kickHistory = [];
+        pendingKick = null;
+        lastContact = null;
+        lastTouch = null;
+        touchHistory = [];
       },
       onGameStop: () => {
         gameStops += 1;
         lastKick = null;
         kickHistory = [];
+        pendingKick = null;
+        lastContact = null;
+        lastTouch = null;
+        touchHistory = [];
       },
     };
 
@@ -366,6 +609,27 @@ function runReplay() {
           : null,
       averageProgression:
         p.progressionEvents > 0 ? p.progressionSum / p.progressionEvents : null,
+      averagePressureDistance:
+        p.pressureObservations > 0
+          ? p.pressureDistanceSum / p.pressureObservations
+          : null,
+      underPressureTouchRate:
+        p.pressureObservations > 0
+          ? p.underPressureTouches / p.pressureObservations
+          : null,
+      touchRetentionRate:
+        (p.teamTouchTransfersOut + p.turnovers) > 0
+          ? p.teamTouchTransfersOut /
+            (p.teamTouchTransfersOut + p.turnovers)
+          : null,
+      pressuredRetentionRate:
+        p.pressuredTransitions > 0
+          ? p.retainedUnderPressure / p.pressuredTransitions
+          : null,
+      averageTouchProgression:
+        p.touchProgressionEvents > 0
+          ? p.touchProgressionSum / p.touchProgressionEvents
+          : null,
     }));
 
   const eventTypeCounts = Object.create(null);
@@ -374,7 +638,8 @@ function runReplay() {
   }
 
   const output = {
-    schemaVersion: 3,
+    schemaVersion: 4,
+    featureVersion: "touch-chain-v1",
     decoder: "node-haxball@2.3.1",
     sourceFile: path.basename(replayPath),
     version: replayData.version,
@@ -398,6 +663,28 @@ function runReplay() {
       averageX: ball.samples ? ball.sumX / ball.samples : null,
       averageY: ball.samples ? ball.sumY / ball.samples : null,
       averageSpeed: ball.samples ? ball.sumSpeed / ball.samples : null,
+    },
+    featureSummary: {
+      touches: playerRows.reduce((sum, p) => sum + p.touches, 0),
+      ballCollisionEvents: playerRows.reduce(
+        (sum, p) => sum + p.ballCollisionEvents,
+        0,
+      ),
+      teamTouchTransfers: playerRows.reduce(
+        (sum, p) => sum + p.teamTouchTransfersOut,
+        0,
+      ),
+      turnovers: playerRows.reduce((sum, p) => sum + p.turnovers, 0),
+      kickTransfersToTeammate: playerRows.reduce(
+        (sum, p) => sum + p.kickTransfersToTeammate,
+        0,
+      ),
+      kickTransfersToOpponent: playerRows.reduce(
+        (sum, p) => sum + p.kickTransfersToOpponent,
+        0,
+      ),
+      touchGoals: playerRows.reduce((sum, p) => sum + p.touchGoals, 0),
+      touchAssists: playerRows.reduce((sum, p) => sum + p.touchAssists, 0),
     },
     players: playerRows,
   };
