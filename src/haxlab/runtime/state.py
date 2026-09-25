@@ -408,23 +408,40 @@ class RuntimeState:
 
         recent_processed = self.connection.execute(
             """
-            SELECT COUNT(*) AS count
+            SELECT
+                COUNT(*) AS count,
+                (julianday('now') - julianday(MIN(updated_at))) * 1440.0
+                    AS elapsed_minutes
             FROM replay_processing
             WHERE updated_at >= datetime('now', '-5 minutes')
             """
-        ).fetchone()["count"]
+        ).fetchone()
         recent_analyzed = self.connection.execute(
             """
-            SELECT COUNT(*) AS count
+            SELECT
+                COUNT(*) AS count,
+                (julianday('now') - julianday(MIN(updated_at))) * 1440.0
+                    AS elapsed_minutes
             FROM replay_analysis_versions
             WHERE updated_at >= datetime('now', '-5 minutes')
               AND analyzer_version = ?
             """,
             (CURRENT_ANALYZER_VERSION,),
-        ).fetchone()["count"]
+        ).fetchone()
 
-        probe_rate_per_minute = float(recent_processed) / 5.0
-        analysis_rate_per_minute = float(recent_analyzed) / 5.0
+        def recent_rate(row: sqlite3.Row) -> float:
+            count = int(row["count"] or 0)
+            if count <= 0:
+                return 0.0
+            elapsed = float(row["elapsed_minutes"] or 0.0)
+            # A one-minute floor avoids noisy instant rates at startup. Once a
+            # pass has been active for five minutes this naturally becomes a
+            # rolling five-minute throughput rate.
+            denominator = min(5.0, max(1.0, elapsed))
+            return float(count) / denominator
+
+        probe_rate_per_minute = recent_rate(recent_processed)
+        analysis_rate_per_minute = recent_rate(recent_analyzed)
 
         processing_ok = int(processed.get("ok", 0))
 
