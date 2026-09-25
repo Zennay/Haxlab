@@ -1,0 +1,104 @@
+name: HaxLab Holdout Shard Pilot
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/imitation-holdout-pilot.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  pilot:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+
+    steps:
+      - name: Build 20 replay holdout pilot
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="/var/lib/haxlab/derived/training/human-imitation-state-pass-v4.json"
+          output_root="/var/lib/haxlab/derived/training/shards-pilot-holdout/state-pass-v4"
+
+          sudo python3 - "${manifest}" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              payload = json.load(handle)
+          print("manifest_schema:", payload.get("schema"))
+          print("manifest_stats:", json.dumps(payload.get("stats") or {}, sort_keys=True))
+          assert payload.get("schema") == "haxlab-human-imitation-manifest-v3"
+          assert len(payload.get("holdout_replays") or []) >= 20
+          PY
+
+          sudo rm -rf "${output_root}"
+          sudo -u haxlab /usr/local/bin/haxlab-build-shards             --split holdout             --limit 20             --workers 2             --sample-every-ticks 6             --output-root "${output_root}"
+
+      - name: Validate holdout pilot
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo /opt/haxlab/.venv/bin/python - <<'PY'
+          import gzip
+          import json
+          import math
+          from pathlib import Path
+
+          root = Path(
+              "/var/lib/haxlab/derived/training/"
+              "shards-pilot-holdout/state-pass-v4/holdout"
+          )
+          index = json.loads((root / "_index.json").read_text(encoding="utf-8"))
+          keys = [
+              "requested_replays",
+              "successful_replays",
+              "failed_replays",
+              "samples",
+              "compressed_bytes",
+              "selected_players_seen",
+              "unknown_input_samples_skipped",
+          ]
+          print(json.dumps({k: index.get(k) for k in keys}, indent=2))
+
+          assert index["requested_replays"] == 20
+          assert index["successful_replays"] == 20
+          assert index["failed_replays"] == 0
+          assert index["samples"] > 0
+          assert index["unknown_input_samples_skipped"] == 0
+
+          metas = sorted(root.glob("*.meta.json"))
+          shards = sorted(root.glob("*.jsonl.gz"))
+          requested = sum(
+              int(json.loads(p.read_text(encoding="utf-8"))["selectedPlayersRequested"])
+              for p in metas
+          )
+          seen = sum(
+              int(json.loads(p.read_text(encoding="utf-8"))["selectedPlayersSeen"])
+              for p in metas
+          )
+          print("identity_hit_rate:", round(seen / requested, 4))
+          assert seen == requested
+
+          with gzip.open(shards[0], "rt", encoding="utf-8") as handle:
+              meta = json.loads(next(handle))
+              columns = meta["columns"]
+              rows = 0
+              for line in handle:
+                  row = json.loads(line)
+                  assert len(row) == len(columns)
+                  assert all(
+                      isinstance(v, (int, float)) and math.isfinite(v)
+                      for v in row
+                  )
+                  rows += 1
+              assert rows > 0
+              print("first_shard_rows:", rows)
+              print("column_count:", len(columns))
+          PY
+
+      - name: Pilot storage
+        shell: bash
+        run: |
+          sudo du -sh /var/lib/haxlab/derived/training/shards-pilot-holdout/state-pass-v4
