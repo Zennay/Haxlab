@@ -1,0 +1,124 @@
+name: HaxLab Imitation Pilot
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/imitation-pilot.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  pilot:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+
+    steps:
+      - name: Build 20 replay train pilot
+        shell: bash
+        run: |
+          set -euo pipefail
+          output_root="/var/lib/haxlab/derived/training/shards-pilot/state-pass-v4"
+          sudo rm -rf "${output_root}"
+          sudo -u haxlab /usr/local/bin/haxlab-build-shards             --split train             --limit 20             --workers 2             --sample-every-ticks 6             --output-root "${output_root}"
+
+      - name: Validate pilot shards
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo /opt/haxlab/.venv/bin/python - <<'PY'
+          import gzip
+          import json
+          import math
+          from collections import Counter
+          from pathlib import Path
+
+          root = Path("/var/lib/haxlab/derived/training/shards-pilot/state-pass-v4/train")
+          index = json.loads((root / "_index.json").read_text(encoding="utf-8"))
+
+          print("=== INDEX ===")
+          summary_keys = [
+              "requested_replays",
+              "successful_replays",
+              "failed_replays",
+              "samples",
+              "compressed_bytes",
+              "selected_players_seen",
+              "unknown_input_samples_skipped",
+          ]
+          print(json.dumps({k: index.get(k) for k in summary_keys}, indent=2))
+
+          assert index["requested_replays"] == 20
+          assert index["successful_replays"] == 20
+          assert index["failed_replays"] == 0
+          assert index["samples"] > 0
+
+          metas = sorted(root.glob("*.meta.json"))
+          shards = sorted(root.glob("*.jsonl.gz"))
+          assert len(metas) == 20
+          assert len(shards) == 20
+
+          seen = 0
+          requested = 0
+          selected_state_samples = 0
+          skipped = 0
+          for meta_path in metas:
+              meta = json.loads(meta_path.read_text(encoding="utf-8"))
+              seen += int(meta.get("selectedPlayersSeen", 0))
+              requested += int(meta.get("selectedPlayersRequested", 0))
+              selected_state_samples += int(meta.get("selectedStateSamples", 0))
+              skipped += int(meta.get("skippedUnknownInput", 0))
+
+          print("=== IDENTITY / INPUT COVERAGE ===")
+          print("selected_players_seen:", seen)
+          print("selected_players_requested:", requested)
+          print("selected_state_samples:", selected_state_samples)
+          print("unknown_input_samples_skipped:", skipped)
+          if requested:
+              print("identity_hit_rate:", round(seen / requested, 4))
+          if selected_state_samples:
+              print("input_skip_rate:", round(skipped / selected_state_samples, 4))
+
+          assert seen > 0
+          assert requested > 0
+
+          first = shards[0]
+          actions = Counter()
+          row_count = 0
+          min_len = None
+          max_len = None
+          with gzip.open(first, "rt", encoding="utf-8") as handle:
+              meta = json.loads(next(handle))
+              columns = meta["columns"]
+              print("=== FIRST SHARD META ===")
+              print(json.dumps(meta, indent=2, ensure_ascii=False))
+              for line in handle:
+                  row = json.loads(line)
+                  row_count += 1
+                  min_len = len(row) if min_len is None else min(min_len, len(row))
+                  max_len = len(row) if max_len is None else max(max_len, len(row))
+                  assert len(row) == len(columns)
+                  assert all(
+                      isinstance(value, (int, float)) and math.isfinite(value)
+                      for value in row
+                  )
+                  actions[(int(row[-3]), int(row[-2]), int(row[-1]))] += 1
+
+          print("=== FIRST SHARD VALIDATION ===")
+          print("path:", first)
+          print("rows:", row_count)
+          print("columns:", len(columns))
+          print("row_width_min:", min_len)
+          print("row_width_max:", max_len)
+          print("top_actions:", actions.most_common(12))
+
+          assert row_count > 0
+          assert min_len == max_len == len(columns)
+          PY
+
+      - name: Pilot storage
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo du -sh /var/lib/haxlab/derived/training/shards-pilot/state-pass-v4
