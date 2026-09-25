@@ -8,6 +8,14 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
+training_state="$(systemctl show haxlab-training-shards.service -p ActiveState --value 2>/dev/null || true)"
+training_was_running=0
+if [[ "${training_state}" == "active" || "${training_state}" == "activating" ]]; then
+  training_was_running=1
+  echo "Pausing resumable imitation shard materialization for deploy..."
+  systemctl stop haxlab-training-shards.service 2>/dev/null || true
+fi
+
 systemctl stop haxlab-analyzer.service haxlab-worker.service haxlab-ingest.service 2>/dev/null || true
 
 apt-get install -y nodejs npm
@@ -42,6 +50,11 @@ install -o root -g root -m 0755 "${APP_DIR}/deploy/haxlab-actions-control.sh" /u
 systemctl daemon-reload
 systemctl enable haxlab-ingest.service haxlab-worker.service haxlab-analyzer.service
 systemctl start haxlab-ingest.service haxlab-worker.service haxlab-analyzer.service
+
+if [[ "${training_was_running}" -eq 1 ]]; then
+  echo "Resuming imitation shard materialization from cache..."
+  systemctl start haxlab-training-shards.service
+fi
 
 systemctl is-active --quiet haxlab-ingest.service
 systemctl is-active --quiet haxlab-worker.service
