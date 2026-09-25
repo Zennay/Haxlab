@@ -308,3 +308,37 @@ def test_match_context_is_bounded_and_action_based() -> None:
     assert 0.0 < strong_opponents <= 1.0
     assert -1.0 <= weak_opponents < 0.0
     assert strong_opponents > weak_opponents
+
+
+def test_role_normalizer_is_robust_to_extreme_short_match_outlier() -> None:
+    evidence = []
+    for i in range(40):
+        evidence.append(
+            {
+                "role": "midfield",
+                "minutes": 5.0,
+                "metrics": {"retention": 0.45 + (i % 3) * 0.05},
+            }
+        )
+
+    evidence.append(
+        {
+            "role": "midfield",
+            "minutes": 5.0,
+            "metrics": {"retention": 1000.0},
+        }
+    )
+    # An absurd value from a sub-minute cameo should not enter the baseline at all.
+    evidence.append(
+        {
+            "role": "midfield",
+            "minutes": 0.1,
+            "metrics": {"retention": 1000000.0},
+        }
+    )
+
+    normalizers = _normalizers(evidence)
+    center, scale = normalizers[("midfield", "retention")]
+
+    assert 0.45 <= center <= 0.55
+    assert 0.0 < scale < 1.0
