@@ -38,7 +38,11 @@ const replayPath = process.argv[2];
 if (!replayPath) usage();
 
 const sampleEvery = Math.max(1, Number.parseInt(process.argv[3] || "6", 10) || 6);
-const data = fs.readFileSync(replayPath);
+// node-haxball currently constructs DataView from data.buffer and does not
+// account for Buffer.byteOffset. Small Node Buffers are often slices of the
+// shared <4 KiB pool, so passing fs.readFileSync() directly can make a valid
+// HBR2 file appear to have the wrong magic. Force a tightly-backed Uint8Array.
+const data = Uint8Array.from(fs.readFileSync(replayPath));
 
 const replayData = Replay.readAll(data);
 
