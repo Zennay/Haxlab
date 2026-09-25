@@ -13,8 +13,8 @@ ExecStart=/opt/haxlab/.venv/bin/python -m haxlab.runtime.analyzer \
   --state-db /var/lib/haxlab/state/haxlab.sqlite3 \
   --derived-root /var/lib/haxlab/derived \
   --decoder-script /opt/haxlab/tools/decode_replay.js \
-  --workers 4 \
-  --batch-size 16 \
+  --workers 6 \
+  --batch-size 24 \
   --sample-every-ticks 6 \
   --timeout-seconds 120 \
   --interval 5
