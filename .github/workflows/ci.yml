@@ -59,6 +59,7 @@ jobs:
           node --check tools/extract_elite_imitation.js
           node --check tools/extract_stadium_from_replay.js
           node --check tools/elite_features.js
+          node --check tools/elite_tactics.js
           node --check tools/elite_policy_runtime.js
           node --check tools/elite_bot_plugin.js
           node --check tools/elite_sandbox_benchmark.js
