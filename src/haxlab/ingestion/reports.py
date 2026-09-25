@@ -11,7 +11,9 @@ _REPORT_ID_RE = re.compile(
     re.IGNORECASE,
 )
 _SCORE_RE = re.compile(
-    r"Red\s+Team\s*(?P<red>\d+)\s*-\s*(?P<blue>\d+)\s*Blue\s+Team",
+    r"(?:\*\*)?Red\s+Team(?:\*\*)?\s*"
+    r"(?P<red>\d+)\s*-\s*(?P<blue>\d+)\s*"
+    r"(?:\*\*)?Blue\s+Team(?:\*\*)?",
     re.IGNORECASE,
 )
 _POSSESSION_RE = re.compile(
