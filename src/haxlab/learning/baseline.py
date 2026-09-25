@@ -312,6 +312,7 @@ def _train_batch(
     x: np.ndarray,
     direction: np.ndarray,
     kick: np.ndarray,
+    sample_weight: np.ndarray,
     params: dict[str, np.ndarray],
     *,
     kick_pos_weight: float,
@@ -321,11 +322,17 @@ def _train_batch(
     hidden, dir_prob, kick_prob = _forward(x, params)
 
     eps = 1e-7
-    dir_loss = -np.log(
-        np.clip(dir_prob[np.arange(batch), direction], eps, 1.0)
-    ).mean()
+    base_weight = np.asarray(sample_weight, dtype=np.float32).reshape(-1)
+    weight_total = max(1.0, float(base_weight.sum()))
+    dir_loss = -(
+        base_weight
+        * np.log(np.clip(dir_prob[np.arange(batch), direction], eps, 1.0))
+    ).sum() / weight_total
 
-    kick_weights = np.where(kick > 0.5, kick_pos_weight, 1.0).astype(np.float32)
+    kick_weights = (
+        base_weight
+        * np.where(kick > 0.5, kick_pos_weight, 1.0).astype(np.float32)
+    )
     kick_loss = -(
         kick_weights
         * (
@@ -336,7 +343,7 @@ def _train_batch(
 
     ddir = dir_prob.copy()
     ddir[np.arange(batch), direction] -= 1.0
-    ddir /= batch
+    ddir *= (base_weight / weight_total)[:, None]
 
     # Weighted BCE derivative, normalized by total sample weight.
     dkick = (
@@ -395,7 +402,9 @@ def _iter_batches(
 
         for start in range(0, x.shape[0], batch_size):
             idx = order[start : start + batch_size]
-            yield x[idx], direction[idx], kick[idx]
+            replay_weight = float(entry.get("example_weight", 1.0))
+            sample_weight = np.full(len(idx), replay_weight, dtype=np.float32)
+            yield x[idx], direction[idx], kick[idx], sample_weight
 
 
 def evaluate_thresholds(
@@ -421,7 +430,7 @@ def evaluate_thresholds(
     joint_correct = np.zeros(len(thresholds), dtype=np.int64)
 
     rng = np.random.default_rng(0)
-    for x, direction, kick in _iter_batches(
+    for x, direction, kick, _sample_weight in _iter_batches(
         index,
         mean=mean,
         std=std,
@@ -547,7 +556,7 @@ def train_baseline(
         dir_losses: list[float] = []
         kick_losses: list[float] = []
 
-        for x, direction, kick in _iter_batches(
+        for x, direction, kick, sample_weight in _iter_batches(
             train_index,
             mean=mean,
             std=std,
@@ -559,6 +568,7 @@ def train_baseline(
                 x,
                 direction,
                 kick,
+                sample_weight,
                 params,
                 kick_pos_weight=kick_pos_weight,
                 l2=max(0.0, l2),
