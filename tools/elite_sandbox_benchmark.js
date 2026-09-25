@@ -395,7 +395,8 @@ function summarize(matches, stadium, modelPath) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const runtimeModel = JSON.parse(fs.readFileSync(args.model, "utf8"));
-  const stadium = JSON.parse(fs.readFileSync(args.stadium, "utf8"));
+  const stadiumJson = JSON.parse(fs.readFileSync(args.stadium, "utf8"));
+  const stadium = Utils.parseStadium(JSON.stringify(stadiumJson));
 
   const matches = [];
   for (let index = 0; index < args.matches; index += 1) {
