@@ -241,14 +241,14 @@ def build_leaderboard(root: Path) -> list[dict]:
     normalizers = _normalizers(evidence)
 
     observations: list[SkillObservation] = []
-    names: dict[str, str] = {}
+    name_counts: defaultdict[str, Counter[str]] = defaultdict(Counter)
     matches: Counter[str] = Counter()
     minutes: defaultdict[str, float] = defaultdict(float)
     role_minutes: defaultdict[str, Counter[str]] = defaultdict(Counter)
 
     for row in evidence:
         player_id = row["player_id"]
-        names.setdefault(player_id, row["name"])
+        name_counts[player_id][row["name"]] += 1
         matches[player_id] += 1
         minutes[player_id] += row["minutes"]
         role_minutes[player_id][row["role"]] += row["minutes"]
@@ -322,7 +322,7 @@ def build_leaderboard(root: Path) -> list[dict]:
         result.append(
             {
                 "player_id": player_id,
-                "name": names[player_id],
+                "name": name_counts[player_id].most_common(1)[0][0],
                 "matches": matches[player_id],
                 "minutes": minutes[player_id],
                 "role": primary_role,
