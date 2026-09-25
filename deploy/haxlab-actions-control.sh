@@ -42,7 +42,7 @@ case "${action}" in
     sqlite3 "${STATE_DB}" "
       SELECT COALESCE(error, '<no error>') AS error, COUNT(*) AS count
       FROM replay_analysis
-      WHERE analyzer_version='state-pass-v2' AND status='failed'
+      WHERE analyzer_version='state-pass-v3' AND status='failed'
       GROUP BY error
       ORDER BY count DESC
       LIMIT 15;
@@ -60,7 +60,7 @@ case "${action}" in
     sqlite3 "${STATE_DB}" "
       UPDATE replay_analysis
       SET status='retry', updated_at=CURRENT_TIMESTAMP
-      WHERE analyzer_version='state-pass-v2' AND status='failed';
+      WHERE analyzer_version='state-pass-v3' AND status='failed';
       SELECT changes();
     "
     systemctl start haxlab-analyzer.service
@@ -85,7 +85,7 @@ case "${action}" in
     sqlite3 "${STATE_DB}" "
       SELECT COALESCE(error, '<no error>') AS error, COUNT(*) AS count
       FROM replay_analysis
-      WHERE analyzer_version='state-pass-v2' AND status='failed'
+      WHERE analyzer_version='state-pass-v3' AND status='failed'
       GROUP BY error
       ORDER BY count DESC
       LIMIT 30;
