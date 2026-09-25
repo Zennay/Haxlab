@@ -106,14 +106,14 @@ def test_training_manifest_selects_quality_replays_and_freezes_split(
     good = {
         "schemaVersion": 4,
         "totalFrames": 18000,
-        "simulation": {"gameStarts": 1},
+        "simulation": {"gameStarts": 0, "sampledStateCount": 1200},
         "featureSummary": {"touches": 100},
         "players": players,
     }
     short = {
         "schemaVersion": 4,
         "totalFrames": 3000,
-        "simulation": {"gameStarts": 1},
+        "simulation": {"gameStarts": 0, "sampledStateCount": 1200},
         "featureSummary": {"touches": 20},
         "players": players,
     }
@@ -157,3 +157,28 @@ def test_training_manifest_selects_quality_replays_and_freezes_split(
     ] == [
         row["replay_sha256"] for row in second["holdout_replays"]
     ]
+
+
+def test_quality_accepts_replay_without_game_start_when_state_exists() -> None:
+    from haxlab.learning.selector import _replay_quality
+
+    ok, reasons = _replay_quality(
+        {
+            "schemaVersion": 4,
+            "totalFrames": 18000,
+            "simulation": {
+                "gameStarts": 0,
+                "sampledStateCount": 3000,
+            },
+            "featureSummary": {"touches": 100},
+            "players": [
+                {"name": "A", "teamId": 1},
+                {"name": "B", "teamId": 1},
+                {"name": "C", "teamId": 2},
+                {"name": "D", "teamId": 2},
+            ],
+        }
+    )
+
+    assert ok is True
+    assert reasons == []
