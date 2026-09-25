@@ -88,3 +88,47 @@ def test_kickoff_overlay_disengages_after_ball_moves() -> None:
 
     assert result["kickoff"] is False
     assert result["action"] is None
+
+
+def test_learned_kick_is_blocked_when_ball_is_far_away() -> None:
+    repo = Path(__file__).parents[1]
+    script = f"""
+const tactics = require({json.dumps(str(repo / "tools" / "elite_tactics.js"))});
+const player = {{disc: {{pos: {{x:0,y:0}}}}}};
+const gameState = {{physicsState: {{discs: [{{pos: {{x:100,y:0}}}}]}}}};
+console.log(JSON.stringify(
+  tactics.enforceKickRange({{dirX:1, dirY:0, kick:true}}, player, gameState)
+));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+    action = json.loads(completed.stdout)
+    assert action["kick"] is False
+    assert action["kick_in_range"] is False
+
+
+def test_learned_kick_survives_when_ball_is_in_range() -> None:
+    repo = Path(__file__).parents[1]
+    script = f"""
+const tactics = require({json.dumps(str(repo / "tools" / "elite_tactics.js"))});
+const player = {{disc: {{pos: {{x:0,y:0}}}}}};
+const gameState = {{physicsState: {{discs: [{{pos: {{x:20,y:0}}}}]}}}};
+console.log(JSON.stringify(
+  tactics.enforceKickRange({{dirX:1, dirY:0, kick:true}}, player, gameState)
+));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+    action = json.loads(completed.stdout)
+    assert action["kick"] is True
+    assert action["kick_in_range"] is True
