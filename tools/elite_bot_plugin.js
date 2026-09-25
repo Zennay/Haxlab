@@ -206,8 +206,15 @@ module.exports = function(API) {
     const player = state?.getPlayer?.(bot.id);
     if (!player) return;
 
-    const dirX = Math.max(-1, Math.min(1, Number(response.dir_x) || 0));
+    const canonicalDirX = Math.max(
+      -1,
+      Math.min(1, Number(response.dir_x) || 0),
+    );
     const dirY = Math.max(-1, Math.min(1, Number(response.dir_y) || 0));
+    const teamId = Number(player.team?.id || 0);
+    // Training labels use a canonical attack axis (+X for both teams).
+    // Convert the policy action back to world coordinates for Blue.
+    const dirX = teamId === 2 ? -canonicalDirX : canonicalDirX;
     const kick = Boolean(response.kick);
     const keyState = Utils.keyState(dirX, dirY, kick);
 
