@@ -72,3 +72,9 @@ jobs:
         run: |
           set -euo pipefail
           sudo /usr/local/sbin/haxlab-actions-control deploy
+
+      - name: Smoke test replay features on real data
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo /usr/local/sbin/haxlab-actions-control feature-smoke
