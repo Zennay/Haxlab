@@ -143,3 +143,27 @@ def test_elite_manifest_builds_three_way_split_and_local_roles(
     assert selected[0]["role"] == "dm"
     assert selected[0]["role_id"] == ROLE_IDS["dm"]
     assert selected[0]["skill_weight"] > 1.0
+
+
+def test_alias_group_uses_one_elite_slot_but_keeps_all_source_profiles() -> None:
+    rows = [
+        _row("name:misio", "misio", "am", 60.0, 0.5),
+        _row("name:sekai", "sekai", "am", 59.0, 0.5),
+        _row("name:other", "Other", "am", 54.0, 0.5),
+    ]
+    selected = select_elite_players(
+        rows,
+        aliases={"misio": "sekai"},
+        top_fraction_per_role=0.5,
+        min_players_per_role=1,
+        min_matches=1,
+        min_minutes=0.0,
+        max_uncertainty=10.0,
+    )
+
+    assert {row["canonical_identity"] for row in selected} == {"alias:sekai"}
+    assert {row["player_id"] for row in selected} == {
+        "name:misio",
+        "name:sekai",
+    }
+    assert len({row["conservative_score"] for row in selected}) == 1
