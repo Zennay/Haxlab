@@ -97,19 +97,25 @@ def test_training_manifest_selects_quality_replays_and_freezes_split(
 
     good_sha = "aabb" + "1" * 60
     bad_sha = "aabb" + "2" * 60
+    players = [
+        {"name": "Alpha", "teamId": 1},
+        {"name": "Mate", "teamId": 1},
+        {"name": "Opp A", "teamId": 2},
+        {"name": "Opp B", "teamId": 2},
+    ]
     good = {
         "schemaVersion": 4,
         "totalFrames": 18000,
         "simulation": {"gameStarts": 1},
         "featureSummary": {"touches": 100},
-        "players": [{"name": "Alpha", "teamId": 1}],
+        "players": players,
     }
     short = {
         "schemaVersion": 4,
         "totalFrames": 3000,
         "simulation": {"gameStarts": 1},
         "featureSummary": {"touches": 20},
-        "players": [{"name": "Alpha", "teamId": 1}],
+        "players": players,
     }
     (analysis_dir / f"{good_sha}.json").write_text(
         json.dumps(good),
