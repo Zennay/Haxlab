@@ -169,6 +169,9 @@ def test_baseline_trains_and_writes_holdout_metrics(tmp_path: Path) -> None:
     assert result["schema"] == "haxlab-bc-baseline-v1"
     assert (output / "model.npz").exists()
     assert (output / "metrics.json").exists()
+    assert len(result["artifact_hashes"]["model_sha256"]) == 64
+    assert len(result["artifact_hashes"]["train_index_sha256"]) == 64
+    assert len(result["artifact_hashes"]["holdout_index_sha256"]) == 64
     assert metrics["samples"] == 1200
     assert 0.0 <= metrics["direction_accuracy"] <= 1.0
     assert 0.0 <= metrics["direction_macro_recall"] <= 1.0
