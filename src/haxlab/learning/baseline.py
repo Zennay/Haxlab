@@ -515,6 +515,89 @@ def evaluate(
     }
 
 
+def calibrate_kick_threshold(
+    index: dict[str, Any],
+    *,
+    params: dict[str, np.ndarray],
+    mean: np.ndarray,
+    std: np.ndarray,
+    batch_size: int = 8192,
+) -> dict[str, float]:
+    probabilities: list[np.ndarray] = []
+    labels: list[np.ndarray] = []
+    rng = np.random.default_rng(0)
+
+    for x, _direction, kick in _iter_batches(
+        index,
+        mean=mean,
+        std=std,
+        batch_size=batch_size,
+        rng=rng,
+        shuffle=False,
+        include_sample_weight=False,
+    ):
+        _hidden, _dir_prob, kick_prob = _forward(x, params)
+        probabilities.append(kick_prob.astype(np.float32, copy=False))
+        labels.append((kick > 0.5).astype(np.int8, copy=False))
+
+    if not probabilities:
+        raise ValueError("calibration index contains no samples")
+
+    prob = np.concatenate(probabilities)
+    truth = np.concatenate(labels)
+    positives = int(truth.sum())
+    if positives <= 0:
+        return {
+            "threshold": 1.0,
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "true_rate": 0.0,
+            "predicted_rate": 0.0,
+            "samples": float(truth.size),
+        }
+
+    order = np.argsort(-prob, kind="stable")
+    sorted_prob = prob[order]
+    sorted_truth = truth[order].astype(np.int64)
+    tp = np.cumsum(sorted_truth)
+    fp = np.cumsum(1 - sorted_truth)
+    fn = positives - tp
+    denom = 2 * tp + fp + fn
+    f1 = np.divide(
+        2 * tp,
+        np.maximum(1, denom),
+        dtype=np.float64,
+    )
+
+    # Thresholding includes all equal-probability rows. Score only the
+    # last row in each tie group so metrics match probability >= threshold.
+    tie_end = np.ones(sorted_prob.shape[0], dtype=bool)
+    if sorted_prob.shape[0] > 1:
+        tie_end[:-1] = sorted_prob[:-1] != sorted_prob[1:]
+    candidate_indices = np.flatnonzero(tie_end)
+    best_local = int(np.argmax(f1[candidate_indices]))
+    best = int(candidate_indices[best_local])
+
+    threshold = float(sorted_prob[best])
+    best_tp = int(tp[best])
+    best_fp = int(fp[best])
+    best_fn = int(fn[best])
+    precision = best_tp / max(1, best_tp + best_fp)
+    recall = best_tp / max(1, best_tp + best_fn)
+    predicted = best_tp + best_fp
+
+    return {
+        "threshold": threshold,
+        "f1": float(f1[best]),
+        "precision": precision,
+        "recall": recall,
+        "true_rate": positives / truth.size,
+        "predicted_rate": predicted / truth.size,
+        "samples": float(truth.size),
+    }
+
+
 def train_baseline(
     *,
     train_index_path: Path,
