@@ -38,6 +38,7 @@ jobs:
             --top 10000 \
             --min-matches 1 \
             --min-minutes 0 \
+            --aliases "$GITHUB_WORKSPACE/configs/player_aliases.json" \
             --format json \
             --output /var/lib/haxlab/derived/leaderboards/elite-pr-smoke.json \
             >/tmp/haxlab-elite-pr-leaderboard.json
