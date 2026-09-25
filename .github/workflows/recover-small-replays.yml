@@ -1,0 +1,59 @@
+name: HaxLab Recover Small Replays
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/recover-small-replays.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    name: Retry previously failed small replays
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+
+    steps:
+      - name: Mark failed replays for one-shot retry
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo /usr/local/sbin/haxlab-actions-control retry-failed-analysis
+
+      - name: Wait for analyzer recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in {1..120}; do
+            JSON="$(haxlab-status)"
+            echo "$JSON"
+            PENDING="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["analysis_pending"])' <<<"$JSON")"
+            if [[ "$PENDING" == "0" ]]; then
+              echo "Recovery analysis complete."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Recovery did not finish within 10 minutes." >&2
+          exit 1
+
+      - name: Final recovery summary
+        if: always()
+        shell: bash
+        run: |
+          echo "=== final status ==="
+          haxlab-status
+          echo
+          echo "=== remaining failures ==="
+          sqlite3 /var/lib/haxlab/state/haxlab.sqlite3 "
+            SELECT status, COUNT(*)
+            FROM replay_analysis
+            WHERE analyzer_version='state-pass-v2'
+            GROUP BY status
+            ORDER BY status;
+          "
+          echo
+          echo "=== preliminary players ==="
+          haxlab-players --top 20 --min-matches 20 --min-minutes 30 || true
