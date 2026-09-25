@@ -24,6 +24,7 @@ haxlab-analyzer = "haxlab.runtime.analyzer:main"
 haxlab-players = "haxlab.runtime.player_stats:main"
 haxlab-skill = "haxlab.skill.leaderboard:main"
 haxlab-training-manifest = "haxlab.learning.selector:main"
+haxlab-build-shards = "haxlab.learning.shards:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
