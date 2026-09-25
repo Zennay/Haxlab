@@ -98,7 +98,9 @@ def _raw_metrics(
     )
 
     if use_touch_features:
-        retained = int(player.get("teamTouchTransfersOut") or 0)
+        team_transfers = int(player.get("teamTouchTransfersOut") or 0)
+        self_retouches = int(player.get("selfRetouches") or 0)
+        retained = team_transfers + self_retouches
         lost = int(player.get("turnovers") or 0)
         recoveries = int(player.get("recoveries") or 0)
         goals = int(player.get("touchGoals") or 0)
@@ -114,6 +116,7 @@ def _raw_metrics(
         )
     else:
         retained = int(player.get("inferredRetainedChains") or 0)
+        team_transfers = retained
         lost = int(player.get("inferredLostChains") or 0)
         recoveries = int(player.get("inferredRecoveries") or 0)
         goals = int(player.get("inferredGoals") or 0)
@@ -136,7 +139,7 @@ def _raw_metrics(
             else None
         ),
         "creation": (
-            (assists * 10.0 / minutes) + (retained / minutes) * 0.05
+            (assists * 10.0 / minutes) + (team_transfers / minutes) * 0.05
             if minutes >= 0.5
             else None
         ),
