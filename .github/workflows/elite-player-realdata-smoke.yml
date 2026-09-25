@@ -67,6 +67,34 @@ jobs:
             --shard-workers 2 \
             | tee /tmp/haxlab-elite-pr-smoke.log
 
+      - name: Load trained model and act as all four roles
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python - <<'PY'
+          from pathlib import Path
+          from haxlab.learning.elite_runtime import ElitePolicy
+
+          model_dir = Path(
+              "/var/lib/haxlab/derived/training/elite-player-pr-smoke/model"
+          )
+          policy = ElitePolicy(model_dir)
+          features = {name: 0.0 for name in policy.input_columns}
+
+          for role in ("gk", "dm", "am", "st"):
+              action = policy.act(
+                  agent_id=f"smoke-{role}",
+                  role=role,
+                  features=features,
+              )
+              assert action["dir_x"] in (-1, 0, 1)
+              assert action["dir_y"] in (-1, 0, 1)
+              assert isinstance(action["kick"], bool)
+              assert 0.0 <= action["kick_probability"] <= 1.0
+              print(role, action)
+          PY
+
       - name: Surface smoke metrics
         shell: bash
         run: |
