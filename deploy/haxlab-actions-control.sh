@@ -6,7 +6,7 @@ STATE_DB="${HAXLAB_STATE_DB:-/var/lib/haxlab/state/haxlab.sqlite3}"
 CURRENT_ANALYZER_VERSION="$("${APP_DIR}/.venv/bin/python" -c 'from haxlab.runtime.state import CURRENT_ANALYZER_VERSION; print(CURRENT_ANALYZER_VERSION)')"
 
 usage() {
-  echo "Usage: haxlab-actions-control {status|deploy|restart-analyzer|retry-failed-analysis|feature-smoke|player-stats|skill-leaderboard|training-manifest|analyzer-logs|failed-analysis}" >&2
+  echo "Usage: haxlab-actions-control {status|deploy|restart-analyzer|retry-failed-analysis|feature-smoke|player-stats|skill-leaderboard|training-manifest|start-training-shards|stop-training-shards|training-shards-status|analyzer-logs|failed-analysis}" >&2
   exit 2
 }
 
@@ -199,6 +199,30 @@ PY
       --leaderboard "${leaderboard}" \
       --raw-root /var/lib/haxlab/raw/replays \
       --output "${output}"
+    ;;
+
+  start-training-shards)
+    systemctl start haxlab-training-shards.service
+    systemctl status haxlab-training-shards.service --no-pager -l || true
+    ;;
+
+  stop-training-shards)
+    systemctl stop haxlab-training-shards.service
+    systemctl status haxlab-training-shards.service --no-pager -l || true
+    ;;
+
+  training-shards-status)
+    echo "=== service ==="
+    systemctl status haxlab-training-shards.service --no-pager -l || true
+    echo
+    echo "=== train progress ==="
+    cat "/var/lib/haxlab/derived/training/shards/${CURRENT_ANALYZER_VERSION}/train/_progress.json" 2>/dev/null || echo "no train progress yet"
+    echo
+    echo "=== holdout progress ==="
+    cat "/var/lib/haxlab/derived/training/shards/${CURRENT_ANALYZER_VERSION}/holdout/_progress.json" 2>/dev/null || echo "no holdout progress yet"
+    echo
+    echo "=== completion ==="
+    cat "/var/lib/haxlab/derived/training/shards/${CURRENT_ANALYZER_VERSION}/_complete.json" 2>/dev/null || echo "not complete yet"
     ;;
 
   analyzer-logs)
