@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from haxlab.learning.selector import build_training_manifest\nfrom haxlab.runtime.state import CURRENT_ANALYZER_VERSION, RuntimeState
+from haxlab.learning.selector import build_training_manifest
+from haxlab.runtime.state import CURRENT_ANALYZER_VERSION, RuntimeState
 from haxlab.skill.leaderboard import build_leaderboard
 
 
@@ -21,7 +22,8 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, ensure_ascii=False, indent=2)
-            handle.write("\n")
+            handle.write("
+")
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary_name, path)
