@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 
-from haxlab.skill.leaderboard import _raw_metrics, build_leaderboard
+from haxlab.skill.leaderboard import _raw_metrics, build_leaderboard, main
 
 
 def _player(
@@ -173,3 +174,55 @@ def test_schema_v4_prefers_touch_chain_evidence() -> None:
     assert metrics["defending"] == 0.4
     assert metrics["pressure_recovery"] == 0.75
     assert metrics["risk_management"] == -0.1
+
+
+def test_skill_cli_can_write_json_snapshot(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    _write_match(
+        tmp_path / "one.json",
+        [
+            _player(
+                1,
+                "Alpha",
+                1,
+                -40,
+                retained=8,
+                lost=2,
+                recoveries=2,
+                goals=1,
+                assists=0,
+                progression=40,
+            )
+        ],
+    )
+    output = tmp_path / "leaderboard.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "haxlab-skill",
+            "--root",
+            str(tmp_path),
+            "--top",
+            "10",
+            "--min-matches",
+            "1",
+            "--min-minutes",
+            "0",
+            "--format",
+            "json",
+            "--output",
+            str(output),
+        ],
+    )
+
+    assert main() == 0
+    printed = json.loads(capsys.readouterr().out)
+    saved = json.loads(output.read_text(encoding="utf-8"))
+
+    assert printed["schema"] == "haxlab-skill-leaderboard-v1"
+    assert saved["schema"] == "haxlab-skill-leaderboard-v1"
+    assert saved["rows"][0]["name"] == "Alpha"
