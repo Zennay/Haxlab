@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from haxlab.evaluation.elite_gate import decide_elite_live_gate
 from haxlab.learning.elite import train_elite_policy
 from haxlab.learning.elite_selector import build_elite_manifest
 from haxlab.learning.elite_shards import build_elite_shards
@@ -97,6 +98,8 @@ def run_elite_pipeline(
         seed=seed,
     )
 
+    live_gate = decide_elite_live_gate(model)
+
     summary = {
         "manifest_path": str(manifest_path),
         "shards_root": str(shards_root),
@@ -114,6 +117,11 @@ def run_elite_pipeline(
         "kick_threshold": model["training"]["calibrated_kick_threshold"],
         "validation": model["final_validation"],
         "frozen_holdout": model["final_holdout"],
+        "live_test_gate": {
+            "eligible_for_live_test": live_gate.eligible_for_live_test,
+            "reasons": list(live_gate.reasons),
+            "checks": live_gate.checks,
+        },
     }
     (work_root / "pipeline-summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
