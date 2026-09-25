@@ -26,6 +26,7 @@ haxlab-skill = "haxlab.skill.leaderboard:main"
 haxlab-training-manifest = "haxlab.learning.selector:main"
 haxlab-build-shards = "haxlab.learning.shards:main"
 haxlab-train-bc = "haxlab.learning.baseline:main"
+haxlab-predict-bc = "haxlab.learning.policy:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

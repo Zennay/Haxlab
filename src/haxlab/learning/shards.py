@@ -138,6 +138,7 @@ def build_shards(
     node_script: Path,
     sample_every_ticks: int = 6,
     workers: int = 2,
+    offset: int = 0,
     limit: int | None = None,
     timeout_seconds: int = 180,
     force: bool = False,
@@ -153,6 +154,7 @@ def build_shards(
 
     source_key = f"{split}_replays"
     entries = list(manifest.get(source_key) or [])
+    entries = entries[max(0, offset) :]
     if limit is not None:
         entries = entries[: max(0, limit)]
 
@@ -199,6 +201,7 @@ def build_shards(
         "analysis_version": manifest.get("analysis_version"),
         "split": split,
         "sample_every_ticks": max(1, sample_every_ticks),
+        "source_offset": max(0, offset),
         "requested_replays": len(entries),
         "successful_replays": len(results),
         "failed_replays": len(failures),
@@ -248,6 +251,7 @@ def main() -> int:
     )
     parser.add_argument("--sample-every-ticks", type=int, default=6)
     parser.add_argument("--workers", type=int, default=2)
+    parser.add_argument("--offset", type=int, default=0)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--timeout-seconds", type=int, default=180)
     parser.add_argument("--force", action="store_true")
@@ -260,6 +264,7 @@ def main() -> int:
         node_script=args.node_script,
         sample_every_ticks=max(1, args.sample_every_ticks),
         workers=max(1, args.workers),
+        offset=max(0, args.offset),
         limit=args.limit,
         timeout_seconds=max(30, args.timeout_seconds),
         force=args.force,

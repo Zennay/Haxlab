@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import json
 import math
 import os
@@ -14,6 +15,15 @@ import numpy as np
 
 
 MODEL_SCHEMA = "haxlab-bc-baseline-v1"
+PORTABLE_MODEL_SCHEMA = "haxlab-bc-portable-v1"
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 ACTION_DIRS = tuple(
     (dx, dy)
     for dy in (-1, 0, 1)
@@ -249,16 +259,29 @@ def _train_batch(
     *,
     kick_pos_weight: float,
     l2: float,
+    sample_weight: np.ndarray | None = None,
 ) -> tuple[dict[str, np.ndarray], dict[str, float]]:
     batch = x.shape[0]
     hidden, dir_prob, kick_prob = _forward(x, params)
+    if sample_weight is None:
+        sample_weight = np.ones(batch, dtype=np.float32)
+    else:
+        sample_weight = np.asarray(sample_weight, dtype=np.float32).reshape(-1)
+        if sample_weight.shape[0] != batch:
+            raise ValueError("sample_weight length must match batch")
+        sample_weight = np.clip(sample_weight, 0.05, 5.0)
+    sample_weight_sum = max(1e-6, float(sample_weight.sum()))
 
     eps = 1e-7
-    dir_loss = -np.log(
+    dir_nll = -np.log(
         np.clip(dir_prob[np.arange(batch), direction], eps, 1.0)
-    ).mean()
+    )
+    dir_loss = float((dir_nll * sample_weight).sum() / sample_weight_sum)
 
-    kick_weights = np.where(kick > 0.5, kick_pos_weight, 1.0).astype(np.float32)
+    kick_weights = (
+        np.where(kick > 0.5, kick_pos_weight, 1.0).astype(np.float32)
+        * sample_weight
+    )
     kick_loss = -(
         kick_weights
         * (
@@ -269,7 +292,7 @@ def _train_batch(
 
     ddir = dir_prob.copy()
     ddir[np.arange(batch), direction] -= 1.0
-    ddir /= batch
+    ddir *= (sample_weight / sample_weight_sum).reshape(-1, 1)
 
     # Weighted BCE derivative, normalized by total sample weight.
     dkick = (
@@ -305,6 +328,42 @@ def _train_batch(
     }
 
 
+def _weighted_resample_order(
+    order: np.ndarray,
+    *,
+    effective_weight: float,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Deterministically resample one replay for a weighted training epoch.
+
+    A scalar loss multiplier on a batch containing only one replay mostly
+    cancels under Adam. Resampling changes the actual example distribution:
+    weight 0.5 keeps about half the examples, weight 1 keeps all examples,
+    and weight 1.5 keeps all plus a half-sized duplicate sample.
+    """
+    if order.size == 0:
+        return order
+
+    weight = max(0.05, min(5.0, float(effective_weight)))
+    whole = int(math.floor(weight))
+    fractional = weight - whole
+
+    pieces: list[np.ndarray] = []
+    for _ in range(whole):
+        pieces.append(order.copy())
+
+    if fractional > 0.0:
+        take = max(1, min(order.size, int(round(order.size * fractional))))
+        pieces.append(rng.choice(order, size=take, replace=False))
+
+    if not pieces:
+        return np.empty(0, dtype=order.dtype)
+
+    sampled = np.concatenate(pieces)
+    rng.shuffle(sampled)
+    return sampled
+
+
 def _iter_batches(
     index: dict[str, Any],
     *,
@@ -313,10 +372,22 @@ def _iter_batches(
     batch_size: int,
     rng: np.random.Generator,
     shuffle: bool,
+    include_sample_weight: bool = False,
 ):
     entries = list(index["entries"])
     if shuffle:
         rng.shuffle(entries)
+
+    raw_weights = np.asarray(
+        [float(entry.get("example_weight", 1.0)) for entry in entries],
+        dtype=np.float32,
+    )
+    mean_weight = (
+        float(raw_weights.mean())
+        if include_sample_weight and raw_weights.size
+        else 1.0
+    )
+    mean_weight = max(1e-6, mean_weight)
 
     for entry in entries:
         rows, columns = _load_shard(entry)
@@ -326,9 +397,23 @@ def _iter_batches(
         if shuffle:
             rng.shuffle(order)
 
-        for start in range(0, x.shape[0], batch_size):
+        if include_sample_weight:
+            replay_weight = float(entry.get("example_weight", 1.0))
+            order = _weighted_resample_order(
+                order,
+                effective_weight=replay_weight / mean_weight,
+                rng=rng,
+            )
+
+        for start in range(0, order.shape[0], batch_size):
             idx = order[start : start + batch_size]
-            yield x[idx], direction[idx], kick[idx]
+            if include_sample_weight:
+                # Weighting has already been applied by resampling. Ones keep
+                # the train-batch interface explicit without re-scaling Adam.
+                weights = np.ones(idx.shape[0], dtype=np.float32)
+                yield x[idx], direction[idx], kick[idx], weights
+            else:
+                yield x[idx], direction[idx], kick[idx]
 
 
 def evaluate(
@@ -338,6 +423,7 @@ def evaluate(
     mean: np.ndarray,
     std: np.ndarray,
     batch_size: int = 8192,
+    kick_threshold: float = 0.5,
 ) -> dict[str, Any]:
     total = 0
     direction_correct = 0
@@ -347,6 +433,7 @@ def evaluate(
     kick_fn = 0
     kick_tn = 0
     direction_counts = np.zeros(9, dtype=np.int64)
+    direction_confusion = np.zeros((9, 9), dtype=np.int64)
 
     rng = np.random.default_rng(0)
     for x, direction, kick in _iter_batches(
@@ -356,10 +443,11 @@ def evaluate(
         batch_size=batch_size,
         rng=rng,
         shuffle=False,
+        include_sample_weight=False,
     ):
         _, dir_prob, kick_prob = _forward(x, params)
         dir_pred = dir_prob.argmax(axis=1)
-        kick_pred = kick_prob >= 0.5
+        kick_pred = kick_prob >= float(kick_threshold)
         kick_true = kick > 0.5
 
         total += x.shape[0]
@@ -372,6 +460,7 @@ def evaluate(
         kick_fn += int((~kick_pred & kick_true).sum())
         kick_tn += int((~kick_pred & ~kick_true).sum())
         direction_counts += np.bincount(direction, minlength=9)
+        np.add.at(direction_confusion, (direction, dir_pred), 1)
 
     if total <= 0:
         raise ValueError("evaluation index contains no samples")
@@ -384,10 +473,29 @@ def evaluate(
     )
     majority_direction = int(direction_counts.max())
     no_kick = kick_tn + kick_fp
+    direction_recall_by_class = []
+    for class_id in range(9):
+        support = int(direction_confusion[class_id].sum())
+        recall = (
+            float(direction_confusion[class_id, class_id]) / support
+            if support > 0
+            else None
+        )
+        direction_recall_by_class.append(recall)
+    supported_recalls = [
+        recall for recall in direction_recall_by_class if recall is not None
+    ]
+    direction_macro_recall = (
+        float(np.mean(supported_recalls)) if supported_recalls else 0.0
+    )
 
     return {
         "samples": total,
+        "kick_threshold": float(kick_threshold),
         "direction_accuracy": direction_correct / total,
+        "direction_macro_recall": direction_macro_recall,
+        "direction_recall_by_class": direction_recall_by_class,
+        "direction_confusion": direction_confusion.tolist(),
         "joint_accuracy": joint_correct / total,
         "kick_precision": kick_precision,
         "kick_recall": kick_recall,
@@ -407,22 +515,113 @@ def evaluate(
     }
 
 
+def calibrate_kick_threshold(
+    index: dict[str, Any],
+    *,
+    params: dict[str, np.ndarray],
+    mean: np.ndarray,
+    std: np.ndarray,
+    batch_size: int = 8192,
+) -> dict[str, float]:
+    probabilities: list[np.ndarray] = []
+    labels: list[np.ndarray] = []
+    rng = np.random.default_rng(0)
+
+    for x, _direction, kick in _iter_batches(
+        index,
+        mean=mean,
+        std=std,
+        batch_size=batch_size,
+        rng=rng,
+        shuffle=False,
+        include_sample_weight=False,
+    ):
+        _hidden, _dir_prob, kick_prob = _forward(x, params)
+        probabilities.append(kick_prob.astype(np.float32, copy=False))
+        labels.append((kick > 0.5).astype(np.int8, copy=False))
+
+    if not probabilities:
+        raise ValueError("calibration index contains no samples")
+
+    prob = np.concatenate(probabilities)
+    truth = np.concatenate(labels)
+    positives = int(truth.sum())
+    if positives <= 0:
+        return {
+            "threshold": 1.0,
+            "f1": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "true_rate": 0.0,
+            "predicted_rate": 0.0,
+            "samples": float(truth.size),
+        }
+
+    order = np.argsort(-prob, kind="stable")
+    sorted_prob = prob[order]
+    sorted_truth = truth[order].astype(np.int64)
+    tp = np.cumsum(sorted_truth)
+    fp = np.cumsum(1 - sorted_truth)
+    fn = positives - tp
+    denom = 2 * tp + fp + fn
+    f1 = np.divide(
+        2 * tp,
+        np.maximum(1, denom),
+        dtype=np.float64,
+    )
+
+    # Thresholding includes all equal-probability rows. Score only the
+    # last row in each tie group so metrics match probability >= threshold.
+    tie_end = np.ones(sorted_prob.shape[0], dtype=bool)
+    if sorted_prob.shape[0] > 1:
+        tie_end[:-1] = sorted_prob[:-1] != sorted_prob[1:]
+    candidate_indices = np.flatnonzero(tie_end)
+    best_local = int(np.argmax(f1[candidate_indices]))
+    best = int(candidate_indices[best_local])
+
+    threshold = float(sorted_prob[best])
+    best_tp = int(tp[best])
+    best_fp = int(fp[best])
+    best_fn = int(fn[best])
+    precision = best_tp / max(1, best_tp + best_fp)
+    recall = best_tp / max(1, best_tp + best_fn)
+    predicted = best_tp + best_fp
+
+    return {
+        "threshold": threshold,
+        "f1": float(f1[best]),
+        "precision": precision,
+        "recall": recall,
+        "true_rate": positives / truth.size,
+        "predicted_rate": predicted / truth.size,
+        "samples": float(truth.size),
+    }
+
+
 def train_baseline(
     *,
     train_index_path: Path,
     holdout_index_path: Path,
     output_dir: Path,
+    calibration_index_path: Path | None = None,
     train_limit: int | None = None,
     holdout_limit: int | None = None,
+    calibration_limit: int | None = None,
     hidden_dim: int = 64,
     epochs: int = 3,
     batch_size: int = 4096,
     learning_rate: float = 1e-3,
     l2: float = 1e-5,
     seed: int = 1337,
+    use_example_weights: bool = False,
 ) -> dict[str, Any]:
     train_index = _load_index(train_index_path, train_limit)
     holdout_index = _load_index(holdout_index_path, holdout_limit)
+    calibration_index = (
+        _load_index(calibration_index_path, calibration_limit)
+        if calibration_index_path is not None
+        else None
+    )
     mean, std, input_columns, train_stats = _normalization(train_index)
 
     rng = np.random.default_rng(seed)
@@ -439,14 +638,20 @@ def train_baseline(
         dir_losses: list[float] = []
         kick_losses: list[float] = []
 
-        for x, direction, kick in _iter_batches(
+        for batch_data in _iter_batches(
             train_index,
             mean=mean,
             std=std,
             batch_size=max(32, batch_size),
             rng=rng,
             shuffle=True,
+            include_sample_weight=use_example_weights,
         ):
+            if use_example_weights:
+                x, direction, kick, sample_weight = batch_data
+            else:
+                x, direction, kick = batch_data
+                sample_weight = None
             grads, loss = _train_batch(
                 x,
                 direction,
@@ -454,6 +659,7 @@ def train_baseline(
                 params,
                 kick_pos_weight=kick_pos_weight,
                 l2=max(0.0, l2),
+                sample_weight=sample_weight,
             )
             step += 1
             _adam_update(
@@ -468,22 +674,53 @@ def train_baseline(
             dir_losses.append(loss["direction_loss"])
             kick_losses.append(loss["kick_loss"])
 
-        holdout_metrics = evaluate(
-            holdout_index,
+        monitor_index = (
+            calibration_index
+            if calibration_index is not None
+            else holdout_index
+        )
+        monitor_metrics = evaluate(
+            monitor_index,
+            params=params,
+            mean=mean,
+            std=std,
+            batch_size=max(32, batch_size),
+            kick_threshold=0.5,
+        )
+        history_row: dict[str, Any] = {
+            "epoch": epoch,
+            "train_loss_mean": float(np.mean(losses)),
+            "direction_loss_mean": float(np.mean(dir_losses)),
+            "kick_loss_mean": float(np.mean(kick_losses)),
+        }
+        history_row[
+            "calibration"
+            if calibration_index is not None
+            else "holdout"
+        ] = monitor_metrics
+        history.append(history_row)
+
+    calibration_result: dict[str, float] | None = None
+    kick_threshold = 0.5
+    if calibration_index is not None:
+        calibration_result = calibrate_kick_threshold(
+            calibration_index,
             params=params,
             mean=mean,
             std=std,
             batch_size=max(32, batch_size),
         )
-        history.append(
-            {
-                "epoch": epoch,
-                "train_loss_mean": float(np.mean(losses)),
-                "direction_loss_mean": float(np.mean(dir_losses)),
-                "kick_loss_mean": float(np.mean(kick_losses)),
-                "holdout": holdout_metrics,
-            }
-        )
+        kick_threshold = float(calibration_result["threshold"])
+
+    # Frozen holdout is evaluated only after training/calibration completes.
+    final_metrics = evaluate(
+        holdout_index,
+        params=params,
+        mean=mean,
+        std=std,
+        batch_size=max(32, batch_size),
+        kick_threshold=kick_threshold,
+    )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     model_path = output_dir / "model.npz"
@@ -494,13 +731,57 @@ def train_baseline(
         **params,
     )
 
-    final_metrics = history[-1]["holdout"]
+    portable_path = output_dir / "model.portable.json"
+    _atomic_json(
+        portable_path,
+        {
+            "schema": PORTABLE_MODEL_SCHEMA,
+            "input_columns": input_columns,
+            "kick_threshold": kick_threshold,
+            "direction_classes": [
+                {"class_id": i, "dir_x": dx, "dir_y": dy}
+                for i, (dx, dy) in enumerate(ACTION_DIRS)
+            ],
+            "mean": mean.tolist(),
+            "std": std.tolist(),
+            "w1": params["w1"].tolist(),
+            "b1": params["b1"].tolist(),
+            "wd": params["wd"].tolist(),
+            "bd": params["bd"].tolist(),
+            "wk": params["wk"].reshape(-1).tolist(),
+            "bk": params["bk"].reshape(-1).tolist(),
+        },
+    )
+
     metadata = {
         "schema": MODEL_SCHEMA,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "model_path": str(model_path),
+        "portable_model_path": str(portable_path),
+        "artifact_hashes": {
+            "model_sha256": _sha256_file(model_path),
+            "portable_model_sha256": _sha256_file(portable_path),
+            "train_index_sha256": _sha256_file(train_index_path),
+            "holdout_index_sha256": _sha256_file(holdout_index_path),
+            **(
+                {
+                    "calibration_index_sha256": _sha256_file(
+                        calibration_index_path
+                    )
+                }
+                if calibration_index_path is not None
+                else {}
+            ),
+        },
         "train_index": str(train_index_path),
         "holdout_index": str(holdout_index_path),
+        "calibration_index": (
+            str(calibration_index_path)
+            if calibration_index_path is not None
+            else None
+        ),
+        "kick_threshold": kick_threshold,
+        "calibration": calibration_result,
         "input_columns": input_columns,
         "excluded_input_columns": list(EXCLUDED_INPUT_COLUMNS),
         "direction_classes": [
@@ -522,7 +803,13 @@ def train_baseline(
             "l2": max(0.0, l2),
             "train_replays": len(train_index["entries"]),
             "holdout_replays": len(holdout_index["entries"]),
+            "calibration_replays": (
+                len(calibration_index["entries"])
+                if calibration_index is not None
+                else 0
+            ),
             "train_stats": train_stats,
+            "use_example_weights": bool(use_example_weights),
         },
         "history": history,
         "final_holdout": final_metrics,
@@ -548,28 +835,34 @@ def main() -> int:
         type=Path,
         required=True,
     )
+    parser.add_argument("--calibration-index", type=Path, default=None)
     parser.add_argument("--train-limit", type=int, default=None)
     parser.add_argument("--holdout-limit", type=int, default=None)
+    parser.add_argument("--calibration-limit", type=int, default=None)
     parser.add_argument("--hidden-dim", type=int, default=64)
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--batch-size", type=int, default=4096)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--l2", type=float, default=1e-5)
     parser.add_argument("--seed", type=int, default=1337)
+    parser.add_argument("--use-example-weights", action="store_true")
     args = parser.parse_args()
 
     result = train_baseline(
         train_index_path=args.train_index,
         holdout_index_path=args.holdout_index,
         output_dir=args.output_dir,
+        calibration_index_path=args.calibration_index,
         train_limit=args.train_limit,
         holdout_limit=args.holdout_limit,
+        calibration_limit=args.calibration_limit,
         hidden_dim=max(8, args.hidden_dim),
         epochs=max(1, args.epochs),
         batch_size=max(32, args.batch_size),
         learning_rate=max(1e-6, args.learning_rate),
         l2=max(0.0, args.l2),
         seed=args.seed,
+        use_example_weights=args.use_example_weights,
     )
     print(json.dumps(result["final_holdout"], indent=2, sort_keys=True))
     print("model:", result["model_path"])

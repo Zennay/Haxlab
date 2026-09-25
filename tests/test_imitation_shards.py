@@ -167,3 +167,68 @@ def test_build_shards_honors_split_and_limit(
     )
     assert saved["split"] == "train"
     assert len(saved["entries"]) == 2
+
+
+def test_build_shards_offset_creates_non_overlapping_calibration_window(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    train = [
+        {
+            "replay_sha256": char * 64,
+            "raw_path": str(tmp_path / f"{char}.hbr2"),
+            "selected_player_ids": [f"name:{char}"],
+            "selected_players": [
+                {
+                    "replay_player_id": 1,
+                    "identity": f"name:{char}",
+                    "samples": 100,
+                }
+            ],
+            "example_weight": 1.0,
+        }
+        for char in ("a", "b", "c", "d")
+    ]
+    manifest = tmp_path / "manifest-offset.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": MANIFEST_SCHEMA,
+                "analysis_version": "state-pass-v4",
+                "train_replays": train,
+                "holdout_replays": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    seen: list[str] = []
+
+    def fake_extract(entry, **kwargs):
+        sha = str(entry["replay_sha256"])
+        seen.append(sha)
+        return {
+            "schema": "haxlab-imitation-extract-summary-v2",
+            "replay_sha256": sha,
+            "samples": 10,
+            "compressedBytes": 100,
+            "selectedPlayersSeen": 1,
+            "skippedUnknownInput": 0,
+            "status": "ok",
+        }
+
+    monkeypatch.setattr(shards, "_extract_one", fake_extract)
+
+    index = shards.build_shards(
+        manifest_path=manifest,
+        split="train",
+        output_root=tmp_path / "calibration-out",
+        node_script=tmp_path / "extract.js",
+        workers=1,
+        offset=2,
+        limit=2,
+    )
+
+    assert index["source_offset"] == 2
+    assert index["requested_replays"] == 2
+    assert seen == ["c" * 64, "d" * 64]

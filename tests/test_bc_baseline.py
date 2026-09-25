@@ -169,9 +169,137 @@ def test_baseline_trains_and_writes_holdout_metrics(tmp_path: Path) -> None:
     assert result["schema"] == "haxlab-bc-baseline-v1"
     assert (output / "model.npz").exists()
     assert (output / "metrics.json").exists()
+    assert len(result["artifact_hashes"]["model_sha256"]) == 64
+    assert len(result["artifact_hashes"]["train_index_sha256"]) == 64
+    assert len(result["artifact_hashes"]["holdout_index_sha256"]) == 64
     assert metrics["samples"] == 1200
     assert 0.0 <= metrics["direction_accuracy"] <= 1.0
+    assert 0.0 <= metrics["direction_macro_recall"] <= 1.0
+    assert len(metrics["direction_recall_by_class"]) == 9
+    assert len(metrics["direction_confusion"]) == 9
+    assert all(len(row) == 9 for row in metrics["direction_confusion"])
     assert 0.0 <= metrics["kick_f1"] <= 1.0
     assert metrics["direction_accuracy"] > metrics["baselines"][
         "majority_direction_accuracy"
     ]
+
+
+def test_example_weights_change_training_when_enabled(tmp_path: Path) -> None:
+    train_dir = tmp_path / "train-weighted"
+    holdout_dir = tmp_path / "holdout-weighted"
+
+    a = _write_shard(train_dir, "train-a", _synthetic_rows(800, 11))
+    b_rows = _synthetic_rows(800, 12)
+    # Flip the horizontal target in the second shard so weighting has a
+    # measurable effect on the learned decision boundary.
+    dx_i = COLUMNS.index("dir_x")
+    b_rows[:, dx_i] *= -1
+    b = _write_shard(train_dir, "train-b", b_rows)
+    a["example_weight"] = 2.0
+    b["example_weight"] = 0.25
+
+    holdout = _write_shard(
+        holdout_dir,
+        "holdout-a",
+        _synthetic_rows(500, 13),
+    )
+
+    train_index = tmp_path / "train-weighted-index.json"
+    holdout_index = tmp_path / "holdout-weighted-index.json"
+    _write_index(train_index, [a, b])
+    _write_index(holdout_index, [holdout])
+
+    plain_dir = tmp_path / "plain-model"
+    weighted_dir = tmp_path / "weighted-model"
+
+    plain = train_baseline(
+        train_index_path=train_index,
+        holdout_index_path=holdout_index,
+        output_dir=plain_dir,
+        hidden_dim=16,
+        epochs=2,
+        batch_size=128,
+        learning_rate=0.003,
+        seed=19,
+        use_example_weights=False,
+    )
+    weighted = train_baseline(
+        train_index_path=train_index,
+        holdout_index_path=holdout_index,
+        output_dir=weighted_dir,
+        hidden_dim=16,
+        epochs=2,
+        batch_size=128,
+        learning_rate=0.003,
+        seed=19,
+        use_example_weights=True,
+    )
+
+    assert plain["training"]["use_example_weights"] is False
+    assert weighted["training"]["use_example_weights"] is True
+
+    with np.load(plain_dir / "model.npz") as plain_model:
+        plain_wd = plain_model["wd"].copy()
+    with np.load(weighted_dir / "model.npz") as weighted_model:
+        weighted_wd = weighted_model["wd"].copy()
+
+    assert not np.allclose(plain_wd, weighted_wd)
+
+
+def test_calibration_split_sets_threshold_before_final_holdout(
+    tmp_path: Path,
+) -> None:
+    train_dir = tmp_path / "train-cal"
+    calibration_dir = tmp_path / "calibration"
+    holdout_dir = tmp_path / "holdout-cal"
+
+    train_entries = [
+        _write_shard(train_dir, "train-a", _synthetic_rows(1200, 31)),
+        _write_shard(train_dir, "train-b", _synthetic_rows(1200, 32)),
+    ]
+    calibration_entries = [
+        _write_shard(
+            calibration_dir,
+            "cal-a",
+            _synthetic_rows(600, 33),
+        )
+    ]
+    holdout_entries = [
+        _write_shard(
+            holdout_dir,
+            "holdout-a",
+            _synthetic_rows(600, 34),
+        )
+    ]
+
+    train_index = tmp_path / "train-cal-index.json"
+    calibration_index = tmp_path / "cal-index.json"
+    holdout_index = tmp_path / "holdout-cal-index.json"
+    _write_index(train_index, train_entries)
+    _write_index(calibration_index, calibration_entries)
+    _write_index(holdout_index, holdout_entries)
+
+    output = tmp_path / "calibrated-model"
+    result = train_baseline(
+        train_index_path=train_index,
+        calibration_index_path=calibration_index,
+        holdout_index_path=holdout_index,
+        output_dir=output,
+        hidden_dim=20,
+        epochs=3,
+        batch_size=256,
+        learning_rate=0.004,
+        seed=23,
+    )
+
+    assert result["calibration"] is not None
+    assert result["calibration"]["samples"] == 600.0
+    assert 0.0 <= result["kick_threshold"] <= 1.0
+    assert result["final_holdout"]["kick_threshold"] == result["kick_threshold"]
+    assert result["final_holdout"]["samples"] == 600
+    assert len(result["artifact_hashes"]["calibration_index_sha256"]) == 64
+    assert result["training"]["calibration_replays"] == 1
+
+    for epoch in result["history"]:
+        assert "calibration" in epoch
+        assert "holdout" not in epoch
