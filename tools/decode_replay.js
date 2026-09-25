@@ -365,6 +365,14 @@ function recordBallTouch(playerId) {
 
     if (previous.playerId === touch.playerId) {
       aggregate.selfRetouches += 1;
+      if (progression != null) {
+        aggregate.touchProgressionEvents += 1;
+        aggregate.touchProgressionSum += progression;
+      }
+      if (previous.underPressure) {
+        aggregate.pressuredTransitions += 1;
+        aggregate.retainedUnderPressure += 1;
+      }
       if (lastTouchEvent) {
         lastTouchEvent[7] = 1;
         lastTouchEvent[8] = touch.playerId;
