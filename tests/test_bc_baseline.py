@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from haxlab.learning.baseline import (
+    _split_train_validation,
     direction_class,
     direction_from_class,
     train_baseline,
@@ -166,12 +167,44 @@ def test_baseline_trains_and_writes_holdout_metrics(tmp_path: Path) -> None:
     )
 
     metrics = result["final_holdout"]
-    assert result["schema"] == "haxlab-bc-baseline-v1"
+    assert result["schema"] == "haxlab-bc-baseline-v2"
     assert (output / "model.npz").exists()
     assert (output / "metrics.json").exists()
     assert metrics["samples"] == 1200
+    assert result["training"]["train_replays_fit"] == 1
+    assert result["training"]["validation_replays"] == 1
+    assert 0.10 <= result["training"]["selected_kick_threshold"] <= 0.90
     assert 0.0 <= metrics["direction_accuracy"] <= 1.0
     assert 0.0 <= metrics["kick_f1"] <= 1.0
     assert metrics["direction_accuracy"] > metrics["baselines"][
         "majority_direction_accuracy"
     ]
+
+
+def test_validation_split_is_deterministic() -> None:
+    index = {
+        "entries": [
+            {"replay_sha256": f"{i:064x}"}
+            for i in range(40)
+        ]
+    }
+
+    fit_a, val_a = _split_train_validation(
+        index,
+        validation_fraction=0.20,
+        seed=123,
+    )
+    fit_b, val_b = _split_train_validation(
+        index,
+        validation_fraction=0.20,
+        seed=123,
+    )
+
+    assert [x["replay_sha256"] for x in fit_a["entries"]] == [
+        x["replay_sha256"] for x in fit_b["entries"]
+    ]
+    assert [x["replay_sha256"] for x in val_a["entries"]] == [
+        x["replay_sha256"] for x in val_b["entries"]
+    ]
+    assert fit_a["entries"]
+    assert val_a["entries"]
