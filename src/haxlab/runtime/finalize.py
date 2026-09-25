@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from haxlab.runtime.state import CURRENT_ANALYZER_VERSION, RuntimeState
+from haxlab.learning.selector import build_training_manifest\nfrom haxlab.runtime.state import CURRENT_ANALYZER_VERSION, RuntimeState
 from haxlab.skill.leaderboard import build_leaderboard
 
 
@@ -66,8 +66,17 @@ def finalize_analysis_if_ready(
         derived_root / "leaderboards" / f"{CURRENT_ANALYZER_VERSION}.json"
     )
     completion_path = analysis_root / "_complete.json"
+    training_manifest_path = (
+        derived_root
+        / "training"
+        / f"human-imitation-{CURRENT_ANALYZER_VERSION}.json"
+    )
 
-    if leaderboard_path.exists() and completion_path.exists():
+    if (
+        leaderboard_path.exists()
+        and completion_path.exists()
+        and training_manifest_path.exists()
+    ):
         try:
             previous = json.loads(completion_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -86,6 +95,7 @@ def finalize_analysis_if_ready(
                 "analysis_version": CURRENT_ANALYZER_VERSION,
                 "leaderboard_path": str(leaderboard_path),
                 "completion_path": str(completion_path),
+                "training_manifest_path": str(training_manifest_path),
             }
 
     rows = [
@@ -107,6 +117,13 @@ def finalize_analysis_if_ready(
     }
     _atomic_json(leaderboard_path, leaderboard)
 
+    training_manifest = build_training_manifest(
+        analysis_root=analysis_root,
+        leaderboard_path=leaderboard_path,
+        raw_root=derived_root.parent / "raw" / "replays",
+    )
+    _atomic_json(training_manifest_path, training_manifest)
+
     completion = {
         "schema": "haxlab-analysis-completion-v1",
         "analysis_version": CURRENT_ANALYZER_VERSION,
@@ -124,6 +141,16 @@ def finalize_analysis_if_ready(
         "analysis_raw_events": int(snapshot.get("analysis_raw_events", 0)),
         "leaderboard_players": len(rows),
         "leaderboard_path": str(leaderboard_path),
+        "training_manifest_path": str(training_manifest_path),
+        "training_selected_players": int(
+            training_manifest["stats"]["selected_player_count"]
+        ),
+        "training_replays": int(
+            training_manifest["stats"]["train_replay_count"]
+        ),
+        "holdout_replays": int(
+            training_manifest["stats"]["holdout_replay_count"]
+        ),
         "top_preview": [
             {
                 "name": row.get("name"),
@@ -153,5 +180,12 @@ def finalize_analysis_if_ready(
         "analysis_version": CURRENT_ANALYZER_VERSION,
         "leaderboard_path": str(leaderboard_path),
         "completion_path": str(completion_path),
+        "training_manifest_path": str(training_manifest_path),
         "leaderboard_players": len(rows),
+        "training_replays": int(
+            training_manifest["stats"]["train_replay_count"]
+        ),
+        "holdout_replays": int(
+            training_manifest["stats"]["holdout_replay_count"]
+        ),
     }
