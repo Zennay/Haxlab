@@ -13,7 +13,7 @@ from typing import Any
 from haxlab.learning.selector import MANIFEST_SCHEMA
 
 
-INDEX_SCHEMA = "haxlab-imitation-shard-index-v1"
+INDEX_SCHEMA = "haxlab-imitation-shard-index-v2"
 
 
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
@@ -48,7 +48,7 @@ def _extract_one(
     force: bool,
 ) -> dict[str, Any]:
     replay_sha256 = str(entry["replay_sha256"])
-    shard_path = output_dir / f"{replay_sha256}.jsonl.gz"
+    shard_path = output_dir / f"{replay_sha256}.f32.gz"
     meta_path = output_dir / f"{replay_sha256}.meta.json"
 
     if not force and shard_path.exists() and meta_path.exists():
@@ -57,7 +57,7 @@ def _extract_one(
         except (OSError, json.JSONDecodeError):
             previous = {}
         if (
-            previous.get("schema") == "haxlab-imitation-extract-summary-v1"
+            previous.get("schema") == "haxlab-imitation-extract-summary-v2"
             and int(previous.get("sampleEveryTicks", 0))
             == sample_every_ticks
             and int(previous.get("samples", 0)) > 0
