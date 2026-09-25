@@ -1,0 +1,87 @@
+name: Elite Player Pilot
+
+on:
+  workflow_dispatch:
+    inputs:
+      replay_limit:
+        description: "Maximum replays per split for the pilot"
+        required: true
+        default: "200"
+      epochs:
+        description: "Training epochs"
+        required: true
+        default: "3"
+      window:
+        description: "Temporal state window"
+        required: true
+        default: "8"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-elite-player-pilot
+  cancel-in-progress: false
+
+jobs:
+  pilot:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build current 4v4 leaderboard
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m haxlab.skill.leaderboard \
+            --root /var/lib/haxlab/derived/state-pass-v4 \
+            --top 10000 \
+            --min-matches 1 \
+            --min-minutes 0 \
+            --format json \
+            --output /var/lib/haxlab/derived/leaderboards/state-pass-v4.json \
+            >/tmp/haxlab-elite-leaderboard.json
+
+      - name: Train elite player pilot
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env \
+            PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            NODE_PATH=/opt/haxlab/node_modules \
+            /opt/haxlab/.venv/bin/python -m haxlab.learning.elite_pipeline \
+            --analysis-root /var/lib/haxlab/derived/state-pass-v4 \
+            --leaderboard /var/lib/haxlab/derived/leaderboards/state-pass-v4.json \
+            --raw-root /var/lib/haxlab/raw/replays \
+            --work-root /var/lib/haxlab/derived/training/elite-player-v01-pilot \
+            --node-script "$GITHUB_WORKSPACE/tools/extract_elite_imitation.js" \
+            --aliases "$GITHUB_WORKSPACE/configs/player_aliases.json" \
+            --replay-limit "${{ inputs.replay_limit }}" \
+            --epochs "${{ inputs.epochs }}" \
+            --window "${{ inputs.window }}" \
+            --shard-workers 3 \
+            | tee /tmp/haxlab-elite-pilot.log
+
+      - name: Publish summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo cat /var/lib/haxlab/derived/training/elite-player-v01-pilot/pipeline-summary.json \
+            > elite-pipeline-summary.json
+          {
+            echo '## HaxLab Elite Player Pilot'
+            echo
+            echo '\`\`\`json'
+            cat elite-pipeline-summary.json
+            echo '\`\`\`'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload metrics
+        uses: actions/upload-artifact@v4
+        with:
+          name: elite-player-pilot-metrics
+          path: elite-pipeline-summary.json
+          retention-days: 14
