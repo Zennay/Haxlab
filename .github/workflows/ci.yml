@@ -52,6 +52,7 @@ jobs:
         run: |
           set -euo pipefail
           node --check tools/decode_replay.js
+          node --check tools/extract_imitation.js
 
       - name: Test
         shell: bash
