@@ -134,6 +134,9 @@ def test_temporal_elite_policy_trains_with_validation_only_calibration(
     assert result["architecture"]["window"] == 4
     assert result["training"]["kick_threshold_source"] == "validation_only"
     assert result["training"]["frozen_holdout_used_for_selection"] is False
+    calibration = result["training"]["kick_calibration"]
+    assert calibration["constraint_satisfied"] is True
+    assert calibration["predicted_rate"] <= calibration["predicted_rate_cap"] + 1e-9
     assert result["training"]["best_epoch"] >= 1
     assert result["final_validation"]["samples"] > 0
     assert result["final_holdout"]["samples"] > 0
