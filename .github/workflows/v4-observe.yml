@@ -1,0 +1,29 @@
+name: HaxLab V4 Observe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/v4-observe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  observe:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 5
+    steps:
+      - name: Observe v4 runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== STATUS ==="
+          sudo /usr/local/sbin/haxlab-actions-control status
+          echo
+          echo "=== STORAGE ==="
+          du -sh /var/lib/haxlab/derived/state-pass-v4 2>/dev/null || true
+          df -h /var/lib/haxlab
+          echo
+          echo "=== ANALYZER PROCESSES ==="
+          ps -eo pid,pcpu,pmem,ni,etime,cmd --sort=-pcpu |             grep -E 'haxlab.runtime.analyzer|decode_replay.js' |             grep -v grep | head -20 || true
