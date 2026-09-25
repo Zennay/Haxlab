@@ -142,7 +142,14 @@ def test_temporal_elite_policy_trains_with_validation_only_calibration(
     assert result["final_holdout"]["samples"] > 0
     assert set(result["final_holdout"]["by_role"]) == {"gk", "dm", "am", "st"}
     assert (output / "model.npz").exists()
+    assert (output / "runtime-model.json").exists()
     assert (output / "metrics.json").exists()
+
+    runtime_model = json.loads((output / "runtime-model.json").read_text())
+    assert runtime_model["schema"] == "haxlab-elite-js-runtime-v1"
+    assert runtime_model["window"] == 4
+    assert runtime_model["base_input_columns"] == result["base_input_columns"]
+    assert len(runtime_model["weights"]["w1"]) == result["architecture"]["input_dim"]
 
     policy = ElitePolicy(output)
     features = {name: 0.0 for name in policy.input_columns}
