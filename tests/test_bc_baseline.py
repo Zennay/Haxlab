@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import gzip
 import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from haxlab.learning.baseline import (
     _split_train_validation,
@@ -169,6 +172,7 @@ def test_baseline_trains_and_writes_holdout_metrics(tmp_path: Path) -> None:
     metrics = result["final_holdout"]
     assert result["schema"] == "haxlab-bc-baseline-v2"
     assert (output / "model.npz").exists()
+    assert (output / "policy.json").exists()
     assert (output / "metrics.json").exists()
     assert metrics["samples"] == 1200
     assert result["training"]["train_replays_fit"] == 1
@@ -213,3 +217,61 @@ def test_validation_split_is_deterministic() -> None:
     ]
     assert fit_a["entries"]
     assert val_a["entries"]
+
+
+def test_exported_policy_runs_in_node(tmp_path: Path) -> None:
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+
+    train_dir = tmp_path / "train"
+    holdout_dir = tmp_path / "holdout"
+    train_entries = [
+        _write_shard(train_dir, "train-a", _synthetic_rows(1000, 11)),
+        _write_shard(train_dir, "train-b", _synthetic_rows(1000, 12)),
+    ]
+    holdout_entries = [
+        _write_shard(holdout_dir, "holdout-a", _synthetic_rows(500, 13))
+    ]
+    train_index = tmp_path / "train-index.json"
+    holdout_index = tmp_path / "holdout-index.json"
+    _write_index(train_index, train_entries)
+    _write_index(holdout_index, holdout_entries)
+
+    output = tmp_path / "model"
+    result = train_baseline(
+        train_index_path=train_index,
+        holdout_index_path=holdout_index,
+        output_dir=output,
+        hidden_dim=16,
+        epochs=2,
+        batch_size=256,
+        learning_rate=0.005,
+        seed=17,
+    )
+
+    state = {
+        column: 0.0
+        for column in result["input_columns"]
+    }
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    script = Path(__file__).resolve().parents[1] / "tools" / "infer_bc_policy.js"
+    completed = subprocess.run(
+        [
+            "node",
+            str(script),
+            str(output / "policy.json"),
+            str(state_path),
+        ],
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    prediction = json.loads(completed.stdout)
+
+    assert prediction["dir_x"] in (-1, 0, 1)
+    assert prediction["dir_y"] in (-1, 0, 1)
+    assert isinstance(prediction["kick"], bool)
+    assert 0.0 <= prediction["kick_probability"] <= 1.0
