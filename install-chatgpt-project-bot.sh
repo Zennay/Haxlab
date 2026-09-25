@@ -18,63 +18,7 @@ exec "$ROOT/.venv/bin/python" "$ROOT/bot.py" "$@"
 RUN
 chmod +x "$DEST/run.sh"
 
-cat > "$DEST/login.sh" <<'LOGIN'
-#!/usr/bin/env bash
-set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-systemctl --user stop chatgpt-project-bot.service 2>/dev/null || true
-
-find_gui_env() {
-  if [ -n "${DISPLAY:-}" ]; then
-    echo "Grafische sessie gevonden via DISPLAY=$DISPLAY"
-    return 0
-  fi
-
-  local pid env_file found_display found_xauth found_dbus found_wayland
-  while IFS= read -r pid; do
-    env_file="/proc/$pid/environ"
-    [ -r "$env_file" ] || continue
-
-    found_display="$(tr '\0' '\n' < "$env_file" 2>/dev/null | sed -n 's/^DISPLAY=//p' | head -n1)"
-    [ -n "$found_display" ] || continue
-
-    found_xauth="$(tr '\0' '\n' < "$env_file" 2>/dev/null | sed -n 's/^XAUTHORITY=//p' | head -n1)"
-    found_dbus="$(tr '\0' '\n' < "$env_file" 2>/dev/null | sed -n 's/^DBUS_SESSION_BUS_ADDRESS=//p' | head -n1)"
-    found_wayland="$(tr '\0' '\n' < "$env_file" 2>/dev/null | sed -n 's/^WAYLAND_DISPLAY=//p' | head -n1)"
-
-    export DISPLAY="$found_display"
-    [ -n "$found_xauth" ] && export XAUTHORITY="$found_xauth"
-    [ -n "$found_dbus" ] && export DBUS_SESSION_BUS_ADDRESS="$found_dbus"
-    [ -n "$found_wayland" ] && export WAYLAND_DISPLAY="$found_wayland"
-
-    echo "Bestaande Linux/NoMachine GUI gevonden: DISPLAY=$DISPLAY (pid $pid)"
-    return 0
-  done < <(ps -u "$USER" -o pid= 2>/dev/null | awk '{print $1}')
-
-  return 1
-}
-
-if ! find_gui_env; then
-  cat >&2 <<'MSG'
-
-Geen actieve grafische Linux-sessie gevonden.
-
-Dit login-scherm kan niet zichtbaar openen in een kale SSH-shell.
-Doe dit:
-  1. Verbind eerst met je VPS via NoMachine en laat die desktop open.
-  2. Voer daarna DITZELFDE login.sh-commando opnieuw uit via SSH
-     (of vanuit een terminal in NoMachine).
-
-De bot zelf draait daarna gewoon headless; alleen de eerste ChatGPT-login heeft een GUI nodig.
-MSG
-  exit 2
-fi
-
-"$ROOT/run.sh" --login
-systemctl --user start chatgpt-project-bot.service
-echo "ChatGPT watchdog gestart."
-LOGIN
+curl -fsSL "$RAW_BASE/login.sh" -o "$DEST/login.sh"
 chmod +x "$DEST/login.sh"
 
 echo '[2/5] Python + Playwright installeren...'
