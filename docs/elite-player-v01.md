@@ -179,3 +179,22 @@ A v0.1 candidate should at minimum:
 5. then play benchmark matches against deterministic chase/defensive bots.
 
 Self-play/RL belongs after this gate, not before it.
+
+
+## Champion candidate run
+
+The first serious v0.1 candidate is intentionally larger than the PR smoke:
+
+- up to 800 training replays;
+- up to 200 validation replays;
+- the complete frozen holdout split;
+- temporal window 8;
+- hidden layers 128 and 96;
+- 3 epochs;
+- 12 local BFF Big v4 sandbox matches, with Red/Blue side swaps;
+- balanced, compact and pressing scripted opponents;
+- physical kick-range gating at 31 px;
+- side/role telemetry to detect mirrored-runtime regressions.
+
+The candidate is not promoted from offline accuracy alone. Frozen-holdout integrity,
+runtime parity and sandbox behavior are all preserved as separate evidence.
