@@ -81,3 +81,43 @@ def test_proxy_score_rewards_more_involvement() -> None:
     add_proxy_score(rows)
 
     assert rows[0]["involvement_score"] > rows[1]["involvement_score"]
+
+
+def test_collect_uses_auth_hash_across_name_changes(tmp_path: Path) -> None:
+    _write_replay(
+        tmp_path,
+        "auth-a",
+        [
+            {
+                "name": "Old Name",
+                "authHash": "abc123",
+                "samples": 600,
+                "nearestBallSamples": 100,
+                "closeBallSamples": 50,
+                "inputEvents": 30,
+                "kickEvents": 10,
+                "kickPressedInputs": 8,
+            }
+        ],
+    )
+    _write_replay(
+        tmp_path,
+        "auth-b",
+        [
+            {
+                "name": "New Name",
+                "authHash": "abc123",
+                "samples": 600,
+                "nearestBallSamples": 120,
+                "closeBallSamples": 60,
+                "inputEvents": 35,
+                "kickEvents": 12,
+                "kickPressedInputs": 9,
+            }
+        ],
+    )
+
+    rows = collect(tmp_path)
+
+    assert len(rows) == 1
+    assert rows[0]["matches"] == 2
