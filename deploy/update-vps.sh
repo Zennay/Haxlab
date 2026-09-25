@@ -24,6 +24,7 @@ node -e 'const api=require("node-haxball")(); if (!api.Replay) process.exit(1)'
 install -m 0644 "${APP_DIR}/deploy/haxlab-ingest.service" /etc/systemd/system/haxlab-ingest.service
 install -m 0644 "${APP_DIR}/deploy/haxlab-worker.service" /etc/systemd/system/haxlab-worker.service
 install -m 0644 "${APP_DIR}/deploy/haxlab-analyzer.service" /etc/systemd/system/haxlab-analyzer.service
+install -m 0644 "${APP_DIR}/deploy/haxlab-training-shards.service" /etc/systemd/system/haxlab-training-shards.service
 
 ln -sf "${APP_DIR}/.venv/bin/haxlab" /usr/local/bin/haxlab
 ln -sf "${APP_DIR}/.venv/bin/haxlab-status" /usr/local/bin/haxlab-status
@@ -34,6 +35,7 @@ ln -sf "${APP_DIR}/.venv/bin/haxlab-players" /usr/local/bin/haxlab-players
 ln -sf "${APP_DIR}/.venv/bin/haxlab-skill" /usr/local/bin/haxlab-skill
 ln -sf "${APP_DIR}/.venv/bin/haxlab-training-manifest" /usr/local/bin/haxlab-training-manifest
 ln -sf "${APP_DIR}/.venv/bin/haxlab-build-shards" /usr/local/bin/haxlab-build-shards
+ln -sf "${APP_DIR}/.venv/bin/haxlab-materialize-shards" /usr/local/bin/haxlab-materialize-shards
 ln -sf "${APP_DIR}/.venv/bin/haxlab-train-bc" /usr/local/bin/haxlab-train-bc
 install -o root -g root -m 0755 "${APP_DIR}/deploy/haxlab-actions-control.sh" /usr/local/sbin/haxlab-actions-control
 
