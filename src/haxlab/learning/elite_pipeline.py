@@ -36,6 +36,9 @@ def run_elite_pipeline(
     l2: float = 1e-5,
     seed: int = 1337,
     replay_limit: int | None = None,
+    train_replay_limit: int | None = None,
+    validation_replay_limit: int | None = None,
+    holdout_replay_limit: int | None = None,
     force_shards: bool = False,
 ) -> dict[str, Any]:
     work_root.mkdir(parents=True, exist_ok=True)
@@ -61,6 +64,19 @@ def run_elite_pipeline(
 
     indexes: dict[str, dict[str, Any]] = {}
     index_paths: dict[str, Path] = {}
+    split_limits = {
+        "train": train_replay_limit if train_replay_limit is not None else replay_limit,
+        "validation": (
+            validation_replay_limit
+            if validation_replay_limit is not None
+            else replay_limit
+        ),
+        "holdout": (
+            holdout_replay_limit
+            if holdout_replay_limit is not None
+            else replay_limit
+        ),
+    }
     for split in ("train", "validation", "holdout"):
         index = build_elite_shards(
             manifest_path=manifest_path,
@@ -69,7 +85,7 @@ def run_elite_pipeline(
             node_script=node_script,
             sample_every_ticks=sample_every_ticks,
             workers=shard_workers,
-            limit=replay_limit,
+            limit=split_limits[split],
             force=force_shards,
         )
         indexes[split] = index
@@ -178,7 +194,15 @@ def main() -> int:
     parser.add_argument("--learning-rate", type=float, default=8e-4)
     parser.add_argument("--l2", type=float, default=1e-5)
     parser.add_argument("--seed", type=int, default=1337)
-    parser.add_argument("--replay-limit", type=int, default=None)
+    parser.add_argument(
+        "--replay-limit",
+        type=int,
+        default=None,
+        help="Legacy cap applied to all splits unless a split-specific cap is set.",
+    )
+    parser.add_argument("--train-replay-limit", type=int, default=None)
+    parser.add_argument("--validation-replay-limit", type=int, default=None)
+    parser.add_argument("--holdout-replay-limit", type=int, default=None)
     parser.add_argument("--force-shards", action="store_true")
     args = parser.parse_args()
 
@@ -206,6 +230,9 @@ def main() -> int:
         l2=max(0.0, args.l2),
         seed=args.seed,
         replay_limit=args.replay_limit,
+        train_replay_limit=args.train_replay_limit,
+        validation_replay_limit=args.validation_replay_limit,
+        holdout_replay_limit=args.holdout_replay_limit,
         force_shards=args.force_shards,
     )
     print(json.dumps(summary, indent=2, sort_keys=True))
