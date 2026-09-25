@@ -117,7 +117,25 @@ def test_collect_uses_auth_hash_across_name_changes(tmp_path: Path) -> None:
         ],
     )
 
+    _write_replay(
+        tmp_path,
+        "auth-c",
+        [
+            {
+                "name": "New Name",
+                "authHash": "abc123",
+                "samples": 600,
+                "nearestBallSamples": 110,
+                "closeBallSamples": 55,
+                "inputEvents": 32,
+                "kickEvents": 11,
+                "kickPressedInputs": 8,
+            }
+        ],
+    )
+
     rows = collect(tmp_path)
 
     assert len(rows) == 1
-    assert rows[0]["matches"] == 2
+    assert rows[0]["matches"] == 3
+    assert rows[0]["name"] == "New Name"
