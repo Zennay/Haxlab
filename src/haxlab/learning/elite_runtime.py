@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from collections import defaultdict, deque
 from pathlib import Path
@@ -32,6 +33,9 @@ class ElitePolicy:
         self.window = int(self.metadata["architecture"]["window"])
         self.kick_threshold = float(
             self.metadata["training"]["calibrated_kick_threshold"]
+        )
+        self.kick_max_distance = float(
+            (self.metadata.get("runtime") or {}).get("kick_max_distance", 31.0)
         )
         self.history: dict[str, deque[np.ndarray]] = defaultdict(
             lambda: deque(maxlen=self.window)
@@ -95,7 +99,13 @@ class ElitePolicy:
         direction_class = int(dir_prob[0].argmax())
         dir_x, dir_y = direction_from_class(direction_class)
         kick_probability = float(kick_prob[0])
-        kick = kick_probability >= self.kick_threshold
+        ball_distance = math.hypot(
+            float(features.get("ball_dx", 0.0)),
+            float(features.get("ball_dy", 0.0)),
+        )
+        kick_in_range = ball_distance <= self.kick_max_distance
+        kick_requested = kick_probability >= self.kick_threshold
+        kick = kick_requested and kick_in_range
 
         return {
             "agent_id": str(agent_id),
@@ -106,6 +116,10 @@ class ElitePolicy:
             "kick": bool(kick),
             "kick_probability": kick_probability,
             "kick_threshold": self.kick_threshold,
+            "kick_requested": bool(kick_requested),
+            "kick_in_range": bool(kick_in_range),
+            "kick_max_distance": self.kick_max_distance,
+            "ball_distance": ball_distance,
             "direction_class": direction_class,
             "direction_probability": float(dir_prob[0, direction_class]),
             "history_frames": len(history),
@@ -138,6 +152,7 @@ def _serve_stdio(policy: ElitePolicy) -> int:
                     "schema": policy.metadata.get("schema"),
                     "window": policy.window,
                     "kick_threshold": policy.kick_threshold,
+                    "kick_max_distance": policy.kick_max_distance,
                     "input_columns": policy.input_columns,
                 }
             else:
