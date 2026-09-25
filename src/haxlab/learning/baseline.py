@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import json
 import math
 import os
@@ -14,6 +15,14 @@ import numpy as np
 
 
 MODEL_SCHEMA = "haxlab-bc-baseline-v1"
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 ACTION_DIRS = tuple(
     (dx, dy)
     for dy in (-1, 0, 1)
@@ -547,6 +556,11 @@ def train_baseline(
         "schema": MODEL_SCHEMA,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "model_path": str(model_path),
+        "artifact_hashes": {
+            "model_sha256": _sha256_file(model_path),
+            "train_index_sha256": _sha256_file(train_index_path),
+            "holdout_index_sha256": _sha256_file(holdout_index_path),
+        },
         "train_index": str(train_index_path),
         "holdout_index": str(holdout_index_path),
         "input_columns": input_columns,
