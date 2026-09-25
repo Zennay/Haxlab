@@ -341,7 +341,7 @@ class RuntimeState:
         )
         self.connection.commit()
 
-    def status_snapshot(self) -> dict[str, int | float | str]:
+    def status_snapshot(self) -> dict[str, object]:
         source = {
             row["status"]: row["count"]
             for row in self.connection.execute(
@@ -369,6 +369,20 @@ class RuntimeState:
                 (CURRENT_ANALYZER_VERSION,),
             )
         }
+        analysis_versions: dict[str, dict[str, int]] = {}
+        for row in self.connection.execute(
+            """
+            SELECT analyzer_version, status, COUNT(*) AS count
+            FROM replay_analysis_versions
+            GROUP BY analyzer_version, status
+            ORDER BY analyzer_version, status
+            """
+        ):
+            version = str(row["analyzer_version"])
+            analysis_versions.setdefault(version, {})[str(row["status"])] = int(
+                row["count"]
+            )
+
         totals = self.connection.execute(
             """
             SELECT
@@ -416,6 +430,7 @@ class RuntimeState:
 
         return {
             "analysis_version": CURRENT_ANALYZER_VERSION,
+            "analysis_versions": analysis_versions,
             "source_archived": int(source.get("archived", 0)),
             "source_duplicates": int(source.get("duplicate", 0)),
             "source_failed": int(source.get("failed", 0)),
