@@ -1,4 +1,5 @@
 import json
+import struct
 from pathlib import Path
 
 from haxlab.ingestion.pipeline import run_import
@@ -11,7 +12,7 @@ def test_import_is_idempotent(tmp_path: Path) -> None:
 
     replay_name = "24-09-26-22h12-aavsmko-deadbeefcafebabe.hbr2"
     replay = raw / replay_name
-    replay.write_bytes(b"HBR2" + b"test-replay-payload")
+    replay.write_bytes(struct.pack(">4sII", b"HBR2", 3, 600) + b"test-replay-payload")
 
     export = {
         "channel": {"id": "726932424172371968"},
