@@ -15,6 +15,7 @@ import numpy as np
 
 
 MODEL_SCHEMA = "haxlab-elite-temporal-policy-v1"
+RUNTIME_KICK_MAX_DISTANCE = 31.0
 ACTION_DIRS = tuple(
     (dx, dy)
     for dy in (-1, 0, 1)
@@ -846,6 +847,7 @@ def train_elite_policy(
             for i, (dx, dy) in enumerate(ACTION_DIRS)
         ],
         "kick_threshold": float(best_threshold),
+        "kick_max_distance": RUNTIME_KICK_MAX_DISTANCE,
         "mean": mean.astype(float).tolist(),
         "std": std.astype(float).tolist(),
         "weights": {
@@ -870,6 +872,10 @@ def train_elite_policy(
             {"class_id": i, "dir_x": dx, "dir_y": dy}
             for i, (dx, dy) in enumerate(ACTION_DIRS)
         ],
+        "runtime": {
+            "kick_max_distance": RUNTIME_KICK_MAX_DISTANCE,
+            "kick_gate": "euclidean_ball_distance",
+        },
         "architecture": {
             "type": "numpy_temporal_mlp_role_conditioned",
             "window": window,
