@@ -4,7 +4,13 @@ import json
 from pathlib import Path
 import sys
 
-from haxlab.skill.leaderboard import (\n    _bounded_match_contexts,\n    _raw_metrics,\n    build_leaderboard,\n    main,\n)
+from haxlab.skill.leaderboard import (
+    _bounded_match_contexts,
+    _normalizers,
+    _raw_metrics,
+    build_leaderboard,
+    main,
+)
 
 
 def _player(
