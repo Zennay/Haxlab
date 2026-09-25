@@ -1,0 +1,28 @@
+[Unit]
+Description=HaxLab full imitation shard materialization
+After=network.target haxlab-analyzer.service
+StartLimitIntervalSec=600
+StartLimitBurst=3
+ConditionPathExists=/var/lib/haxlab/derived/training/human-imitation-state-pass-v4.json
+
+[Service]
+Type=oneshot
+User=haxlab
+Group=haxlab
+WorkingDirectory=/opt/haxlab
+ExecStart=/usr/local/bin/haxlab-materialize-shards --workers 4 --sample-every-ticks 6
+Nice=10
+CPUQuota=400%
+Restart=on-failure
+RestartSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/var/lib/haxlab
+
+[Install]
+WantedBy=multi-user.target
