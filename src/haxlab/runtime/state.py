@@ -65,6 +65,23 @@ CREATE TABLE IF NOT EXISTS replay_analysis (
 CREATE INDEX IF NOT EXISTS idx_replay_analysis_status
     ON replay_analysis(status);
 
+CREATE TABLE IF NOT EXISTS replay_analysis_versions (
+    sha256 TEXT NOT NULL REFERENCES raw_replays(sha256) ON DELETE CASCADE,
+    analyzer_version TEXT NOT NULL,
+    status TEXT NOT NULL,
+    output_path TEXT,
+    sampled_state_count INTEGER,
+    player_count INTEGER,
+    raw_event_count INTEGER,
+    tick_count INTEGER,
+    error TEXT,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (sha256, analyzer_version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_replay_analysis_versions_status
+    ON replay_analysis_versions(analyzer_version, status);
+
 CREATE TABLE IF NOT EXISTS runtime_events (
     id INTEGER PRIMARY KEY,
     event_type TEXT NOT NULL,
@@ -98,6 +115,36 @@ class RuntimeState:
         self.connection = sqlite3.connect(path)
         self.connection.row_factory = sqlite3.Row
         self.connection.executescript(SCHEMA)
+        self._migrate_analysis_versions()
+
+    def _migrate_analysis_versions(self) -> None:
+        """Copy legacy single-version rows into the versioned analysis ledger.
+
+        The old table is intentionally retained for rollback/forensics, but all
+        new runtime reads and writes use replay_analysis_versions.
+        """
+        self.connection.execute(
+            """
+            INSERT OR IGNORE INTO replay_analysis_versions (
+                sha256, analyzer_version, status, output_path,
+                sampled_state_count, player_count, raw_event_count,
+                tick_count, error, updated_at
+            )
+            SELECT
+                sha256,
+                COALESCE(analyzer_version, 'legacy'),
+                status,
+                output_path,
+                sampled_state_count,
+                player_count,
+                raw_event_count,
+                tick_count,
+                error,
+                updated_at
+            FROM replay_analysis
+            """
+        )
+        self.connection.commit()
 
     def close(self) -> None:
         self.connection.close()
@@ -197,8 +244,9 @@ class RuntimeState:
             FROM raw_replays AS r
             JOIN replay_processing AS p
               ON p.sha256 = r.sha256 AND p.status = 'ok'
-            LEFT JOIN replay_analysis AS a ON a.sha256 = r.sha256
-            WHERE a.sha256 IS NULL OR a.analyzer_version != ? OR a.status = 'retry'
+            LEFT JOIN replay_analysis_versions AS a
+              ON a.sha256 = r.sha256 AND a.analyzer_version = ?
+            WHERE a.sha256 IS NULL OR a.status = 'retry'
             ORDER BY r.first_archived_at, r.sha256
             LIMIT ?
             """,
@@ -263,15 +311,14 @@ class RuntimeState:
     ) -> None:
         self.connection.execute(
             """
-            INSERT INTO replay_analysis (
-                sha256, status, analyzer_version, output_path,
+            INSERT INTO replay_analysis_versions (
+                sha256, analyzer_version, status, output_path,
                 sampled_state_count, player_count, raw_event_count,
                 tick_count, error
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(sha256) DO UPDATE SET
+            ON CONFLICT(sha256, analyzer_version) DO UPDATE SET
                 status = excluded.status,
-                analyzer_version = excluded.analyzer_version,
                 output_path = excluded.output_path,
                 sampled_state_count = excluded.sampled_state_count,
                 player_count = excluded.player_count,
@@ -282,8 +329,8 @@ class RuntimeState:
             """,
             (
                 sha256,
-                status,
                 analyzer_version,
+                status,
                 output_path,
                 sampled_state_count,
                 player_count,
@@ -315,7 +362,7 @@ class RuntimeState:
             for row in self.connection.execute(
                 """
                 SELECT status, COUNT(*) AS count
-                FROM replay_analysis
+                FROM replay_analysis_versions
                 WHERE analyzer_version = ?
                 GROUP BY status
                 """,
@@ -337,7 +384,7 @@ class RuntimeState:
                 COALESCE(SUM(sampled_state_count), 0) AS samples,
                 COALESCE(SUM(raw_event_count), 0) AS events,
                 COALESCE(SUM(tick_count), 0) AS ticks
-            FROM replay_analysis
+            FROM replay_analysis_versions
             WHERE status = 'ok' AND analyzer_version = ?
             """,
             (CURRENT_ANALYZER_VERSION,),
@@ -355,7 +402,7 @@ class RuntimeState:
         recent_analyzed = self.connection.execute(
             """
             SELECT COUNT(*) AS count
-            FROM replay_analysis
+            FROM replay_analysis_versions
             WHERE updated_at >= datetime('now', '-5 minutes')
               AND analyzer_version = ?
             """,
