@@ -1,0 +1,88 @@
+name: Elite Player Real-Data Smoke
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/haxlab/learning/elite*.py"
+      - "src/haxlab/analysis/roles.py"
+      - "tools/extract_elite_imitation.js"
+      - "tools/elite_bot_plugin.js"
+      - "configs/player_aliases.json"
+      - ".github/workflows/elite-player-realdata-smoke.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-elite-realdata-smoke-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    if: github.head_ref == 'feature/elite-4v4-player-v01'
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build branch leaderboard from real analyses
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab mkdir -p /var/lib/haxlab/derived/leaderboards
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m haxlab.skill.leaderboard \
+            --root /var/lib/haxlab/derived/state-pass-v4 \
+            --top 10000 \
+            --min-matches 1 \
+            --min-minutes 0 \
+            --format json \
+            --output /var/lib/haxlab/derived/leaderboards/elite-pr-smoke.json \
+            >/tmp/haxlab-elite-pr-leaderboard.json
+
+      - name: Run small real-data pipeline
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab rm -rf /var/lib/haxlab/derived/training/elite-player-pr-smoke
+          sudo -u haxlab env \
+            PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            NODE_PATH=/opt/haxlab/node_modules \
+            /opt/haxlab/.venv/bin/python -m haxlab.learning.elite_pipeline \
+            --analysis-root /var/lib/haxlab/derived/state-pass-v4 \
+            --leaderboard /var/lib/haxlab/derived/leaderboards/elite-pr-smoke.json \
+            --raw-root /var/lib/haxlab/raw/replays \
+            --work-root /var/lib/haxlab/derived/training/elite-player-pr-smoke \
+            --node-script "$GITHUB_WORKSPACE/tools/extract_elite_imitation.js" \
+            --aliases "$GITHUB_WORKSPACE/configs/player_aliases.json" \
+            --replay-limit 20 \
+            --epochs 1 \
+            --window 4 \
+            --sequence-stride 2 \
+            --hidden-dim 32 \
+            --hidden-dim-2 24 \
+            --batch-size 512 \
+            --shard-workers 2 \
+            | tee /tmp/haxlab-elite-pr-smoke.log
+
+      - name: Surface smoke metrics
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo cat /var/lib/haxlab/derived/training/elite-player-pr-smoke/pipeline-summary.json \
+            > elite-realdata-smoke-summary.json
+          {
+            echo '## Elite Player real-data smoke'
+            echo
+            echo '\`\`\`json'
+            cat elite-realdata-smoke-summary.json
+            echo '\`\`\`'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: elite-realdata-smoke-summary
+          path: elite-realdata-smoke-summary.json
+          retention-days: 7
