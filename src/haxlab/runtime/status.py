@@ -32,6 +32,26 @@ def main() -> int:
         else None
     )
 
+    raw_unique = int(snapshot.get("raw_unique_replays", 0))
+    processing_ok = int(snapshot.get("processing_ok", 0))
+    analysis_ok = int(snapshot.get("analysis_ok", 0))
+
+    snapshot["processing_progress_percent"] = (
+        round(100.0 * processing_ok / raw_unique, 2)
+        if raw_unique > 0
+        else 0.0
+    )
+    snapshot["analysis_progress_percent"] = (
+        round(100.0 * analysis_ok / raw_unique, 2)
+        if raw_unique > 0
+        else 0.0
+    )
+    snapshot["analysis_complete"] = (
+        raw_unique > 0
+        and analysis_ok == raw_unique
+        and int(snapshot.get("analysis_failed", 0)) == 0
+    )
+
     analysis_rate = float(snapshot.get("analysis_rate_per_minute_5m", 0.0))
     analysis_pending = int(snapshot.get("analysis_pending", 0))
     snapshot["estimated_analysis_minutes_remaining"] = (
