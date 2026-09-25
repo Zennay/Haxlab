@@ -603,8 +603,10 @@ def train_baseline(
     train_index_path: Path,
     holdout_index_path: Path,
     output_dir: Path,
+    calibration_index_path: Path | None = None,
     train_limit: int | None = None,
     holdout_limit: int | None = None,
+    calibration_limit: int | None = None,
     hidden_dim: int = 64,
     epochs: int = 3,
     batch_size: int = 4096,
@@ -615,6 +617,11 @@ def train_baseline(
 ) -> dict[str, Any]:
     train_index = _load_index(train_index_path, train_limit)
     holdout_index = _load_index(holdout_index_path, holdout_limit)
+    calibration_index = (
+        _load_index(calibration_index_path, calibration_limit)
+        if calibration_index_path is not None
+        else None
+    )
     mean, std, input_columns, train_stats = _normalization(train_index)
 
     rng = np.random.default_rng(seed)
@@ -667,22 +674,31 @@ def train_baseline(
             dir_losses.append(loss["direction_loss"])
             kick_losses.append(loss["kick_loss"])
 
-        holdout_metrics = evaluate(
-            holdout_index,
+        monitor_index = (
+            calibration_index
+            if calibration_index is not None
+            else holdout_index
+        )
+        monitor_metrics = evaluate(
+            monitor_index,
             params=params,
             mean=mean,
             std=std,
             batch_size=max(32, batch_size),
+            kick_threshold=0.5,
         )
-        history.append(
-            {
-                "epoch": epoch,
-                "train_loss_mean": float(np.mean(losses)),
-                "direction_loss_mean": float(np.mean(dir_losses)),
-                "kick_loss_mean": float(np.mean(kick_losses)),
-                "holdout": holdout_metrics,
-            }
-        )
+        history_row: dict[str, Any] = {
+            "epoch": epoch,
+            "train_loss_mean": float(np.mean(losses)),
+            "direction_loss_mean": float(np.mean(dir_losses)),
+            "kick_loss_mean": float(np.mean(kick_losses)),
+        }
+        history_row[
+            "calibration"
+            if calibration_index is not None
+            else "holdout"
+        ] = monitor_metrics
+        history.append(history_row)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     model_path = output_dir / "model.npz"
