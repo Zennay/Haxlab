@@ -175,3 +175,65 @@ def test_baseline_trains_and_writes_holdout_metrics(tmp_path: Path) -> None:
     assert metrics["direction_accuracy"] > metrics["baselines"][
         "majority_direction_accuracy"
     ]
+
+
+def test_example_weights_change_training_when_enabled(tmp_path: Path) -> None:
+    train_dir = tmp_path / "train-weighted"
+    holdout_dir = tmp_path / "holdout-weighted"
+
+    a = _write_shard(train_dir, "train-a", _synthetic_rows(800, 11))
+    b_rows = _synthetic_rows(800, 12)
+    # Flip the horizontal target in the second shard so weighting has a
+    # measurable effect on the learned decision boundary.
+    dx_i = COLUMNS.index("dir_x")
+    b_rows[:, dx_i] *= -1
+    b = _write_shard(train_dir, "train-b", b_rows)
+    a["example_weight"] = 2.0
+    b["example_weight"] = 0.25
+
+    holdout = _write_shard(
+        holdout_dir,
+        "holdout-a",
+        _synthetic_rows(500, 13),
+    )
+
+    train_index = tmp_path / "train-weighted-index.json"
+    holdout_index = tmp_path / "holdout-weighted-index.json"
+    _write_index(train_index, [a, b])
+    _write_index(holdout_index, [holdout])
+
+    plain_dir = tmp_path / "plain-model"
+    weighted_dir = tmp_path / "weighted-model"
+
+    plain = train_baseline(
+        train_index_path=train_index,
+        holdout_index_path=holdout_index,
+        output_dir=plain_dir,
+        hidden_dim=16,
+        epochs=2,
+        batch_size=128,
+        learning_rate=0.003,
+        seed=19,
+        use_example_weights=False,
+    )
+    weighted = train_baseline(
+        train_index_path=train_index,
+        holdout_index_path=holdout_index,
+        output_dir=weighted_dir,
+        hidden_dim=16,
+        epochs=2,
+        batch_size=128,
+        learning_rate=0.003,
+        seed=19,
+        use_example_weights=True,
+    )
+
+    assert plain["training"]["use_example_weights"] is False
+    assert weighted["training"]["use_example_weights"] is True
+
+    with np.load(plain_dir / "model.npz") as plain_model:
+        plain_wd = plain_model["wd"].copy()
+    with np.load(weighted_dir / "model.npz") as weighted_model:
+        weighted_wd = weighted_model["wd"].copy()
+
+    assert not np.allclose(plain_wd, weighted_wd)
