@@ -44,7 +44,11 @@ def _player_metrics(player: dict[str, Any], payload: dict[str, Any]) -> dict[str
         "minutes": round(minutes, 3),
         "touches": touches,
         "touches_per_min": _safe_div(touches, minutes),
-        "retention": _safe_div(retained, retained + turnovers, default=1.0),
+        "retention": (
+            _safe_div(retained, retained + turnovers)
+            if retained + turnovers > 0
+            else None
+        ),
         "pressured_retention": (
             _safe_div(pressure_kept, pressured) if pressured > 0 else None
         ),
@@ -255,13 +259,15 @@ def _role_feedback(
     improvements: list[str] = []
     drills: list[str] = []
 
-    retention = float(metrics["retention"])
-    if retention >= 0.82:
-        strengths.append(f"Sterke balbehoud-score in deze replay ({retention:.0%}).")
-    elif retention < 0.68:
-        improvements.append(
-            f"Balbehoud is kwetsbaar ({retention:.0%}); te veel possessions eindigen bij de tegenstander."
-        )
+    retention = metrics["retention"]
+    if retention is not None:
+        retention = float(retention)
+        if retention >= 0.82:
+            strengths.append(f"Sterke balbehoud-score in deze replay ({retention:.0%}).")
+        elif retention < 0.68:
+            improvements.append(
+                f"Balbehoud is kwetsbaar ({retention:.0%}); te veel possessions eindigen bij de tegenstander."
+            )
 
     pressure_ret = metrics["pressured_retention"]
     if pressure_ret is not None:
@@ -410,10 +416,10 @@ def analyze_team(payload: dict[str, Any], team_id: int) -> dict[str, Any]:
         "team": "red" if team_id == 1 else "blue",
         "match_minutes": round(total_minutes, 3),
         "goals": int(goals or 0),
-        "retention": _safe_div(
-            team_retained,
-            team_retained + team_turnovers,
-            default=1.0,
+        "retention": (
+            _safe_div(team_retained, team_retained + team_turnovers)
+            if team_retained + team_turnovers > 0
+            else None
         ),
         "pressured_retention": (
             _safe_div(pressure_kept, pressure_total) if pressure_total > 0 else None
@@ -426,7 +432,7 @@ def analyze_team(payload: dict[str, Any], team_id: int) -> dict[str, Any]:
 
     spacing, priorities = _spacing_findings(role_rows)
 
-    if team_metrics["retention"] < 0.68:
+    if team_metrics["retention"] is not None and team_metrics["retention"] < 0.68:
         priorities.append(
             _priority(
                 "high",
@@ -444,7 +450,7 @@ def analyze_team(payload: dict[str, Any], team_id: int) -> dict[str, Any]:
                 ],
             )
         )
-    elif team_metrics["retention"] < 0.80:
+    elif team_metrics["retention"] is not None and team_metrics["retention"] < 0.80:
         priorities.append(
             _priority(
                 "medium",
@@ -615,8 +621,51 @@ def analyze_team(payload: dict[str, Any], team_id: int) -> dict[str, Any]:
     }
 
 
+def _validate_coachable_team(payload: dict[str, Any], team_id: int) -> None:
+    players = [
+        player
+        for player in payload.get("players") or []
+        if int(player.get("teamId") or 0) == team_id
+        and int(player.get("samples") or 0) > 0
+    ]
+    if len(players) < 4:
+        raise ValueError(
+            f"Team {team_id} has only {len(players)} active players in the analysis; "
+            "4v4 coaching requires four usable player traces."
+        )
+
+    team_touches = sum(int(player.get("touches") or 0) for player in players)
+    sparse_touches = [
+        row
+        for row in _event_rows(payload)
+        if len(row) >= 3 and int(row[2] or 0) == team_id
+    ]
+    xs = [
+        attack_axis_x(team_id, float(player["averageX"]))
+        for player in players
+        if player.get("averageX") is not None
+    ]
+    position_span = (max(xs) - min(xs)) if len(xs) >= 4 else 0.0
+
+    problems: list[str] = []
+    if team_touches <= 0 or not sparse_touches:
+        problems.append("no touch-chain evidence")
+    if position_span < 25.0:
+        problems.append(f"degenerate average positions (span={position_span:.1f})")
+
+    if problems:
+        raise ValueError(
+            "Stored analysis is not coachable for this team: "
+            + "; ".join(problems)
+            + ". Run haxlab-coach on the raw .hbr2 with the current decoder "
+              "instead of this stored analysis JSON."
+        )
+
+
 def analyze_replay(payload: dict[str, Any], teams: list[int] | None = None) -> dict[str, Any]:
     teams = teams or [1, 2]
+    for team_id in teams:
+        _validate_coachable_team(payload, team_id)
     return {
         "schema": "haxlab-team-coach-v1",
         "source_file": payload.get("sourceFile"),
@@ -631,6 +680,10 @@ def analyze_replay(payload: dict[str, Any], teams: list[int] | None = None) -> d
         },
         "teams": [analyze_team(payload, team_id) for team_id in teams],
     }
+
+
+def _pct(value: float | None) -> str:
+    return "N/A" if value is None else f"{value:.1%}"
 
 
 def render_text(report: dict[str, Any]) -> str:
@@ -654,7 +707,7 @@ def render_text(report: dict[str, Any]) -> str:
         lines.append(f"TEAM {team['team'].upper()} — COACH REVIEW")
         lines.append("#" * 72)
         lines.append(
-            f"Goals {team['goals']} | retention {team['retention']:.1%} | "
+            f"Goals {team['goals']} | retention {_pct(team['retention'])} | "
             f"turnovers {team['turnovers']} | recoveries {team['recoveries']} | "
             f"team transfers {team['team_transfers']}"
         )
@@ -728,7 +781,7 @@ def render_text(report: dict[str, Any]) -> str:
                 f"(role confidence {player['role_confidence']:.0%})"
             )
             lines.append(
-                f"   touches/min {m['touches_per_min']:.2f} | retention {m['retention']:.1%} | "
+                f"   touches/min {m['touches_per_min']:.2f} | retention {_pct(m['retention'])} | "
                 f"turnovers/10 {m['turnovers_per_10']:.2f} | recoveries {m['recoveries']} | "
                 f"avg progression {m['average_progression']:.2f}"
             )
