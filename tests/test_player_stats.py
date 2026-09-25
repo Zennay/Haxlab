@@ -11,7 +11,7 @@ def _write_replay(root: Path, name: str, players: list[dict]) -> None:
     path.write_text(
         json.dumps(
             {
-                "schemaVersion": 2,
+                "schemaVersion": 3,
                 "players": players,
             }
         ),
