@@ -54,6 +54,7 @@ jobs:
           set -euo pipefail
           node --check tools/decode_replay.js
           node --check tools/extract_imitation.js
+          node --check tools/infer_bc_policy.js
 
       - name: Test
         shell: bash
