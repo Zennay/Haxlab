@@ -36,7 +36,7 @@ concurrency:
 jobs:
   vps:
     name: HaxLab VPS control
-    runs-on: [self-hosted, linux, x64, haxlab]
+    runs-on: [self-hosted, haxlab]
     timeout-minutes: 30
 
     steps:
