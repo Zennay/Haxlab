@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import sys
 
-from haxlab.skill.leaderboard import _raw_metrics, build_leaderboard, main
+from haxlab.skill.leaderboard import (\n    _bounded_match_contexts,\n    _raw_metrics,\n    build_leaderboard,\n    main,\n)
 
 
 def _player(
@@ -226,3 +226,85 @@ def test_skill_cli_can_write_json_snapshot(
     assert printed["schema"] == "haxlab-skill-leaderboard-v1"
     assert saved["schema"] == "haxlab-skill-leaderboard-v1"
     assert saved["rows"][0]["name"] == "Alpha"
+
+
+def test_match_context_is_bounded_and_action_based() -> None:
+    dims = {
+        "retention": 3.0,
+        "progression": 3.0,
+        "creation": 3.0,
+        "finishing": 3.0,
+        "defending": 3.0,
+        "positioning": 3.0,
+        "pressure_recovery": 3.0,
+        "risk_management": 3.0,
+    }
+    weak = {key: -value for key, value in dims.items()}
+    neutral = {key: 0.0 for key in dims}
+
+    rows = [
+        {
+            "player_id": "target",
+            "match_id": "strong-match",
+            "team_id": 1,
+            "minutes": 10.0,
+            "normalized": neutral,
+        },
+        {
+            "player_id": "mate-a",
+            "match_id": "strong-match",
+            "team_id": 1,
+            "minutes": 10.0,
+            "normalized": neutral,
+        },
+        {
+            "player_id": "strong-a",
+            "match_id": "strong-match",
+            "team_id": 2,
+            "minutes": 10.0,
+            "normalized": dims,
+        },
+        {
+            "player_id": "strong-b",
+            "match_id": "strong-match",
+            "team_id": 2,
+            "minutes": 10.0,
+            "normalized": dims,
+        },
+        {
+            "player_id": "target",
+            "match_id": "weak-match",
+            "team_id": 1,
+            "minutes": 10.0,
+            "normalized": neutral,
+        },
+        {
+            "player_id": "mate-b",
+            "match_id": "weak-match",
+            "team_id": 1,
+            "minutes": 10.0,
+            "normalized": neutral,
+        },
+        {
+            "player_id": "weak-a",
+            "match_id": "weak-match",
+            "team_id": 2,
+            "minutes": 10.0,
+            "normalized": weak,
+        },
+        {
+            "player_id": "weak-b",
+            "match_id": "weak-match",
+            "team_id": 2,
+            "minutes": 10.0,
+            "normalized": weak,
+        },
+    ]
+
+    contexts = _bounded_match_contexts(rows)
+    _, strong_opponents = contexts[("strong-match", "target")]
+    _, weak_opponents = contexts[("weak-match", "target")]
+
+    assert 0.0 < strong_opponents <= 1.0
+    assert -1.0 <= weak_opponents < 0.0
+    assert strong_opponents > weak_opponents
