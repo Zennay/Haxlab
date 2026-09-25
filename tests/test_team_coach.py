@@ -105,3 +105,20 @@ def test_intensive_text_report_contains_all_coaching_sections() -> None:
     assert "DM — DM-R" in text
     assert "AM — AM-R" in text
     assert "ST — ST-R" in text
+
+
+def test_coach_rejects_zero_touch_degenerate_analysis() -> None:
+    payload = _payload()
+    for player in payload["players"]:
+        player["touches"] = 0
+        player["teamTouchTransfersOut"] = 0
+        player["selfRetouches"] = 0
+        player["turnovers"] = 0
+        if player["teamId"] == 1:
+            player["averageX"] = -200.0
+    payload["sparseEvents"]["touches"] = []
+
+    import pytest
+
+    with pytest.raises(ValueError, match="Stored analysis is not coachable"):
+        analyze_replay(payload, [1])
