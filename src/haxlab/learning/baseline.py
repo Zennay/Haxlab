@@ -15,6 +15,7 @@ import numpy as np
 
 
 MODEL_SCHEMA = "haxlab-bc-baseline-v1"
+PORTABLE_MODEL_SCHEMA = "haxlab-bc-portable-v1"
 
 
 def _sha256_file(path: Path) -> str:
@@ -551,13 +552,36 @@ def train_baseline(
         **params,
     )
 
+    portable_path = output_dir / "model.portable.json"
+    _atomic_json(
+        portable_path,
+        {
+            "schema": PORTABLE_MODEL_SCHEMA,
+            "input_columns": input_columns,
+            "direction_classes": [
+                {"class_id": i, "dir_x": dx, "dir_y": dy}
+                for i, (dx, dy) in enumerate(ACTION_DIRS)
+            ],
+            "mean": mean.tolist(),
+            "std": std.tolist(),
+            "w1": params["w1"].tolist(),
+            "b1": params["b1"].tolist(),
+            "wd": params["wd"].tolist(),
+            "bd": params["bd"].tolist(),
+            "wk": params["wk"].reshape(-1).tolist(),
+            "bk": params["bk"].reshape(-1).tolist(),
+        },
+    )
+
     final_metrics = history[-1]["holdout"]
     metadata = {
         "schema": MODEL_SCHEMA,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "model_path": str(model_path),
+        "portable_model_path": str(portable_path),
         "artifact_hashes": {
             "model_sha256": _sha256_file(model_path),
+            "portable_model_sha256": _sha256_file(portable_path),
             "train_index_sha256": _sha256_file(train_index_path),
             "holdout_index_sha256": _sha256_file(holdout_index_path),
         },
