@@ -198,7 +198,7 @@ class RuntimeState:
             JOIN replay_processing AS p
               ON p.sha256 = r.sha256 AND p.status = 'ok'
             LEFT JOIN replay_analysis AS a ON a.sha256 = r.sha256
-            WHERE a.sha256 IS NULL OR a.analyzer_version != ?
+            WHERE a.sha256 IS NULL OR a.analyzer_version != ? OR a.status = 'retry'
             ORDER BY r.first_archived_at, r.sha256
             LIMIT ?
             """,
@@ -343,7 +343,7 @@ class RuntimeState:
             (CURRENT_ANALYZER_VERSION,),
         ).fetchone()
         processed_total = sum(processed.values())
-        analyzed_total = sum(analyzed.values())
+        analyzed_total = int(analyzed.get("ok", 0)) + int(analyzed.get("failed", 0))
 
         recent_processed = self.connection.execute(
             """
