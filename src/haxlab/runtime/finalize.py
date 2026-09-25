@@ -68,12 +68,25 @@ def finalize_analysis_if_ready(
     completion_path = analysis_root / "_complete.json"
 
     if leaderboard_path.exists() and completion_path.exists():
-        return {
-            "status": "already_finalized",
-            "analysis_version": CURRENT_ANALYZER_VERSION,
-            "leaderboard_path": str(leaderboard_path),
-            "completion_path": str(completion_path),
-        }
+        try:
+            previous = json.loads(completion_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            previous = {}
+
+        current_ticks = int(snapshot.get("analysis_ticks_reconstructed", 0))
+        if (
+            previous.get("analysis_version") == CURRENT_ANALYZER_VERSION
+            and int(previous.get("raw_unique_replays", -1)) == raw_unique
+            and int(previous.get("analysis_ok", -1)) == analysis_ok
+            and int(previous.get("analysis_ticks_reconstructed", -1))
+            == current_ticks
+        ):
+            return {
+                "status": "already_finalized",
+                "analysis_version": CURRENT_ANALYZER_VERSION,
+                "leaderboard_path": str(leaderboard_path),
+                "completion_path": str(completion_path),
+            }
 
     rows = [
         row
