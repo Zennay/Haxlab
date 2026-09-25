@@ -835,8 +835,10 @@ def main() -> int:
         type=Path,
         required=True,
     )
+    parser.add_argument("--calibration-index", type=Path, default=None)
     parser.add_argument("--train-limit", type=int, default=None)
     parser.add_argument("--holdout-limit", type=int, default=None)
+    parser.add_argument("--calibration-limit", type=int, default=None)
     parser.add_argument("--hidden-dim", type=int, default=64)
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--batch-size", type=int, default=4096)
@@ -850,8 +852,10 @@ def main() -> int:
         train_index_path=args.train_index,
         holdout_index_path=args.holdout_index,
         output_dir=args.output_dir,
+        calibration_index_path=args.calibration_index,
         train_limit=args.train_limit,
         holdout_limit=args.holdout_limit,
+        calibration_limit=args.calibration_limit,
         hidden_dim=max(8, args.hidden_dim),
         epochs=max(1, args.epochs),
         batch_size=max(32, args.batch_size),
