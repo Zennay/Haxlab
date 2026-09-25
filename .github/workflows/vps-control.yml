@@ -16,6 +16,10 @@ on:
           - feature-smoke
           - player-stats
           - skill-leaderboard
+          - training-manifest
+          - start-training-shards
+          - stop-training-shards
+          - training-shards-status
           - analyzer-logs
           - failed-analysis
 
@@ -61,6 +65,15 @@ jobs:
               ;;
             training-manifest)
               sudo /usr/local/sbin/haxlab-actions-control training-manifest
+              ;;
+            start-training-shards)
+              sudo /usr/local/sbin/haxlab-actions-control start-training-shards
+              ;;
+            stop-training-shards)
+              sudo /usr/local/sbin/haxlab-actions-control stop-training-shards
+              ;;
+            training-shards-status)
+              sudo /usr/local/sbin/haxlab-actions-control training-shards-status
               ;;
             analyzer-logs)
               sudo /usr/local/sbin/haxlab-actions-control analyzer-logs
