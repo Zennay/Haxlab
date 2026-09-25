@@ -85,8 +85,11 @@ def test_analysis_versions_are_preserved(tmp_path: Path) -> None:
             """,
             ("b" * 64,),
         ).fetchall()
+        snapshot = state.status_snapshot()
 
     assert [(row["analyzer_version"], row["status"]) for row in rows] == [
         ("state-pass-v3", "ok"),
         ("state-pass-v4", "failed"),
     ]
+    assert snapshot["analysis_versions"]["state-pass-v3"]["ok"] == 1
+    assert snapshot["analysis_versions"]["state-pass-v4"]["failed"] == 1
