@@ -983,6 +983,7 @@ def train_elite_policy(
     future_horizon_steps: int = 5,
     future_loss_weight: float = 0.35,
     seed: int = 1337,
+    resume: bool = False,
 ) -> dict[str, Any]:
     train_index = _load_index(train_index_path, train_limit)
     validation_index = _load_index(validation_index_path, validation_limit)
@@ -996,9 +997,35 @@ def train_elite_policy(
 
     window = max(2, int(window))
     sequence_stride = max(1, int(sequence_stride))
+    hidden_dim = max(16, int(hidden_dim))
+    hidden_dim_2 = max(16, int(hidden_dim_2))
+    epochs = max(1, int(epochs))
+    batch_size = max(32, int(batch_size))
+    learning_rate = max(1e-6, float(learning_rate))
+    l2 = max(0.0, float(l2))
     future_horizon_steps = max(1, int(future_horizon_steps))
     future_loss_weight = max(0.0, min(1.0, float(future_loss_weight)))
+    seed = int(seed)
     input_dim = len(input_columns) * window + 4
+
+    training_fingerprint, fingerprint_payload = _training_fingerprint(
+        train_index_path=train_index_path,
+        validation_index_path=validation_index_path,
+        holdout_index_path=holdout_index_path,
+        train_limit=train_limit,
+        validation_limit=validation_limit,
+        holdout_limit=holdout_limit,
+        window=window,
+        sequence_stride=sequence_stride,
+        hidden_dim=hidden_dim,
+        hidden_dim_2=hidden_dim_2,
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+        l2=l2,
+        future_horizon_steps=future_horizon_steps,
+        future_loss_weight=future_loss_weight,
+        seed=seed,
+    )
 
     rng = np.random.default_rng(seed)
     params = _init_params(input_dim, hidden_dim, hidden_dim_2, rng)
@@ -1014,8 +1041,44 @@ def train_elite_policy(
     best_score = -math.inf
     best_epoch = 0
     best_params = {key: value.copy() for key, value in params.items()}
+    start_epoch = 1
+    resumed_from: str | None = None
 
-    for epoch in range(1, max(1, epochs) + 1):
+    if resume:
+        checkpoint = _load_training_checkpoint(
+            output_dir=output_dir,
+            fingerprint=training_fingerprint,
+            expected_params=params,
+        )
+        if checkpoint is not None:
+            params = checkpoint["params"]
+            m = checkpoint["m"]
+            v = checkpoint["v"]
+            best_params = checkpoint["best_params"]
+            best_score = checkpoint["best_score"]
+            best_epoch = checkpoint["best_epoch"]
+            step = checkpoint["step"]
+            history = checkpoint["history"]
+            rng.bit_generator.state = checkpoint["rng_state"]
+            start_epoch = checkpoint["completed_epoch"] + 1
+            resumed_from = checkpoint["checkpoint_path"]
+            print(
+                json.dumps(
+                    {
+                        "event": "elite_training_resumed",
+                        "checkpoint": resumed_from,
+                        "completed_epoch": checkpoint["completed_epoch"],
+                        "next_epoch": start_epoch,
+                        "epochs_requested": epochs,
+                        "step": step,
+                        "training_fingerprint": training_fingerprint,
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
+
+    for epoch in range(start_epoch, epochs + 1):
         losses: list[float] = []
         direction_losses: list[float] = []
         kick_losses: list[float] = []
@@ -1030,7 +1093,7 @@ def train_elite_policy(
             role_weights=role_weights,
             window=window,
             sequence_stride=sequence_stride,
-            batch_size=max(32, batch_size),
+            batch_size=batch_size,
             rng=rng,
             shuffle=True,
             future_horizon_steps=future_horizon_steps,
@@ -1044,7 +1107,7 @@ def train_elite_policy(
                 params,
                 kick_pos_weight=kick_pos_weight,
                 future_loss_weight=future_loss_weight,
-                l2=max(0.0, l2),
+                l2=l2,
             )
             step += 1
             _adam_update(
@@ -1076,7 +1139,7 @@ def train_elite_policy(
             role_weights=role_weights,
             window=window,
             sequence_stride=sequence_stride,
-            batch_size=max(32, batch_size),
+            batch_size=batch_size,
             kick_threshold=0.5,
             future_horizon_steps=future_horizon_steps,
         )
@@ -1112,7 +1175,7 @@ def train_elite_policy(
             "schema": "haxlab-elite-training-progress-v1",
             "status": "training",
             "epoch": epoch,
-            "epochs_requested": max(1, epochs),
+            "epochs_requested": epochs,
             "best_epoch": best_epoch,
             "best_validation_score": float(best_score),
             "batches": batches,
@@ -1127,11 +1190,28 @@ def train_elite_policy(
             "validation_kick_f1": float(validation_metrics["kick_f1"]),
         }
         _atomic_json(progress_path, progress)
+        checkpoint_pointer = _save_training_checkpoint(
+            output_dir=output_dir,
+            fingerprint=training_fingerprint,
+            fingerprint_payload=fingerprint_payload,
+            completed_epoch=epoch,
+            step=step,
+            params=params,
+            m=m,
+            v=v,
+            best_params=best_params,
+            best_score=best_score,
+            best_epoch=best_epoch,
+            history=history,
+            rng=rng,
+        )
         print(
             json.dumps(
                 {
                     "event": "elite_epoch_complete",
                     **progress,
+                    "checkpoint": checkpoint_pointer["metadata_path"],
+                    "training_fingerprint": training_fingerprint,
                 },
                 sort_keys=True,
             ),
@@ -1148,7 +1228,7 @@ def train_elite_policy(
         role_weights=role_weights,
         window=window,
         sequence_stride=sequence_stride,
-        batch_size=max(32, batch_size),
+        batch_size=batch_size,
         kick_threshold=0.5,
         future_horizon_steps=future_horizon_steps,
         collect_kick=True,
@@ -1173,7 +1253,7 @@ def train_elite_policy(
         role_weights=role_weights,
         window=window,
         sequence_stride=sequence_stride,
-        batch_size=max(32, batch_size),
+        batch_size=batch_size,
         kick_threshold=best_threshold,
         future_horizon_steps=future_horizon_steps,
     )
@@ -1188,7 +1268,7 @@ def train_elite_policy(
         role_weights=role_weights,
         window=window,
         sequence_stride=sequence_stride,
-        batch_size=max(32, batch_size),
+        batch_size=batch_size,
         kick_threshold=best_threshold,
         future_horizon_steps=future_horizon_steps,
     )
@@ -1269,9 +1349,11 @@ def train_elite_policy(
         },
         "training": {
             "seed": seed,
-            "epochs_requested": max(1, epochs),
+            "epochs_requested": epochs,
+            "training_fingerprint": training_fingerprint,
+            "resumed_from_checkpoint": resumed_from,
             "best_epoch": best_epoch,
-            "batch_size": max(32, batch_size),
+            "batch_size": batch_size,
             "learning_rate": learning_rate,
             "l2": max(0.0, l2),
             "future_loss_weight": future_loss_weight,
@@ -1339,6 +1421,11 @@ def main() -> int:
     parser.add_argument("--future-horizon-steps", type=int, default=5)
     parser.add_argument("--future-loss-weight", type=float, default=0.35)
     parser.add_argument("--seed", type=int, default=1337)
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume a matching atomic epoch checkpoint from output-dir.",
+    )
     args = parser.parse_args()
 
     result = train_elite_policy(
@@ -1360,6 +1447,7 @@ def main() -> int:
         future_horizon_steps=max(1, args.future_horizon_steps),
         future_loss_weight=max(0.0, min(1.0, args.future_loss_weight)),
         seed=args.seed,
+        resume=args.resume,
     )
     print(json.dumps(result["final_holdout"], indent=2, sort_keys=True))
     print("model:", result["model_path"])
