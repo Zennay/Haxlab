@@ -67,10 +67,47 @@ def test_duel_kick_spam_blocks_replacement() -> None:
         for reason in decision.reasons
     )
 
-def test_replay_seeded_schema_uses_same_promotion_policy() -> None:
+def _good_replay_duel() -> dict:
     duel = _good_duel()
     duel["schema"] = "haxlab-elite-replay-seeded-duel-v1"
     duel["evaluation_mode"] = "replay_seeded_proxy_v1"
+    duel["challenger_progression_share"] = 0.53
+    duel["challenger_nonzero_movement_rate"] = 0.27
+    return duel
+
+
+def test_replay_seeded_schema_uses_same_promotion_policy() -> None:
+    duel = _good_replay_duel()
     decision = decide_duel_gate(duel)
     assert decision.eligible_to_replace_champion
     assert decision.checks["evaluation_mode"] == "replay_seeded_proxy_v1"
+    assert decision.checks["challenger_progression_share"] == 0.53
+    assert decision.checks["challenger_nonzero_movement_rate"] == 0.27
+
+
+def test_replay_seeded_stationary_challenger_is_rejected() -> None:
+    duel = _good_replay_duel()
+    duel["challenger_nonzero_movement_rate"] = 0.05
+    duel["challenger_kick_action_rate"] = 0.0
+
+    decision = decide_duel_gate(duel)
+
+    assert not decision.eligible_to_replace_champion
+    assert any(
+        reason.startswith("challenger_nonzero_movement_rate")
+        for reason in decision.reasons
+    )
+    assert "challenger_no_kick_activity" in decision.reasons
+
+
+def test_replay_seeded_weak_progression_is_rejected() -> None:
+    duel = _good_replay_duel()
+    duel["challenger_progression_share"] = 0.20
+
+    decision = decide_duel_gate(duel)
+
+    assert not decision.eligible_to_replace_champion
+    assert any(
+        reason.startswith("challenger_progression_share")
+        for reason in decision.reasons
+    )
