@@ -79,6 +79,8 @@ jobs:
           zeroed = 0
           def zero(value):
               global zeroed
+              if isinstance(value, dict):
+                  return {key: zero(item) for key, item in value.items()}
               if isinstance(value, list):
                   return [zero(item) for item in value]
               if isinstance(value, bool):
