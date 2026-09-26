@@ -1,4 +1,4 @@
-generated_at=2026-09-26T13:17:59+00:00
+generated_at=2026-09-26T13:19:10+00:00
 === APP SOURCE ===
 'use strict';
 const ICONS={grid:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',cloud:'<path d="M7 18a5 5 0 1 1 .8-9.9A7 7 0 0 1 21 11a3.5 3.5 0 0 1-1.5 7Z"/>',game:'<path d="M7 7h10c3 0 4 4 4 9 0 3-3 4-5 0H8c-2 4-5 3-5 0 0-5 1-9 4-9Z"/><path d="M7 10v4m-2-2h4m7-1h.01m2 3h.01"/>',chart:'<path d="M4 4v16h16M7 14l4-4 4 2 5-7"/>',pulse:'<path d="M2 12h4l3-8 5 16 3-8h5"/>',server:'<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M15 6.5h3m-3 11h3"/>',refresh:'<path d="M20 8A8 8 0 0 0 6 5L3 8m0-5v5h5m-4 8a8 8 0 0 0 14 3l3-3m0 5v-5h-5"/>',watch:'<rect x="5" y="6" width="14" height="12" rx="4"/><path d="M8 6l1-4h6l1 4M8 18l1 4h6l1-4m-4-9v3l2 1"/>',arrow:'<path d="M5 12h14m-5-5 5 5-5 5"/>',back:'<path d="M19 12H5m5-5-5 5 5 5"/>',calendar:'<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4m10-4v4M3 11h18"/>',check:'<path d="m5 12 4 4L19 6"/>',commit:'<circle cx="12" cy="12" r="4"/><path d="M3 12h5m8 0h5"/>',target:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',cpu:'<rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M9 2v3m6-3v3M9 19v3m6-3v3M2 9h3m-3 6h3m14-6h3m-3 6h3"/>',clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',layers:'<path d="m12 3 10 5-10 5L2 8Zm-9 9 9 5 9-5M3 16l9 5 9-5"/>',disk:'<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 14h18m-5 3h2"/>'};
@@ -56,147 +56,131 @@ document.addEventListener('keydown',e=>{if(e.target.dataset.point&&['Enter',' ']
 document.addEventListener('change',e=>{if(e.target.id==='activityFilter'){filter=e.target.value;history.replaceState(null,'','#activity'+(filter?'?project='+filter:''));render()}});
 $('refresh').addEventListener('click',()=>refresh(true));window.addEventListener('hashchange',navigate);hydrate();navigate();refresh(true);setInterval(()=>{if(!document.hidden)refresh()},15000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()});
 === RESOURCE IMPLEMENTATION ===
-80-            total_mem += mem
-81-            active += int(state in ("active", "activating"))
-82-        cpu_pct = None
-83-        prev = _RESOURCE_PREV.get(pid)
-84-        if prev and now_mono > prev[0] and total_cpu >= prev[1]:
-85-            cpu_pct = round(((total_cpu - prev[1]) / 1_000_000_000) / (now_mono - prev[0]) * 100, 1)
-86-        _RESOURCE_PREV[pid] = (now_mono, total_cpu)
-87-        out[pid] = {
-88-            "priority": cfg["priority"],
-89-            "weight": PRIORITY_WEIGHTS[cfg["priority"]],
-90-            "managed": bool(units),
-91-            "active_units": active,
-92-            "unit_count": len(units),
-93-            "cpu_percent": cpu_pct,
-94-            "memory_bytes": total_mem,
-95-            "mode": "relative",
-96-            "note": "Relatieve CPU/IO-prioriteit; vrije capaciteit blijft bruikbaar.",
-97-        }
-98-    return out
-99-
-100:def set_priority(project, priority):
-101-    if project not in PROJECT_UNITS:
-102-        raise ValueError("Onbekend project")
-103-    if priority not in PRIORITY_WEIGHTS:
-104-        raise ValueError("Ongeldige prioriteit")
-105-    policy = load_resource_policy()
-106-    policy[project] = {"priority": priority}
-107-    tmp = RESOURCE_FILE.with_suffix(".tmp")
-108-    tmp.write_text(json.dumps(policy, ensure_ascii=False, indent=2) + "\n")
-109-    tmp.replace(RESOURCE_FILE)
-110-    subprocess.check_output(
-111-        ["sudo", "-n", "/usr/local/sbin/zennay-resource-control", "apply", project],
-112-        text=True, stderr=subprocess.STDOUT, timeout=12
-113-    )
-114-    return {"project": project, "priority": priority, "weight": PRIORITY_WEIGHTS[priority]}
-115-
-116-def _find_metrics_dict(data):
-117-    if not isinstance(data, dict):
-118-        return None
-119-    for key in ("frozen_holdout", "holdout", "validation", "metrics"):
-120-        val = data.get(key)
-121-        if isinstance(val, dict) and "direction_accuracy" in val and "joint_accuracy" in val:
-122-            return val
-123-    if "direction_accuracy" in data and "joint_accuracy" in data:
-124-        return data
-125-    for val in data.values():
-126-        if isinstance(val, dict):
-127-            hit = _find_metrics_dict(val)
-128-            if hit:
-129-                return hit
-130-    return None
-131-
-132-def _hax_quality():
-133-    current = _json("/var/lib/haxlab/derived/champions/elite-player/current.json", sudo=True) or {}
-134-    live = _json("/var/lib/haxlab/derived/champions/elite-player/live.json", sudo=True) or {}
-135-    metrics = _json(current.get("metrics_path", ""), sudo=True) if current.get("metrics_path") else None
-136-    if not metrics:
-137-        metrics = _json("/var/lib/haxlab/derived/training/elite-player-champion-candidate/pipeline-summary.json") or {}
-138-    holdout = _find_metrics_dict(metrics) or {}
-139-    direction = holdout.get("direction_accuracy")
-140-    joint = holdout.get("joint_accuracy")
-141-    kick_f1 = holdout.get("kick_f1")
-142-    live_healthy = bool((live.get("live_health") or {}).get("healthy"))
-143-    version = live.get("version_id") or current.get("version_id")
-144-    items = []
-145-    if direction is not None:
-146-        items.append({"label": "Direction accuracy", "value": round(float(direction) * 100, 1), "unit": "%"})
-147-    if joint is not None:
-148-        items.append({"label": "Joint action accuracy", "value": round(float(joint) * 100, 1), "unit": "%"})
-149-    if kick_f1 is not None:
-150-        items.append({"label": "Kick F1", "value": round(float(kick_f1) * 100, 1), "unit": "%"})
-151-    items.append({"label": "Live champion", "value": "Healthy" if live_healthy else "Not healthy", "unit": ""})
-152-    headline = None
-153-    if joint is not None:
-154-        headline = {
-155-            "label": "Player imitation",
-156-            "value": round(float(joint) * 100, 1),
-157-            "unit": "%",
-158-            "note": "Frozen-holdout joint action accuracy; geen win-rate.",
-159-        }
-160-    return {
-161-        "available": bool(headline),
-162-        "headline": headline,
-163-        "items": items,
-164-        "stage": "live champion" if live else "offline validation",
-165-        "meta": {"version_id": version, "live_healthy": live_healthy},
-166-    }
-167-
-168-def _gen_number(text):
-169-    m = re.search(r"(?:alpha-|generation-?)(\d+)", text or "", re.I)
-170-    return int(m.group(1)) if m else -1
-171-
-172-def _ftmo_candidate():
-173-    root = Path("/opt/ftmo-runner/_work/Ftmo/Ftmo/artifacts/research_outcomes")
-174-    choices = []
-175-    for path in root.glob("*/development-review-summary.json"):
-176-        data = _json(path)
-177-        if not data:
-178-            continue
-179-        gen = _gen_number(data.get("generation_id") or path.parent.name)
-180-        for review in data.get("reviews", []):
-181-            if review.get("outcome") != "candidate" or not review.get("selected_variant"):
-182-                continue
-183-            exp = review.get("experiment_id")
-184-            for trial_path in (path.parent / str(exp) / "trials").glob("*.json"):
-185-                trial = _json(trial_path) or {}
-186-                result = trial.get("result") or {}
-187-                if result.get("variant") == review.get("selected_variant"):
-188-                    choices.append((gen, trial_path, trial, result, data))
-189-    return max(choices, key=lambda x: x[0]) if choices else None
-190-
-191-def _ftmo_release():
-192-    root = Path("/opt/ftmo-runner/_work/Ftmo/Ftmo/artifacts/research_outcomes")
-193-    releases = []
-194-    for release_path in root.glob("*/paper-release.json"):
-195-        release = _json(release_path) or {}
-196-        for rel in release.get("released_candidates", []):
-197-            exp = rel.get("experiment_id")
-198-            run_path = release_path.parent / str(exp) / "holdout-run.json"
-199-            holdout = _json(run_path) or {}
-200-            if holdout:
-201-                releases.append((_gen_number(release.get("generation_id") or release_path.parent.name), release, rel, holdout))
-202-    return max(releases, key=lambda x: x[0]) if releases else None
-203-
-204-def _pips(value):
-205-    try:
-206-        return round(float(value) / 0.0001, 1)
-207-    except Exception:
-208-        return None
-209-
-210-def _ftmo_quality():
-211-    cand = _ftmo_candidate()
-212-    rel = _ftmo_release()
-213-    items = []
-214-    headline = None
-215-    meta = {}
-216-    stage = "research"
-217-    if cand:
-218-        gen, trial_path, trial, result, review = cand
-219-        pips = _pips(result.get("total_pnl"))
-220-        stressed = _pips(result.get("cost_1_5x_pnl"))
+from pathlib import Path
+from datetime import datetime, timezone, timedelta
+import hashlib, json, re, sqlite3, subprocess, time
+
+ROOT = Path("/home/ubuntu/zennay-cloud")
+RESOURCE_FILE = ROOT / "resource-policy.json"
+ALERT_STATE_FILE = ROOT / "alert-state.json"
+SIGNALS_DIR = ROOT / "signals"
+SIGNALS_DIR.mkdir(exist_ok=True)
+
+PRIORITY_WEIGHTS = {"background": 100, "normal": 400, "high": 800}
+PROJECT_UNITS = {
+    "haxlab": [
+        "haxlab-analyzer.service",
+        "haxlab-ingest.service",
+        "haxlab-worker.service",
+        "actions.runner.Zennay-Haxlab.vps-bb300bba-haxlab.service",
+    ],
+    "ftmo": [
+        "ftmo-autonomous.service",
+        "actions.runner.Zennay-Ftmo.vps-bb300bba-ftmo.service",
+    ],
+    "cloud": ["zennay-cloud.service"],
+    "supa": [],
+}
+_RESOURCE_PREV = {}
+
+def _now():
+    return datetime.now(timezone.utc).isoformat()
+
+def _json(path, sudo=False):
+    p = str(path)
+    try:
+        if sudo:
+            raw = subprocess.check_output(["sudo", "-n", "cat", p], text=True, stderr=subprocess.DEVNULL, timeout=3)
+            return json.loads(raw)
+        return json.loads(Path(p).read_text())
+    except Exception:
+        return None
+
+def load_resource_policy():
+    default = {
+        "haxlab": {"priority": "background"},
+        "ftmo": {"priority": "high"},
+        "supa": {"priority": "normal"},
+        "cloud": {"priority": "normal"},
+    }
+    try:
+        raw = json.loads(RESOURCE_FILE.read_text())
+    except Exception:
+        raw = {}
+    for pid, cfg in default.items():
+        priority = str((raw.get(pid) or {}).get("priority") or cfg["priority"])
+        if priority not in PRIORITY_WEIGHTS:
+            priority = cfg["priority"]
+        default[pid] = {"priority": priority}
+    return default
+
+def _unit_numbers(unit):
+    try:
+        raw = subprocess.check_output(
+            ["systemctl", "show", unit, "--property=CPUUsageNSec,MemoryCurrent,ActiveState"],
+            text=True, stderr=subprocess.DEVNULL, timeout=2
+        )
+        d = dict(line.split("=", 1) for line in raw.splitlines() if "=" in line)
+        return int(d.get("CPUUsageNSec") or 0), int(d.get("MemoryCurrent") or 0), d.get("ActiveState") or "unknown"
+    except Exception:
+        return 0, 0, "unknown"
+
+def resource_snapshot():
+    policy = load_resource_policy()
+    now_mono = time.monotonic()
+    out = {}
+    for pid, cfg in policy.items():
+        units = PROJECT_UNITS.get(pid, [])
+        total_cpu = total_mem = active = 0
+        for unit in units:
+            cpu, mem, state = _unit_numbers(unit)
+            total_cpu += cpu
+            total_mem += mem
+            active += int(state in ("active", "activating"))
+        cpu_pct = None
+        prev = _RESOURCE_PREV.get(pid)
+        if prev and now_mono > prev[0] and total_cpu >= prev[1]:
+            cpu_pct = round(((total_cpu - prev[1]) / 1_000_000_000) / (now_mono - prev[0]) * 100, 1)
+        _RESOURCE_PREV[pid] = (now_mono, total_cpu)
+        out[pid] = {
+            "priority": cfg["priority"],
+            "weight": PRIORITY_WEIGHTS[cfg["priority"]],
+            "managed": bool(units),
+            "active_units": active,
+            "unit_count": len(units),
+            "cpu_percent": cpu_pct,
+            "memory_bytes": total_mem,
+            "mode": "relative",
+            "note": "Relatieve CPU/IO-prioriteit; vrije capaciteit blijft bruikbaar.",
+        }
+    return out
+
+def set_priority(project, priority):
+    if project not in PROJECT_UNITS:
+        raise ValueError("Onbekend project")
+    if priority not in PRIORITY_WEIGHTS:
+        raise ValueError("Ongeldige prioriteit")
+    policy = load_resource_policy()
+    policy[project] = {"priority": priority}
+    tmp = RESOURCE_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(policy, ensure_ascii=False, indent=2) + "\n")
+    tmp.replace(RESOURCE_FILE)
+    subprocess.check_output(
+        ["sudo", "-n", "/usr/local/sbin/zennay-resource-control", "apply", project],
+        text=True, stderr=subprocess.STDOUT, timeout=12
+    )
+    return {"project": project, "priority": priority, "weight": PRIORITY_WEIGHTS[priority]}
+
+def _find_metrics_dict(data):
+    if not isinstance(data, dict):
+        return None
+    for key in ("frozen_holdout", "holdout", "validation", "metrics"):
+        val = data.get(key)
+        if isinstance(val, dict) and "direction_accuracy" in val and "joint_accuracy" in val:
+            return val
+    if "direction_accuracy" in data and "joint_accuracy" in data:
+        return data
+    for val in data.values():
 === SERVER RESOURCE ENDPOINT ===
     def reply(self,body,status=200,kind='application/json; charset=utf-8'):
         raw=json.dumps(body,ensure_ascii=False).encode() if not isinstance(body,bytes) else body
