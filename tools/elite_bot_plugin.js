@@ -57,16 +57,16 @@ module.exports = function(API) {
     type: VariableType.String,
     value:
       process.env.HAXLAB_ELITE_CHAMPION_POINTER ||
-      "/var/lib/haxlab/derived/champions/elite-player/current.json",
+      "/var/lib/haxlab/derived/champions/elite-player/live.json",
     description:
-      "Optional promoted champion pointer. Falls back to modelDir when absent.",
+      "Approved live champion pointer. Falls back to modelDir when absent.",
   });
   this.defineVariable({
     name: "minimumChampionValidationStage",
     type: VariableType.String,
     value:
       process.env.HAXLAB_ELITE_MIN_VALIDATION_STAGE ||
-      "canary",
+      "live",
     description:
       "Minimum registry validation stage required for live loading: promotion, multi_replay, canary, or live.",
   });
@@ -151,7 +151,7 @@ module.exports = function(API) {
       pointerPath: String(that.championPointer || ""),
       fallbackModelDir: String(that.modelDir),
       minimumValidationStage: String(
-        that.minimumChampionValidationStage || "canary",
+        that.minimumChampionValidationStage || "live",
       ),
     });
   }
@@ -222,56 +222,6 @@ module.exports = function(API) {
     }
     bot.lastAction = action;
   }
-
-  this.getEliteRuntimeStatus = function() {
-    const futureSettings = policySource
-      ? effectiveFutureMotionSettings()
-      : {
-          enabled: false,
-          minimumConfidence: null,
-          minimumBallDistance: null,
-          allowedRoles: null,
-          source: "uninitialized",
-        };
-
-    return {
-      schema: "haxlab-elite-plugin-runtime-status-v1",
-      policy: policySource
-        ? {
-            source: policySource.source,
-            version_id: policySource.version_id,
-            runtime_model_path: policySource.runtime_model_path,
-            behavior_sha256: policySource.behavior_sha256 || null,
-            validation_stage: policySource.validation_stage || null,
-            fallback_reason: policySource.fallback_reason || null,
-          }
-        : null,
-      future_motion: {
-        enabled: Boolean(futureSettings.enabled),
-        minimum_confidence: futureSettings.minimumConfidence,
-        minimum_ball_distance: futureSettings.minimumBallDistance,
-        allowed_roles: futureSettings.allowedRoles,
-        source: futureSettings.source,
-      },
-      runtime_errors: runtimeErrorCount,
-      bots: bots.map((bot) => ({
-        id: bot.id,
-        role: bot.role,
-        key_state: bot.keyState,
-        last_action: bot.lastAction
-          ? {
-              dir_x: Number(bot.lastAction.dir_x || 0),
-              dir_y: Number(bot.lastAction.dir_y || 0),
-              kick: Boolean(bot.lastAction.kick),
-              source: bot.lastAction.source || null,
-              future_assist_applied:
-                Boolean(bot.lastAction.future_assist_applied),
-            }
-          : null,
-        recovery_overrides: bot.recoveryOverrides,
-      })),
-    };
-  };
 
   this.spawnEliteTeam = function(teamId = that.teamId) {
     if (bots.length) return bots.map((bot) => bot.id);
