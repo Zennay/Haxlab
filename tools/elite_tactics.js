@@ -117,9 +117,25 @@ function futureMotionAssist(
   {
     minimumConfidence = 0.45,
     minimumBallDistance = 80,
+    allowedRoles = null,
   } = {},
 ) {
   if (!policyAction?.future_head_available) return policyAction;
+
+  if (allowedRoles != null) {
+    const allowed = allowedRoles instanceof Set
+      ? allowedRoles
+      : new Set(
+          Array.isArray(allowedRoles)
+            ? allowedRoles.map((role) => String(role).toLowerCase())
+            : String(allowedRoles)
+                .split(",")
+                .map((role) => role.trim().toLowerCase())
+                .filter(Boolean),
+        );
+    const role = String(policyAction.role || "").toLowerCase();
+    if (!allowed.has(role)) return policyAction;
+  }
 
   const immediateStationary =
     Number(policyAction.dir_x || 0) === 0 &&
