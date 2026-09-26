@@ -338,6 +338,7 @@ else:
                 z.extractall(cache)
         if not gradle_bin.exists():
             raise RuntimeError("Gradle bootstrap failed")
+        gradle_bin.chmod(gradle_bin.stat().st_mode | 0o111)
         watch_build = "built-bootstrapped-gradle-" + gradle_version
     else:
         watch_build = "built-found-gradle"
