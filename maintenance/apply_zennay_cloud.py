@@ -301,6 +301,19 @@ if (wear / "gradlew").exists():
 elif shutil.which("gradle"):
     run(["gradle","-p",str(wear),":app:assembleDebug"], env=env)
     watch_build = "built-system-gradle"
+else:
+    candidates = [
+        Path("/opt/gradle/bin/gradle"),
+        Path("/usr/local/gradle/bin/gradle"),
+        Path("/home/ubuntu/gradle/bin/gradle"),
+        Path("/home/ubuntu/.local/bin/gradle"),
+    ]
+    gradle_bin = next((p for p in candidates if p.exists()), None)
+    if gradle_bin:
+        run([str(gradle_bin),"-p",str(wear),":app:assembleDebug"], env=env)
+        watch_build = "built-found-gradle"
+    else:
+        watch_build = "source-updated-build-tool-not-found"
 
 # Restart only the dashboard backend.
 run(["sudo","systemctl","restart","zennay-cloud.service"])
