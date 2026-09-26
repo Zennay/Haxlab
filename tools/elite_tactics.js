@@ -87,6 +87,45 @@ function shouldRecoverFromStall(
   );
 }
 
+function futureMotionAssist(
+  policyAction,
+  ballDistance,
+  {
+    minimumConfidence = 0.45,
+    minimumBallDistance = 80,
+  } = {},
+) {
+  if (!policyAction?.future_head_available) return policyAction;
+
+  const immediateStationary =
+    Number(policyAction.dir_x || 0) === 0 &&
+    Number(policyAction.dir_y || 0) === 0;
+  if (!immediateStationary) return policyAction;
+
+  if (Number(ballDistance) < minimumBallDistance) return policyAction;
+
+  const confidence = Number(
+    policyAction.future_direction_probability || 0,
+  );
+  const futureDirX = Number(policyAction.future_dir_x || 0);
+  const futureDirY = Number(policyAction.future_dir_y || 0);
+  if (
+    confidence < minimumConfidence ||
+    (futureDirX === 0 && futureDirY === 0)
+  ) {
+    return policyAction;
+  }
+
+  return {
+    ...policyAction,
+    dir_x: futureDirX,
+    dir_y: futureDirY,
+    future_assist_applied: true,
+    source: "learned_future_motion",
+  };
+}
+
+
 function isKickoffState(gameState) {
   const ball = gameState?.physicsState?.discs?.[0];
   if (!ball?.pos) return false;
@@ -149,4 +188,5 @@ module.exports = {
   enforceKickRange,
   recoveryAction,
   shouldRecoverFromStall,
+  futureMotionAssist,
 };
