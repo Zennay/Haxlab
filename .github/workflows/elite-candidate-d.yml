@@ -1,0 +1,214 @@
+name: Elite Candidate D Multisource Robustness
+
+on:
+  push:
+    branches:
+      - experiment/candidate-d-multisource-robustness
+
+permissions:
+  contents: read
+
+jobs:
+  candidate-d:
+    if: contains(github.event.head_commit.message, '[candidate-d]')
+    concurrency:
+      group: haxlab-elite-candidate-d
+      cancel-in-progress: true
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 300
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify frozen Candidate D inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src"             /opt/haxlab/.venv/bin/python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          expected = {
+              Path("/var/lib/haxlab/derived/training/elite-player-candidate-b/shards/train/_index.json"):
+                  "920ca18fdbc3682130307c01f91d61ad745d6642824f19962c6a2c614ffe1923",
+              Path("/var/lib/haxlab/derived/training/elite-player-candidate-b/shards/validation/_index.json"):
+                  "baaa00830ec3906640e893344262282d931de15b7a1c5c63485df1da44d6ba27",
+              Path("/var/lib/haxlab/derived/training/elite-player-candidate-b/shards/holdout/_index.json"):
+                  "a80b9789547ba3befd993bfd4c62c84b2c2c999a6d9283d9b2ef3c08451083fe",
+              Path("/var/lib/haxlab/derived/evaluation/candidate-d-multisource-holdout-v1/frozen-manifest.json"):
+                  "541b635e34492e9409c5d0fbe2ffd6303c75a2cd10348aebee9e5df49669a609",
+          }
+          for path, wanted in expected.items():
+              if not path.exists():
+                  raise SystemExit(f"missing frozen input: {path}")
+              actual = hashlib.sha256(path.read_bytes()).hexdigest()
+              if actual != wanted:
+                  raise SystemExit(
+                      f"frozen input hash mismatch: {path}: {actual} != {wanted}"
+                  )
+
+          root = Path("/var/lib/haxlab/derived/evaluation/candidate-d-multisource-holdout-v1")
+          manifest = json.loads((root / "frozen-manifest.json").read_text())
+          if manifest.get("source_count") != 3:
+              raise SystemExit("Candidate D requires exactly three frozen sources")
+          for source in manifest["sources"]:
+              source_root = root / source["id"]
+              for name, wanted in source["files_sha256"].items():
+                  actual = hashlib.sha256((source_root / name).read_bytes()).hexdigest()
+                  if actual != wanted:
+                      raise SystemExit(
+                          f"evaluation file hash mismatch: {source['id']}/{name}"
+                      )
+          print(json.dumps({
+              "training_index_hashes_verified": 3,
+              "source_count": manifest["source_count"],
+              "total_mirrored_matches": manifest["total_mirrored_matches"],
+              "replay_sha256s": [
+                  source["replay_sha256"] for source in manifest["sources"]
+              ],
+          }, indent=2))
+          PY
+
+      - name: Clear stale Candidate D evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab rm -rf             /var/lib/haxlab/derived/training/elite-player-candidate-d             /var/lib/haxlab/derived/training/elite-champions-candidate-d
+          sudo -u haxlab rm -f             /tmp/haxlab-candidate-d-*.json             /tmp/candidate-d-evolution.json             /tmp/haxlab-candidate-d.log
+          rm -f candidate-d-*.json candidate-d-*.log frozen-manifest.json
+
+      - name: Train Candidate D with narrow AM ST jitter
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT=/var/lib/haxlab/derived/training/elite-player-candidate-d/model
+          sudo -u haxlab mkdir -p "$OUT"
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src"             /opt/haxlab/.venv/bin/python -m haxlab.learning.elite             --train-index /var/lib/haxlab/derived/training/elite-player-candidate-b/shards/train/_index.json             --validation-index /var/lib/haxlab/derived/training/elite-player-candidate-b/shards/validation/_index.json             --holdout-index /var/lib/haxlab/derived/training/elite-player-candidate-b/shards/holdout/_index.json             --output-dir "$OUT"             --window 8             --sequence-stride 1             --hidden-dim 128             --hidden-dim-2 96             --epochs 3             --batch-size 2048             --learning-rate 0.0008             --l2 0.00001             --future-horizon-steps 5             --future-loss-weight 0.35             --state-jitter-std 0.05             --seed 1337             --progress-path /var/lib/haxlab/derived/training/elite-player-candidate-d/progress.json             | tee /tmp/haxlab-candidate-d.log
+
+      - name: Run Candidate D scripted sandbox
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=/var/lib/haxlab/derived/evaluation/candidate-d-multisource-holdout-v1/source-01
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node             "$GITHUB_WORKSPACE/tools/elite_sandbox_benchmark.js"             --model /var/lib/haxlab/derived/training/elite-player-candidate-d/model/runtime-model.json             --stadium "$ROOT/stadium.hbs"             --matches 12             --minutes 1.5             --sample-every 6             --output /var/lib/haxlab/derived/training/elite-player-candidate-d/sandbox-benchmark.json
+
+      - name: Build three frozen replay duels
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=/var/lib/haxlab/derived/evaluation/candidate-d-multisource-holdout-v1
+          CAND=/var/lib/haxlab/derived/training/elite-player-candidate-d/model/runtime-model.json
+          LIVE_RUNTIME="$(
+            sudo -u haxlab /opt/haxlab/.venv/bin/python -c               'import json; print(json.load(open("/var/lib/haxlab/derived/champions/elite-player/current.json"))["runtime_model_path"])'
+          )"
+
+          for I in 01 02 03; do
+            SOURCE="$ROOT/source-$I"
+            sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node               "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js"               --model "$CAND"               --stadium "$SOURCE/stadium.hbs"               --scenarios "$SOURCE/scenarios.json"               --max-scenarios 16               --seconds 30               --sample-every 6               --disable-recovery               --output "/tmp/haxlab-candidate-d-$I.json"
+
+            sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node               "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js"               --model "$LIVE_RUNTIME"               --stadium "$SOURCE/stadium.hbs"               --scenarios "$SOURCE/scenarios.json"               --max-scenarios 16               --seconds 30               --sample-every 6               --disable-recovery               --output "/tmp/haxlab-live-d-$I.json"
+
+            sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src"               /opt/haxlab/.venv/bin/python -m haxlab.evaluation.replay_duel               "/tmp/haxlab-candidate-d-$I.json"               "/tmp/haxlab-live-d-$I.json"               --output "/tmp/haxlab-duel-d-$I.json"
+          done
+
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src"             /opt/haxlab/.venv/bin/python -m haxlab.evaluation.multisource_duel             /tmp/haxlab-duel-d-01.json             /tmp/haxlab-duel-d-02.json             /tmp/haxlab-duel-d-03.json             --output /var/lib/haxlab/derived/training/elite-player-candidate-d/multisource-duel.json
+
+      - name: Seed isolated Candidate D registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          CHAMPIONS=/var/lib/haxlab/derived/training/elite-champions-candidate-d
+          LIVE_POINTER=/var/lib/haxlab/derived/champions/elite-player/current.json
+          sudo -u haxlab mkdir -p "$CHAMPIONS"
+          sudo -u haxlab env LIVE_POINTER="$LIVE_POINTER" CHAMPIONS="$CHAMPIONS"             /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          live = json.loads(Path(os.environ["LIVE_POINTER"]).read_text())
+          model_dir = Path(live["model_path"]).parent
+          current = {
+              "candidate_id": f"live-{live['version_id']}",
+              "promoted_at": live.get("updated_at"),
+              "source_ref": live["version_id"],
+              "artifact_dir": str(model_dir),
+              "model_dir": str(model_dir),
+          }
+          root = Path(os.environ["CHAMPIONS"])
+          registry = {
+              "schema": "haxlab-elite-champion-registry-v1",
+              "current": current,
+              "history": [],
+          }
+          (root / "registry.json").write_text(
+              json.dumps(registry, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          (root / "current.json").write_text(
+              json.dumps(current, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Evaluate Candidate D against current champion
+        shell: bash
+        run: |
+          set -euo pipefail
+          CHAMPIONS=/var/lib/haxlab/derived/training/elite-champions-candidate-d
+          SHORT_SHA="$(echo "$GITHUB_SHA" | cut -c1-8)"
+          set +e
+          sudo -u haxlab env             PYTHONPATH="$GITHUB_WORKSPACE/src"             NODE_PATH=/opt/haxlab/node_modules             /opt/haxlab/.venv/bin/python -m haxlab.learning.evolution             --registry "$CHAMPIONS/registry.json"             --champions-root "$CHAMPIONS"             --candidate-id "candidate-d-$SHORT_SHA"             --candidate-model-dir /var/lib/haxlab/derived/training/elite-player-candidate-d/model             --metrics /var/lib/haxlab/derived/training/elite-player-candidate-d/model/metrics.json             --sandbox /var/lib/haxlab/derived/training/elite-player-candidate-d/sandbox-benchmark.json             --stadium /var/lib/haxlab/derived/evaluation/candidate-d-multisource-holdout-v1/source-01/stadium.hbs             --duel-script "$GITHUB_WORKSPACE/tools/elite_model_duel.js"             --duel-evidence /var/lib/haxlab/derived/training/elite-player-candidate-d/multisource-duel.json             --source-ref "$GITHUB_SHA"             --output /tmp/candidate-d-evolution.json
+          EVOLUTION_CODE=$?
+          set -e
+          echo "evolution exit=$EVOLUTION_CODE"
+          cat /tmp/candidate-d-evolution.json
+
+      - name: Collect Candidate D evidence
+        if: always()
+        shell: bash
+        run: |
+          set -u
+          ROOT=/var/lib/haxlab/derived/evaluation/candidate-d-multisource-holdout-v1
+          MODEL=/var/lib/haxlab/derived/training/elite-player-candidate-d/model
+          TRAINING=/var/lib/haxlab/derived/training/elite-player-candidate-d
+
+          copy_haxlab() {
+            local src="$1"
+            local dst="$2"
+            if sudo -u haxlab test -f "$src"; then
+              sudo -u haxlab cat "$src" > "$dst"
+            fi
+          }
+
+          copy_haxlab "$MODEL/metrics.json" candidate-d-metrics.json
+          copy_haxlab "$TRAINING/sandbox-benchmark.json" candidate-d-sandbox.json
+          copy_haxlab "$TRAINING/multisource-duel.json" candidate-d-multisource-duel.json
+          copy_haxlab "$ROOT/frozen-manifest.json" frozen-manifest.json
+
+          for I in 01 02 03; do
+            [ -f "/tmp/haxlab-duel-d-$I.json" ] &&               cp "/tmp/haxlab-duel-d-$I.json" "candidate-d-duel-$I.json"
+            [ -f "/tmp/haxlab-candidate-d-$I.json" ] &&               cp "/tmp/haxlab-candidate-d-$I.json" "candidate-d-benchmark-$I.json"
+            [ -f "/tmp/haxlab-live-d-$I.json" ] &&               cp "/tmp/haxlab-live-d-$I.json" "live-benchmark-$I.json"
+          done
+
+          [ -f /tmp/candidate-d-evolution.json ] &&             cp /tmp/candidate-d-evolution.json candidate-d-evolution.json
+          [ -f /tmp/haxlab-candidate-d.log ] &&             cp /tmp/haxlab-candidate-d.log candidate-d-training.log
+
+      - name: Upload Candidate D evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: elite-candidate-d-multisource-robustness
+          path: |
+            candidate-d-metrics.json
+            candidate-d-sandbox.json
+            candidate-d-multisource-duel.json
+            candidate-d-duel-*.json
+            candidate-d-benchmark-*.json
+            live-benchmark-*.json
+            candidate-d-evolution.json
+            candidate-d-training.log
+            frozen-manifest.json
+          if-no-files-found: warn
+          retention-days: 30
