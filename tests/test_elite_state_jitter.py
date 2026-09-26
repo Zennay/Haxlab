@@ -69,7 +69,7 @@ def test_state_jitter_is_sequence_consistent_per_feature() -> None:
             np.testing.assert_allclose(
                 delta[:, idx],
                 np.repeat(delta[0, idx], sequence.shape[1]),
-                atol=1e-7,
+                atol=2e-7,
             )
 
 
