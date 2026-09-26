@@ -73,7 +73,8 @@ def _atomic_npz(path: Path, arrays: dict[str, np.ndarray]) -> None:
     os.close(fd)
     try:
         np.savez_compressed(temporary_name, **arrays)
-        with open(temporary_name, "rb") as handle:
+        with open(temporary_name, "r+b") as handle:
+            handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary_name, path)
     except Exception:
