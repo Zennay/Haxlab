@@ -6,7 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from haxlab.evaluation.champion_registry import promote_champion
+from haxlab.evaluation.champion_registry import (
+    promote_champion,
+    record_champion_validation,
+)
 
 
 def _write_model(model_dir: Path) -> None:
@@ -189,3 +192,137 @@ def test_runtime_config_changes_behavior_version(tmp_path: Path) -> None:
     current = json.loads((registry / "current.json").read_text())
     assert current["version_id"] == second["version_id"]
     assert current["runtime_config"]["minimum_confidence"] == 0.75
+
+
+
+def _promoted_registry(tmp_path: Path) -> tuple[Path, dict]:
+    model_dir = tmp_path / "model-validation"
+    _write_model(model_dir)
+    evidence = tmp_path / "promotion-validation.json"
+    evidence.write_text(json.dumps({"promote": True}), encoding="utf-8")
+    registry = tmp_path / "registry-validation"
+    result = promote_champion(
+        model_dir=model_dir,
+        promotion_evidence_path=evidence,
+        registry_root=registry,
+        candidate_name="candidate",
+    )
+    return registry, result
+
+
+def test_records_multi_replay_validation_without_mutating_model_bundle(
+    tmp_path: Path,
+) -> None:
+    registry, promoted = _promoted_registry(tmp_path)
+    manifest_path = (
+        registry / "versions" / promoted["version_id"] / "manifest.json"
+    )
+    manifest_before = manifest_path.read_bytes()
+
+    evidence = tmp_path / "multi-replay.json"
+    evidence.write_text(
+        json.dumps(
+            {
+                "schema": "haxlab-multi-replay-champion-validation-v1",
+                "validated": True,
+                "candidate": {"version_id": promoted["version_id"]},
+                "aggregate": {
+                    "replay_count": 5,
+                    "mean_movement_delta": 0.064,
+                    "mean_progression_delta": -0.014,
+                    "total_runtime_errors": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = record_champion_validation(
+        registry_root=registry,
+        validation_evidence_path=evidence,
+        stage="multi_replay",
+    )
+
+    assert result["recorded"] is True
+    assert result["version_id"] == promoted["version_id"]
+    assert result["stage"] == "multi_replay"
+    assert Path(result["evidence_path"]).is_file()
+    assert manifest_path.read_bytes() == manifest_before
+
+    current = json.loads((registry / "current.json").read_text())
+    assert current["validation_stage"] == "multi_replay"
+    assert current["validation_summary"]["replay_count"] == 5
+    assert current["validation_summary"]["total_runtime_errors"] == 0
+    assert Path(current["validation_evidence_path"]).is_file()
+
+
+def test_validation_rejects_failed_gate(tmp_path: Path) -> None:
+    registry, promoted = _promoted_registry(tmp_path)
+    evidence = tmp_path / "failed-validation.json"
+    evidence.write_text(
+        json.dumps(
+            {
+                "validated": False,
+                "candidate": {"version_id": promoted["version_id"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="does not pass"):
+        record_champion_validation(
+            registry_root=registry,
+            validation_evidence_path=evidence,
+            stage="multi_replay",
+        )
+
+    current = json.loads((registry / "current.json").read_text())
+    assert "validation_stage" not in current
+
+
+def test_validation_rejects_wrong_champion_version(tmp_path: Path) -> None:
+    registry, _ = _promoted_registry(tmp_path)
+    evidence = tmp_path / "wrong-version.json"
+    evidence.write_text(
+        json.dumps(
+            {
+                "validated": True,
+                "candidate": {"version_id": "other-version"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="version mismatch"):
+        record_champion_validation(
+            registry_root=registry,
+            validation_evidence_path=evidence,
+            stage="multi_replay",
+        )
+
+
+def test_validation_stage_cannot_downgrade(tmp_path: Path) -> None:
+    registry, promoted = _promoted_registry(tmp_path)
+    evidence = tmp_path / "canary.json"
+    evidence.write_text(
+        json.dumps(
+            {
+                "validated": True,
+                "candidate": {"version_id": promoted["version_id"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    record_champion_validation(
+        registry_root=registry,
+        validation_evidence_path=evidence,
+        stage="canary",
+    )
+
+    with pytest.raises(ValueError, match="stage downgrade"):
+        record_champion_validation(
+            registry_root=registry,
+            validation_evidence_path=evidence,
+            stage="multi_replay",
+        )
