@@ -219,6 +219,14 @@ def test_temporal_elite_policy_trains_with_validation_only_calibration(
             node_action["direction_probability"]
             - python_action["direction_probability"]
         ) < 1e-4
+        assert abs(
+            node_action["ood_mean_abs_z"]
+            - python_action["ood_mean_abs_z"]
+        ) < 1e-4
+        assert abs(
+            node_action["ood_max_abs_z"]
+            - python_action["ood_max_abs_z"]
+        ) < 1e-4
 
 
     far_features = {name: 0.0 for name in policy.input_columns}
