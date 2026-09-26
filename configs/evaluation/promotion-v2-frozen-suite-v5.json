@@ -1,0 +1,81 @@
+{
+  "schema": "haxlab-promotion-v2-frozen-suite-v5",
+  "frozen_before_next_challenger": true,
+  "predecessor_evidence": "promotion-v2-frozen-suite-v4",
+  "predecessor_status": "consumed_by_candidate_f",
+  "base_excluded_sha256_count": 1157,
+  "base_exclusion_sha256": "83f5d451dd6ab59ff6475610e1006b56454a2739d13320a631ce50a8046d6cc4",
+  "source_count": 3,
+  "scenarios_per_source": 16,
+  "mirrored_matches_per_source": 32,
+  "total_mirrored_matches": 96,
+  "excluded_sha256_count": 1160,
+  "excluded_manifest_sha256": "bde1bdb3bbe203f81d43adc80a9e9914a39003902ee1fe82a43e972e8c7b0bdc",
+  "selection_policy": {
+    "analysis_version": "state-pass-v4",
+    "minimum_duration_seconds": 180,
+    "minimum_touches": 100,
+    "average_team_size_range": [
+      3.5,
+      4.5
+    ],
+    "required_roles": [
+      "gk",
+      "dm",
+      "am",
+      "st"
+    ],
+    "minimum_role_confidence": 0.55,
+    "ordering": [
+      "sampled_state_count DESC",
+      "sha256 ASC"
+    ]
+  },
+  "arena_contract": {
+    "policy": "closed-loop-arena-v2-frozen-1",
+    "seconds": 30,
+    "max_scenarios": 16,
+    "sample_every_ticks": 6,
+    "plug_repeats": 1,
+    "seed": 1337,
+    "raw_policy_only": true
+  },
+  "sources": [
+    {
+      "id": "source-01",
+      "replay_sha256": "4b04a3ab8df24e0b94be797c28fba0047e766aa91a515ee39de08bfcb68d5cb2",
+      "scenario_count": 16,
+      "history_window": 8,
+      "sample_every_ticks": 6,
+      "files_sha256": {
+        "source.json": "7f802d9479897af9ca81fef2812f0618ec209fbbee029bfc84a728b98507dd73",
+        "stadium.hbs": "81597b6bbb62f4e5340b82bd7d1c00a1aef167b1ea53e966c3b281acc08cd0b1",
+        "scenarios.json": "af76ea8aee494aabb48a801ed4bb77d6f90043eb66311e13b0d448383b4cd192"
+      }
+    },
+    {
+      "id": "source-02",
+      "replay_sha256": "b09a40e707e4c7de1f6adc160251e83e7123d59a0076b66a0cc1e5fe2ff73ac4",
+      "scenario_count": 16,
+      "history_window": 8,
+      "sample_every_ticks": 6,
+      "files_sha256": {
+        "source.json": "24f32f49b7c168c7f5e0dda204c8197445bd9a1d5c605e651de39b64fd0385bb",
+        "stadium.hbs": "bf5fd9ea7c22d3b058981da8272c011d9588ed1a698991a69cbdb090eccd5e9e",
+        "scenarios.json": "c6fec27490a9265d064f6928ad09d315bc92660486752a0d0374d075bdfa6ef3"
+      }
+    },
+    {
+      "id": "source-03",
+      "replay_sha256": "253ead6473d9a72efe802213ed62ee4209af6c26fdc20f860e95befe0ab74166",
+      "scenario_count": 16,
+      "history_window": 8,
+      "sample_every_ticks": 6,
+      "files_sha256": {
+        "source.json": "b47e75f93f5aba6b2d0947a37c7042554441f7390799fbc56187bcfde7ddc08d",
+        "stadium.hbs": "bf5fd9ea7c22d3b058981da8272c011d9588ed1a698991a69cbdb090eccd5e9e",
+        "scenarios.json": "e7fb305989ea3d2359b86a9db171ecd062861fcce338a4d07ebb14d128d7f0c8"
+      }
+    }
+  ]
+}
