@@ -29,6 +29,38 @@ function softmax(logits) {
   return exp.map((value) => value / total);
 }
 
+const ENTITY_PREFIXES = Object.freeze([
+  "tm1", "tm2", "tm3", "op1", "op2", "op3", "op4",
+]);
+
+function imputeMissingEntityGroups(features, inputColumns, mean) {
+  const output = { ...features };
+  const indexByName = new Map(
+    inputColumns.map((name, index) => [name, index]),
+  );
+  const imputed = [];
+
+  for (const prefix of ENTITY_PREFIXES) {
+    const presentName = prefix + "_present";
+    if (!indexByName.has(presentName)) continue;
+    if (Number(output[presentName] || 0) > 0) continue;
+
+    for (const suffix of ["dx", "dy", "dvx", "dvy", "present"]) {
+      const name = prefix + "_" + suffix;
+      const index = indexByName.get(name);
+      if (index == null) continue;
+      const value = Number(mean[index]);
+      if (Number.isFinite(value)) output[name] = value;
+    }
+    imputed.push(prefix);
+  }
+
+  return {
+    features: output,
+    imputed_entities: imputed,
+  };
+}
+
 function dense(input, weights, bias, relu = false) {
   if (!Array.isArray(weights) || weights.length !== input.length) {
     throw new Error(
@@ -118,6 +150,14 @@ class ElitePolicyRuntime {
       throw new Error(`invalid configured role id: ${value}`);
     }
     return value;
+  }
+
+  imputeMissingEntities(features) {
+    return imputeMissingEntityGroups(
+      features,
+      this.inputColumns,
+      this.mean,
+    );
   }
 
   vectorize(features) {
@@ -343,4 +383,5 @@ module.exports = {
   dense,
   sigmoid,
   softmax,
+  imputeMissingEntityGroups,
 };
