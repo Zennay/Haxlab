@@ -10,30 +10,31 @@ permissions:
 
 concurrency:
   group: haxlab-elite-plugin-runtime-validation
-  # A runtime gate is evidence-producing and must finish once it starts.
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   validate:
-    if: contains(github.event.head_commit.message, '[runtime]')
+    if: contains(github.event.head_commit.message, '[runtime-validation]')
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Preflight actual plugin runtime tooling
+      - name: Preflight plugin runtime validation
         shell: bash
         run: |
           set -euo pipefail
-          node --check "$GITHUB_WORKSPACE/tools/elite_bot_plugin.js"
           node --check "$GITHUB_WORKSPACE/tools/elite_plugin_runtime_validation.js"
+          node --check "$GITHUB_WORKSPACE/tools/elite_bot_plugin.js"
           node --check "$GITHUB_WORKSPACE/tools/elite_champion_config.js"
+          node "$GITHUB_WORKSPACE/tests/test_elite_champion_config.js"
           PYTHONPATH="$GITHUB_WORKSPACE/src" \
-            python3 -m py_compile \
-            "$GITHUB_WORKSPACE/src/haxlab/evaluation/champion_registry.py"
+            /opt/haxlab/.venv/bin/python -m py_compile \
+            "$GITHUB_WORKSPACE/src/haxlab/evaluation/champion_registry.py" \
+            "$GITHUB_WORKSPACE/src/haxlab/evaluation/scenario_source.py"
 
-      - name: Require canary-approved current champion
+      - name: Require canary-validated current champion
         shell: bash
         run: |
           set -euo pipefail
@@ -44,66 +45,56 @@ jobs:
           root = Path("/var/lib/haxlab/derived/champions/elite-player")
           pointer = json.loads((root / "current.json").read_text())
           stage = str(pointer.get("validation_stage") or "promotion")
-          if stage not in {"canary", "runtime", "live"}:
+          if stage not in {"canary", "runtime"}:
               raise SystemExit(
-                  f"Runtime validation requires canary stage or higher; got {stage!r}"
+                  "Plugin runtime validation requires canary stage first; "
+                  f"got {stage!r}"
               )
+          evidence = Path(pointer["validation_evidence_path"])
+          if not evidence.is_file():
+              raise SystemExit(f"Validation evidence missing: {evidence}")
+          payload = json.loads(evidence.read_text())
+          if payload.get("validated") is not True:
+              raise SystemExit("Current validation evidence does not pass")
 
-          evidence_path = Path(pointer["validation_evidence_path"])
-          evidence = json.loads(evidence_path.read_text())
-          if evidence.get("validated") is not True:
-              raise SystemExit("Current champion validation evidence is not passing")
-
-          sources = (evidence.get("source_set") or {}).get("sources") or []
-          if not sources:
-              raise SystemExit("Current canary evidence has no replay source set")
-          source = sources[0]
-
-          Path("/tmp/haxlab-plugin-runtime-source.json").write_text(
-              json.dumps(
-                  {
-                      "version_id": pointer["version_id"],
-                      "validation_stage": stage,
-                      "raw_path": source["raw_path"],
-                      "analysis_path": source["analysis_path"],
-                      "sha256": source["sha256"],
-                  },
-                  indent=2,
-              ) + "\n",
-              encoding="utf-8",
-          )
           print(json.dumps({
               "version_id": pointer["version_id"],
               "validation_stage": stage,
-              "source_sha256": source["sha256"],
+              "runtime_config": pointer.get("runtime_config"),
           }, indent=2))
           PY
 
-      - name: Export live-like stadium and replay starts
+      - name: Select healthy runtime replay
         shell: bash
         run: |
           set -euo pipefail
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m haxlab.evaluation.scenario_source \
+            --state-db /var/lib/haxlab/state/haxlab.sqlite3 \
+            --max-candidates 2500 \
+            --output /tmp/haxlab-runtime-source.json
+
           mapfile -t SRC < <(
             sudo -u haxlab /opt/haxlab/.venv/bin/python - <<'PY'
           import json
-          data = json.load(open("/tmp/haxlab-plugin-runtime-source.json"))
+          data = json.load(open("/tmp/haxlab-runtime-source.json"))
           print(data["raw_path"])
           print(data["analysis_path"])
+          print(data["sha256"])
           PY
           )
-          RAW="\${SRC[0]}"
-          ANALYSIS="\${SRC[1]}"
+          RAW="${SRC[0]}"
+          ANALYSIS="${SRC[1]}"
 
           sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
             "$GITHUB_WORKSPACE/tools/extract_stadium_from_replay.js" \
-            "$RAW" /tmp/haxlab-plugin-runtime-stadium.hbs
+            "$RAW" /tmp/haxlab-runtime-stadium.hbs
 
           sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
             "$GITHUB_WORKSPACE/tools/extract_replay_scenarios.js" \
-            "$RAW" "$ANALYSIS" \
-            /tmp/haxlab-plugin-runtime-scenarios.json 12 6 6
+            "$RAW" "$ANALYSIS" /tmp/haxlab-runtime-scenarios.json 12 6 6
 
-      - name: Exercise actual elite bot plugin in sandbox
+      - name: Exercise actual plugin runtime
         shell: bash
         run: |
           set -euo pipefail
@@ -111,8 +102,8 @@ jobs:
             "$GITHUB_WORKSPACE/tools/elite_plugin_runtime_validation.js" \
             --pointer /var/lib/haxlab/derived/champions/elite-player/current.json \
             --fallback-model-dir /var/lib/haxlab/derived/training/elite-player-champion-candidate/model \
-            --stadium /tmp/haxlab-plugin-runtime-stadium.hbs \
-            --scenarios /tmp/haxlab-plugin-runtime-scenarios.json \
+            --stadium /tmp/haxlab-runtime-stadium.hbs \
+            --scenarios /tmp/haxlab-runtime-scenarios.json \
             --max-scenarios 4 \
             --seconds 30 \
             --sample-every 6 \
@@ -122,22 +113,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if sudo -u haxlab /opt/haxlab/.venv/bin/python - <<'PY'
+          sudo -u haxlab /opt/haxlab/.venv/bin/python - <<'PY'
           import json
           data = json.load(open("/tmp/haxlab-plugin-runtime-validation.json"))
-          raise SystemExit(0 if data.get("validated") is True else 1)
+          if data.get("validated") is not True:
+              raise SystemExit("Plugin runtime gate rejected champion")
+          print(json.dumps({
+              "validated": True,
+              "candidate": data.get("candidate"),
+              "aggregate": data.get("aggregate"),
+              "checks": data.get("checks"),
+          }, indent=2))
           PY
-          then
-            sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
-              /opt/haxlab/.venv/bin/python -m haxlab.evaluation.champion_registry \
-              --registry-root /var/lib/haxlab/derived/champions/elite-player \
-              --record-validation /tmp/haxlab-plugin-runtime-validation.json \
-              --validation-stage runtime \
-              --output /tmp/haxlab-plugin-runtime-registry.json
-          else
-            sudo -u haxlab sh -c \
-              'echo '"'"'{"recorded": false, "reason": "runtime_gate_rejected"}'"'"' > /tmp/haxlab-plugin-runtime-registry.json'
-          fi
+
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m haxlab.evaluation.champion_registry \
+            --registry-root /var/lib/haxlab/derived/champions/elite-player \
+            --record-validation /tmp/haxlab-plugin-runtime-validation.json \
+            --validation-stage runtime \
+            --output /tmp/haxlab-runtime-registry-validation.json
 
       - name: Publish runtime evidence
         if: always()
@@ -151,13 +145,14 @@ jobs:
               sudo cat "$src" > "$dst"
             fi
           }
-          copy_if_present /tmp/haxlab-plugin-runtime-source.json plugin-runtime-source.json
-          copy_if_present /tmp/haxlab-plugin-runtime-validation.json plugin-runtime-validation.json
-          copy_if_present /tmp/haxlab-plugin-runtime-registry.json plugin-runtime-registry.json
 
-          echo '## HaxLab Actual Plugin Runtime Validation' >> "$GITHUB_STEP_SUMMARY"
-          if test -f plugin-runtime-validation.json; then
-            cat plugin-runtime-validation.json >> "$GITHUB_STEP_SUMMARY"
+          copy_if_present /tmp/haxlab-runtime-source.json runtime-source.json
+          copy_if_present /tmp/haxlab-plugin-runtime-validation.json runtime-validation.json
+          copy_if_present /tmp/haxlab-runtime-registry-validation.json runtime-registry-validation.json
+
+          echo '## HaxLab Plugin Runtime Validation' >> "$GITHUB_STEP_SUMMARY"
+          if test -f runtime-validation.json; then
+            cat runtime-validation.json >> "$GITHUB_STEP_SUMMARY"
           else
             echo 'Runtime validation did not produce evidence.' >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -167,9 +162,9 @@ jobs:
         with:
           name: elite-plugin-runtime-validation
           path: |
-            plugin-runtime-source.json
-            plugin-runtime-validation.json
-            plugin-runtime-registry.json
+            runtime-source.json
+            runtime-validation.json
+            runtime-registry-validation.json
           retention-days: 30
 
       - name: Enforce runtime gate
@@ -178,12 +173,13 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           import json
-          data = json.load(open("plugin-runtime-validation.json"))
+          data = json.load(open("runtime-validation.json"))
           print(json.dumps({
               "validated": data.get("validated"),
+              "candidate": data.get("candidate"),
               "aggregate": data.get("aggregate"),
-              "boundary_reload": data.get("boundary_reload"),
               "checks": data.get("checks"),
+              "boundary_reload": data.get("boundary_reload"),
           }, indent=2))
           raise SystemExit(0 if data.get("validated") else 1)
           PY
