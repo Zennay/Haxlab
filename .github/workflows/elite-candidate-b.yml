@@ -198,7 +198,7 @@ jobs:
             /tmp/haxlab-live-champion-replay.json \
             --output /var/lib/haxlab/derived/training/elite-player-candidate-b/replay-seeded-duel.json
 
-      - name: Evaluate candidate B and duel current champion
+      - name: Evaluate candidate B against current champion
         shell: bash
         run: |
           set -euo pipefail
@@ -238,6 +238,13 @@ jobs:
             > candidate-b-pipeline-summary.json
           sudo cat /var/lib/haxlab/derived/training/elite-player-candidate-b/sandbox-benchmark.json \
             > candidate-b-sandbox-benchmark.json
+          sudo cat /var/lib/haxlab/derived/training/elite-player-candidate-b/replay-seeded-duel.json \
+            > candidate-b-replay-seeded-duel.json
+          cp /tmp/haxlab-candidate-b-replay.json candidate-b-replay-benchmark.json
+          cp /tmp/haxlab-live-champion-replay.json live-champion-replay-benchmark.json
+          cp /tmp/haxlab-candidate-b-scenario-source.json candidate-b-scenario-source.json
+          cp /tmp/haxlab-candidate-b-replay-scenarios.json candidate-b-replay-scenarios.json
+          cp /tmp/haxlab-candidate-b-replay-stadium.hbs candidate-b-replay-stadium.hbs
 
           CHAMPIONS=/var/lib/haxlab/derived/training/elite-champions
           if [ -f "$CHAMPIONS/registry.json" ]; then
@@ -273,6 +280,12 @@ jobs:
           path: |
             candidate-b-pipeline-summary.json
             candidate-b-sandbox-benchmark.json
+            candidate-b-replay-seeded-duel.json
+            candidate-b-replay-benchmark.json
+            live-champion-replay-benchmark.json
+            candidate-b-scenario-source.json
+            candidate-b-replay-scenarios.json
+            candidate-b-replay-stadium.hbs
             candidate-b-evolution.json
             champion-registry.json
           retention-days: 30
