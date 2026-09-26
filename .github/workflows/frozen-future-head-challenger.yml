@@ -45,27 +45,58 @@ jobs:
           test -f "$ROOT/shards/validation/_index.json"
           test -f "$ROOT/shards/holdout/_index.json"
 
-      - name: Train future head only on frozen champion
+      - name: Reuse or train future head only on frozen champion
         shell: bash
         run: |
           set -euo pipefail
           ROOT=/var/lib/haxlab/derived/training/elite-player-champion-candidate
           OUT=/var/lib/haxlab/derived/training/elite-player-frozen-future-v01/model
-          sudo -u haxlab rm -rf "$OUT"
-          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
-            /opt/haxlab/.venv/bin/python -m haxlab.learning.frozen_future \
-            --champion-model-dir "$ROOT/model" \
-            --train-index "$ROOT/shards/train/_index.json" \
-            --validation-index "$ROOT/shards/validation/_index.json" \
-            --holdout-index "$ROOT/shards/holdout/_index.json" \
-            --output-dir "$OUT" \
-            --epochs 2 \
-            --batch-size 4096 \
-            --learning-rate 0.002 \
-            --l2 0.00001 \
-            --future-horizon-steps 5 \
-            --seed 1337 \
-            | tee /tmp/haxlab-frozen-future-training.log
+
+          if sudo -u haxlab /opt/haxlab/.venv/bin/python - "$OUT/metrics.json" "$OUT/runtime-model.json" <<'PY'
+          import json
+          import math
+          import sys
+          from pathlib import Path
+
+          metrics_path = Path(sys.argv[1])
+          runtime_path = Path(sys.argv[2])
+          if not metrics_path.is_file() or not runtime_path.is_file():
+              raise SystemExit(1)
+          metrics = json.loads(metrics_path.read_text())
+          train = metrics.get("training") or {}
+          integrity = train.get("frozen_base_parameter_integrity") or {}
+          checks = [
+              metrics.get("schema") == "haxlab-elite-frozen-future-head-v1",
+              train.get("mode") == "future_head_only",
+              int(train.get("seed") or -1) == 1337,
+              int(train.get("epochs_requested") or 0) == 2,
+              int(train.get("batch_size") or 0) == 4096,
+              int(train.get("future_horizon_steps") or 0) == 5,
+              math.isclose(float(train.get("learning_rate") or -1), 0.002, abs_tol=1e-12),
+              all(bool(v) for v in integrity.values()) and len(integrity) == 8,
+              int((metrics.get("final_holdout") or {}).get("samples") or 0) > 0,
+          ]
+          raise SystemExit(0 if all(checks) else 1)
+          PY
+          then
+            echo "Reusing completed frozen-future model."
+          else
+            sudo -u haxlab rm -rf "$OUT"
+            sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+              /opt/haxlab/.venv/bin/python -m haxlab.learning.frozen_future \
+              --champion-model-dir "$ROOT/model" \
+              --train-index "$ROOT/shards/train/_index.json" \
+              --validation-index "$ROOT/shards/validation/_index.json" \
+              --holdout-index "$ROOT/shards/holdout/_index.json" \
+              --output-dir "$OUT" \
+              --epochs 2 \
+              --batch-size 4096 \
+              --learning-rate 0.002 \
+              --l2 0.00001 \
+              --future-horizon-steps 5 \
+              --seed 1337 \
+              | tee /tmp/haxlab-frozen-future-training.log
+          fi
 
       - name: Re-evaluate both models on identical frozen holdout
         shell: bash
@@ -165,8 +196,10 @@ jobs:
         run: |
           set -euo pipefail
           MODEL=/var/lib/haxlab/derived/training/elite-player-frozen-future-v01/model/runtime-model.json
-          for CONF in 0.45 0.60 0.75; do
-            LABEL="$(printf '%s' "$CONF" | tr '.' '_')"
+
+          run_assist() {
+            CONF="$1"
+            LABEL="$2"
             sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
               "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js" \
               --model "$MODEL" \
@@ -179,8 +212,12 @@ jobs:
               --future-assist \
               --future-assist-confidence "$CONF" \
               --future-assist-min-distance 80 \
-              --output "/tmp/haxlab-frozen-assisted-\${LABEL}.json"
-          done
+              --output "/tmp/haxlab-frozen-assisted-$LABEL.json"
+          }
+
+          run_assist 0.45 0_45
+          run_assist 0.60 0_60
+          run_assist 0.75 0_75
 
       - name: Select frozen future promotion
         shell: bash
