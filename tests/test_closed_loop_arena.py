@@ -131,17 +131,40 @@ def test_safety_controller_invalidates_raw_policy_arena() -> None:
 
 def test_calibrated_policy_adds_absolute_strength_gate() -> None:
     payload = _payload()
-    policy = ClosedLoopArenaPolicy(
-        calibrated=True,
-        minimum_team_proxy_match_score=0.5,
-        minimum_plug_proxy_match_score=0.5,
-        max_absolute_far_stall_rate=0.30,
-        max_absolute_held_action_seconds=5.0,
-        minimum_absolute_context_adaptation_rate=0.35,
-    )
+    policy = ClosedLoopArenaPolicy(calibrated=True)
 
     decision = decide_closed_loop_arena(payload, policy=policy)
 
     assert decision.structurally_valid
     assert decision.behavior_gate_passed
     assert decision.eligible_for_live_promotion
+
+
+def test_frozen_calibration_thresholds_are_evidence_backed() -> None:
+    policy = ClosedLoopArenaPolicy()
+
+    assert policy.policy_version == "closed-loop-arena-v2-frozen-1"
+    assert policy.minimum_team_proxy_match_score == 0.50
+    assert policy.minimum_plug_proxy_match_score == 0.50
+    assert policy.max_absolute_far_stall_rate == 0.90
+    assert policy.max_absolute_held_action_seconds == 30.0
+    assert policy.minimum_absolute_context_adaptation_rate == 0.25
+
+
+def test_frozen_absolute_context_gate_rejects_inert_policy() -> None:
+    payload = _payload()
+    for row in payload["plug_and_play"]["by_role"].values():
+        row["individual"]["candidate"]["context_adaptation_rate"] = 0.0
+        row["individual"]["reference"]["context_adaptation_rate"] = 0.0
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.behavior_gate_passed
+    assert not decision.eligible_for_live_promotion
+    assert any(
+        "absolute_context_adaptation_rate" in reason
+        for reason in decision.reasons
+    )
