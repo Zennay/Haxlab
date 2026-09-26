@@ -32,3 +32,16 @@ scenario/audit commits cannot cancel an active model training job.
 The challenger is trained from the frozen champion shard indices on its own
 experiment branch. This prevents unrelated scenario, audit or documentation
 pushes on the main feature branch from cancelling the long-running training job.
+
+
+## Shared VPS execution guard
+
+Future-motion challenger runs across feature and experiment branches share one VPS
+model/evaluation workspace. GitHub Actions therefore serializes the complete
+workflow with a single cross-branch concurrency group and never cancels an
+in-flight trainer. A cancelled job must not leave a second trainer writing to the
+same model directory.
+
+Promotion evaluation uses the deterministic completed model, identical frozen
+holdout sequences, side-swapped replay scenarios, and a bounded future-assist
+confidence sweep before the champion registry may change.
