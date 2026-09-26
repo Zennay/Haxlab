@@ -48,6 +48,8 @@ try {
       behavior_sha256: "behavior123",
       model_sha256: "model123",
       runtime_model_sha256: "runtime123",
+      validation_stage: "canary",
+      validation_evidence_path: "/tmp/canary.json",
       runtime_config: {
         minimum_confidence: 0.6,
         minimum_ball_distance: 90,
@@ -64,6 +66,7 @@ try {
   assert.strictEqual(resolved.version_id, "future-abc");
   assert.strictEqual(resolved.runtime_model_path, runtimeModelPath);
   assert.strictEqual(resolved.behavior_sha256, "behavior123");
+  assert.strictEqual(resolved.validation_stage, "canary");
 
   const future = futureMotionRuntimeSettings(resolved, {
     enabled: false,
@@ -90,6 +93,63 @@ try {
     allowedRoles: null,
     source: "plugin_variables",
   });
+
+  const multiReplayPointerPath = path.join(
+    root,
+    "registry",
+    "multi-replay-current.json",
+  );
+  fs.writeFileSync(
+    multiReplayPointerPath,
+    JSON.stringify({
+      schema: "haxlab-champion-pointer-v1",
+      version_id: "future-multi",
+      runtime_model_path: runtimeModelPath,
+      validation_stage: "multi_replay",
+      runtime_config: {
+        minimum_confidence: 0.68,
+        minimum_ball_distance: 80,
+        allowed_roles: ["dm", "am"],
+      },
+    }),
+  );
+
+  const blocked = resolveEliteChampionConfig({
+    pointerPath: multiReplayPointerPath,
+    fallbackModelDir: fallbackDir,
+    minimumValidationStage: "canary",
+  });
+  assert.strictEqual(blocked.source, "fallback");
+  assert.strictEqual(
+    blocked.fallback_reason,
+    "registry_validation_stage_insufficient",
+  );
+  assert.strictEqual(blocked.blocked_registry_version_id, "future-multi");
+  assert.strictEqual(blocked.blocked_validation_stage, "multi_replay");
+  assert.strictEqual(blocked.minimum_validation_stage, "canary");
+  assert.strictEqual(
+    blocked.runtime_model_path,
+    path.join(fallbackDir, "runtime-model.json"),
+  );
+
+  const experimental = resolveEliteChampionConfig({
+    pointerPath: multiReplayPointerPath,
+    fallbackModelDir: fallbackDir,
+    minimumValidationStage: "multi_replay",
+  });
+  assert.strictEqual(experimental.source, "registry");
+  assert.strictEqual(experimental.version_id, "future-multi");
+  assert.strictEqual(experimental.validation_stage, "multi_replay");
+
+  assert.throws(
+    () =>
+      resolveEliteChampionConfig({
+        pointerPath,
+        fallbackModelDir: fallbackDir,
+        minimumValidationStage: "unknown-stage",
+      }),
+    /unsupported HaxLab validation stage/,
+  );
 
   const legacyVersionDir = path.join(root, "registry", "versions", "legacy");
   fs.mkdirSync(legacyVersionDir, { recursive: true });
