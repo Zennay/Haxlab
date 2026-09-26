@@ -58,6 +58,8 @@ def _extract_one(
             previous = {}
         if (
             previous.get("schema") == "haxlab-elite-imitation-extract-summary-v1"
+            and previous.get("shardSchema") == "haxlab-elite-imitation-shard-v2"
+            and previous.get("featureOrdering") == "team-line-order-v1"
             and int(previous.get("sampleEveryTicks", 0)) == sample_every_ticks
             and int(previous.get("samples", 0)) > 0
         ):
