@@ -175,6 +175,7 @@ module.exports = function(API) {
       enabled: that.enableFutureMotion,
       minimumConfidence: Number(that.futureMotionConfidence) || 0.45,
       minimumBallDistance: Number(that.futureMotionMinDistance) || 80,
+      allowedRoles: null,
     });
   }
 
@@ -316,6 +317,7 @@ module.exports = function(API) {
           action = futureMotionAssist(action, ballDistance, {
             minimumConfidence: futureSettings.minimumConfidence,
             minimumBallDistance: futureSettings.minimumBallDistance,
+            allowedRoles: futureSettings.allowedRoles,
           });
         }
         const stationary =
