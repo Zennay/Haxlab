@@ -103,6 +103,26 @@ jobs:
             --sample-every 6 \
             --output /var/lib/haxlab/derived/training/elite-player-candidate-b/sandbox-benchmark.json
 
+      - name: Prepare replay-seeded evaluation scenarios
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m haxlab.evaluation.scenario_source \
+            --state-db /var/lib/haxlab/state/haxlab.sqlite3 \
+            --max-candidates 1500 \
+            --output /tmp/haxlab-candidate-b-scenario-source.json
+
+          RAW_REPLAY="$(python3 -c 'import json; print(json.load(open("/tmp/haxlab-candidate-b-scenario-source.json"))["raw_path"])')"
+          ANALYSIS="$(python3 -c 'import json; print(json.load(open("/tmp/haxlab-candidate-b-scenario-source.json"))["analysis_path"])')"
+          NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/extract_stadium_from_replay.js" \
+            "$RAW_REPLAY" /tmp/haxlab-candidate-b-replay-stadium.hbs
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/extract_replay_scenarios.js" \
+            "$RAW_REPLAY" "$ANALYSIS" \
+            /tmp/haxlab-candidate-b-replay-scenarios.json 16 8 6
+
       - name: Seed evolution registry from live champion
         shell: bash
         run: |
@@ -154,6 +174,31 @@ jobs:
           PY
           fi
 
+      - name: Build replay-seeded challenger evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          LIVE_RUNTIME="$(python3 -c 'import json; print(json.load(open("/var/lib/haxlab/derived/champions/elite-player/current.json"))["runtime_model_path"])')"
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js" \
+            --model /var/lib/haxlab/derived/training/elite-player-candidate-b/model/runtime-model.json \
+            --stadium /tmp/haxlab-candidate-b-replay-stadium.hbs \
+            --scenarios /tmp/haxlab-candidate-b-replay-scenarios.json \
+            --max-scenarios 8 --seconds 30 --sample-every 6 \
+            --disable-recovery --output /tmp/haxlab-candidate-b-replay.json
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js" \
+            --model "$LIVE_RUNTIME" \
+            --stadium /tmp/haxlab-candidate-b-replay-stadium.hbs \
+            --scenarios /tmp/haxlab-candidate-b-replay-scenarios.json \
+            --max-scenarios 8 --seconds 30 --sample-every 6 \
+            --disable-recovery --output /tmp/haxlab-live-champion-replay.json
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m haxlab.evaluation.replay_duel \
+            /tmp/haxlab-candidate-b-replay.json \
+            /tmp/haxlab-live-champion-replay.json \
+            --output /var/lib/haxlab/derived/training/elite-player-candidate-b/replay-seeded-duel.json
+
       - name: Evaluate candidate B and duel current champion
         shell: bash
         run: |
@@ -173,6 +218,7 @@ jobs:
             --sandbox /var/lib/haxlab/derived/training/elite-player-candidate-b/sandbox-benchmark.json \
             --stadium /tmp/haxlab-candidate-b-stadium.hbs \
             --duel-script "$GITHUB_WORKSPACE/tools/elite_model_duel.js" \
+            --duel-evidence /var/lib/haxlab/derived/training/elite-player-candidate-b/replay-seeded-duel.json \
             --duel-matches 12 \
             --duel-minutes 2 \
             --duel-seed 1337 \
