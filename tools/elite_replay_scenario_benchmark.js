@@ -177,6 +177,14 @@ function runScenarioMatch({
       recoveryTicks: 0,
       recoveryOverrides: 0,
       futureAssistApplied: 0,
+      oodMeanSum: 0,
+      oodMaxSeen: 0,
+      oodHigh2: 0,
+      oodHigh3: 0,
+      oodStationarySum: 0,
+      oodStationaryCount: 0,
+      oodMovingSum: 0,
+      oodMovingCount: 0,
     });
     baselineBots.push({
       id: baselineId,
@@ -232,6 +240,23 @@ function runScenarioMatch({
               role: bot.role,
               features,
             });
+
+            const policyStationary =
+              Number(canonical.dir_x || 0) === 0 &&
+              Number(canonical.dir_y || 0) === 0;
+            const oodMean = Number(canonical.ood_mean_abs_z || 0);
+            const oodMax = Number(canonical.ood_max_abs_z || 0);
+            bot.oodMeanSum += oodMean;
+            bot.oodMaxSeen = Math.max(bot.oodMaxSeen, oodMax);
+            if (oodMean >= 2) bot.oodHigh2 += 1;
+            if (oodMean >= 3) bot.oodHigh3 += 1;
+            if (policyStationary) {
+              bot.oodStationarySum += oodMean;
+              bot.oodStationaryCount += 1;
+            } else {
+              bot.oodMovingSum += oodMean;
+              bot.oodMovingCount += 1;
+            }
 
             const ballDistanceFromFeatures = Math.hypot(
               Number(features.ball_dx || 0),
@@ -379,6 +404,29 @@ function runScenarioMatch({
   );
   const totalKicks = eliteBots.reduce((sum, bot) => sum + bot.kicks, 0);
   const nearBallSamples = eliteBots.reduce((sum, bot) => sum + bot.nearBall, 0);
+  const totalOodMean = eliteBots.reduce((sum, bot) => sum + bot.oodMeanSum, 0);
+  const totalOodHigh2 = eliteBots.reduce((sum, bot) => sum + bot.oodHigh2, 0);
+  const totalOodHigh3 = eliteBots.reduce((sum, bot) => sum + bot.oodHigh3, 0);
+  const maxOod = eliteBots.reduce(
+    (best, bot) => Math.max(best, bot.oodMaxSeen),
+    0,
+  );
+  const stationaryOodSum = eliteBots.reduce(
+    (sum, bot) => sum + bot.oodStationarySum,
+    0,
+  );
+  const stationaryOodCount = eliteBots.reduce(
+    (sum, bot) => sum + bot.oodStationaryCount,
+    0,
+  );
+  const movingOodSum = eliteBots.reduce(
+    (sum, bot) => sum + bot.oodMovingSum,
+    0,
+  );
+  const movingOodCount = eliteBots.reduce(
+    (sum, bot) => sum + bot.oodMovingCount,
+    0,
+  );
   const eliteGoals = eliteTeamId === 1 ? redGoals : blueGoals;
   const baselineGoals = eliteTeamId === 1 ? blueGoals : redGoals;
   const denom = Math.max(1, samples);
@@ -423,6 +471,18 @@ function runScenarioMatch({
       nonzero_movement_rate:
         (totalActions - stationary) / Math.max(1, totalActions),
       near_ball_rate: nearBallSamples / Math.max(1, totalActions),
+      ood: {
+        mean_abs_z: totalOodMean / Math.max(1, totalActions),
+        max_abs_z: maxOod,
+        high_mean_z_rate_2: totalOodHigh2 / Math.max(1, totalActions),
+        high_mean_z_rate_3: totalOodHigh3 / Math.max(1, totalActions),
+        stationary_mean_abs_z:
+          stationaryOodSum / Math.max(1, stationaryOodCount),
+        moving_mean_abs_z:
+          movingOodSum / Math.max(1, movingOodCount),
+        stationary_samples: stationaryOodCount,
+        moving_samples: movingOodCount,
+      },
       recovery_overrides: eliteBots.reduce(
         (sum, bot) => sum + bot.recoveryOverrides,
         0,
@@ -451,6 +511,16 @@ function runScenarioMatch({
             average_ball_distance:
               bot.ballDistanceSum / Math.max(1, bot.actions),
             near_ball_rate: bot.nearBall / Math.max(1, bot.actions),
+            ood: {
+              mean_abs_z: bot.oodMeanSum / Math.max(1, bot.actions),
+              max_abs_z: bot.oodMaxSeen,
+              high_mean_z_rate_2: bot.oodHigh2 / Math.max(1, bot.actions),
+              high_mean_z_rate_3: bot.oodHigh3 / Math.max(1, bot.actions),
+              stationary_mean_abs_z:
+                bot.oodStationarySum / Math.max(1, bot.oodStationaryCount),
+              moving_mean_abs_z:
+                bot.oodMovingSum / Math.max(1, bot.oodMovingCount),
+            },
             recovery_overrides: bot.recoveryOverrides,
             recovery_override_rate:
               bot.recoveryOverrides / Math.max(1, bot.actions),
@@ -556,6 +626,25 @@ function summarize(matches, modelPath, scenarioPath, stadium) {
       nonzero_movement_rate:
         nonzeroActions / Math.max(1, totalActions),
       near_ball_rate: avg((row) => row.policy.near_ball_rate),
+      ood: {
+        mean_abs_z: avg((row) => Number(row.policy.ood?.mean_abs_z || 0)),
+        max_abs_z: matches.reduce(
+          (best, row) => Math.max(best, Number(row.policy.ood?.max_abs_z || 0)),
+          0,
+        ),
+        high_mean_z_rate_2: avg(
+          (row) => Number(row.policy.ood?.high_mean_z_rate_2 || 0),
+        ),
+        high_mean_z_rate_3: avg(
+          (row) => Number(row.policy.ood?.high_mean_z_rate_3 || 0),
+        ),
+        stationary_mean_abs_z: avg(
+          (row) => Number(row.policy.ood?.stationary_mean_abs_z || 0),
+        ),
+        moving_mean_abs_z: avg(
+          (row) => Number(row.policy.ood?.moving_mean_abs_z || 0),
+        ),
+      },
       runtime_errors: matches.reduce(
         (sum, row) => sum + row.policy.runtime_errors,
         0,
