@@ -69,6 +69,23 @@ function makeRng(seed) {
   };
 }
 
+function sampleStartState(seed, challengerTeamId, stadium) {
+  const rng = makeRng(seed);
+  const sideSign = challengerTeamId === 1 ? 1 : -1;
+  const canonicalStartX =
+    (rng() * 2 - 1) * Math.min(120, Number(stadium.width || 800) * 0.15);
+  const startY =
+    (rng() * 2 - 1) * Math.min(90, Number(stadium.height || 350) * 0.22);
+  const canonicalStartVx = (rng() * 2 - 1) * 0.8;
+  const startVy = (rng() * 2 - 1) * 0.8;
+  return {
+    ball_x: sideSign * canonicalStartX,
+    ball_y: startY,
+    ball_vx: sideSign * canonicalStartVx,
+    ball_vy: startVy,
+  };
+}
+
 function addPlayer(room, id, name, teamId) {
   room.playerJoin(
     id,
@@ -210,16 +227,13 @@ function runMatch({
   room.startGame(0);
   room.runSteps(5);
 
-  const rng = makeRng(seed);
-  const sideSign = challengerTeamId === 1 ? 1 : -1;
-  const canonicalStartX =
-    (rng() * 2 - 1) * Math.min(120, Number(stadium.width || 800) * 0.15);
-  const startY =
-    (rng() * 2 - 1) * Math.min(90, Number(stadium.height || 350) * 0.22);
-  const canonicalStartVx = (rng() * 2 - 1) * 0.8;
-  const startVy = (rng() * 2 - 1) * 0.8;
-  const startX = sideSign * canonicalStartX;
-  const startVx = sideSign * canonicalStartVx;
+  const startState = sampleStartState(seed, challengerTeamId, stadium);
+  const {
+    ball_x: startX,
+    ball_y: startY,
+    ball_vx: startVx,
+    ball_vy: startVy,
+  } = startState;
   room.setDiscProperties(
     0,
     0,
@@ -371,12 +385,7 @@ function runMatch({
   const result = {
     match_index: matchIndex,
     seed,
-    start_state: {
-      ball_x: startX,
-      ball_y: startY,
-      ball_vx: startVx,
-      ball_vy: startVy,
-    },
+    start_state: startState,
     challenger_team_id: challengerTeamId,
     champion_team_id: championTeamId,
     goals: {
@@ -635,6 +644,7 @@ if (require.main === module) {
 
 module.exports = {
   makeRng,
+  sampleStartState,
   runMatch,
   summarize,
 };
