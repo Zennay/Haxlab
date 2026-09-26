@@ -225,6 +225,59 @@ module.exports = function(API) {
     bot.lastAction = action;
   }
 
+  this.getEliteRuntimeStatus = function() {
+    const futureSettings = policySource
+      ? effectiveFutureMotionSettings()
+      : {
+          enabled: false,
+          minimumConfidence: null,
+          minimumBallDistance: null,
+          allowedRoles: null,
+          source: "uninitialized",
+        };
+
+    return {
+      schema: "haxlab-elite-plugin-runtime-status-v1",
+      policy: policySource
+        ? {
+            source: policySource.source,
+            version_id: policySource.version_id,
+            runtime_model_path: policySource.runtime_model_path,
+            behavior_sha256: policySource.behavior_sha256 || null,
+            validation_stage: policySource.validation_stage || null,
+            fallback_reason: policySource.fallback_reason || null,
+          }
+        : null,
+      future_motion: {
+        enabled: Boolean(futureSettings.enabled),
+        minimum_confidence: futureSettings.minimumConfidence,
+        minimum_ball_distance: futureSettings.minimumBallDistance,
+        allowed_roles: futureSettings.allowedRoles,
+        source: futureSettings.source,
+      },
+      runtime_errors: runtimeErrorCount,
+      bots: bots.map((bot) => ({
+        id: bot.id,
+        role: bot.role,
+        key_state: bot.keyState,
+        last_action: bot.lastAction
+          ? {
+              dir_x: Number(bot.lastAction.dir_x || 0),
+              dir_y: Number(bot.lastAction.dir_y || 0),
+              kick: Boolean(bot.lastAction.kick),
+              source: bot.lastAction.source || null,
+              future_assist_applied:
+                Boolean(bot.lastAction.future_assist_applied),
+            }
+          : null,
+        recovery_overrides: bot.recoveryOverrides,
+        policy_decisions: Number(bot.policyDecisions || 0),
+        inputs_sent: Number(bot.inputsSent || 0),
+        future_assists: Number(bot.futureAssists || 0),
+      })),
+    };
+  };
+
   this.spawnEliteTeam = function(teamId = that.teamId) {
     if (bots.length) return bots.map((bot) => bot.id);
     ensurePolicy();
