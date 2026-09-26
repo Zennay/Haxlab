@@ -110,7 +110,13 @@ def select_scenario_source(
     db_path: Path,
     *,
     max_candidates: int = 1000,
+    exclude_sha256: set[str] | None = None,
 ) -> dict[str, Any]:
+    excluded = {
+        str(value).strip().lower()
+        for value in (exclude_sha256 or set())
+        if str(value).strip()
+    }
     db = sqlite3.connect(db_path)
     try:
         rows = db.execute(
@@ -137,6 +143,9 @@ def select_scenario_source(
         db.close()
 
     for sha256, raw_path, analysis_path, sampled_states in rows:
+        normalized_sha = str(sha256).lower()
+        if normalized_sha in excluded:
+            continue
         candidate = _healthy_candidate(
             sha256=str(sha256),
             raw_path=str(raw_path),
@@ -144,11 +153,15 @@ def select_scenario_source(
             sampled_states=int(sampled_states or 0),
         )
         if candidate is not None:
-            return candidate
+            return {
+                **candidate,
+                "excluded_sha256_count": len(excluded),
+            }
 
     raise RuntimeError(
         "No healthy role-resolved 4v4 replay found among "
-        f"{min(len(rows), max_candidates)} candidates"
+        f"{min(len(rows), max_candidates)} candidates "
+        f"after excluding {len(excluded)} replay(s)"
     )
 
 
@@ -160,12 +173,19 @@ def main() -> int:
         default=Path("/var/lib/haxlab/state/haxlab.sqlite3"),
     )
     parser.add_argument("--max-candidates", type=int, default=1000)
+    parser.add_argument(
+        "--exclude-sha256",
+        action="append",
+        default=[],
+        help="Replay SHA-256 to exclude. Repeatable.",
+    )
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
 
     result = select_scenario_source(
         args.state_db,
         max_candidates=max(1, args.max_candidates),
+        exclude_sha256=set(args.exclude_sha256),
     )
     rendered = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
     if args.output is not None:
