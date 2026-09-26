@@ -1,4 +1,4 @@
-generated_at=2026-09-26T13:19:10+00:00
+generated_at=2026-09-26T13:20:19+00:00
 === APP SOURCE ===
 'use strict';
 const ICONS={grid:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',cloud:'<path d="M7 18a5 5 0 1 1 .8-9.9A7 7 0 0 1 21 11a3.5 3.5 0 0 1-1.5 7Z"/>',game:'<path d="M7 7h10c3 0 4 4 4 9 0 3-3 4-5 0H8c-2 4-5 3-5 0 0-5 1-9 4-9Z"/><path d="M7 10v4m-2-2h4m7-1h.01m2 3h.01"/>',chart:'<path d="M4 4v16h16M7 14l4-4 4 2 5-7"/>',pulse:'<path d="M2 12h4l3-8 5 16 3-8h5"/>',server:'<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M15 6.5h3m-3 11h3"/>',refresh:'<path d="M20 8A8 8 0 0 0 6 5L3 8m0-5v5h5m-4 8a8 8 0 0 0 14 3l3-3m0 5v-5h-5"/>',watch:'<rect x="5" y="6" width="14" height="12" rx="4"/><path d="M8 6l1-4h6l1 4M8 18l1 4h6l1-4m-4-9v3l2 1"/>',arrow:'<path d="M5 12h14m-5-5 5 5-5 5"/>',back:'<path d="M19 12H5m5-5-5 5 5 5"/>',calendar:'<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4m10-4v4M3 11h18"/>',check:'<path d="m5 12 4 4L19 6"/>',commit:'<circle cx="12" cy="12" r="4"/><path d="M3 12h5m8 0h5"/>',target:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',cpu:'<rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M9 2v3m6-3v3M9 19v3m6-3v3M2 9h3m-3 6h3m14-6h3m-3 6h3"/>',clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',layers:'<path d="m12 3 10 5-10 5L2 8Zm-9 9 9 5 9-5M3 16l9 5 9-5"/>',disk:'<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 14h18m-5 3h2"/>'};
@@ -181,7 +181,82 @@ def _find_metrics_dict(data):
     if "direction_accuracy" in data and "joint_accuracy" in data:
         return data
     for val in data.values():
-=== SERVER RESOURCE ENDPOINT ===
+=== WATCH PROJECT / ALERTS ===
+        if row:
+            return {'time':row['ts'],'label':row['title'] or 'ChatGPT run','source':'runner_telemetry','estimated':False}
+        if pid=='supa':
+            return None
+        row=c.execute('SELECT ts,title FROM events WHERE project=? ORDER BY ts DESC LIMIT 1',(pid,)).fetchone()
+    if not row:
+        return None
+    return {'time':row['ts'],'label':row['title'],'source':'project_activity','estimated':True}
+
+def watch_warnings(data):
+    warnings=[]
+    h=data['host']
+    mem=round(h['memory']['used']/h['memory']['total']*100)
+    if data.get('stale'): warnings.append({'level':'warning','message':'Monitoringdata is stale'})
+    if h.get('cpu') is not None and h['cpu'] >= 85: warnings.append({'level':'warning','message':f"CPU {h['cpu']}%"})
+    if mem >= 85: warnings.append({'level':'warning','message':f'RAM {mem}%'})
+    visible, _, _ = project_views(data)
+    for p in visible:
+        if p.get('health') != 'healthy':
+            warnings.append({'level':'warning','project':p['id'],'message':f"{p['name']} needs attention"})
+    return warnings
+
+def watch_summary(data):
+    projects=[]
+    runner=runner_status()
+    warnings=watch_warnings(data)
+    if runner.get('state') != 'live': warnings.append({'level':'warning','message':'ChatGPT runner '+runner.get('state','offline')})
+    visible, _, _ = project_views(data)
+    for p in visible:
+        activity=watch_activity(p['id'],1)
+        projects.append({
+            'id':p['id'],'name':p['name'],'progress':p['progress'],
+            'status':p.get('status') or ('active' if p['progress'] < 100 else 'complete'),
+            'health':p['health'],'phase':p.get('phase') or p['next'],
+            'milestone':p.get('phase') or p['next'],'next_step':p.get('next_step') or p['next'],
+            'last_activity':activity[0] if activity else None,
+            'last_chatgpt_run':p.get('last_chatgpt_run')
+        })
+    return {
+        'version':2,'time':data['time'],'stale':data.get('stale',False),
+        'overall_progress':round(sum(p['progress'] for p in visible)/max(1,len(visible))),
+        'active_projects':sum(1 for p in visible if p['progress'] < 100),
+        'host':{
+            'cpu':data['host']['cpu'],
+            'memory_percent':round(data['host']['memory']['used']/data['host']['memory']['total']*100),
+            'load':data['host']['load']
+        },
+        'warnings':warnings,
+        'chatgpt_runner':runner,
+        'alerts':enhancements.list_alerts(DB,5,True),
+        'projects':projects
+    }
+
+def watch_project(data,pid):
+    p=next((x for x in data['projects'] if x['id']==pid),None)
+    if not p:return None
+    return {
+        'version':2,'time':data['time'],
+        'project':{
+            'id':p['id'],'name':p['name'],'progress':p['progress'],'health':p['health'],
+            'status':p.get('status') or ('active' if p['progress'] < 100 else 'complete'),
+            'phase':p.get('phase') or p['next'],
+            'current_milestone':p.get('phase') or p['next'],'next_step':p.get('next_step') or p['next'],
+            'last_chatgpt_run':p.get('last_chatgpt_run'),
+            'recent_activity':watch_activity(pid,8),
+            'progress_history':compact_history(pid,24),
+            'services':p.get('services',[]),
+            'quality':p.get('quality'),
+            'resource':p.get('resource'),
+            'milestones':p.get('milestones',[])
+        }
+    }
+
+
+class Handler(BaseHTTPRequestHandler):
     def reply(self,body,status=200,kind='application/json; charset=utf-8'):
         raw=json.dumps(body,ensure_ascii=False).encode() if not isinstance(body,bytes) else body
         self.send_response(status)
@@ -213,24 +288,85 @@ def _find_metrics_dict(data):
             if u.path=='/api/project-layout':
                 if 'application/json' not in self.headers.get('Content-Type',''):return self.reply({'error':'JSON vereist'},415)
                 with LOCK:data=CACHE
-                if data is None:return self.reply({'error':'Monitor start op'},503)
-                layout=save_project_layout(payload,data['projects'])
-                return self.reply({'ok':True,'layout':layout,'time':now()})
-            return self.reply({'error':'Niet gevonden'},404)
-        except Exception:
-            logging.exception('POST failed');self.reply({'error':'Opslaan mislukt'},500)
-    def route(self):
-        u=urlparse(self.path);q=parse_qs(u.query)
-        with LOCK:data=CACHE
-        if u.path.startswith('/api/'):
-            if data is None:return self.reply({'error':'Monitor start op'},503)
-            pid=q.get('project',[''])[0]
-            if u.path.startswith('/api/v1/watch'):
-                auth=self.headers.get('Authorization','')
-                if WATCH_TOKEN and auth != 'Bearer '+WATCH_TOKEN:return self.reply({'error':'Unauthorized'},401)
-            if u.path in ('/api/status','/api/v1/status'):return self.reply({**public_status(data),'chatgpt_runner':runner_status()})
-            if u.path=='/api/v1/watch':return self.reply(watch_summary(data))
-            if u.path=='/api/v1/alerts':return self.reply({'time':data['time'],'alerts':enhancements.list_alerts(DB,20,True)})
-            if u.path=='/api/alerts':return self.reply(enhancements.list_alerts(DB,20,False))
-            if u.path=='/api/resources':return self.reply(enhancements.resource_snapshot())
+=== ALERT ENGINE ===
+287-    try:
+288-        with sqlite3.connect(db_path) as c:
+289-            c.row_factory = sqlite3.Row
+290-            where = "WHERE important=1" if important_only else ""
+291-            rows = c.execute("SELECT * FROM alerts %s ORDER BY ts DESC LIMIT ?" % where, (limit,)).fetchall()
+292-        return [dict(r) for r in rows]
+293-    except Exception:
+294-        return []
+295-
+296-def _state_for(data):
+297-    state = {"milestones": [], "quality": {}}
+298-    for p in data.get("projects", []):
+299-        for i, m in enumerate(p.get("milestones", [])):
+300-            value = float(m.get("progress", 100 if m.get("done") else 0))
+301-            if value >= 100:
+302-                state["milestones"].append("%s:%s:%s" % (p["id"], i, p.get("milestone_revision", "")))
+303-        q = p.get("quality") or {}
+304-        state["quality"][p["id"]] = q.get("meta") or {}
+305-    return state
+306-
+307:def evaluate_alerts(data, runner, db_path):
+308-    current = _state_for(data)
+309-    try:
+310-        previous = json.loads(ALERT_STATE_FILE.read_text())
+311-    except Exception:
+312-        previous = None
+313-    with sqlite3.connect(db_path) as c:
+314-        init_db(c)
+315-        for p in data.get("projects", []):
+316-            if p.get("status") == "archived":
+317-                continue
+318-            if p.get("health") != "healthy":
+319-                bad = next((s for s in p.get("services", []) if s.get("state") not in ("active", "activating", "waiting")), None)
+320-                detail = (bad or {}).get("name", "service") + " · " + (bad or {}).get("state", "attention")
+321-                _emit(c, p["id"], "freeze", "high", p["name"] + " heeft aandacht nodig", detail, "health:" + p["id"] + ":" + detail, 3 * 3600)
+322-        if runner.get("state") in ("stale", "offline") and (runner.get("age_seconds") or 0) > 300:
+323-            _emit(c, "cloud", "automation", "high", "ChatGPT automation lijkt stil te staan",
+324-                  "Runner %s · laatste event %ss geleden" % (runner.get("state"), runner.get("age_seconds")),
+325-                  "runner-stale", 2 * 3600)
+326-        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+327-        blocked = c.execute("""SELECT reason,COUNT(*) c FROM runner_events
+328-            WHERE event='startup-blocked' AND ts>=? AND reason NOT IN ('generation-active','draft-present','')
+329-            GROUP BY reason HAVING c>=3 ORDER BY c DESC LIMIT 1""", (cutoff,)).fetchone()
+330-        if blocked:
+331-            _emit(c, "cloud", "input", "high", "Automatisering blijft geblokkeerd",
+332-                  "%s · %sx in 30 min" % (blocked[0], blocked[1]), "blocked:" + str(blocked[0]), 2 * 3600)
+333-        if previous:
+334-            old = set(previous.get("milestones", []))
+335-            for key in set(current["milestones"]) - old:
+336-                pid = key.split(":", 1)[0]
+337-                p = next((x for x in data.get("projects", []) if x["id"] == pid), None)
+338-                if p and p.get("status") != "archived":
+339-                    idx = int(key.split(":")[1])
+340-                    title = p.get("milestones", [{}])[idx].get("title", "Milestone")
+341-                    _emit(c, pid, "breakthrough", "normal", p["name"] + ": milestone afgerond", title, "milestone:" + key)
+342-            oldq = previous.get("quality", {})
+343-            hnew = (current["quality"].get("haxlab") or {}).get("version_id")
+344-            hold = (oldq.get("haxlab") or {}).get("version_id")
+345-            if hnew and hold and hnew != hold:
+346-                _emit(c, "haxlab", "breakthrough", "high", "HaxLab heeft een nieuwe live champion", str(hnew), "hax-version:" + str(hnew))
+347-            fnew = (current["quality"].get("ftmo") or {}).get("candidate_hash")
+348-            fold = (oldq.get("ftmo") or {}).get("candidate_hash")
+349-            if fnew and fold and fnew != fold:
+350-                q = next((p.get("quality") for p in data["projects"] if p["id"] == "ftmo"), {}) or {}
+351-                h = q.get("headline") or {}
+352-                detail = "%s%s · %s" % (h.get("value", "?"), h.get("unit", ""), h.get("note", ""))
+353-                _emit(c, "ftmo", "breakthrough", "high", "FTMO heeft een nieuwe research-candidate", detail, "ftmo-candidate:" + str(fnew))
+354-            rnew = (current["quality"].get("ftmo") or {}).get("release_hash")
+355-            rold = (oldq.get("ftmo") or {}).get("release_hash")
+356-            if rnew and rold and rnew != rold:
+357-                _emit(c, "ftmo", "breakthrough", "high", "FTMO heeft een nieuwe gevalideerde paper release",
+358-                      "Nieuwe frozen-holdout release is vrijgegeven voor paper execution.", "ftmo-release:" + str(rnew))
+359-        for path in SIGNALS_DIR.glob("*.json"):
+360-            sig = _json(path) or {}
+361-            sid = str(sig.get("id") or path.stem)
+362-            _emit(c, str(sig.get("project") or "cloud"), str(sig.get("kind") or "input"),
+363-                  str(sig.get("severity") or "high"), str(sig.get("title") or "Input nodig"),
+364-                  str(sig.get("detail") or ""), "signal:" + sid)
+365-        c.commit()
+366-    ALERT_STATE_FILE.write_text(json.dumps(current, ensure_ascii=False, indent=2) + "\n")
 === CSS REFS ===
