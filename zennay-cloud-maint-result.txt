@@ -1,31 +1,15 @@
-=== workflow result ===
-/etc/sudoers.d/zennay-resource-control: parsed OK
-haxlab background 100
-ftmo high 800
-cloud normal 400
-supa normal 400
-
-ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH.
-
-Please set the JAVA_HOME variable in your environment to match the
-location of your Java installation.
-
+generated_at=2026-09-26T13:07:46+00:00
+=== BEFORE ===
+haxlab-analyzer.service active running 889202 100 infinity 
+haxlab-ingest.service active running 889200 100 infinity 
+haxlab-worker.service active running 889201 100 infinity 
+actions.runner.Zennay-Haxlab.vps-bb300bba-haxlab.service active running 411098 100 infinity 
+actions.runner.Zennay-Ftmo.vps-bb300bba-ftmo.service active running 61158 800 infinity 
+ftmo-autonomous.timer active waiting 
+zennay-cloud.service active running 1319721 400 infinity 
 Traceback (most recent call last):
-  File "/opt/actions-runner-haxlab/_work/Haxlab/Haxlab/maintenance/apply_zennay_cloud.py", line 345, in <module>
-    run([str(gradle_bin),"-p",str(wear),":app:assembleDebug"], env=env)
-    ~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/actions-runner-haxlab/_work/Haxlab/Haxlab/maintenance/apply_zennay_cloud.py", line 13, in run
-    return subprocess.run(args, **kw)
-           ~~~~~~~~~~~~~~^^^^^^^^^^^^
-  File "/usr/lib/python3.14/subprocess.py", line 578, in run
-    raise CalledProcessError(retcode, process.args,
-                             output=stdout, stderr=stderr)
-subprocess.CalledProcessError: Command '['/home/ubuntu/.cache/zennay-gradle/gradle-8.13/bin/gradle', '-p', '/home/ubuntu/zennay-cloud/wear-os', ':app:assembleDebug']' returned non-zero exit status 1.
-
-=== service health ===
-active
-active
-active
-active
-active
-active
+  File "/opt/actions-runner-haxlab/_work/Haxlab/Haxlab/zennay-cloud-maint/apply_backend.py", line 132, in <module>
+    s=rep(s,old,new,"granular progress")
+  File "/opt/actions-runner-haxlab/_work/Haxlab/Haxlab/zennay-cloud-maint/apply_backend.py", line 10, in rep
+    raise RuntimeError("missing anchor: "+label)
+RuntimeError: missing anchor: granular progress
