@@ -83,6 +83,8 @@ class ElitePolicyRuntime {
     );
     this.kickMaxDistance = Number(model.kick_max_distance ?? 31.0);
     this.weights = model.weights;
+    this.futureHeadAvailable =
+      Array.isArray(this.weights.wf) && Array.isArray(this.weights.bf);
     this.history = new Map();
 
     if (!Number.isInteger(this.window) || this.window < 1) {
@@ -160,6 +162,15 @@ class ElitePolicyRuntime {
       frames.splice(0, frames.length - this.window);
     }
 
+    const currentNormalized = this.normalizeFrame(raw);
+    const oodMeanAbs =
+      currentNormalized.reduce((sum, value) => sum + Math.abs(value), 0) /
+      Math.max(1, currentNormalized.length);
+    const oodMaxAbs = currentNormalized.reduce(
+      (best, value) => Math.max(best, Math.abs(value)),
+      0,
+    );
+
     const sequence = [];
     const first = frames[0];
     for (let i = frames.length; i < this.window; i += 1) {
@@ -194,6 +205,10 @@ class ElitePolicyRuntime {
       false,
     );
     const directionProbabilities = softmax(directionLogits);
+    const futureLogits = this.futureHeadAvailable
+      ? dense(h2, this.weights.wf, this.weights.bf, false)
+      : directionLogits.slice();
+    const futureProbabilities = softmax(futureLogits);
     let directionClass = 0;
     for (let i = 1; i < directionProbabilities.length; i += 1) {
       if (
@@ -201,6 +216,16 @@ class ElitePolicyRuntime {
         directionProbabilities[directionClass]
       ) {
         directionClass = i;
+      }
+    }
+
+    let futureDirectionClass = 0;
+    for (let i = 1; i < futureProbabilities.length; i += 1) {
+      if (
+        futureProbabilities[i] >
+        futureProbabilities[futureDirectionClass]
+      ) {
+        futureDirectionClass = i;
       }
     }
 
@@ -223,7 +248,8 @@ class ElitePolicyRuntime {
     const kickInRange = ballDistance <= this.kickMaxDistance;
     const kickRequested = kickProbability >= roleKickThreshold;
     const direction = this.directionClasses[directionClass];
-    if (!direction) {
+    const futureDirection = this.directionClasses[futureDirectionClass];
+    if (!direction || !futureDirection) {
       throw new Error(`direction class ${directionClass} missing from model`);
     }
 
@@ -243,8 +269,16 @@ class ElitePolicyRuntime {
       ball_distance: ballDistance,
       direction_class: directionClass,
       direction_probability: directionProbabilities[directionClass],
+      future_head_available: this.futureHeadAvailable,
+      future_direction_class: futureDirectionClass,
+      future_dir_x: Number(futureDirection.dir_x),
+      future_dir_y: Number(futureDirection.dir_y),
+      future_direction_probability:
+        futureProbabilities[futureDirectionClass],
       history_frames: frames.length,
       window: this.window,
+      ood_mean_abs_z: oodMeanAbs,
+      ood_max_abs_z: oodMaxAbs,
     };
   }
 

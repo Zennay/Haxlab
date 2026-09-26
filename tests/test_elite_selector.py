@@ -5,6 +5,7 @@ from pathlib import Path
 
 from haxlab.learning.elite_selector import (
     ROLE_IDS,
+    _replay_quality,
     _split_bucket,
     build_elite_manifest,
     select_elite_players,
@@ -97,14 +98,14 @@ def test_elite_manifest_builds_three_way_split_and_local_roles(
 
     sha = "1" * 64
     players = [
-        {"id": 1, "name": "GK", "teamId": 1, "samples": 3000, "averageX": -160},
-        {"id": 2, "name": "Elite", "teamId": 1, "samples": 3000, "averageX": -50},
-        {"id": 3, "name": "AM", "teamId": 1, "samples": 3000, "averageX": 50},
-        {"id": 4, "name": "ST", "teamId": 1, "samples": 3000, "averageX": 150},
-        {"id": 5, "name": "GK2", "teamId": 2, "samples": 3000, "averageX": 160},
-        {"id": 6, "name": "DM2", "teamId": 2, "samples": 3000, "averageX": 50},
-        {"id": 7, "name": "AM2", "teamId": 2, "samples": 3000, "averageX": -50},
-        {"id": 8, "name": "ST2", "teamId": 2, "samples": 3000, "averageX": -150},
+        {"id": 1, "name": "GK", "teamId": 1, "samples": 6000, "averageX": -160},
+        {"id": 2, "name": "Elite", "teamId": 1, "samples": 6000, "averageX": -50},
+        {"id": 3, "name": "AM", "teamId": 1, "samples": 6000, "averageX": 50},
+        {"id": 4, "name": "ST", "teamId": 1, "samples": 6000, "averageX": 150},
+        {"id": 5, "name": "GK2", "teamId": 2, "samples": 6000, "averageX": 160},
+        {"id": 6, "name": "DM2", "teamId": 2, "samples": 6000, "averageX": 50},
+        {"id": 7, "name": "AM2", "teamId": 2, "samples": 6000, "averageX": -50},
+        {"id": 8, "name": "ST2", "teamId": 2, "samples": 6000, "averageX": -150},
     ]
     (analysis_root / f"{sha}.json").write_text(
         json.dumps(
@@ -169,6 +170,54 @@ def test_alias_group_uses_one_elite_slot_but_keeps_all_source_profiles() -> None
     assert len({row["conservative_score"] for row in selected}) == 1
 
 
+def _quality_payload(team_size: int) -> dict:
+    sampled_states = 1000
+    players = []
+    player_id = 1
+    for team_id in (1, 2):
+        sign = 1 if team_id == 1 else -1
+        for index in range(team_size):
+            players.append(
+                {
+                    "id": player_id,
+                    "name": f"T{team_id}P{index}",
+                    "teamId": team_id,
+                    "samples": sampled_states,
+                    "averageX": sign * (-180 + index * 70),
+                }
+            )
+            player_id += 1
+    return {
+        "schemaVersion": 4,
+        "totalFrames": 60 * 300,
+        "simulation": {
+            "sampledStateCount": sampled_states,
+            "sampleEveryTicks": 6,
+        },
+        "featureSummary": {"touches": 500},
+        "players": players,
+    }
+
+
+def test_replay_quality_accepts_true_4v4() -> None:
+    ok, reasons = _replay_quality(_quality_payload(4))
+    assert ok is True
+    assert not any("average_team_size_not_4v4" in reason for reason in reasons)
+
+
+def test_replay_quality_rejects_7v7_contamination() -> None:
+    ok, reasons = _replay_quality(_quality_payload(7))
+    assert ok is False
+    assert any(
+        reason.startswith("average_team_size_not_4v4_team_1:7.")
+        for reason in reasons
+    )
+    assert any(
+        reason.startswith("average_team_size_not_4v4_team_2:7.")
+        for reason in reasons
+    )
+
+
 def test_manifest_resolves_replay_alias_even_with_auth_hash(
     tmp_path: Path,
 ) -> None:
@@ -196,21 +245,21 @@ def test_manifest_resolves_replay_alias_even_with_auth_hash(
 
     sha = "2" * 64
     players = [
-        {"id": 1, "name": "GK", "teamId": 1, "samples": 3000, "averageX": -160},
-        {"id": 2, "name": "DM", "teamId": 1, "samples": 3000, "averageX": -50},
+        {"id": 1, "name": "GK", "teamId": 1, "samples": 6000, "averageX": -160},
+        {"id": 2, "name": "DM", "teamId": 1, "samples": 6000, "averageX": -50},
         {
             "id": 3,
             "name": "misio",
             "authHash": "different-replay-auth",
             "teamId": 1,
-            "samples": 3000,
+            "samples": 6000,
             "averageX": 50,
         },
-        {"id": 4, "name": "ST", "teamId": 1, "samples": 3000, "averageX": 150},
-        {"id": 5, "name": "GK2", "teamId": 2, "samples": 3000, "averageX": 160},
-        {"id": 6, "name": "DM2", "teamId": 2, "samples": 3000, "averageX": 50},
-        {"id": 7, "name": "AM2", "teamId": 2, "samples": 3000, "averageX": -50},
-        {"id": 8, "name": "ST2", "teamId": 2, "samples": 3000, "averageX": -150},
+        {"id": 4, "name": "ST", "teamId": 1, "samples": 6000, "averageX": 150},
+        {"id": 5, "name": "GK2", "teamId": 2, "samples": 6000, "averageX": 160},
+        {"id": 6, "name": "DM2", "teamId": 2, "samples": 6000, "averageX": 50},
+        {"id": 7, "name": "AM2", "teamId": 2, "samples": 6000, "averageX": -50},
+        {"id": 8, "name": "ST2", "teamId": 2, "samples": 6000, "averageX": -150},
     ]
     (analysis_root / f"{sha}.json").write_text(
         json.dumps(

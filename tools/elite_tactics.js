@@ -8,6 +8,124 @@ function discreteDirection(delta, deadzone = 5) {
   return 0;
 }
 
+function clamp(value, low, high) {
+  return Math.max(low, Math.min(high, value));
+}
+
+function recoveryAction(
+  role,
+  player,
+  gameState,
+  teamId,
+  {
+    stadiumWidth = 800,
+  } = {},
+) {
+  const disc = discOf(player);
+  const ball = gameState?.physicsState?.discs?.[0];
+  if (!disc?.pos || !ball?.pos) return null;
+
+  const sign = Number(teamId) === 2 ? -1 : 1;
+  const width = Math.max(420, Number(stadiumWidth) || 800);
+  const canonicalBallX = sign * num(ball.pos.x);
+  const canonicalPlayerX = sign * num(disc.pos.x);
+  const ballY = num(ball.pos.y);
+  const roleKey = String(role).toLowerCase();
+
+  let targetX;
+  let targetY;
+
+  if (roleKey === "gk") {
+    targetX = clamp(canonicalBallX - 420, -0.90 * width, -0.52 * width);
+    targetY = clamp(ballY * 0.35, -95, 95);
+  } else if (roleKey === "dm") {
+    targetX = clamp(canonicalBallX - 180, -0.68 * width, 0.24 * width);
+    targetY = clamp(ballY * 0.55 - 18, -150, 150);
+  } else if (roleKey === "am") {
+    targetX = clamp(canonicalBallX - 45, -0.34 * width, 0.56 * width);
+    targetY = clamp(ballY * 0.75 + 16, -170, 170);
+  } else {
+    targetX = clamp(canonicalBallX + 135, -0.12 * width, 0.82 * width);
+    targetY = clamp(ballY * 0.82, -175, 175);
+  }
+
+  const targetWorldX = sign * targetX;
+  const dx = targetWorldX - num(disc.pos.x);
+  const dy = targetY - num(disc.pos.y);
+  const ballDx = num(ball.pos.x) - num(disc.pos.x);
+  const ballDy = num(ball.pos.y) - num(disc.pos.y);
+  const ballDistance = Math.hypot(ballDx, ballDy);
+
+  return {
+    dirX: discreteDirection(dx, 7),
+    dirY: discreteDirection(dy, 7),
+    kick: ballDistance <= 30,
+    source: "closed_loop_recovery",
+    target_canonical_x: targetX,
+    target_y: targetY,
+    canonical_player_x: canonicalPlayerX,
+    ball_distance: ballDistance,
+  };
+}
+
+function shouldRecoverFromStall(
+  action,
+  ballDistance,
+  stallStreak,
+  {
+    minimumBallDistance = 120,
+    minimumStallDecisions = 3,
+  } = {},
+) {
+  const stationary =
+    Number(action?.dirX || 0) === 0 &&
+    Number(action?.dirY || 0) === 0;
+  return (
+    stationary &&
+    Number(ballDistance) >= minimumBallDistance &&
+    Number(stallStreak) >= minimumStallDecisions
+  );
+}
+
+function futureMotionAssist(
+  policyAction,
+  ballDistance,
+  {
+    minimumConfidence = 0.45,
+    minimumBallDistance = 80,
+  } = {},
+) {
+  if (!policyAction?.future_head_available) return policyAction;
+
+  const immediateStationary =
+    Number(policyAction.dir_x || 0) === 0 &&
+    Number(policyAction.dir_y || 0) === 0;
+  if (!immediateStationary) return policyAction;
+
+  if (Number(ballDistance) < minimumBallDistance) return policyAction;
+
+  const confidence = Number(
+    policyAction.future_direction_probability || 0,
+  );
+  const futureDirX = Number(policyAction.future_dir_x || 0);
+  const futureDirY = Number(policyAction.future_dir_y || 0);
+  if (
+    confidence < minimumConfidence ||
+    (futureDirX === 0 && futureDirY === 0)
+  ) {
+    return policyAction;
+  }
+
+  return {
+    ...policyAction,
+    dir_x: futureDirX,
+    dir_y: futureDirY,
+    future_assist_applied: true,
+    source: "learned_future_motion",
+  };
+}
+
+
 function isKickoffState(gameState) {
   const ball = gameState?.physicsState?.discs?.[0];
   if (!ball?.pos) return false;
@@ -68,4 +186,7 @@ module.exports = {
   isKickoffState,
   kickoffAction,
   enforceKickRange,
+  recoveryAction,
+  shouldRecoverFromStall,
+  futureMotionAssist,
 };

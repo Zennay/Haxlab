@@ -39,6 +39,9 @@ haxlab-elite-duel-gate = "haxlab.evaluation.duel_gate:main"
 haxlab-elite-promote = "haxlab.evaluation.champion_registry:main"
 haxlab-elite-evolve = "haxlab.learning.evolution:main"
 haxlab-elite-status = "haxlab.learning.elite_status:main"
+haxlab-sandbox-gate = "haxlab.evaluation.sandbox_gate:main"
+haxlab-scenario-source = "haxlab.evaluation.scenario_source:main"
+haxlab-replay-audit = "haxlab.evaluation.replay_population_audit:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

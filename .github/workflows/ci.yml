@@ -64,6 +64,13 @@ jobs:
           node --check tools/elite_bot_plugin.js
           node --check tools/elite_sandbox_benchmark.js
           node --check tools/elite_model_duel.js
+          node --check tools/sandbox_side_sanity.js
+          node --check tools/elite_replay_scenario_benchmark.js
+          node --check tools/compare_recovery_benchmark.js
+          node --check tools/select_recovery_config.js
+          node --check tools/compare_future_challenger.js
+          node --check tools/sandbox_replay_start.js
+          node --check tools/extract_replay_scenarios.js
           node tests/test_elite_mirror.js
           node tests/test_elite_feature_order.js
 

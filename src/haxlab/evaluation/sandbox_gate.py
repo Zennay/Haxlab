@@ -9,6 +9,7 @@ from typing import Any
 
 @dataclass(frozen=True)
 class SandboxGatePolicy:
+    # Legacy/champion-gate checks.
     minimum_matches: int = 6
     maximum_runtime_errors: int = 0
     minimum_non_loss_rate: float = 0.50
@@ -17,6 +18,11 @@ class SandboxGatePolicy:
     maximum_side_territory_gap: float = 0.25
     maximum_kick_action_rate: float = 0.10
     required_profiles: tuple[str, ...] = ("balanced", "compact", "press")
+    # New arena-validity / behavioral checks.
+    maximum_model_free_side_bias: float = 0.18
+    minimum_progression_share: float = 0.42
+    minimum_nonzero_movement_rate: float = 0.10
+    minimum_total_kicks: int = 1
 
 
 @dataclass(frozen=True)
@@ -45,9 +51,7 @@ def decide_sandbox_gate(
     matches = int(benchmark.get("matches") or 0)
     checks["matches"] = matches
     if matches < policy.minimum_matches:
-        failures.append(
-            f"insufficient_matches:{matches}<{policy.minimum_matches}"
-        )
+        failures.append(f"insufficient_matches:{matches}<{policy.minimum_matches}")
 
     runtime_errors = int(benchmark.get("runtime_errors") or 0)
     checks["runtime_errors"] = runtime_errors
@@ -70,8 +74,8 @@ def decide_sandbox_gate(
     checks["territory_share"] = territory_share
     if territory_share < policy.minimum_territory_share:
         failures.append(
-            "territory_share:"
-            f"{territory_share:.4f}<{policy.minimum_territory_share:.4f}"
+            f"territory_share:{territory_share:.4f}<"
+            f"{policy.minimum_territory_share:.4f}"
         )
 
     elite_attack = float(territory.get("elite_attack_third_rate") or 0.0)
@@ -80,8 +84,8 @@ def decide_sandbox_gate(
     checks["attack_third_share"] = attack_share
     if attack_share < policy.minimum_attack_third_share:
         failures.append(
-            "attack_third_share:"
-            f"{attack_share:.4f}<{policy.minimum_attack_third_share:.4f}"
+            f"attack_third_share:{attack_share:.4f}<"
+            f"{policy.minimum_attack_third_share:.4f}"
         )
 
     sides = benchmark.get("by_elite_side") or {}
@@ -93,14 +97,13 @@ def decide_sandbox_gate(
             continue
         side_rates[side] = float(row.get("elite_half_rate") or 0.0)
     checks["side_elite_half_rates"] = side_rates
-
     if len(side_rates) == 2:
         side_gap = abs(side_rates["1"] - side_rates["2"])
         checks["side_territory_gap"] = side_gap
         if side_gap > policy.maximum_side_territory_gap:
             failures.append(
-                "side_territory_gap:"
-                f"{side_gap:.4f}>{policy.maximum_side_territory_gap:.4f}"
+                f"side_territory_gap:{side_gap:.4f}>"
+                f"{policy.maximum_side_territory_gap:.4f}"
             )
 
     profiles = set((benchmark.get("by_profile") or {}).keys())
@@ -109,9 +112,7 @@ def decide_sandbox_gate(
     ]
     checks["profiles_seen"] = sorted(profiles)
     if missing_profiles:
-        failures.append(
-            "missing_profiles:" + ",".join(missing_profiles)
-        )
+        failures.append("missing_profiles:" + ",".join(missing_profiles))
 
     match_results = list(benchmark.get("match_results") or [])
     total_actions = sum(
@@ -130,27 +131,22 @@ def decide_sandbox_gate(
         failures.append("no_policy_actions")
     elif kick_action_rate > policy.maximum_kick_action_rate:
         failures.append(
-            "kick_action_rate:"
-            f"{kick_action_rate:.4f}>{policy.maximum_kick_action_rate:.4f}"
+            f"kick_action_rate:{kick_action_rate:.4f}>"
+            f"{policy.maximum_kick_action_rate:.4f}"
         )
 
     if failures:
-        return SandboxGateDecision(
-            eligible_for_champion_promotion=False,
-            reasons=tuple(failures),
-            checks=checks,
-        )
-
+        return SandboxGateDecision(False, tuple(failures), checks)
     return SandboxGateDecision(
-        eligible_for_champion_promotion=True,
-        reasons=(
+        True,
+        (
             "sandbox_runtime_stable",
             "sandbox_territory_passed",
             "red_blue_symmetry_passed",
             "kick_action_rate_passed",
             "opponent_profile_coverage_passed",
         ),
-        checks=checks,
+        checks,
     )
 
 
@@ -164,27 +160,110 @@ def evaluate_benchmark_file(
         "schema": "haxlab-elite-sandbox-gate-v1",
         "benchmark_path": str(benchmark_path),
         "policy": asdict(policy),
-        "eligible_for_champion_promotion": (
-            decision.eligible_for_champion_promotion
-        ),
+        "eligible_for_champion_promotion": decision.eligible_for_champion_promotion,
         "reasons": list(decision.reasons),
         "checks": decision.checks,
     }
 
 
+def evaluate_sandbox_evidence(
+    benchmark: dict[str, Any],
+    side_sanity: dict[str, Any],
+    policy: SandboxGatePolicy = SandboxGatePolicy(),
+) -> dict[str, Any]:
+    reasons: list[str] = []
+    side_bias = float(
+        side_sanity.get("aggregate_side_bias_abs")
+        if side_sanity.get("aggregate_side_bias_abs") is not None
+        else side_sanity.get("average_side_bias_abs") or 0.0
+    )
+    runtime_errors = int(benchmark.get("runtime_errors") or 0)
+    progression_share = float(
+        (benchmark.get("progression") or {}).get("elite_share") or 0.0
+    )
+    non_loss_rate = float(benchmark.get("non_loss_rate") or 0.0)
+    activity = benchmark.get("policy_activity") or {}
+    nonzero_movement_rate = float(activity.get("nonzero_movement_rate") or 0.0)
+    total_kicks = int(activity.get("total_kicks") or 0)
+
+    arena_valid = side_bias <= policy.maximum_model_free_side_bias
+    if not arena_valid:
+        reasons.append(
+            f"arena_side_bias:{side_bias:.4f}>"
+            f"{policy.maximum_model_free_side_bias:.4f}"
+        )
+    if runtime_errors > policy.maximum_runtime_errors:
+        reasons.append(
+            f"runtime_errors:{runtime_errors}>{policy.maximum_runtime_errors}"
+        )
+    if progression_share < policy.minimum_progression_share:
+        reasons.append(
+            f"progression_share:{progression_share:.4f}<"
+            f"{policy.minimum_progression_share:.4f}"
+        )
+    if non_loss_rate < policy.minimum_non_loss_rate:
+        reasons.append(
+            f"non_loss_rate:{non_loss_rate:.4f}<"
+            f"{policy.minimum_non_loss_rate:.4f}"
+        )
+    if nonzero_movement_rate < policy.minimum_nonzero_movement_rate:
+        reasons.append(
+            f"nonzero_movement_rate:{nonzero_movement_rate:.4f}<"
+            f"{policy.minimum_nonzero_movement_rate:.4f}"
+        )
+    if total_kicks < policy.minimum_total_kicks:
+        reasons.append(f"total_kicks:{total_kicks}<{policy.minimum_total_kicks}")
+
+    eligible = arena_valid and not reasons
+    return {
+        "schema": "haxlab-sandbox-promotion-gate-v1",
+        "eligible_for_champion_match": eligible,
+        "arena_valid": arena_valid,
+        "reasons": reasons or [
+            "arena_side_sanity_passed",
+            "runtime_stability_passed",
+            "progression_passed",
+            "non_loss_rate_passed",
+        ],
+        "checks": {
+            "model_free_side_bias": side_bias,
+            "runtime_errors": runtime_errors,
+            "progression_share": progression_share,
+            "non_loss_rate": non_loss_rate,
+            "nonzero_movement_rate": nonzero_movement_rate,
+            "total_kicks": total_kicks,
+        },
+        "policy": asdict(policy),
+    }
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(prog="haxlab-elite-sandbox-gate")
-    parser.add_argument("benchmark", type=Path)
+    parser = argparse.ArgumentParser(prog="haxlab-sandbox-gate")
+    parser.add_argument("benchmark_positional", nargs="?", type=Path)
+    parser.add_argument("--benchmark", dest="benchmark_flag", type=Path)
+    parser.add_argument("--side-sanity", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
 
-    result = evaluate_benchmark_file(args.benchmark)
+    benchmark_path = args.benchmark_flag or args.benchmark_positional
+    if benchmark_path is None:
+        parser.error("benchmark path is required")
+
+    if args.side_sanity is not None:
+        benchmark = json.loads(benchmark_path.read_text(encoding="utf-8"))
+        side_sanity = json.loads(args.side_sanity.read_text(encoding="utf-8"))
+        result = evaluate_sandbox_evidence(benchmark, side_sanity)
+        ok = bool(result["eligible_for_champion_match"])
+    else:
+        result = evaluate_benchmark_file(benchmark_path)
+        ok = bool(result["eligible_for_champion_promotion"])
+
     rendered = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(rendered, encoding="utf-8")
     print(rendered, end="")
-    return 0 if result["eligible_for_champion_promotion"] else 2
+    return 0 if ok else 2
 
 
 if __name__ == "__main__":

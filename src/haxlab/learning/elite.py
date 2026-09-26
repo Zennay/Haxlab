@@ -217,6 +217,21 @@ def _segment_indices(frames: np.ndarray, max_gap: int) -> list[tuple[int, int]]:
     return [(int(start), int(end)) for start, end in zip(starts, ends)]
 
 
+def _future_direction_classes(
+    current_x: np.ndarray,
+    current_y: np.ndarray,
+    future_x: np.ndarray,
+    future_y: np.ndarray,
+    *,
+    deadzone: float = 8.0,
+) -> np.ndarray:
+    dx = future_x - current_x
+    dy = future_y - current_y
+    qx = np.where(dx > deadzone, 1, np.where(dx < -deadzone, -1, 0))
+    qy = np.where(dy > deadzone, 1, np.where(dy < -deadzone, -1, 0))
+    return ((qy + 1) * 3 + (qx + 1)).astype(np.int64)
+
+
 def _iter_batches(
     index: dict[str, Any],
     *,
@@ -228,7 +243,17 @@ def _iter_batches(
     batch_size: int,
     rng: np.random.Generator,
     shuffle: bool,
-) -> Iterator[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
+    future_horizon_steps: int = 5,
+) -> Iterator[
+    tuple[
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+    ]
+]:
     entries = list(index["entries"])
     if shuffle:
         rng.shuffle(entries)
@@ -236,11 +261,15 @@ def _iter_batches(
     sample_every = max(1, int(index.get("sample_every_ticks") or 6))
     max_gap = sample_every * 3
     role_eye = np.eye(4, dtype=np.float32)
+    future_horizon_steps = max(1, int(future_horizon_steps))
 
     for entry in entries:
         rows, columns = _load_shard(entry)
         arrays = _extract_frame_arrays(rows, columns)
-        x = ((arrays["x"] - mean) / std).astype(np.float32, copy=False)
+        raw_x = arrays["x"]
+        x = ((raw_x - mean) / std).astype(np.float32, copy=False)
+        own_x_index = arrays["input_columns"].index("own_x")
+        own_y_index = arrays["input_columns"].index("own_y")
 
         unique_players = np.unique(arrays["player"])
         if shuffle:
@@ -248,13 +277,14 @@ def _iter_batches(
 
         for player_id in unique_players:
             idx = np.flatnonzero(arrays["player"] == player_id)
-            if len(idx) < window:
+            if len(idx) < window + future_horizon_steps:
                 continue
             order = np.argsort(arrays["frame"][idx], kind="stable")
             idx = idx[order]
 
             frames = arrays["frame"][idx]
             px = x[idx]
+            praw = raw_x[idx]
             pdirection = arrays["direction"][idx]
             pkick = arrays["kick"][idx]
             prole = arrays["role"][idx]
@@ -262,11 +292,11 @@ def _iter_batches(
 
             for start, end in _segment_indices(frames, max_gap):
                 length = end - start
-                if length < window:
+                if length < window + future_horizon_steps:
                     continue
                 endpoints = np.arange(
                     start + window - 1,
-                    end,
+                    end - future_horizon_steps,
                     max(1, sequence_stride),
                     dtype=np.int64,
                 )
@@ -297,10 +327,19 @@ def _iter_batches(
                             sample_weight[mask] *= role_weights[role_id]
                     sample_weight = np.clip(sample_weight, 0.1, 5.0)
 
+                    future_ep = ep + future_horizon_steps
+                    future_direction = _future_direction_classes(
+                        praw[ep, own_x_index],
+                        praw[ep, own_y_index],
+                        praw[future_ep, own_x_index],
+                        praw[future_ep, own_y_index],
+                    )
+
                     yield (
                         model_x.astype(np.float32, copy=False),
                         pdirection[ep],
                         pkick[ep],
+                        future_direction,
                         roles,
                         sample_weight,
                     )
@@ -335,20 +374,29 @@ def _init_params(
         "bd": np.zeros(9, dtype=np.float32),
         "wk": rng.normal(0.0, scale3, (hidden_dim_2, 1)).astype(np.float32),
         "bk": np.zeros(1, dtype=np.float32),
+        "wf": rng.normal(0.0, scale3, (hidden_dim_2, 9)).astype(np.float32),
+        "bf": np.zeros(9, dtype=np.float32),
     }
 
 
 def _forward(
     x: np.ndarray,
     params: dict[str, np.ndarray],
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+]:
     pre1 = x @ params["w1"] + params["b1"]
     h1 = np.maximum(pre1, 0.0)
     pre2 = h1 @ params["w2"] + params["b2"]
     h2 = np.maximum(pre2, 0.0)
     dir_prob = _softmax(h2 @ params["wd"] + params["bd"])
     kick_prob = _sigmoid(h2 @ params["wk"] + params["bk"]).reshape(-1)
-    return h1, h2, dir_prob, kick_prob
+    future_prob = _softmax(h2 @ params["wf"] + params["bf"])
+    return h1, h2, dir_prob, kick_prob, future_prob
 
 
 def _adam_update(
@@ -378,20 +426,35 @@ def _train_batch(
     x: np.ndarray,
     direction: np.ndarray,
     kick: np.ndarray,
+    future_direction: np.ndarray,
     sample_weight: np.ndarray,
     params: dict[str, np.ndarray],
     *,
     kick_pos_weight: float,
+    future_loss_weight: float,
     l2: float,
 ) -> tuple[dict[str, np.ndarray], dict[str, float]]:
     batch = x.shape[0]
-    h1, h2, dir_prob, kick_prob = _forward(x, params)
+    h1, h2, dir_prob, kick_prob, future_prob = _forward(x, params)
     eps = 1e-7
 
     sw = sample_weight.astype(np.float32, copy=False)
     sw_sum = max(1e-6, float(sw.sum()))
     dir_loss = -float(
         (sw * np.log(np.clip(dir_prob[np.arange(batch), direction], eps, 1.0))).sum()
+        / sw_sum
+    )
+    future_loss = -float(
+        (
+            sw
+            * np.log(
+                np.clip(
+                    future_prob[np.arange(batch), future_direction],
+                    eps,
+                    1.0,
+                )
+            )
+        ).sum()
         / sw_sum
     )
 
@@ -412,6 +475,11 @@ def _train_batch(
     ddir[np.arange(batch), direction] -= 1.0
     ddir *= (sw / sw_sum)[:, None]
 
+    dfuture = future_prob.copy()
+    dfuture[np.arange(batch), future_direction] -= 1.0
+    dfuture *= (sw / sw_sum)[:, None]
+    dfuture *= float(future_loss_weight)
+
     dkick = (
         (kick_prob - kick)
         * kick_weights
@@ -422,8 +490,14 @@ def _train_batch(
     grad_bd = ddir.sum(axis=0)
     grad_wk = h2.T @ dkick + l2 * params["wk"]
     grad_bk = dkick.sum(axis=0)
+    grad_wf = h2.T @ dfuture + l2 * params["wf"]
+    grad_bf = dfuture.sum(axis=0)
 
-    dh2 = ddir @ params["wd"].T + dkick @ params["wk"].T
+    dh2 = (
+        ddir @ params["wd"].T
+        + dkick @ params["wk"].T
+        + dfuture @ params["wf"].T
+    )
     dpre2 = dh2 * (h2 > 0.0)
     grad_w2 = h1.T @ dpre2 + l2 * params["w2"]
     grad_b2 = dpre2.sum(axis=0)
@@ -442,11 +516,14 @@ def _train_batch(
         "bd": grad_bd.astype(np.float32),
         "wk": grad_wk.astype(np.float32),
         "bk": grad_bk.astype(np.float32),
+        "wf": grad_wf.astype(np.float32),
+        "bf": grad_bf.astype(np.float32),
     }
     return grads, {
         "direction_loss": dir_loss,
         "kick_loss": kick_loss,
-        "loss": dir_loss + kick_loss,
+        "future_direction_loss": future_loss,
+        "loss": dir_loss + kick_loss + float(future_loss_weight) * future_loss,
     }
 
 
@@ -557,15 +634,19 @@ def evaluate(
     batch_size: int,
     kick_threshold: float,
     kick_thresholds_by_role: dict[int, float] | None = None,
+    future_horizon_steps: int = 5,
     collect_kick: bool = False,
 ) -> tuple[dict[str, Any], np.ndarray | None, np.ndarray | None]:
     overall = _empty_metric_counter()
     by_role = {role_id: _empty_metric_counter() for role_id in range(4)}
     collected_probs: list[np.ndarray] = []
     collected_true: list[np.ndarray] = []
+    future_samples = 0
+    future_correct = 0
+    future_counts = np.zeros(9, dtype=np.int64)
 
     rng = np.random.default_rng(0)
-    for x, direction, kick, roles, _ in _iter_batches(
+    for x, direction, kick, future_direction, roles, _ in _iter_batches(
         index,
         mean=mean,
         std=std,
@@ -575,9 +656,11 @@ def evaluate(
         batch_size=batch_size,
         rng=rng,
         shuffle=False,
+        future_horizon_steps=future_horizon_steps,
     ):
-        _, _, dir_prob, kick_prob = _forward(x, params)
+        _, _, dir_prob, kick_prob, future_prob = _forward(x, params)
         dir_pred = dir_prob.argmax(axis=1)
+        future_pred = future_prob.argmax(axis=1)
         kick_true = kick > 0.5
         thresholds = np.full(
             len(kick_prob),
@@ -589,6 +672,10 @@ def evaluate(
                 thresholds[roles == int(role_id)] = float(role_threshold)
         kick_pred = kick_prob >= thresholds
         _update_counter(overall, direction, dir_pred, kick_true, kick_pred)
+
+        future_samples += len(future_direction)
+        future_correct += int((future_pred == future_direction).sum())
+        future_counts += np.bincount(future_direction, minlength=9)
 
         for role_id in range(4):
             mask = roles == role_id
@@ -614,6 +701,17 @@ def evaluate(
             )
             for role_id in range(4)
         }
+    metrics["future_direction_accuracy"] = (
+        future_correct / future_samples if future_samples else 0.0
+    )
+    metrics["future_majority_direction_accuracy"] = (
+        int(future_counts.max()) / future_samples if future_samples else 0.0
+    )
+    metrics["future_direction_lift"] = (
+        metrics["future_direction_accuracy"]
+        - metrics["future_majority_direction_accuracy"]
+    )
+    metrics["future_horizon_steps"] = int(future_horizon_steps)
     metrics["by_role"] = {
         ROLE_NAMES[role_id]: _finalize_metrics(
             counter,
@@ -642,13 +740,14 @@ def _collect_kick_predictions(
     window: int,
     sequence_stride: int,
     batch_size: int,
+    future_horizon_steps: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     probs: list[np.ndarray] = []
     truth: list[np.ndarray] = []
     roles_out: list[np.ndarray] = []
     rng = np.random.default_rng(0)
 
-    for x, _, kick, roles, _ in _iter_batches(
+    for x, _, kick, _, roles, _ in _iter_batches(
         index,
         mean=mean,
         std=std,
@@ -658,8 +757,9 @@ def _collect_kick_predictions(
         batch_size=batch_size,
         rng=rng,
         shuffle=False,
+        future_horizon_steps=future_horizon_steps,
     ):
-        _, _, _, kick_prob = _forward(x, params)
+        _, _, _, kick_prob, _ = _forward(x, params)
         probs.append(kick_prob.astype(np.float32, copy=True))
         truth.append((kick > 0.5).astype(bool, copy=True))
         roles_out.append(roles.astype(np.int64, copy=True))
@@ -755,6 +855,8 @@ def train_elite_policy(
     batch_size: int = 2048,
     learning_rate: float = 8e-4,
     l2: float = 1e-5,
+    future_horizon_steps: int = 5,
+    future_loss_weight: float = 0.35,
     seed: int = 1337,
     progress_path: Path | None = None,
 ) -> dict[str, Any]:
@@ -770,6 +872,8 @@ def train_elite_policy(
 
     window = max(2, int(window))
     sequence_stride = max(1, int(sequence_stride))
+    future_horizon_steps = max(1, int(future_horizon_steps))
+    future_loss_weight = max(0.0, min(1.0, float(future_loss_weight)))
     input_dim = len(input_columns) * window + 4
 
     rng = np.random.default_rng(seed)
@@ -788,10 +892,11 @@ def train_elite_policy(
         losses: list[float] = []
         direction_losses: list[float] = []
         kick_losses: list[float] = []
+        future_losses: list[float] = []
         batches = 0
         sequence_samples = 0
 
-        for x, direction, kick, _, sample_weight in _iter_batches(
+        for x, direction, kick, future_direction, _, sample_weight in _iter_batches(
             train_index,
             mean=mean,
             std=std,
@@ -801,14 +906,17 @@ def train_elite_policy(
             batch_size=max(32, batch_size),
             rng=rng,
             shuffle=True,
+            future_horizon_steps=future_horizon_steps,
         ):
             grads, loss = _train_batch(
                 x,
                 direction,
                 kick,
+                future_direction,
                 sample_weight,
                 params,
                 kick_pos_weight=kick_pos_weight,
+                future_loss_weight=future_loss_weight,
                 l2=max(0.0, l2),
             )
             step += 1
@@ -823,6 +931,7 @@ def train_elite_policy(
             losses.append(loss["loss"])
             direction_losses.append(loss["direction_loss"])
             kick_losses.append(loss["kick_loss"])
+            future_losses.append(loss["future_direction_loss"])
             batches += 1
             sequence_samples += len(direction)
 
@@ -842,6 +951,7 @@ def train_elite_policy(
             sequence_stride=sequence_stride,
             batch_size=max(32, batch_size),
             kick_threshold=0.5,
+            future_horizon_steps=future_horizon_steps,
         )
         if int(validation_metrics.get("samples", 0)) <= 0:
             raise ValueError("validation split produced zero temporal sequences")
@@ -851,6 +961,7 @@ def train_elite_policy(
         validation_score = (
             float(validation_metrics["direction_accuracy"])
             + 0.25 * float(validation_metrics["kick_f1"])
+            + 0.10 * float(validation_metrics["future_direction_accuracy"])
         )
         if validation_score > best_score:
             best_score = validation_score
@@ -864,6 +975,7 @@ def train_elite_policy(
             "train_loss_mean": float(np.mean(losses)),
             "direction_loss_mean": float(np.mean(direction_losses)),
             "kick_loss_mean": float(np.mean(kick_losses)),
+            "future_direction_loss_mean": float(np.mean(future_losses)),
             "validation_at_0_5": validation_metrics,
             "validation_selection_score": validation_score,
         }
@@ -894,6 +1006,7 @@ def train_elite_policy(
         sequence_stride=sequence_stride,
         batch_size=max(32, batch_size),
         kick_threshold=0.5,
+        future_horizon_steps=future_horizon_steps,
     )
     kick_probs, kick_truth, kick_roles = _collect_kick_predictions(
         validation_index,
@@ -904,6 +1017,7 @@ def train_elite_policy(
         window=window,
         sequence_stride=sequence_stride,
         batch_size=max(32, batch_size),
+        future_horizon_steps=future_horizon_steps,
     )
 
     best_threshold, kick_calibration, threshold_candidates = (
@@ -955,6 +1069,7 @@ def train_elite_policy(
         batch_size=max(32, batch_size),
         kick_threshold=best_threshold,
         kick_thresholds_by_role=kick_thresholds_by_role,
+        future_horizon_steps=future_horizon_steps,
     )
 
     # Frozen holdout: exactly one final evaluation after architecture/model
@@ -970,6 +1085,7 @@ def train_elite_policy(
         batch_size=max(32, batch_size),
         kick_threshold=best_threshold,
         kick_thresholds_by_role=kick_thresholds_by_role,
+        future_horizon_steps=future_horizon_steps,
     )
     if int(holdout_final.get("samples", 0)) <= 0:
         raise ValueError("frozen holdout produced zero temporal sequences")
@@ -1002,6 +1118,8 @@ def train_elite_policy(
             for role_id, threshold in kick_thresholds_by_role.items()
         },
         "kick_max_distance": RUNTIME_KICK_MAX_DISTANCE,
+        "future_horizon_steps": future_horizon_steps,
+        "future_deadzone": 8.0,
         "mean": mean.astype(float).tolist(),
         "std": std.astype(float).tolist(),
         "weights": {
@@ -1041,6 +1159,13 @@ def train_elite_policy(
             "hidden_dim_2": hidden_dim_2,
             "direction_classes": 9,
             "kick_head": "binary_sigmoid",
+            "future_direction_head": "9_way_displacement_direction",
+            "future_horizon_steps": future_horizon_steps,
+            "future_horizon_seconds": (
+                future_horizon_steps
+                * max(1, int(train_index.get("sample_every_ticks") or 6))
+                / 60.0
+            ),
         },
         "training": {
             "seed": seed,
@@ -1049,6 +1174,8 @@ def train_elite_policy(
             "batch_size": max(32, batch_size),
             "learning_rate": learning_rate,
             "l2": max(0.0, l2),
+            "future_loss_weight": future_loss_weight,
+            "future_horizon_steps": future_horizon_steps,
             "train_replays": len(train_index["entries"]),
             "validation_replays": len(validation_index["entries"]),
             "holdout_replays": len(holdout_index["entries"]),
@@ -1107,6 +1234,8 @@ def main() -> int:
     parser.add_argument("--batch-size", type=int, default=2048)
     parser.add_argument("--learning-rate", type=float, default=8e-4)
     parser.add_argument("--l2", type=float, default=1e-5)
+    parser.add_argument("--future-horizon-steps", type=int, default=5)
+    parser.add_argument("--future-loss-weight", type=float, default=0.35)
     parser.add_argument("--seed", type=int, default=1337)
     args = parser.parse_args()
 
@@ -1126,6 +1255,8 @@ def main() -> int:
         batch_size=max(32, args.batch_size),
         learning_rate=max(1e-6, args.learning_rate),
         l2=max(0.0, args.l2),
+        future_horizon_steps=max(1, args.future_horizon_steps),
+        future_loss_weight=max(0.0, min(1.0, args.future_loss_weight)),
         seed=args.seed,
     )
     print(json.dumps(result["final_holdout"], indent=2, sort_keys=True))

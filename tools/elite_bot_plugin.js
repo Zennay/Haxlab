@@ -7,7 +7,13 @@ const {
   buildFeatureObject,
   canonicalActionToWorld,
 } = require("./elite_features");
-const { kickoffAction, enforceKickRange } = require("./elite_tactics");
+const {
+  kickoffAction,
+  enforceKickRange,
+  recoveryAction,
+  shouldRecoverFromStall,
+  futureMotionAssist,
+} = require("./elite_tactics");
 
 module.exports = function(API) {
   const {
@@ -55,6 +61,57 @@ module.exports = function(API) {
     range: { min: 1, max: 2, step: 1 },
     description: "Team for the four AI players (1 red, 2 blue).",
   });
+  this.defineVariable({
+    name: "enableFutureMotion",
+    type: VariableType.Boolean,
+    value: process.env.HAXLAB_ELITE_FUTURE_MOTION === "1",
+    description:
+      "Allow a learned future-motion head to break confident far-ball stalls. Off until challenger promotion.",
+  });
+  this.defineVariable({
+    name: "futureMotionConfidence",
+    type: VariableType.Float,
+    value: 0.45,
+    range: { min: 0, max: 1, step: 0.05 },
+    description: "Minimum future-motion confidence before learned assist can act.",
+  });
+  this.defineVariable({
+    name: "futureMotionMinDistance",
+    type: VariableType.Integer,
+    value: 80,
+    range: { min: 0, max: 800, step: 10 },
+    description: "Minimum ball distance before learned future-motion can break a stall.",
+  });
+
+  this.defineVariable({
+    name: "enableRecovery",
+    type: VariableType.Boolean,
+    value: process.env.HAXLAB_ELITE_RECOVERY === "1",
+    description:
+      "Enable the closed-loop anti-stall recovery guard. Off by default until benchmark promotion.",
+  });
+  this.defineVariable({
+    name: "recoveryMinDistance",
+    type: VariableType.Integer,
+    value: 240,
+    range: { min: 60, max: 800, step: 10 },
+    description: "Minimum ball distance before stalled movement can trigger recovery.",
+  });
+  this.defineVariable({
+    name: "recoveryStallDecisions",
+    type: VariableType.Integer,
+    value: 6,
+    range: { min: 2, max: 20, step: 1 },
+    description: "Consecutive stationary decisions required before recovery.",
+  });
+  this.defineVariable({
+    name: "recoveryTicks",
+    type: VariableType.Integer,
+    value: 2,
+    range: { min: 1, max: 12, step: 1 },
+    description: "Policy decision steps to keep a recovery trajectory active.",
+  });
+
   this.defineVariable({
     name: "autoSpawn",
     type: VariableType.Boolean,
@@ -112,6 +169,9 @@ module.exports = function(API) {
       role,
       keyState: 0,
       lastAction: null,
+      stallStreak: 0,
+      recoveryTicks: 0,
+      recoveryOverrides: 0,
     }));
 
     for (const bot of bots) {
@@ -153,6 +213,9 @@ module.exports = function(API) {
     runtimeErrorCount = 0;
     for (const bot of bots) {
       bot.keyState = 0;
+      bot.stallStreak = 0;
+      bot.recoveryTicks = 0;
+      bot.recoveryOverrides = 0;
       policy?.reset(String(bot.id));
     }
   };
@@ -189,11 +252,70 @@ module.exports = function(API) {
           continue;
         }
 
-        const action = ensurePolicy().act({
+        let action = ensurePolicy().act({
           agent_id: String(bot.id),
           role: bot.role,
           features,
         });
+
+        const ballDistance = Math.hypot(
+          Number(features.ball_dx || 0),
+          Number(features.ball_dy || 0),
+        );
+        if (that.enableFutureMotion) {
+          action = futureMotionAssist(action, ballDistance, {
+            minimumConfidence: Number(that.futureMotionConfidence) || 0.45,
+            minimumBallDistance: Number(that.futureMotionMinDistance) || 80,
+          });
+        }
+        const stationary =
+          Number(action.dir_x || 0) === 0 &&
+          Number(action.dir_y || 0) === 0;
+        bot.stallStreak =
+          stationary && ballDistance >= 120
+            ? bot.stallStreak + 1
+            : 0;
+
+        if (
+          that.enableRecovery &&
+          bot.recoveryTicks <= 0 &&
+          shouldRecoverFromStall(
+            { dirX: action.dir_x, dirY: action.dir_y },
+            ballDistance,
+            bot.stallStreak,
+            {
+              minimumBallDistance: Number(that.recoveryMinDistance) || 240,
+              minimumStallDecisions:
+                Number(that.recoveryStallDecisions) || 6,
+            },
+          )
+        ) {
+          bot.recoveryTicks = Number(that.recoveryTicks) || 2;
+          bot.recoveryOverrides += 1;
+          bot.stallStreak = 0;
+        }
+
+        if (that.enableRecovery && bot.recoveryTicks > 0) {
+          const teamId = teamIdForPlayer(player);
+          const recovery = recoveryAction(
+            bot.role,
+            player,
+            gameState,
+            teamId,
+          );
+          if (recovery) {
+            bot.recoveryTicks -= 1;
+            applyAction(bot, {
+              dir_x: teamId === 2 ? -recovery.dirX : recovery.dirX,
+              dir_y: recovery.dirY,
+              kick: recovery.kick,
+              source: recovery.source,
+            });
+            continue;
+          }
+          bot.recoveryTicks = 0;
+        }
+
         applyAction(bot, action);
       } catch (error) {
         runtimeErrorCount += 1;

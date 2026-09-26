@@ -16,6 +16,7 @@ const {
   num,
 } = require("./elite_features");
 const { kickoffAction, enforceKickRange } = require("./elite_tactics");
+const { prepareNeutralStart } = require("./sandbox_neutral_start");
 
 const ROLES = ["gk", "dm", "am", "st"];
 const BASELINE_PROFILES = ["balanced", "compact", "press"];
@@ -217,12 +218,14 @@ function runMatch({
     const baselineId = 200 + index;
     addPlayer(room, eliteId, "Elite-" + role.toUpperCase(), eliteTeamId);
     addPlayer(room, baselineId, "Script-" + role.toUpperCase(), baselineTeamId);
-    eliteBots.push({ id: eliteId, role, keyState: 0, kicks: 0, actions: 0 });
-    baselineBots.push({ id: baselineId, role, keyState: 0, kicks: 0, actions: 0 });
+    eliteBots.push({ id: eliteId, role, teamId: eliteTeamId, keyState: 0, kicks: 0, actions: 0 });
+    baselineBots.push({ id: baselineId, role, teamId: baselineTeamId, keyState: 0, kicks: 0, actions: 0 });
   }
 
   room.startGame(0);
   room.runSteps(5);
+  prepareNeutralStart(room, [...eliteBots, ...baselineBots], matchIndex - 1);
+  policy.reset();
 
   const totalTicks = Math.floor(minutes * 60 * 60);
   const metrics = {
@@ -235,6 +238,12 @@ function runMatch({
     directionCounts: {},
     roleCanonicalXSum: { gk: 0, dm: 0, am: 0, st: 0 },
     roleCanonicalXSamples: { gk: 0, dm: 0, am: 0, st: 0 },
+    roleBallDistanceSum: { gk: 0, dm: 0, am: 0, st: 0 },
+    roleBallDistanceSamples: { gk: 0, dm: 0, am: 0, st: 0 },
+    roleNearBallSamples: { gk: 0, dm: 0, am: 0, st: 0 },
+    eliteBallProgressTotal: 0,
+    baselineBallProgressTotal: 0,
+    previousEliteAxisX: null,
     elitePossessionProxyTicks: 0,
     baselinePossessionProxyTicks: 0,
     formationOrderSamples: 0,
@@ -284,14 +293,26 @@ function runMatch({
               action = canonicalActionToWorld(canonical, eliteTeamId);
             }
             action = enforceKickRange(action, player, gameState);
+
+            const playerDisc = discOf(player);
+            const canonicalX =
+              (eliteTeamId === 1 ? 1 : -1) * num(playerDisc?.pos?.x);
+            metrics.roleCanonicalXSum[bot.role] += canonicalX;
+            metrics.roleCanonicalXSamples[bot.role] += 1;
+
+            const ballDx = num(ball.pos.x) - num(playerDisc?.pos?.x);
+            const ballDy = num(ball.pos.y) - num(playerDisc?.pos?.y);
+            const ballDistance = Math.hypot(ballDx, ballDy);
+            metrics.roleBallDistanceSum[bot.role] += ballDistance;
+            metrics.roleBallDistanceSamples[bot.role] += 1;
+            if (ballDistance <= 32) metrics.roleNearBallSamples[bot.role] += 1;
+
             const canonicalDirX =
               eliteTeamId === 2 ? -Number(action.dirX || 0) : Number(action.dirX || 0);
-            const directionKey = canonicalDirX + "," + Number(action.dirY || 0);
+            const directionKey =
+              String(canonicalDirX) + "," + String(Number(action.dirY || 0));
             metrics.directionCounts[directionKey] =
               (metrics.directionCounts[directionKey] || 0) + 1;
-            const canonicalPos = canonicalPosition(player, eliteTeamId);
-            metrics.roleCanonicalXSum[bot.role] += canonicalPos.x;
-            metrics.roleCanonicalXSamples[bot.role] += 1;
 
             const keyState = Utils.keyState(action.dirX, action.dirY, action.kick);
             room.playerInput(keyState, bot.id);
@@ -329,6 +350,12 @@ function runMatch({
         }
 
         const eliteAxisX = (eliteTeamId === 1 ? 1 : -1) * num(ball.pos.x);
+        if (metrics.previousEliteAxisX != null) {
+          const delta = eliteAxisX - metrics.previousEliteAxisX;
+          if (delta > 0) metrics.eliteBallProgressTotal += delta;
+          else if (delta < 0) metrics.baselineBallProgressTotal += -delta;
+        }
+        metrics.previousEliteAxisX = eliteAxisX;
         metrics.sampledTicks += 1;
         if (eliteAxisX > 10) metrics.eliteBallHalfTicks += 1;
         else if (eliteAxisX < -10) metrics.baselineBallHalfTicks += 1;
@@ -375,6 +402,16 @@ function runMatch({
       elite_attack_third_rate: metrics.eliteAttackThirdTicks / sampled,
       baseline_attack_third_rate: metrics.baselineAttackThirdTicks / sampled,
     },
+    progression: {
+      elite_positive_x: metrics.eliteBallProgressTotal,
+      baseline_positive_x: metrics.baselineBallProgressTotal,
+      elite_share:
+        metrics.eliteBallProgressTotal /
+        Math.max(
+          1e-9,
+          metrics.eliteBallProgressTotal + metrics.baselineBallProgressTotal,
+        ),
+    },
     policy: {
       runtime_errors: runtimeErrors,
       total_actions: eliteBots.reduce((sum, bot) => sum + bot.actions, 0),
@@ -388,6 +425,12 @@ function runMatch({
             average_canonical_x:
               metrics.roleCanonicalXSum[bot.role] /
               Math.max(1, metrics.roleCanonicalXSamples[bot.role]),
+            average_ball_distance:
+              metrics.roleBallDistanceSum[bot.role] /
+              Math.max(1, metrics.roleBallDistanceSamples[bot.role]),
+            near_ball_rate:
+              metrics.roleNearBallSamples[bot.role] /
+              Math.max(1, metrics.roleBallDistanceSamples[bot.role]),
           },
         ]),
       ),
@@ -472,6 +515,30 @@ function summarize(matches, stadium, modelPath) {
     };
   }
 
+  const totalPolicyActions = matches.reduce(
+    (sum, match) => sum + Number(match.policy.total_actions || 0),
+    0,
+  );
+  const totalPolicyKicks = matches.reduce(
+    (sum, match) => sum + Number(match.policy.total_kicks || 0),
+    0,
+  );
+  const stationaryActions = matches.reduce(
+    (sum, match) =>
+      sum + Number((match.policy.direction_counts || {})["0,0"] || 0),
+    0,
+  );
+  const totalNearBallSamples = matches.reduce(
+    (sum, match) =>
+      sum + Object.values(match.policy.roles || {}).reduce(
+        (roleSum, role) =>
+          roleSum +
+          Number(role.near_ball_rate || 0) * Number(role.actions || 0),
+        0,
+      ),
+    0,
+  );
+
   const byProfile = {};
   for (const profile of BASELINE_PROFILES) {
     const rows = matches.filter((match) => match.baseline_profile === profile);
@@ -517,6 +584,11 @@ function summarize(matches, stadium, modelPath) {
         (match) => match.territory.baseline_attack_third_rate,
       ),
     },
+    progression: {
+      elite_share: avg((match) => match.progression.elite_share),
+      elite_positive_x: avg((match) => match.progression.elite_positive_x),
+      baseline_positive_x: avg((match) => match.progression.baseline_positive_x),
+    },
     runtime_errors: runtimeErrors,
     possession_proxy_rate: avg(
       (match) => match.policy.possession_proxy_rate,
@@ -524,6 +596,16 @@ function summarize(matches, stadium, modelPath) {
     formation_order_rate: avg(
       (match) => match.policy.formation_order_rate,
     ),
+    policy_activity: {
+      total_actions: totalPolicyActions,
+      total_kicks: totalPolicyKicks,
+      stationary_actions: stationaryActions,
+      nonzero_movement_rate:
+        (totalPolicyActions - stationaryActions) /
+        Math.max(1, totalPolicyActions),
+      near_ball_rate:
+        totalNearBallSamples / Math.max(1, totalPolicyActions),
+    },
     by_elite_side: bySide,
     by_profile: byProfile,
     match_results: matches,

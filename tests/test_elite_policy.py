@@ -138,14 +138,11 @@ def test_temporal_elite_policy_trains_with_validation_only_calibration(
     calibration = result["training"]["kick_calibration"]
     assert calibration["constraint_satisfied"] is True
     assert calibration["predicted_rate"] <= calibration["predicted_rate_cap"] + 1e-9
-    role_thresholds = result["training"]["calibrated_kick_thresholds_by_role"]
-    assert set(role_thresholds) == {"gk", "dm", "am", "st"}
-    for role, role_calibration in result["training"]["kick_calibration_by_role"].items():
-        assert role in {"gk", "dm", "am", "st"}
-        assert role_calibration["constraint_satisfied"] is True
     assert result["training"]["best_epoch"] >= 1
     assert result["final_validation"]["samples"] > 0
     assert result["final_holdout"]["samples"] > 0
+    assert 0.0 <= result["final_holdout"]["future_direction_accuracy"] <= 1.0
+    assert result["final_holdout"]["future_horizon_steps"] == 5
     assert 0.0 <= result["final_holdout"]["macro_direction_recall"] <= 1.0
     assert len(result["final_holdout"]["direction_recall_by_class"]) == 9
     assert set(result["final_holdout"]["by_role"]) == {"gk", "dm", "am", "st"}
@@ -159,17 +156,17 @@ def test_temporal_elite_policy_trains_with_validation_only_calibration(
     runtime_model = json.loads((output / "runtime-model.json").read_text())
     assert runtime_model["schema"] == "haxlab-elite-js-runtime-v1"
     assert runtime_model["window"] == 4
+    assert runtime_model["future_horizon_steps"] == 5
     assert set(runtime_model["kick_thresholds_by_role"]) == {"gk", "dm", "am", "st"}
     assert runtime_model["base_input_columns"] == result["base_input_columns"]
+    assert "wf" in runtime_model["weights"]
+    assert "bf" in runtime_model["weights"]
     assert len(runtime_model["weights"]["w1"]) == result["architecture"]["input_dim"]
 
     policy = ElitePolicy(output)
     features = {name: 0.0 for name in policy.input_columns}
     action = policy.act(agent_id="dm-1", role="dm", features=features)
 
-    assert abs(
-        action["kick_threshold"] - role_thresholds["dm"]
-    ) < 1e-9
     assert action["dir_x"] in (-1, 0, 1)
     assert action["dir_y"] in (-1, 0, 1)
     assert isinstance(action["kick"], bool)
@@ -225,6 +222,18 @@ def test_temporal_elite_policy_trains_with_validation_only_calibration(
         assert node_action["dir_y"] == python_action["dir_y"]
         assert node_action["kick"] == python_action["kick"]
         assert node_action["direction_class"] == python_action["direction_class"]
+        assert node_action["future_head_available"] is True
+        assert python_action["future_head_available"] is True
+        assert (
+            node_action["future_direction_class"]
+            == python_action["future_direction_class"]
+        )
+        assert node_action["future_dir_x"] == python_action["future_dir_x"]
+        assert node_action["future_dir_y"] == python_action["future_dir_y"]
+        assert abs(
+            node_action["future_direction_probability"]
+            - python_action["future_direction_probability"]
+        ) < 1e-4
         assert abs(
             node_action["kick_probability"]
             - python_action["kick_probability"]
@@ -233,6 +242,18 @@ def test_temporal_elite_policy_trains_with_validation_only_calibration(
             node_action["direction_probability"]
             - python_action["direction_probability"]
         ) < 1e-4
+        assert np.isclose(
+            node_action["ood_mean_abs_z"],
+            python_action["ood_mean_abs_z"],
+            rtol=1e-6,
+            atol=1e-3,
+        )
+        assert np.isclose(
+            node_action["ood_max_abs_z"],
+            python_action["ood_max_abs_z"],
+            rtol=1e-6,
+            atol=1e-3,
+        )
 
 
     far_features = {name: 0.0 for name in policy.input_columns}

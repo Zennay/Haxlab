@@ -156,6 +156,27 @@ def _raw_metrics(
     }
 
 
+def _true_4v4_average_sizes(payload: dict) -> dict[int, float] | None:
+    simulation = payload.get("simulation") or {}
+    sampled_state_count = int(simulation.get("sampledStateCount") or 0)
+    if sampled_state_count <= 0:
+        return None
+
+    players = list(payload.get("players") or [])
+    result: dict[int, float] = {}
+    for team_id in (1, 2):
+        team_sample_total = sum(
+            int(player.get("samples") or 0)
+            for player in players
+            if int(player.get("teamId") or 0) == team_id
+        )
+        result[team_id] = team_sample_total / sampled_state_count
+
+    if all(3.5 <= result[team_id] <= 4.5 for team_id in (1, 2)):
+        return result
+    return None
+
+
 def load_match_evidence(
     root: Path,
     aliases: dict[str, str] | None = None,
@@ -170,6 +191,8 @@ def load_match_evidence(
             continue
         schema_version = int(payload.get("schemaVersion") or 0)
         if schema_version not in (3, 4):
+            continue
+        if _true_4v4_average_sizes(payload) is None:
             continue
 
         players = list(payload.get("players") or [])
