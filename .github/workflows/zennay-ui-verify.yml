@@ -1,0 +1,43 @@
+name: Zennay Cloud UI verification
+
+on:
+  push:
+    branches: [zennay-cloud-maint]
+    paths:
+      - ".github/workflows/zennay-ui-verify.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: zennay-cloud-maint
+      - name: Inspect desktop mobile controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="$GITHUB_WORKSPACE/zennay-ui-verify-result.txt"
+          {
+            echo "generated_at=$(date -Is)"
+            echo "=== APP RESOURCE / QUALITY / MILESTONE REFS ==="
+            grep -n -E "resource|priority|quality|milestone-progress|current_milestone_progress" /home/ubuntu/zennay-cloud/public/app.js | head -220 || true
+            echo "=== APP FUNCTIONS AROUND RESOURCE ==="
+            grep -n -A35 -B15 "resource" /home/ubuntu/zennay-cloud/public/app.js | head -300 || true
+            echo "=== SERVER RESOURCE ENDPOINT ==="
+            sed -n '360,410p' /home/ubuntu/zennay-cloud/server.py
+            echo "=== CSS REFS ==="
+            grep -n -E "resource|priority|quality|milestone-progress" /home/ubuntu/zennay-cloud/public/style.css | tail -100 || true
+          } > "$OUT"
+      - name: Publish
+        shell: bash
+        run: |
+          git config user.name "zennay-cloud-maint"
+          git config user.email "actions@users.noreply.github.com"
+          git add zennay-ui-verify-result.txt
+          git commit -m "chore: publish Zennay Cloud UI verification" || exit 0
+          git push origin HEAD:zennay-cloud-maint
