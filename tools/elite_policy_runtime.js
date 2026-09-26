@@ -68,6 +68,9 @@ class ElitePolicyRuntime {
     this.model = model;
     this.window = Number(model.window);
     this.inputColumns = model.base_input_columns.slice();
+    this.featureOrdering = String(
+      model.feature_ordering || "nearest-distance-v1",
+    );
     this.mean = model.mean.map(Number);
     this.std = model.std.map(Number);
     this.roleIds = { ...ROLE_IDS, ...(model.role_ids || {}) };
@@ -250,6 +253,7 @@ class ElitePolicyRuntime {
       schema: this.model.schema,
       source_model_schema: this.model.source_model_schema,
       window: this.window,
+      feature_ordering: this.featureOrdering,
       kick_threshold: this.kickThreshold,
       kick_thresholds_by_role: { ...this.kickThresholdsByRole },
       kick_max_distance: this.kickMaxDistance,
