@@ -52,7 +52,13 @@ def _write_match(path: Path, players: list[dict]) -> None:
             {
                 "schemaVersion": 3,
                 "totalFrames": 36000,
-                "simulation": {"sampleEveryTicks": 6},
+                "simulation": {
+                    "sampleEveryTicks": 6,
+                    "sampledStateCount": max(
+                        [int(player.get("samples") or 0) for player in players]
+                        or [0]
+                    ),
+                },
                 "players": players,
             }
         ),
@@ -69,7 +75,7 @@ def test_skill_leaderboard_builds_conservative_player_estimates(tmp_path: Path) 
                     1,
                     "Alpha",
                     1,
-                    -40,
+                    -120,
                     retained=25,
                     lost=3,
                     recoveries=8,
@@ -81,7 +87,7 @@ def test_skill_leaderboard_builds_conservative_player_estimates(tmp_path: Path) 
                     2,
                     "Beta",
                     1,
-                    0,
+                    -30,
                     retained=15,
                     lost=10,
                     recoveries=3,
@@ -102,10 +108,22 @@ def test_skill_leaderboard_builds_conservative_player_estimates(tmp_path: Path) 
                     progression=100,
                 ),
                 _player(
+                    7,
+                    "Delta",
+                    1,
+                    130,
+                    retained=14,
+                    lost=9,
+                    recoveries=1,
+                    goals=1,
+                    assists=0,
+                    progression=80,
+                ),
+                _player(
                     4,
                     "Opp A",
                     2,
-                    40,
+                    120,
                     retained=15,
                     lost=8,
                     recoveries=3,
@@ -117,7 +135,7 @@ def test_skill_leaderboard_builds_conservative_player_estimates(tmp_path: Path) 
                     5,
                     "Opp B",
                     2,
-                    0,
+                    30,
                     retained=15,
                     lost=8,
                     recoveries=3,
@@ -137,6 +155,18 @@ def test_skill_leaderboard_builds_conservative_player_estimates(tmp_path: Path) 
                     assists=0,
                     progression=40,
                 ),
+                _player(
+                    8,
+                    "Opp D",
+                    2,
+                    -130,
+                    retained=15,
+                    lost=8,
+                    recoveries=3,
+                    goals=0,
+                    assists=0,
+                    progression=40,
+                ),
             ],
         )
 
@@ -144,7 +174,7 @@ def test_skill_leaderboard_builds_conservative_player_estimates(tmp_path: Path) 
     by_name = {row["name"]: row for row in rows}
 
     assert by_name["Alpha"]["matches"] == 35
-    assert by_name["Alpha"]["role"] == "defender"
+    assert by_name["Alpha"]["role"] == "gk"
     assert by_name["Alpha"]["rating"] > by_name["Beta"]["rating"]
     assert by_name["Alpha"]["rating_uncertainty"] > 0
     assert by_name["Alpha"]["dimensions"]["retention"]["effective_weight"] > 0
@@ -194,14 +224,21 @@ def test_skill_cli_can_write_json_snapshot(
                 1,
                 "Alpha",
                 1,
-                -40,
+                -120,
                 retained=8,
                 lost=2,
                 recoveries=2,
                 goals=1,
                 assists=0,
                 progression=40,
-            )
+            ),
+            _player(2, "DM", 1, -30, retained=7, lost=3, recoveries=2, goals=0, assists=1, progression=30),
+            _player(3, "AM", 1, 40, retained=7, lost=3, recoveries=1, goals=0, assists=1, progression=35),
+            _player(4, "ST", 1, 130, retained=6, lost=4, recoveries=1, goals=1, assists=0, progression=35),
+            _player(5, "Opp GK", 2, 120, retained=7, lost=3, recoveries=2, goals=0, assists=0, progression=25),
+            _player(6, "Opp DM", 2, 30, retained=7, lost=3, recoveries=2, goals=0, assists=0, progression=25),
+            _player(7, "Opp AM", 2, -40, retained=7, lost=3, recoveries=2, goals=0, assists=0, progression=25),
+            _player(8, "Opp ST", 2, -130, retained=7, lost=3, recoveries=2, goals=0, assists=0, progression=25),
         ],
     )
     output = tmp_path / "leaderboard.json"
@@ -348,3 +385,41 @@ def test_role_normalizer_is_robust_to_extreme_short_match_outlier() -> None:
 
     assert 0.45 <= center <= 0.55
     assert 0.0 < scale < 1.0
+
+
+def test_confirmed_aliases_merge_before_skill_estimation(tmp_path: Path) -> None:
+    for i in range(40):
+        alias_name = "misio" if i < 20 else "sekai"
+        _write_match(
+            tmp_path / f"alias-{i}.json",
+            [
+                _player(
+                    1,
+                    alias_name,
+                    1,
+                    -120,
+                    retained=25,
+                    lost=3,
+                    recoveries=8,
+                    goals=1,
+                    assists=1,
+                    progression=300,
+                ),
+                _player(2, "DM", 1, -30, retained=15, lost=7, recoveries=4, goals=0, assists=0, progression=80),
+                _player(3, "AM", 1, 40, retained=17, lost=6, recoveries=2, goals=0, assists=1, progression=120),
+                _player(4, "ST", 1, 130, retained=12, lost=6, recoveries=1, goals=1, assists=0, progression=90),
+                _player(5, "Opp GK", 2, 120, retained=15, lost=7, recoveries=4, goals=0, assists=0, progression=70),
+                _player(6, "Opp DM", 2, 30, retained=15, lost=7, recoveries=4, goals=0, assists=0, progression=70),
+                _player(7, "Opp AM", 2, -40, retained=15, lost=7, recoveries=4, goals=0, assists=0, progression=70),
+                _player(8, "Opp ST", 2, -130, retained=15, lost=7, recoveries=4, goals=0, assists=0, progression=70),
+            ],
+        )
+
+    rows = build_leaderboard(tmp_path, {"misio": "sekai"})
+    merged = [row for row in rows if row["player_id"] == "alias:sekai"]
+
+    assert len(merged) == 1
+    assert merged[0]["matches"] == 40
+    assert merged[0]["role"] == "gk"
+    assert not any(row["player_id"] == "name:misio" for row in rows)
+    assert not any(row["player_id"] == "name:sekai" for row in rows)
