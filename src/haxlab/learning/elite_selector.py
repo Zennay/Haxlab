@@ -203,6 +203,7 @@ def _replay_quality(payload: dict[str, Any]) -> tuple[bool, list[str]]:
     if int(feature_summary.get("touches") or 0) <= 0:
         reasons.append("no_touch_evidence")
 
+    sampled_state_count = int(simulation.get("sampledStateCount") or 0)
     active_by_team = Counter(
         int(player.get("teamId") or 0)
         for player in players
@@ -211,6 +212,23 @@ def _replay_quality(payload: dict[str, Any]) -> tuple[bool, list[str]]:
     )
     if active_by_team[1] < 4 or active_by_team[2] < 4:
         reasons.append("not_4v4_evidence")
+
+    if sampled_state_count > 0:
+        for team_id in (1, 2):
+            team_sample_total = sum(
+                int(player.get("samples") or 0)
+                for player in players
+                if int(player.get("teamId") or 0) == team_id
+            )
+            average_team_size = team_sample_total / sampled_state_count
+            # HaxLab's target domain is fixed 4v4. This catches 5v5/7v7
+            # contamination even when a larger match also has four obvious
+            # positional "core" players.
+            if not 3.5 <= average_team_size <= 4.5:
+                reasons.append(
+                    f"average_team_size_not_4v4_team_{team_id}:"
+                    f"{average_team_size:.3f}"
+                )
 
     role_evidence = infer_roles_4v4(players)
     for team_id in (1, 2):
