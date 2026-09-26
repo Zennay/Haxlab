@@ -29,7 +29,7 @@ jobs:
           echo "WHOAMI=$(whoami)"
           sudo -n true && echo "SUDO_OK=1" || echo "SUDO_OK=0"
           echo "=== watch metric pill ==="
-          sed -n '1,470p' /home/ubuntu/zennay-cloud/wear-os/app/src/main/java/com/zennay/cloud/watch/ui/ZennayWearApp.kt
+          sed -n '470,650p' /home/ubuntu/zennay-cloud/wear-os/app/src/main/java/com/zennay/cloud/watch/ui/ZennayWearApp.kt
           echo "=== gradle ==="
           cat /home/ubuntu/zennay-cloud/wear-os/app/build.gradle.kts
           echo "=== models ==="
