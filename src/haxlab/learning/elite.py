@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import json
 import math
 import os
@@ -52,6 +53,230 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
         except OSError:
             pass
         raise
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _atomic_npz(path: Path, arrays: dict[str, np.ndarray]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".npz",
+        dir=path.parent,
+    )
+    os.close(fd)
+    try:
+        np.savez_compressed(temporary_name, **arrays)
+        with open(temporary_name, "rb") as handle:
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, path)
+    except Exception:
+        try:
+            os.unlink(temporary_name)
+        except OSError:
+            pass
+        raise
+
+
+def _training_fingerprint(
+    *,
+    train_index_path: Path,
+    validation_index_path: Path,
+    holdout_index_path: Path,
+    train_limit: int | None,
+    validation_limit: int | None,
+    holdout_limit: int | None,
+    window: int,
+    sequence_stride: int,
+    hidden_dim: int,
+    hidden_dim_2: int,
+    batch_size: int,
+    learning_rate: float,
+    l2: float,
+    future_horizon_steps: int,
+    future_loss_weight: float,
+    seed: int,
+) -> tuple[str, dict[str, Any]]:
+    payload = {
+        "schema": "haxlab-elite-training-fingerprint-v1",
+        "indices": {
+            "train": {
+                "path": str(train_index_path.resolve()),
+                "sha256": _sha256_file(train_index_path),
+                "limit": train_limit,
+            },
+            "validation": {
+                "path": str(validation_index_path.resolve()),
+                "sha256": _sha256_file(validation_index_path),
+                "limit": validation_limit,
+            },
+            "holdout": {
+                "path": str(holdout_index_path.resolve()),
+                "sha256": _sha256_file(holdout_index_path),
+                "limit": holdout_limit,
+            },
+        },
+        "hyperparameters": {
+            "window": window,
+            "sequence_stride": sequence_stride,
+            "hidden_dim": hidden_dim,
+            "hidden_dim_2": hidden_dim_2,
+            "batch_size": batch_size,
+            "learning_rate": learning_rate,
+            "l2": l2,
+            "future_horizon_steps": future_horizon_steps,
+            "future_loss_weight": future_loss_weight,
+            "seed": seed,
+        },
+    }
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest(), payload
+
+
+def _save_training_checkpoint(
+    *,
+    output_dir: Path,
+    fingerprint: str,
+    fingerprint_payload: dict[str, Any],
+    completed_epoch: int,
+    step: int,
+    params: dict[str, np.ndarray],
+    m: dict[str, np.ndarray],
+    v: dict[str, np.ndarray],
+    best_params: dict[str, np.ndarray],
+    best_score: float,
+    best_epoch: int,
+    history: list[dict[str, Any]],
+    rng: np.random.Generator,
+) -> dict[str, Any]:
+    checkpoint_dir = output_dir / "checkpoints"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    stem = f"epoch-{completed_epoch:04d}"
+    arrays_path = checkpoint_dir / f"{stem}.npz"
+    metadata_path = checkpoint_dir / f"{stem}.json"
+
+    arrays: dict[str, np.ndarray] = {}
+    for key, value in params.items():
+        arrays[f"params__{key}"] = value
+        arrays[f"m__{key}"] = m[key]
+        arrays[f"v__{key}"] = v[key]
+        arrays[f"best__{key}"] = best_params[key]
+    _atomic_npz(arrays_path, arrays)
+    arrays_sha256 = _sha256_file(arrays_path)
+
+    metadata = {
+        "schema": "haxlab-elite-training-checkpoint-v1",
+        "fingerprint": fingerprint,
+        "fingerprint_payload": fingerprint_payload,
+        "completed_epoch": completed_epoch,
+        "step": step,
+        "best_score": best_score,
+        "best_epoch": best_epoch,
+        "history": history,
+        "rng_state": rng.bit_generator.state,
+        "arrays_path": str(arrays_path),
+        "arrays_sha256": arrays_sha256,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _atomic_json(metadata_path, metadata)
+
+    pointer = {
+        "schema": "haxlab-elite-training-checkpoint-pointer-v1",
+        "fingerprint": fingerprint,
+        "completed_epoch": completed_epoch,
+        "metadata_path": str(metadata_path),
+        "arrays_path": str(arrays_path),
+        "arrays_sha256": arrays_sha256,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _atomic_json(output_dir / "checkpoint-current.json", pointer)
+    return pointer
+
+
+def _load_training_checkpoint(
+    *,
+    output_dir: Path,
+    fingerprint: str,
+    expected_params: dict[str, np.ndarray],
+) -> dict[str, Any] | None:
+    pointer_path = output_dir / "checkpoint-current.json"
+    if not pointer_path.is_file():
+        return None
+
+    pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+    if pointer.get("schema") != "haxlab-elite-training-checkpoint-pointer-v1":
+        raise ValueError("unsupported elite checkpoint pointer schema")
+    if pointer.get("fingerprint") != fingerprint:
+        raise ValueError(
+            "elite checkpoint fingerprint mismatch; refusing unsafe resume"
+        )
+
+    metadata_path = Path(str(pointer["metadata_path"]))
+    arrays_path = Path(str(pointer["arrays_path"]))
+    if not metadata_path.is_file() or not arrays_path.is_file():
+        raise FileNotFoundError("elite checkpoint bundle is incomplete")
+    if _sha256_file(arrays_path) != str(pointer.get("arrays_sha256") or ""):
+        raise ValueError("elite checkpoint arrays checksum mismatch")
+
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if metadata.get("fingerprint") != fingerprint:
+        raise ValueError("elite checkpoint metadata fingerprint mismatch")
+    if metadata.get("arrays_sha256") != pointer.get("arrays_sha256"):
+        raise ValueError("elite checkpoint pointer/metadata checksum mismatch")
+
+    loaded = np.load(arrays_path)
+    params: dict[str, np.ndarray] = {}
+    m: dict[str, np.ndarray] = {}
+    v: dict[str, np.ndarray] = {}
+    best_params: dict[str, np.ndarray] = {}
+    for key, template in expected_params.items():
+        names = {
+            "params": f"params__{key}",
+            "m": f"m__{key}",
+            "v": f"v__{key}",
+            "best": f"best__{key}",
+        }
+        if any(name not in loaded.files for name in names.values()):
+            raise ValueError(f"elite checkpoint missing arrays for {key}")
+        params[key] = loaded[names["params"]].astype(np.float32)
+        m[key] = loaded[names["m"]].astype(np.float32)
+        v[key] = loaded[names["v"]].astype(np.float32)
+        best_params[key] = loaded[names["best"]].astype(np.float32)
+        for label, value in (
+            ("params", params[key]),
+            ("m", m[key]),
+            ("v", v[key]),
+            ("best", best_params[key]),
+        ):
+            if value.shape != template.shape:
+                raise ValueError(
+                    f"elite checkpoint {label} shape mismatch for {key}: "
+                    f"{value.shape} != {template.shape}"
+                )
+
+    return {
+        "completed_epoch": int(metadata["completed_epoch"]),
+        "step": int(metadata["step"]),
+        "params": params,
+        "m": m,
+        "v": v,
+        "best_params": best_params,
+        "best_score": float(metadata["best_score"]),
+        "best_epoch": int(metadata["best_epoch"]),
+        "history": list(metadata.get("history") or []),
+        "rng_state": metadata["rng_state"],
+        "checkpoint_path": str(metadata_path),
+    }
 
 
 def _load_index(path: Path, limit: int | None = None) -> dict[str, Any]:
