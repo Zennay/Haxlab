@@ -226,31 +226,16 @@ def test_champion_fails_when_sandbox_side_bias_fails() -> None:
     )
 
 
-def test_stationary_no_kick_benchmark_blocks_champion_promotion() -> None:
+def test_neutral_sandbox_does_not_apply_replay_behavior_floor() -> None:
     benchmark = _good_benchmark()
-    benchmark["policy_activity"]["nonzero_movement_rate"] = 0.075
+    benchmark["policy_activity"]["nonzero_movement_rate"] = 0.0
     benchmark["policy_activity"]["total_kicks"] = 0
+    benchmark["progression"]["elite_share"] = 0.0
     for row in benchmark["match_results"]:
         row["policy"]["total_kicks"] = 0
 
     decision = decide_sandbox_gate(benchmark)
 
-    assert not decision.eligible_for_champion_promotion
-    assert any(
-        reason.startswith("nonzero_movement_rate")
-        for reason in decision.reasons
-    )
-    assert any(reason.startswith("total_kicks") for reason in decision.reasons)
-
-
-def test_weak_progression_blocks_champion_promotion() -> None:
-    benchmark = _good_benchmark()
-    benchmark["progression"]["elite_share"] = 0.20
-
-    decision = decide_sandbox_gate(benchmark)
-
-    assert not decision.eligible_for_champion_promotion
-    assert any(
-        reason.startswith("progression_share")
-        for reason in decision.reasons
-    )
+    assert decision.eligible_for_champion_promotion
+    assert "nonzero_movement_rate" not in decision.checks
+    assert "progression_share" not in decision.checks
