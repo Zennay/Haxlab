@@ -180,6 +180,27 @@ jobs:
             /tmp/haxlab-multi-manifest.json \
             /tmp/haxlab-multi-validation.json
 
+      - name: Record passing multi-replay validation in champion registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          if sudo -u haxlab /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          data = json.load(open("/tmp/haxlab-multi-validation.json"))
+          raise SystemExit(0 if data.get("validated") is True else 1)
+          PY
+          then
+            sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+              /opt/haxlab/.venv/bin/python -m haxlab.evaluation.champion_registry \
+              --registry-root /var/lib/haxlab/derived/champions/elite-player \
+              --record-validation /tmp/haxlab-multi-validation.json \
+              --validation-stage multi_replay \
+              --output /tmp/haxlab-multi-registry-validation.json
+          else
+            sudo -u haxlab sh -c \
+              'echo '"'"'{"recorded": false, "reason": "validation_gate_rejected"}'"'"' > /tmp/haxlab-multi-registry-validation.json'
+          fi
+
       - name: Publish multi-replay evidence
         if: always()
         shell: bash
@@ -197,6 +218,7 @@ jobs:
           copy_if_present /tmp/haxlab-multi-sources.json multi-replay-sources.json
           copy_if_present /tmp/haxlab-multi-manifest.json multi-replay-manifest.json
           copy_if_present /tmp/haxlab-multi-validation.json multi-replay-validation.json
+          copy_if_present /tmp/haxlab-multi-registry-validation.json multi-replay-registry-validation.json
 
           shopt -s nullglob
           for FILE in /tmp/haxlab-multi-*-champion.json /tmp/haxlab-multi-*-candidate.json; do
@@ -218,6 +240,7 @@ jobs:
             multi-replay-sources.json
             multi-replay-manifest.json
             multi-replay-validation.json
+            multi-replay-registry-validation.json
             haxlab-multi-*-champion.json
             haxlab-multi-*-candidate.json
           retention-days: 30
