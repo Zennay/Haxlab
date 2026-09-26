@@ -282,3 +282,102 @@ def test_temporal_elite_policy_trains_with_validation_only_calibration(
     assert far_node_action["kick"] is False
     assert far_node_action["kick_in_range"] is False
     assert abs(far_node_action["kick_max_distance"] - 31.0) < 1e-9
+
+
+
+def test_resumed_training_matches_uninterrupted_training(
+    tmp_path: Path,
+) -> None:
+    train_entries = [
+        _write_shard(tmp_path / "resume-train", "train-a", _synthetic_rows(90, 11)),
+        _write_shard(tmp_path / "resume-train", "train-b", _synthetic_rows(90, 12)),
+    ]
+    validation_entries = [
+        _write_shard(
+            tmp_path / "resume-validation",
+            "validation-a",
+            _synthetic_rows(70, 13),
+        )
+    ]
+    holdout_entries = [
+        _write_shard(
+            tmp_path / "resume-holdout",
+            "holdout-a",
+            _synthetic_rows(70, 14),
+        )
+    ]
+
+    train_index = tmp_path / "resume-train.json"
+    validation_index = tmp_path / "resume-validation.json"
+    holdout_index = tmp_path / "resume-holdout.json"
+    _write_index(train_index, train_entries, "train")
+    _write_index(validation_index, validation_entries, "validation")
+    _write_index(holdout_index, holdout_entries, "holdout")
+
+    common = dict(
+        train_index_path=train_index,
+        validation_index_path=validation_index,
+        holdout_index_path=holdout_index,
+        window=4,
+        hidden_dim=24,
+        hidden_dim_2=20,
+        batch_size=96,
+        learning_rate=0.003,
+        future_horizon_steps=3,
+        future_loss_weight=0.25,
+        seed=77,
+    )
+
+    resumed_dir = tmp_path / "resumed-model"
+    first = train_elite_policy(
+        **common,
+        output_dir=resumed_dir,
+        epochs=1,
+    )
+    assert first["training"]["resumed_from_checkpoint"] is None
+
+    resumed = train_elite_policy(
+        **common,
+        output_dir=resumed_dir,
+        epochs=2,
+        resume=True,
+    )
+    assert resumed["training"]["resumed_from_checkpoint"] is not None
+    assert len(resumed["history"]) == 2
+
+    uninterrupted_dir = tmp_path / "uninterrupted-model"
+    uninterrupted = train_elite_policy(
+        **common,
+        output_dir=uninterrupted_dir,
+        epochs=2,
+    )
+    assert uninterrupted["training"]["resumed_from_checkpoint"] is None
+    assert len(uninterrupted["history"]) == 2
+
+    resumed_arrays = np.load(resumed_dir / "model.npz")
+    uninterrupted_arrays = np.load(uninterrupted_dir / "model.npz")
+    assert set(resumed_arrays.files) == set(uninterrupted_arrays.files)
+    for key in resumed_arrays.files:
+        np.testing.assert_allclose(
+            resumed_arrays[key],
+            uninterrupted_arrays[key],
+            rtol=0,
+            atol=0,
+        )
+
+    assert (
+        resumed["training"]["best_epoch"]
+        == uninterrupted["training"]["best_epoch"]
+    )
+    assert (
+        resumed["final_holdout"]["direction_accuracy"]
+        == uninterrupted["final_holdout"]["direction_accuracy"]
+    )
+    assert (
+        resumed["final_holdout"]["future_direction_accuracy"]
+        == uninterrupted["final_holdout"]["future_direction_accuracy"]
+    )
+    assert resumed["final_holdout"]["kick_f1"] == uninterrupted["final_holdout"]["kick_f1"]
+
+    pointer = json.loads((resumed_dir / "checkpoint-current.json").read_text())
+    assert pointer["completed_epoch"] == 2
