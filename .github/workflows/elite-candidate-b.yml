@@ -177,7 +177,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          LIVE_RUNTIME="$(python3 -c 'import json; print(json.load(open("/var/lib/haxlab/derived/champions/elite-player/current.json"))["runtime_model_path"])')"
+          LIVE_RUNTIME="$(sudo -u haxlab /opt/haxlab/.venv/bin/python -c 'import json; print(json.load(open("/var/lib/haxlab/derived/champions/elite-player/current.json"))["runtime_model_path"])')"
           sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
             "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js" \
             --model /var/lib/haxlab/derived/training/elite-player-candidate-b/model/runtime-model.json \
