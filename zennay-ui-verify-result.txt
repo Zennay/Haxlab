@@ -1,0 +1,56 @@
+generated_at=2026-09-26T13:16:45+00:00
+=== APP RESOURCE / QUALITY / MILESTONE REFS ===
+=== APP FUNCTIONS AROUND RESOURCE ===
+=== SERVER RESOURCE ENDPOINT ===
+    def reply(self,body,status=200,kind='application/json; charset=utf-8'):
+        raw=json.dumps(body,ensure_ascii=False).encode() if not isinstance(body,bytes) else body
+        self.send_response(status)
+        for k,v in {'Content-Type':kind,'Content-Length':str(len(raw)),'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','X-Frame-Options':'DENY','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"}.items():self.send_header(k,v)
+        self.end_headers();self.wfile.write(raw)
+    def do_GET(self):
+        try:self.route()
+        except (BrokenPipeError,ConnectionResetError):pass
+        except Exception:
+            logging.exception('Request failed');self.reply({'error':'Tijdelijk niet beschikbaar'},503)
+    def do_POST(self):
+        try:
+            u=urlparse(self.path)
+            size=min(int(self.headers.get('Content-Length','0') or 0),16384)
+            if size<=0:return self.reply({'error':'Lege payload'},400)
+            payload=json.loads(self.rfile.read(size))
+            if not isinstance(payload,dict):return self.reply({'error':'Ongeldige payload'},400)
+            if u.path=='/api/runner-status':
+                if self.client_address[0] not in ('127.0.0.1','::1'):return self.reply({'error':'Alleen lokaal'},403)
+                runner_record(payload)
+                return self.reply({'ok':True,'time':now()})
+            if u.path=='/api/resource-priority':
+                if self.client_address[0] not in ('127.0.0.1','::1'):return self.reply({'error':'Alleen lokaal'},403)
+                project=str(payload.get('project') or '')
+                priority=str(payload.get('priority') or '')
+                try: result=enhancements.set_priority(project,priority)
+                except ValueError as e: return self.reply({'error':str(e)},400)
+                return self.reply({'ok':True,'resource':result,'time':now()})
+            if u.path=='/api/project-layout':
+                if 'application/json' not in self.headers.get('Content-Type',''):return self.reply({'error':'JSON vereist'},415)
+                with LOCK:data=CACHE
+                if data is None:return self.reply({'error':'Monitor start op'},503)
+                layout=save_project_layout(payload,data['projects'])
+                return self.reply({'ok':True,'layout':layout,'time':now()})
+            return self.reply({'error':'Niet gevonden'},404)
+        except Exception:
+            logging.exception('POST failed');self.reply({'error':'Opslaan mislukt'},500)
+    def route(self):
+        u=urlparse(self.path);q=parse_qs(u.query)
+        with LOCK:data=CACHE
+        if u.path.startswith('/api/'):
+            if data is None:return self.reply({'error':'Monitor start op'},503)
+            pid=q.get('project',[''])[0]
+            if u.path.startswith('/api/v1/watch'):
+                auth=self.headers.get('Authorization','')
+                if WATCH_TOKEN and auth != 'Bearer '+WATCH_TOKEN:return self.reply({'error':'Unauthorized'},401)
+            if u.path in ('/api/status','/api/v1/status'):return self.reply({**public_status(data),'chatgpt_runner':runner_status()})
+            if u.path=='/api/v1/watch':return self.reply(watch_summary(data))
+            if u.path=='/api/v1/alerts':return self.reply({'time':data['time'],'alerts':enhancements.list_alerts(DB,20,True)})
+            if u.path=='/api/alerts':return self.reply(enhancements.list_alerts(DB,20,False))
+            if u.path=='/api/resources':return self.reply(enhancements.resource_snapshot())
+=== CSS REFS ===
