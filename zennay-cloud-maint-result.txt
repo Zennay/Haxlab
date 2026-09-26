@@ -1,13 +1,437 @@
-generated_at=2026-09-26T13:08:52+00:00
-=== BEFORE ===
-haxlab-analyzer.service active running 889202 100 infinity 
-haxlab-ingest.service active running 889200 100 infinity 
-haxlab-worker.service active running 889201 100 infinity 
-actions.runner.Zennay-Haxlab.vps-bb300bba-haxlab.service active running 411098 100 infinity 
-actions.runner.Zennay-Ftmo.vps-bb300bba-ftmo.service active running 61158 800 infinity 
-ftmo-autonomous.timer active waiting 
-zennay-cloud.service active running 1319721 400 infinity 
-Traceback (most recent call last):
-  File "/opt/actions-runner-haxlab/_work/Haxlab/Haxlab/zennay-cloud-maint/apply_backend.py", line 139, in <module>
-    raise RuntimeError("cannot adapt granular progress block")
-RuntimeError: cannot adapt granular progress block
+generated_at=2026-09-26T13:09:20+00:00
+=== SERVER COLLECT ===
+    # Read-only connection, bounded query, no trainer commands and no state changes.
+    with sqlite3.connect('file:/var/lib/haxlab/state/haxlab.sqlite3?mode=ro',uri=True,timeout=1) as c:
+        deadline=time.monotonic()+1
+        c.set_progress_handler(lambda: int(time.monotonic()>deadline),1000)
+        counts=dict(c.execute('SELECT status,COUNT(*) FROM replay_analysis GROUP BY status'))
+        r=c.execute("SELECT SUM(duration_seconds) FROM replay_processing WHERE status='ok'").fetchone()
+    return {'analyzed':counts.get('ok',0),'failed':counts.get('failed',0),'pending':counts.get('pending',0),'hours':round((r[0] or 0)/3600,1),'available':True}
+
+def collect():
+    projects = json.loads((ROOT/'projects.json').read_text())
+    errors=[]
+    try: states=service_states()
+    except Exception: states={}; errors.append('Servicestatus tijdelijk niet beschikbaar')
+    events=[]
+    resources=enhancements.resource_snapshot()
+    for p in projects:
+        values=[float(m.get('progress',100 if m.get('done') else 0)) for m in p['milestones']]
+        for m,value in zip(p['milestones'],values):
+            m['progress']=round(max(0,min(100,value)),1);m['done']=m['progress']>=100
+        p['progress']=round(sum(m['progress'] for m in p['milestones'])/len(p['milestones']))
+        p['completed']=sum(m['done'] for m in p['milestones'])
+        p['next']=next((m['title'] for m in p['milestones'] if not m['done']), 'Alle milestones afgerond')
+        p['current_milestone_progress']=next((m['progress'] for m in p['milestones'] if not m['done']),100)
+        p['resource']=resources.get(p['id'],{})
+        p['source_status']='ok'; p['commits']=None; p['commit']=''; p['updated']=None; p['message']='Nog geen Git-bron'; p['shallow']=False
+        path=p.pop('repo',None)
+        repo_ref=p.pop('repo_ref','HEAD')
+        if path:
+            try:
+                git(path,'rev-parse','--git-dir')
+                active_ref=None
+                for candidate in (repo_ref,'HEAD'):
+                    try:
+                        git(path,'rev-parse','--verify',candidate+'^{commit}')
+                        active_ref=candidate
+                        break
+                    except Exception:
+                        pass
+                if active_ref is None:
+                    p['source_status']='empty'; p['commits']=0; p['message']='Repo gekoppeld · nog geen commits'
+                else:
+                    logs=git(path,'log','-30',active_ref,'--format=%H%x1f%cI%x1f%s').splitlines()
+                    for line in logs:
+                        sha,ts,title=line.split('\x1f',2)
+                        events.append((p['id']+':git:'+sha, datetime.fromisoformat(ts).astimezone(timezone.utc).isoformat(),p['id'],'commit',title,sha[:7]))
+                    p['commit'],p['updated'],p['message']=logs[0].split('\x1f',2)
+                    p['commit']=p['commit'][:7]
+                    p['commits']=int(git(path,'rev-list','--count',active_ref))
+                    p['shallow']=git(path,'rev-parse','--is-shallow-repository')=='true'
+            except Exception:
+                p['source_status']='unavailable'; p['message']='Git-bron tijdelijk niet beschikbaar'
+        p['services']=[]
+        if p['id']=='haxlab':
+            names=['haxlab-analyzer.service','haxlab-ingest.service','haxlab-worker.service',RUNNERS['haxlab']]
+            try:p['metrics']=replay_metrics()
+            except Exception:p['metrics']={'available':False}
+            try:p['quality']=enhancements.quality_for('haxlab')
+            except Exception:p['quality']={'available':False,'items':[]}
+        elif p['id']=='ftmo':
+            names=['ftmo-autonomous.timer','ftmo-autonomous.service',RUNNERS['ftmo']]
+            try:p['quality']=enhancements.quality_for('ftmo')
+            except Exception:p['quality']={'available':False,'items':[]}
+        elif p['id']=='supa': names=[SUPA_SYNC]
+        else: names=[]
+        for name in names:
+            s=states.get(name,{})
+            state=s.get('ActiveState','unknown')
+            label=name.removesuffix('.service').removesuffix('.timer').replace('haxlab-','').replace('ftmo-autonomous','Research').split('.')[-1]
+            if name in RUNNERS.values():label='GitHub runner'
+            if name.endswith('.timer'):label='Research timer'
+            if name==SUPA_SYNC:label='Repo sync'
+            if name=='ftmo-autonomous.service' and state=='inactive' and s.get('Result')=='success':state='waiting'
+            p['services'].append({'name':label,'state':state,'result':s.get('Result'), 'last_run':s.get('ExecMainExitTimestamp') or None})
+        p['health']='healthy' if not names or all(s['state'] in ('active','activating','waiting') for s in p['services']) else 'attention'
+        p['last_chatgpt_run']=watch_last_run(p['id'])
+    with connect() as c:
+        c.executemany('INSERT OR IGNORE INTO events VALUES(?,?,?,?,?,?)',events)
+    data={'version':3,'time':now(),'host':host_metrics(),'projects':projects,'errors':errors,'sampling':{'host_seconds':15,'projects_seconds':60,'history_seconds':300},'timezone':'Europe/Amsterdam'}
+    try: enhancements.evaluate_alerts(data,runner_status(),DB)
+    except Exception: logging.exception('Alert evaluation failed')
+    return data
+
+def persist(data):
+    with connect() as c:
+        for p in data['projects']:
+            c.execute('INSERT OR IGNORE INTO project_samples VALUES(?,?,?,?,?,?)',(data['time'],p['id'],p['progress'],p['commits'],p['commit'],p['message']))
+            eid=f"milestone:{p['id']}:{p['milestone_revision']}"
+            c.execute('INSERT OR IGNORE INTO events VALUES(?,?,?,?,?,?)',(eid,data['time'],p['id'],'milestone',f"Milestoneplan: {p['completed']} van {len(p['milestones'])} afgerond",'Planninginschatting · geen kwaliteitsscore'))
+        h=data['host']
+        c.execute('INSERT OR IGNORE INTO host_samples VALUES(?,?,?,?,?)',(data['time'],h['cpu'],h['memory']['used']/h['memory']['total']*100,h['disk']['used']/h['disk']['total']*100,h['load']))
+        # About 106k small records per year. Retain one year of host samples.
+        cutoff=datetime.fromtimestamp(time.time()-366*86400,timezone.utc).isoformat()
+        c.execute('DELETE FROM host_samples WHERE ts < ?', (cutoff,))
+
+def sampler():
+    global CACHE
+    tick=0
+    while True:
+        try:
+            if tick%4==0 or CACHE is None: data=collect()
+            else:
+                with LOCK:data={**CACHE}
+                data['time']=now();data['host']=host_metrics()
+            data['stale']=False
+            if tick%20==0:persist(data)
+            with LOCK:CACHE=data
+        except Exception:
+            logging.exception('Monitor sampling failed')
+            with LOCK:
+                if CACHE:CACHE={**CACHE,'stale':True}
+        tick+=1
+=== PROJECTS ===
+[
+  {
+    "id": "haxlab",
+    "name": "HaxLab",
+    "eyebrow": "GAME INTELLIGENCE",
+    "goal": "Van replay naar een competitieve HaxBall-bot.",
+    "icon": "game",
+    "accent": "#a899ff",
+    "repo": "/opt/actions-runner-haxlab/_work/Haxlab/Haxlab",
+    "milestone_revision": "v3-granular-quality",
+    "progress_basis": "Bouwvoortgang is het gemiddelde van milestone-percentages. Modelkwaliteit staat apart.",
+    "milestones": [
+      {
+        "title": "Replay pipeline",
+        "done": true,
+        "progress": 100
+      },
+      {
+        "title": "State analysis",
+        "done": true,
+        "progress": 100
+      },
+      {
+        "title": "Player profiling",
+        "done": true,
+        "progress": 100
+      },
+      {
+        "title": "Behavior model",
+        "done": true,
+        "progress": 100
+      },
+      {
+        "title": "Closed-loop bot",
+        "done": true,
+        "progress": 100
+      },
+      {
+        "title": "Self-play training",
+        "done": false,
+        "progress": 0
+      },
+      {
+        "title": "Competitive benchmark",
+        "done": false,
+        "progress": 45
+      },
+      {
+        "title": "Live match bot",
+        "done": false,
+        "progress": 55
+      }
+    ],
+    "phase": "Live champion validation · competitive behavior",
+    "next_step": "Verbeter kickgedrag en competitieve sandbox-resultaten; valideer daarna tegen echte spelers.",
+    "status": "active",
+    "priority": "low"
+  },
+  {
+    "id": "ftmo",
+    "name": "FTMO",
+    "eyebrow": "AUTONOMOUS RESEARCH",
+    "goal": "Een onderzoekssysteem voor robuuste tradingstrategieën.",
+    "icon": "chart",
+    "accent": "#5ddcbb",
+    "repo": "/opt/ftmo-runner/_work/Ftmo/Ftmo",
+    "milestone_revision": "v3-granular-quality",
+    "progress_basis": "Bouwvoortgang is het gemiddelde van milestone-percentages. Tradingkwaliteit staat apart.",
+    "milestones": [
+      {
+        "title": "Research framework",
+        "done": true,
+        "progress": 100
+      },
+      {
+        "title": "Market data pipeline",
+        "done": true,
+        "progress": 100
+      },
+      {
+        "title": "Backtest engine",
+        "done": true,
+        "progress": 100
+      },
+      {
+        "title": "Strategy generations",
+        "done": true,
+        "progress": 100
+      },
+      {
+        "title": "Telemetry",
+        "done": true,
+        "progress": 100
+      },
+      {
+        "title": "Autonomous research loop",
+        "done": true,
+        "progress": 100
+      },
+      {
+        "title": "Robust validation",
+        "done": false,
+        "progress": 82
+      },
+      {
+        "title": "Production-ready system",
+        "done": false,
+        "progress": 35
+      }
+    ],
+    "phase": "Generation 10 candidate · awaiting walk-forward",
+    "next_step": "Voer de frozen walk-forward uit voor de Generation-10 candidate; houd development en validatie strikt gescheiden.",
+    "status": "active",
+    "priority": "high"
+  },
+  {
+    "id": "cloud",
+    "name": "Zennay Cloud",
+    "eyebrow": "YOUR CONTROL ROOM",
+    "goal": "Al je projecten en je VPS in één helder overzicht.",
+    "icon": "cloud",
+    "accent": "#82b8ff",
+    "milestone_revision": "v4-archived",
+    "progress_basis": "Zennay Cloud is operationeel en gearchiveerd als infrastructuur/control room.",
+    "milestones": [
+      {
+        "title": "Live projectoverzicht",
+        "done": true,
+        "progress": 100
+      },
+      {
+        "title": "Grafieken met datums",
+        "done": true,
+        "progress": 100
+      },
+      {
+        "title": "Milestones & activity history",
+        "done": true,
+        "progress": 100
+      },
+      {
+        "title": "VPS-monitoring",
+        "done": true,
+        "progress": 100
+      },
+      {
+        "title": "Responsive mobile design",
+        "done": true,
+        "progress": 100
+      },
+      {
+        "title": "Compacte Watch API",
+        "done": true,
+        "progress": 100
+      },
+      {
+        "title": "Wear OS-app",
+        "done": true,
+        "progress": 100
+      }
+    ],
+    "phase": "Archived · control room operational",
+    "status": "archived",
+    "priority": "system"
+  },
+  {
+    "id": "supa",
+    "name": "Supa",
+    "eyebrow": "SMART GROCERY PLANNER",
+    "goal": "Een mobile-first boodschappenplanner die studenten helpt goedkoper en slimmer te eten.",
+    "icon": "layers",
+    "accent": "#ff9b7a",
+    "repo": "/home/ubuntu/zennay-cloud/repos/supa",
+    "repo_ref": "origin/main",
+    "repo_url": "https://github.com/Zennay/Supa",
+    "phase": "Production rebuild · mobile-first foundation",
+    "status": "active",
+    "next_step": "Bouw de mobile-first production foundation en koppel de plannerflow aan echte app-state.",
+    "milestone_revision": "supa-v3-granular",
+    "progress_basis": "Bouwvoortgang is het gemiddelde van milestone-percentages.",
+    "milestones": [
+      {
+        "title": "User research & problem validation",
+        "done": true,
+        "progress": 100
+      },
+      {
+        "title": "UX architecture & planner-first flow",
+        "done": true,
+        "progress": 100
+      },
+      {
+        "title": "Validated graduation prototype",
+        "done": true,
+        "progress": 100
+      },
+      {
+        "title": "Savings logic & basket-comparison concept",
+        "done": true,
+        "progress": 100
+      },
+      {
+        "title": "Production mobile UI foundation",
+        "done": false,
+        "progress": 0
+      },
+      {
+        "title": "Planner + recipe/offer engine",
+        "done": false,
+        "progress": 0
+      },
+      {
+        "title": "Full basket comparison & data integration",
+        "done": false,
+        "progress": 0
+      },
+      {
+        "title": "Beta deployment & real-user validation",
+        "done": false,
+        "progress": 0
+      }
+    ],
+    "priority": "normal"
+  }
+]
+=== WATCH UI METRICS ===
+110-        item {
+111-            HeaderRow(
+112-                title = "Zennay Cloud",
+113-                subtitle = if (loading) "SYNCING" else "LIVE",
+114-                onRefresh = { scope.launch { reload() } }
+115-            )
+116-        }
+117-        if (error != null && data == null) {
+118-            item { ErrorCard(error ?: "Cloud offline", onRetry = { scope.launch { reload() } }) }
+119-        }
+120-        data?.let { snapshot ->
+121-            item {
+122:                OverviewHero(
+123-                    progress = snapshot.overallProgress,
+124-                    active = snapshot.activeProjects,
+125-                    cpu = snapshot.host.cpu,
+126-                    ram = snapshot.host.memoryPercent
+127-                )
+128-            }
+129-            if (snapshot.warnings.isNotEmpty()) {
+130-                item {
+131-                    SurfaceCard {
+132-                        Label("WARNING", Warning)
+133-                        Text(
+134-                            snapshot.warnings.first().message,
+135-                            color = TextMain,
+136-                            fontSize = 11.sp,
+137-                            fontWeight = FontWeight.SemiBold,
+138-                            textAlign = TextAlign.Center,
+139-                            modifier = Modifier.fillMaxWidth(),
+140-                            maxLines = 2,
+141-                            overflow = TextOverflow.Ellipsis
+142-                        )
+143-                    }
+144-                }
+145-            }
+146-            item { SectionLabel("PROJECTS") }
+147-            items(snapshot.projects, key = { it.id }) { project ->
+148-                ProjectCard(project = project, onClick = { onProject(project.id) })
+149-            }
+150-            item {
+151-                Text(
+152-                    if (snapshot.stale) "Data stale" else "Live · ${shortAge(snapshot.generatedAt)}",
+153-                    color = if (snapshot.stale) Warning else TextMuted,
+154-                    fontSize = 9.sp,
+155-                    modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+156-                    textAlign = TextAlign.Center
+157-                )
+--
+319-    Box(
+320-        modifier = Modifier
+321-            .size(42.dp)
+322-            .background(Surface2, CircleShape)
+323-            .clickable(onClick = onClick),
+324-        contentAlignment = Alignment.Center
+325-    ) {
+326-        Text(label, color = TextMain, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+327-    }
+328-}
+329-
+330-@Composable
+331:private fun OverviewHero(progress: Int, active: Int, cpu: Double?, ram: Int) {
+332-    Column(
+333-        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+334-        horizontalAlignment = Alignment.CenterHorizontally
+335-    ) {
+336-        ProgressRing(progress, 108.dp)
+337-        Spacer(Modifier.height(12.dp))
+338-        Row(
+339-            modifier = Modifier.fillMaxWidth(),
+340-            horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+341-            verticalAlignment = Alignment.CenterVertically
+342-        ) {
+343-            MetricPill("ACTIVE", "$active")
+344-            MetricPill("CPU", cpu?.let { "${it.toInt()}%" } ?: "—")
+345-            MetricPill("RAM", "$ram%")
+346-        }
+347-    }
+348-}
+349-@Composable
+350-private fun ProjectHero(p: ProjectDetail) {
+351-    SurfaceCard {
+352-        Row(
+353-            modifier = Modifier.fillMaxWidth(),
+354-            verticalAlignment = Alignment.CenterVertically,
+355-            horizontalArrangement = Arrangement.SpaceBetween
+356-        ) {
+357-            ProgressRing(p.progress, 70.dp)
+358-            Column(horizontalAlignment = Alignment.End) {
+359-                StatusDot(p.health)
+360-                Spacer(Modifier.height(7.dp))
+361-                Text(p.status.uppercase(), color = TextMuted, fontSize = 9.sp, letterSpacing = 0.8.sp)
+362-            }
+363-        }
+364-    }
+365-}
+366-
