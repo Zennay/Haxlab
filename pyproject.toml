@@ -38,6 +38,7 @@ haxlab-elite-champion-gate = "haxlab.evaluation.champion_gate:main"
 haxlab-elite-duel-gate = "haxlab.evaluation.duel_gate:main"
 haxlab-elite-promote = "haxlab.evaluation.champion_registry:main"
 haxlab-elite-evolve = "haxlab.learning.evolution:main"
+haxlab-elite-status = "haxlab.learning.elite_status:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
