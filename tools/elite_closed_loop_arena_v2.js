@@ -23,6 +23,10 @@ const {
 const {
   prepareReplayScenario,
 } = require("./sandbox_replay_start");
+const {
+  RecoveryTraceRecorder,
+  writeRecoveryTrace,
+} = require("./recovery_trace");
 
 const ROLES = ["gk", "dm", "am", "st"];
 const ARENA_SCHEMA = "haxlab-closed-loop-arena-v2";
@@ -34,7 +38,8 @@ function usage() {
       "--stadium stadium.hbs --scenarios scenarios.json " +
       "[--partner-model runtime-model.json ...] [--seconds 30] " +
       "[--max-scenarios 4] [--sample-every 6] [--plug-repeats 1] " +
-      "[--seed 1337] [--output result.json]",
+      "[--seed 1337] [--output result.json] " +
+      "[--recovery-trace-output trace.jsonl] [--source-ref git-sha]",
   );
   process.exit(2);
 }
@@ -48,6 +53,11 @@ function parseArgs(argv) {
     plugRepeats: 1,
     seed: 1337,
     output: null,
+    recoveryTraceOutput: null,
+    sourceRef: null,
+    recoveryTraceMaxPerFailure: 4,
+    recoveryTraceGapSeconds: 2,
+    recoveryTraceHistorySamples: 4,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const key = argv[i];
@@ -72,6 +82,19 @@ function parseArgs(argv) {
     }
     else if (key === "--seed") { args.seed = Number(value); i += 1; }
     else if (key === "--output") { args.output = value; i += 1; }
+    else if (key === "--recovery-trace-output") {
+      args.recoveryTraceOutput = value; i += 1;
+    }
+    else if (key === "--source-ref") { args.sourceRef = value; i += 1; }
+    else if (key === "--recovery-trace-max-per-failure") {
+      args.recoveryTraceMaxPerFailure = Number(value); i += 1;
+    }
+    else if (key === "--recovery-trace-gap-seconds") {
+      args.recoveryTraceGapSeconds = Number(value); i += 1;
+    }
+    else if (key === "--recovery-trace-history-samples") {
+      args.recoveryTraceHistorySamples = Number(value); i += 1;
+    }
     else if (key === "--help" || key === "-h") usage();
     else throw new Error("Unknown argument: " + key);
   }
@@ -84,6 +107,15 @@ function parseArgs(argv) {
   args.sampleEvery = Math.max(1, Math.floor(args.sampleEvery || 6));
   args.plugRepeats = Math.max(1, Math.floor(args.plugRepeats || 1));
   args.seed = Number.isFinite(args.seed) ? Math.floor(args.seed) : 1337;
+  args.recoveryTraceMaxPerFailure = Math.max(
+    1, Math.floor(args.recoveryTraceMaxPerFailure || 4),
+  );
+  args.recoveryTraceGapSeconds = Math.max(
+    0, Number(args.recoveryTraceGapSeconds) || 0,
+  );
+  args.recoveryTraceHistorySamples = Math.max(
+    0, Math.floor(args.recoveryTraceHistorySamples || 0),
+  );
   return args;
 }
 
@@ -197,7 +229,16 @@ function updateTracker(
 ) {
   const context = currentContext(player, gameState);
   const playerDisc = discOf(player);
-  if (!context || !playerDisc?.pos) return;
+  if (!context || !playerDisc?.pos) return null;
+  const diagnostics = {
+    context,
+    boundary: false,
+    role_deviation: null,
+    role_target: null,
+    far_stall: false,
+    context_miss: false,
+    ood_max_abs_z: Number(canonical?.ood_max_abs_z || 0),
+  };
 
   tracker.policy_samples += 1;
   tracker.ball_distance_sum += context.distance;
@@ -216,6 +257,7 @@ function updateTracker(
     Math.abs(num(playerDisc.pos.y)) >= height * 0.90
   ) {
     tracker.boundary_samples += 1;
+    diagnostics.boundary = true;
   }
 
   const recovery = recoveryAction(
@@ -226,17 +268,24 @@ function updateTracker(
     { stadiumWidth: width },
   );
   if (recovery) {
-    tracker.role_deviation_sum += Math.hypot(
+    const roleDeviation = Math.hypot(
       num(recovery.target_canonical_x) - num(recovery.canonical_player_x),
       num(recovery.target_y) - num(playerDisc.pos.y),
     );
+    tracker.role_deviation_sum += roleDeviation;
     tracker.role_deviation_samples += 1;
+    diagnostics.role_deviation = roleDeviation;
+    diagnostics.role_target = {
+      canonical_x: num(recovery.target_canonical_x),
+      y: num(recovery.target_y),
+    };
   }
 
   const stationary =
     Number(action.dirX || 0) === 0 &&
     Number(action.dirY || 0) === 0;
   if (stationary && context.distance >= 180) {
+    diagnostics.far_stall = true;
     tracker.far_stall_samples += 1;
     tracker.current_far_stall_samples += 1;
     tracker.max_far_stall_samples = Math.max(
@@ -254,7 +303,8 @@ function updateTracker(
     tracker.max_action_run_samples = 1;
     tracker.action_anchor_context = context;
     tracker.context_shift_accounted = false;
-    return;
+    tracker.sample_every_ticks = sampleEvery;
+    return diagnostics;
   }
 
   const shifted = contextShifted(tracker.action_anchor_context, context);
@@ -280,11 +330,13 @@ function updateTracker(
       tracker.current_action_run_samples >= 3
     ) {
       tracker.context_misses += 1;
+      diagnostics.context_miss = true;
       tracker.context_shift_accounted = true;
     }
   }
 
   tracker.sample_every_ticks = sampleEvery;
+  return diagnostics;
 }
 
 function finishTracker(tracker, sampleEvery) {
@@ -504,6 +556,8 @@ function runArenaMatch({
   sampleEvery,
   seed,
   repeatIndex,
+  recoveryTraceRows = null,
+  recoveryTraceConfig = null,
 }) {
   const { testBots, opponentBots } = buildLineup({
     mode,
@@ -551,6 +605,21 @@ function runArenaMatch({
   room.runSteps(5);
   prepareReplayScenario(room, allBots, scenario, testTeamId);
   primeRuntimes(runtimeMap, allBots, scenario);
+
+  const recoveryRecorder = new RecoveryTraceRecorder({
+    enabled: testedKind === "challenger" && Array.isArray(recoveryTraceRows),
+    mode,
+    testedRole,
+    scenarioIndex,
+    testTeamId,
+    repeatIndex,
+    seed,
+    maxPerFailure: recoveryTraceConfig?.maxPerFailure || 4,
+    minGapTicks: Math.floor(
+      Number(recoveryTraceConfig?.gapSeconds || 0) * 60,
+    ),
+    historySamples: recoveryTraceConfig?.historySamples || 4,
+  });
 
   const sampled = {
     ticks: 0,
@@ -601,7 +670,7 @@ function runArenaMatch({
             });
             let action = canonicalActionToWorld(canonical, bot.teamId);
             action = enforceKickRange(action, player, gameState);
-            updateTracker(bot.tracker, {
+            const diagnostics = updateTracker(bot.tracker, {
               action,
               canonical,
               player,
@@ -610,6 +679,17 @@ function runArenaMatch({
               stadium,
               sampleEvery,
             });
+            if (diagnostics) {
+              recoveryRecorder.observe({
+                bot,
+                features,
+                action,
+                canonical,
+                diagnostics,
+                playerPosition: discOf(player)?.pos || null,
+                ballPosition: ball.pos,
+              });
+            }
             room.playerInput(
               Utils.keyState(action.dirX, action.dirY, action.kick),
               bot.id,
@@ -652,9 +732,14 @@ function runArenaMatch({
           if (formation.collapsed) sampled.formation_collapsed += 1;
           if (formation.overstretched) sampled.formation_overstretched += 1;
         }
+        recoveryRecorder.finishTick({ tick, formation });
       }
     }
     room.runSteps(1);
+  }
+
+  if (Array.isArray(recoveryTraceRows) && recoveryRecorder.rows.length) {
+    recoveryTraceRows.push(...recoveryRecorder.rows);
   }
 
   const samples = Math.max(1, sampled.ticks);
@@ -997,6 +1082,12 @@ function main() {
 
   const fullTeamPairs = [];
   const plugPairs = [];
+  const recoveryTraceRows = [];
+  const recoveryTraceConfig = {
+    maxPerFailure: args.recoveryTraceMaxPerFailure,
+    gapSeconds: args.recoveryTraceGapSeconds,
+    historySamples: args.recoveryTraceHistorySamples,
+  };
 
   for (let scenarioOffset = 0; scenarioOffset < scenarios.length; scenarioOffset += 1) {
     const scenario = scenarios[scenarioOffset];
@@ -1019,6 +1110,8 @@ function main() {
         sampleEvery: args.sampleEvery,
         seed: args.seed,
         repeatIndex: 0,
+        recoveryTraceRows,
+        recoveryTraceConfig,
       });
       const reference = runArenaMatch({
         mode: "full_team",
@@ -1035,6 +1128,8 @@ function main() {
         sampleEvery: args.sampleEvery,
         seed: args.seed,
         repeatIndex: 0,
+        recoveryTraceRows,
+        recoveryTraceConfig,
       });
       const pair = pairArenaRows(candidate, reference);
       fullTeamPairs.push(pair);
@@ -1064,6 +1159,8 @@ function main() {
             sampleEvery: args.sampleEvery,
             seed: args.seed,
             repeatIndex: repeat,
+            recoveryTraceRows,
+            recoveryTraceConfig,
           });
           const reference = runArenaMatch({
             mode: "plug_and_play",
@@ -1080,6 +1177,8 @@ function main() {
             sampleEvery: args.sampleEvery,
             seed: args.seed,
             repeatIndex: repeat,
+            recoveryTraceRows,
+            recoveryTraceConfig,
           });
           const pair = pairArenaRows(candidate, reference);
           plugPairs.push(pair);
@@ -1101,6 +1200,26 @@ function main() {
     args,
     scenarios,
   });
+  summary.recovery_trace = {
+    enabled: Boolean(args.recoveryTraceOutput),
+    row_count: recoveryTraceRows.length,
+    output: args.recoveryTraceOutput,
+    max_per_failure_per_role_match: args.recoveryTraceMaxPerFailure,
+    gap_seconds: args.recoveryTraceGapSeconds,
+    history_samples: args.recoveryTraceHistorySamples,
+  };
+  if (args.recoveryTraceOutput) {
+    writeRecoveryTrace(
+      args.recoveryTraceOutput,
+      {
+        source_ref: args.sourceRef,
+        provenance: summary.provenance,
+        config: summary.config,
+        trace_config: summary.recovery_trace,
+      },
+      recoveryTraceRows,
+    );
+  }
   const rendered = JSON.stringify(summary, null, 2) + "\n";
   if (args.output) {
     fs.mkdirSync(path.dirname(args.output), { recursive: true });
