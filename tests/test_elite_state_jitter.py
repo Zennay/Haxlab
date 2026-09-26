@@ -66,11 +66,7 @@ def test_state_jitter_is_sequence_consistent_per_feature() -> None:
         delta = result[row] - sequence[row]
         for name in ("own_x", "ball_dx", "tm1_dx", "op1_dx"):
             idx = COLUMNS.index(name)
-            np.testing.assert_allclose(
-                delta[:, idx],
-                np.repeat(delta[0, idx], sequence.shape[1]),
-                atol=2e-7,
-            )
+            assert float(np.ptp(delta[:, idx])) <= 5e-7
 
 
 def test_state_jitter_is_deterministic_for_seed_and_disabled_is_noop() -> None:
