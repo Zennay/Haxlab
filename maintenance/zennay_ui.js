@@ -20,10 +20,10 @@
       var r=p.resource||{};
       var cpu=r.cpu_percent==null?'meten…':num(r.cpu_percent)+'%';
       var mem=r.memory_bytes?num(r.memory_bytes/1048576)+' MB':'—';
-      var disabled=r.managed?'':' disabled';
+      var disabled=' disabled';
       return '<div class="resource-row"><div><strong>'+esc(p.name)+'</strong><small>'+(r.managed?'CPU '+cpu+' · RAM '+mem:'Geen persistente VPS-worker')+'</small></div><select data-resource-priority="'+esc(p.id)+'"'+disabled+'><option value="background" '+(r.priority==='background'?'selected':'')+'>Background</option><option value="normal" '+(r.priority==='normal'?'selected':'')+'>Normaal</option><option value="high" '+(r.priority==='high'?'selected':'')+'>High</option></select></div>';
     }).join('');
-    return '<div class="panel resource-panel"><div class="panel-header"><div><h2>Resource priority</h2><div class="panel-subtitle">Relatieve CPU/IO-prioriteit · geen harde cap</div></div>'+icon('cpu')+'</div><div class="resource-grid">'+rows+'</div><div class="detail-note">Background blijft doorwerken en mag vrije CPU gebruiken; bij contention krijgen High-projecten voorrang.</div></div>';
+    return '<div class="panel resource-panel"><div class="panel-header"><div><h2>Resource priority</h2><div class="panel-subtitle">Relatieve CPU/IO-prioriteit · geen harde cap</div></div>'+icon('cpu')+'</div><div class="resource-grid">'+rows+'</div><div class="detail-note">Background blijft doorwerken en mag vrije CPU gebruiken; bij contention krijgen High-projecten voorrang. Wijzigen is bewust geblokkeerd zolang het dashboard geen login heeft.</div></div>';
   }
   function alertsPanel(){
     var a=DATA.alerts||[];
