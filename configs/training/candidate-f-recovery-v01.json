@@ -1,0 +1,97 @@
+{
+  "schema": "haxlab-candidate-f-recovery-contract-v1",
+  "candidate": "F",
+  "frozen_before_training": true,
+  "base": {
+    "candidate_e_code_sha": "475bcaf9a5e4dcf325654cde93c485d2dd56fee2",
+    "recovery_pipeline_sha": "b1bf0893ef2d169b3440a23d3607bf27ad85e193",
+    "seed": 1337,
+    "epochs": 3,
+    "human_batch_size": 2048,
+    "learning_rate": 0.0008,
+    "l2": 0.00001,
+    "future_loss_weight": 0.5,
+    "future_horizon_steps": 5,
+    "window": 8,
+    "state_jitter_std": 0.05,
+    "state_jitter_roles": ["am", "st"],
+    "expected_human_batches_per_epoch": 5675,
+    "expected_human_sequence_samples_per_epoch": 8313339
+  },
+  "human_indexes": {
+    "train": {
+      "sha256": "920ca18fdbc3682130307c01f91d61ad745d6642824f19962c6a2c614ffe1923"
+    },
+    "validation": {
+      "sha256": "baaa00830ec3906640e893344262282d931de15b7a1c5c63485df1da44d6ba27"
+    },
+    "holdout": {
+      "sha256": "a80b9789547ba3befd993bfd4c62c84b2c2c999a6d9283d9b2ef3c08451083fe"
+    }
+  },
+  "recovery_dataset": {
+    "dataset_id": "candidate-e-arena-v2-recovery-v2",
+    "manifest_sha256": "e34e5e5a16004898d4e13c275794dc1d8012a9cedf23718cddb5ef578b439755",
+    "raw_trace_rows": 11560,
+    "deduplicated_rows": 11095,
+    "split_counts": {
+      "train": 8586,
+      "validation": 1356,
+      "evaluation": 1153
+    },
+    "eligible_filter": {
+      "split": "train",
+      "recovery_window_length": 8,
+      "failure_any_of": ["boundary", "role_deviation"]
+    },
+    "eligible_counts": {
+      "train": 3341,
+      "validation": 543,
+      "evaluation": 457
+    },
+    "eligible_train_by_role": {
+      "gk": 712,
+      "dm": 889,
+      "am": 889,
+      "st": 851
+    }
+  },
+  "recovery_supervision": {
+    "target": "direction_only_geometric_role_recovery",
+    "target_source": "auxiliary_targets.role_target",
+    "target_formula": {
+      "dx": "role_target.canonical_x - final_frame.features.own_x",
+      "dy": "role_target.y - final_frame.features.own_y",
+      "deadzone": 7,
+      "classes": "existing_9_way_direction_classes"
+    },
+    "failed_policy_action_is_never_a_target": true,
+    "kick_loss": false,
+    "future_direction_loss": false,
+    "team_shape_loss": false,
+    "recovery_state_jitter": false,
+    "recovery_sample_weight": 1.0,
+    "recovery_l2_term": false,
+    "optimizer_effect": "shared_trunk_plus_direction_head_only"
+  },
+  "mixing": {
+    "human_path_unchanged": true,
+    "recovery_batch_size": 256,
+    "insert_recovery_update_after_every_human_updates": 100,
+    "expected_recovery_updates_per_epoch": 56,
+    "expected_recovery_draws_per_epoch": 14336,
+    "optimizer_step_share": 0.009771418600593265,
+    "sampling": "epoch-seeded permutation of eligible state_fingerprints, repeated cyclically without replacement within each pass",
+    "recovery_epoch_seed": "1337 + epoch_number",
+    "role_or_failure_reweighting": false
+  },
+  "selection_and_evaluation": {
+    "best_epoch_selection": "unchanged_candidate_e_human_validation_score_only",
+    "recovery_validation": "diagnostic_direction_accuracy_only_not_used_for_selection",
+    "recovery_evaluation": "untouched_until_model_selection_then_report_once",
+    "human_frozen_holdout": "unchanged_one_final_evaluation",
+    "promotion_suite": "promotion-v2-frozen-suite-v4",
+    "promotion_suite_manifest_sha256": "3d2c365cae266fc91ab18865cfa371b94e3694f77d2f47a32761335b2bdcf5c3",
+    "promotion_threshold_changes": false
+  }
+}
