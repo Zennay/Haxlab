@@ -22,9 +22,35 @@ function discOf(player) {
   return player?.disc?.ext || player?.disc || null;
 }
 
+function collectionValues(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  if (typeof value.values === "function") {
+    try {
+      return Array.from(value.values());
+    } catch (_) {}
+  }
+  if (
+    typeof value !== "string" &&
+    typeof value[Symbol.iterator] === "function"
+  ) {
+    try {
+      return Array.from(value);
+    } catch (_) {}
+  }
+  if (typeof value === "object") {
+    return Object.values(value).filter(
+      (item) => item && typeof item === "object",
+    );
+  }
+  return [];
+}
+
 function statePlayers(state) {
-  if (Array.isArray(state?.players)) return state.players;
-  if (Array.isArray(state?.playerList)) return state.playerList;
+  const direct = collectionValues(state?.players);
+  if (direct.length) return direct;
+  const listed = collectionValues(state?.playerList);
+  if (listed.length) return listed;
   return [];
 }
 
@@ -138,6 +164,7 @@ module.exports = {
   FEATURE_NAMES,
   num,
   discOf,
+  collectionValues,
   statePlayers,
   entityVector,
   nearestVectors,
