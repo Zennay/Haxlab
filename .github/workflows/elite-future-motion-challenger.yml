@@ -33,30 +33,63 @@ jobs:
           test -f "$ROOT/shards/validation/_index.json"
           test -f "$ROOT/shards/holdout/_index.json"
 
-      - name: Train future-motion challenger from existing shards
+      - name: Reuse or train deterministic future-motion challenger
         shell: bash
         run: |
           set -euo pipefail
           ROOT=/var/lib/haxlab/derived/training/elite-player-champion-candidate
           OUT=/var/lib/haxlab/derived/training/elite-player-future-challenger/model
-          sudo -u haxlab rm -rf "$OUT"
-          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
-            /opt/haxlab/.venv/bin/python -m haxlab.learning.elite \
-            --train-index "$ROOT/shards/train/_index.json" \
-            --validation-index "$ROOT/shards/validation/_index.json" \
-            --holdout-index "$ROOT/shards/holdout/_index.json" \
-            --output-dir "$OUT" \
-            --window 8 \
-            --sequence-stride 1 \
-            --hidden-dim 128 \
-            --hidden-dim-2 96 \
-            --epochs 3 \
-            --batch-size 2048 \
-            --learning-rate 0.0008 \
-            --future-horizon-steps 5 \
-            --future-loss-weight 0.35 \
-            --seed 1337 \
-            | tee /tmp/haxlab-future-challenger-training.log
+
+          if sudo -u haxlab /opt/haxlab/.venv/bin/python - "$OUT/metrics.json" "$OUT/runtime-model.json" <<'PY'
+          import json
+          import math
+          import sys
+          from pathlib import Path
+
+          metrics_path = Path(sys.argv[1])
+          runtime_path = Path(sys.argv[2])
+          if not metrics_path.is_file() or not runtime_path.is_file():
+              raise SystemExit(1)
+
+          metrics = json.loads(metrics_path.read_text())
+          arch = metrics.get("architecture") or {}
+          train = metrics.get("training") or {}
+          checks = [
+              int(arch.get("window") or 0) == 8,
+              int(arch.get("hidden_dim") or 0) == 128,
+              int(arch.get("hidden_dim_2") or 0) == 96,
+              int(train.get("seed") or -1) == 1337,
+              int(train.get("epochs_requested") or 0) == 3,
+              int(train.get("future_horizon_steps") or 0) == 5,
+              math.isclose(float(train.get("future_loss_weight") or -1), 0.35, abs_tol=1e-9),
+              math.isclose(float(train.get("learning_rate") or -1), 0.0008, abs_tol=1e-12),
+              int((metrics.get("final_holdout") or {}).get("samples") or 0) > 0,
+          ]
+          raise SystemExit(0 if all(checks) else 1)
+          PY
+          then
+            echo "Reusing deterministic future-motion model already produced on this VPS."
+          else
+            echo "No matching completed model found; training from frozen champion shards."
+            sudo -u haxlab rm -rf "$OUT"
+            sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+              /opt/haxlab/.venv/bin/python -m haxlab.learning.elite \
+              --train-index "$ROOT/shards/train/_index.json" \
+              --validation-index "$ROOT/shards/validation/_index.json" \
+              --holdout-index "$ROOT/shards/holdout/_index.json" \
+              --output-dir "$OUT" \
+              --window 8 \
+              --sequence-stride 1 \
+              --hidden-dim 128 \
+              --hidden-dim-2 96 \
+              --epochs 3 \
+              --batch-size 2048 \
+              --learning-rate 0.0008 \
+              --future-horizon-steps 5 \
+              --future-loss-weight 0.35 \
+              --seed 1337 \
+              | tee /tmp/haxlab-future-challenger-training.log
+          fi
 
       - name: Re-evaluate champion and challenger on identical frozen holdout
         shell: bash
