@@ -13,7 +13,7 @@ ROLES = ("gk", "dm", "am", "st")
 
 @dataclass(frozen=True)
 class ClosedLoopArenaPolicy:
-    policy_version: str = "closed-loop-arena-v2-calibration-2"
+    policy_version: str = "closed-loop-arena-v2-frozen-1"
     calibrated: bool = False
 
     minimum_team_matches: int = 4
@@ -34,13 +34,15 @@ class ClosedLoopArenaPolicy:
     max_formation_order_regression: float = 0.05
     max_shape_collapse_regression: float = 0.05
 
-    # Absolute strength thresholds are intentionally disabled for promotion
-    # until real reference runs have calibrated/frozen them.
-    minimum_team_proxy_match_score: float = 0.55
+    # Frozen absolute thresholds calibrated on the 3-source x 16-scenario
+    # Arena v2 batch at code SHA 46efb908a0e7. They remain fail-closed unless
+    # calibrated=True / --calibrated is explicitly enabled by the caller.
+    # Champion-self passed 3/3; Candidate D and the zero-policy control 0/3.
+    minimum_team_proxy_match_score: float = 0.50
     minimum_plug_proxy_match_score: float = 0.50
-    max_absolute_far_stall_rate: float = 0.30
-    max_absolute_held_action_seconds: float = 5.0
-    minimum_absolute_context_adaptation_rate: float = 0.35
+    max_absolute_far_stall_rate: float = 0.90
+    max_absolute_held_action_seconds: float = 30.0
+    minimum_absolute_context_adaptation_rate: float = 0.25
 
 
 @dataclass(frozen=True)
