@@ -5,18 +5,38 @@ ftmo high 800
 cloud normal 400
 supa normal 400
 Traceback (most recent call last):
-  File "/opt/actions-runner-haxlab/_work/Haxlab/Haxlab/maintenance/apply_zennay_cloud.py", line 326, in <module>
-    agp = re.search(r'com\\.android\\.application"\\) version "([0-9.]+)"', root_build)
-  File "/usr/lib/python3.14/re/__init__.py", line 177, in search
-    return _compile(pattern, flags).search(string)
-           ~~~~~~~~^^^^^^^^^^^^^^^^
-  File "/usr/lib/python3.14/re/__init__.py", line 350, in _compile
-    p = _compiler.compile(pattern, flags)
-  File "/usr/lib/python3.14/re/_compiler.py", line 762, in compile
-    p = _parser.parse(p, flags)
-  File "/usr/lib/python3.14/re/_parser.py", line 978, in parse
-    raise source.error("unbalanced parenthesis")
-re.PatternError: unbalanced parenthesis at position 30
+  File "/opt/actions-runner-haxlab/_work/Haxlab/Haxlab/maintenance/apply_zennay_cloud.py", line 344, in <module>
+    run([str(gradle_bin),"-p",str(wear),":app:assembleDebug"], env=env)
+    ~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/actions-runner-haxlab/_work/Haxlab/Haxlab/maintenance/apply_zennay_cloud.py", line 13, in run
+    return subprocess.run(args, **kw)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/usr/lib/python3.14/subprocess.py", line 555, in run
+    with Popen(*popenargs, **kwargs) as process:
+         ~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/subprocess.py", line 1039, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                        pass_fds, cwd, env,
+                        ^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+                        gid, gids, uid, umask,
+                        ^^^^^^^^^^^^^^^^^^^^^^
+                        start_new_session, process_group)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/subprocess.py", line 1875, in _execute_child
+    self._posix_spawn(args, executable, env, restore_signals, close_fds,
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                      p2cread, p2cwrite,
+                      ^^^^^^^^^^^^^^^^^^
+                      c2pread, c2pwrite,
+                      ^^^^^^^^^^^^^^^^^^
+                      errread, errwrite)
+                      ^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/subprocess.py", line 1819, in _posix_spawn
+    self.pid = os.posix_spawn(executable, args, env, **kwargs)
+               ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+PermissionError: [Errno 13] Permission denied: '/home/ubuntu/.cache/zennay-gradle/gradle-8.13/bin/gradle'
 
 === service health ===
 active
