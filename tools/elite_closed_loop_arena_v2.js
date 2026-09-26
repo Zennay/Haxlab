@@ -39,7 +39,8 @@ function usage() {
       "[--partner-model runtime-model.json ...] [--seconds 30] " +
       "[--max-scenarios 4] [--sample-every 6] [--plug-repeats 1] " +
       "[--seed 1337] [--output result.json] " +
-      "[--recovery-trace-output trace.jsonl] [--source-ref git-sha]",
+      "[--recovery-trace-output trace.jsonl] [--source-ref git-sha] " +
+      "[--source-replay-sha256 sha256]",
   );
   process.exit(2);
 }
@@ -55,6 +56,7 @@ function parseArgs(argv) {
     output: null,
     recoveryTraceOutput: null,
     sourceRef: null,
+    sourceReplaySha256: null,
     recoveryTraceMaxPerFailure: 4,
     recoveryTraceGapSeconds: 2,
     recoveryTraceHistorySamples: 4,
@@ -86,6 +88,9 @@ function parseArgs(argv) {
       args.recoveryTraceOutput = value; i += 1;
     }
     else if (key === "--source-ref") { args.sourceRef = value; i += 1; }
+    else if (key === "--source-replay-sha256") {
+      args.sourceReplaySha256 = value; i += 1;
+    }
     else if (key === "--recovery-trace-max-per-failure") {
       args.recoveryTraceMaxPerFailure = Number(value); i += 1;
     }
@@ -102,6 +107,15 @@ function parseArgs(argv) {
     usage();
   }
   if (!args.partnerModels.length) args.partnerModels = [args.champion];
+  if (args.recoveryTraceOutput) {
+    const replaySha = String(args.sourceReplaySha256 || "").toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(replaySha)) {
+      throw new Error(
+        "--source-replay-sha256 is required and must be a 64-char SHA-256 when recovery tracing is enabled",
+      );
+    }
+    args.sourceReplaySha256 = replaySha;
+  }
   args.seconds = Math.max(5, Number(args.seconds) || 30);
   args.maxScenarios = Math.max(1, Math.floor(args.maxScenarios || 4));
   args.sampleEvery = Math.max(1, Math.floor(args.sampleEvery || 6));
@@ -1047,6 +1061,7 @@ function summarizeArena({
       stadium_sha256: sha256File(args.stadium),
       scenarios: args.scenarios,
       scenarios_sha256: sha256File(args.scenarios),
+      source_replay_sha256: args.sourceReplaySha256,
     },
     config: {
       seconds: args.seconds,
