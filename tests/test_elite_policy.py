@@ -141,6 +141,8 @@ def test_temporal_elite_policy_trains_with_validation_only_calibration(
     assert result["training"]["best_epoch"] >= 1
     assert result["final_validation"]["samples"] > 0
     assert result["final_holdout"]["samples"] > 0
+    assert 0.0 <= result["final_holdout"]["future_direction_accuracy"] <= 1.0
+    assert result["final_holdout"]["future_horizon_steps"] == 5
     assert set(result["final_holdout"]["by_role"]) == {"gk", "dm", "am", "st"}
     assert (output / "model.npz").exists()
     assert (output / "runtime-model.json").exists()
@@ -149,7 +151,10 @@ def test_temporal_elite_policy_trains_with_validation_only_calibration(
     runtime_model = json.loads((output / "runtime-model.json").read_text())
     assert runtime_model["schema"] == "haxlab-elite-js-runtime-v1"
     assert runtime_model["window"] == 4
+    assert runtime_model["future_horizon_steps"] == 5
     assert runtime_model["base_input_columns"] == result["base_input_columns"]
+    assert "wf" in runtime_model["weights"]
+    assert "bf" in runtime_model["weights"]
     assert len(runtime_model["weights"]["w1"]) == result["architecture"]["input_dim"]
 
     policy = ElitePolicy(output)
@@ -211,6 +216,18 @@ def test_temporal_elite_policy_trains_with_validation_only_calibration(
         assert node_action["dir_y"] == python_action["dir_y"]
         assert node_action["kick"] == python_action["kick"]
         assert node_action["direction_class"] == python_action["direction_class"]
+        assert node_action["future_head_available"] is True
+        assert python_action["future_head_available"] is True
+        assert (
+            node_action["future_direction_class"]
+            == python_action["future_direction_class"]
+        )
+        assert node_action["future_dir_x"] == python_action["future_dir_x"]
+        assert node_action["future_dir_y"] == python_action["future_dir_y"]
+        assert abs(
+            node_action["future_direction_probability"]
+            - python_action["future_direction_probability"]
+        ) < 1e-4
         assert abs(
             node_action["kick_probability"]
             - python_action["kick_probability"]
