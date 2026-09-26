@@ -142,6 +142,16 @@ jobs:
 
           sudo cat /var/lib/haxlab/derived/training/elite-player-pr-smoke/sandbox-benchmark.json
 
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/sandbox_side_sanity.js" \
+            --stadium /tmp/haxlab-benchmark-stadium.hbs \
+            --matches 6 \
+            --minutes 0.75 \
+            --sample-every 6 \
+            --output /var/lib/haxlab/derived/training/elite-player-pr-smoke/side-sanity.json
+
+          sudo cat /var/lib/haxlab/derived/training/elite-player-pr-smoke/side-sanity.json
+
       - name: Surface smoke metrics
         shell: bash
         run: |
