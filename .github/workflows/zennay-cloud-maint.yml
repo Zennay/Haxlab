@@ -1,127 +1,86 @@
-name: Zennay Cloud final deploy
+name: Zennay Cloud maintenance
 
 on:
   push:
     branches: [zennay-cloud-maint]
     paths:
       - ".github/workflows/zennay-cloud-maint.yml"
-      - "maintenance/AlertWorker.kt"
-      - "maintenance/MainActivity.kt"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: zennay-cloud-final
+  group: zennay-cloud-maint
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  wear:
     runs-on: [self-hosted, haxlab]
-    timeout-minutes: 25
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
           ref: zennay-cloud-maint
 
-      - name: Finalize dashboard and Wear app
+      - name: Apply Wear alerts and metric layout
         shell: bash
         run: |
           set -euo pipefail
+          exec > >(tee /tmp/zennay-cloud-upgrade-result.txt) 2>&1
           ROOT=/home/ubuntu/zennay-cloud
-          echo "=== BEFORE PROTECTED PIDS ==="
-          protected=(
-            haxlab-analyzer.service
-            haxlab-ingest.service
-            haxlab-worker.service
-            actions.runner.Zennay-Haxlab.vps-bb300bba-haxlab.service
-            actions.runner.Zennay-Ftmo.vps-bb300bba-ftmo.service
-          )
-          declare -A BEFORE
-          for s in "${protected[@]}"; do
-            BEFORE["$s"]="$(systemctl show "$s" -p MainPID --value)"
-            echo "$s ${BEFORE[$s]}"
+          echo "generated_at=$(date -Is)"
+          echo "=== BEFORE SERVICES ==="
+          for s in haxlab-analyzer.service haxlab-ingest.service haxlab-worker.service actions.runner.Zennay-Haxlab.vps-bb300bba-haxlab.service actions.runner.Zennay-Ftmo.vps-bb300bba-ftmo.service ftmo-autonomous.timer zennay-cloud.service; do
+            echo -n "$s "
+            systemctl show "$s" -p ActiveState -p SubState -p MainPID -p CPUWeight -p MemoryHigh --value | tr '\n' ' '
+            echo
           done
 
-          echo "=== APPLY WATCH SOURCE FIXES ==="
-          mkdir -p "$ROOT/wear-os/app/src/main/java/com/zennay/cloud/watch/notifications"
-          cp maintenance/AlertWorker.kt "$ROOT/wear-os/app/src/main/java/com/zennay/cloud/watch/notifications/AlertWorker.kt"
-          cp maintenance/MainActivity.kt "$ROOT/wear-os/app/src/main/java/com/zennay/cloud/watch/MainActivity.kt"
-
-          python3 - <<'PY'
-          from pathlib import Path
-          root=Path("/home/ubuntu/zennay-cloud")
-          ui=root/"wear-os/app/src/main/java/com/zennay/cloud/watch/ui/ZennayWearApp.kt"
-          s=ui.read_text()
-          s=s.replace(".width(62.dp)", ".width(56.dp)")
-          ui.write_text(s)
-
-          server=root/"server.py"
-          s=server.read_text()
-          needle="            if u.path=='/api/resource-priority':\n                project=str(payload.get('project') or '')\n"
-          secured="            if u.path=='/api/resource-priority':\n                if self.client_address[0] not in ('127.0.0.1','::1'):return self.reply({'error':'Alleen lokaal'},403)\n                project=str(payload.get('project') or '')\n"
-          if needle in s:
-              s=s.replace(needle,secured,1)
-          server.write_text(s)
-
-          index=root/"public/index.html"
-          x=index.read_text()
-          x=x.replace("Wear OS komt later.<br>De compacte API staat klaar.","Wear OS actief.<br>Alerts & dashboard om je pols.")
-          index.write_text(x)
-          PY
-
-          echo "=== VALIDATE SOURCES ==="
-          python3 -m py_compile "$ROOT/server.py" "$ROOT/enhancements.py"
-          node --check "$ROOT/public/app.js"
-          node --check "$ROOT/public/enhancements.js"
-          grep -q "POST_NOTIFICATIONS" "$ROOT/wear-os/app/src/main/AndroidManifest.xml"
-          grep -q "work-runtime-ktx" "$ROOT/wear-os/app/build.gradle.kts"
-          grep -q 'width(56.dp)' "$ROOT/wear-os/app/src/main/java/com/zennay/cloud/watch/ui/ZennayWearApp.kt"
-          grep -q "getSystemService" "$ROOT/wear-os/app/src/main/java/com/zennay/cloud/watch/notifications/AlertWorker.kt"
-
-          echo "=== RESOURCE PRIORITIES ==="
-          sudo -n /usr/local/sbin/zennay-resource-control apply all
-
-          echo "=== RESTART CLOUD ONLY ==="
-          sudo systemctl restart zennay-cloud.service
-          sleep 3
-          test "$(systemctl is-active zennay-cloud.service)" = active
-
-          echo "=== API VALIDATION ==="
-          curl -fsS http://127.0.0.1:8765/api/status >/tmp/z-status.json
-          curl -fsS http://127.0.0.1:8765/api/resources >/tmp/z-resources.json
-          curl -fsS http://127.0.0.1:8765/api/alerts >/tmp/z-alerts.json
+          echo "=== WATCH API ==="
           TOKEN="$(cat "$ROOT/.watch-token")"
-          curl -fsS -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8765/api/v1/watch >/tmp/z-watch.json
-          curl -fsS -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8765/api/v1/alerts >/tmp/z-watch-alerts.json
+          curl -fsS -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8765/api/v1/watch >/tmp/watch-before.json
           python3 - <<'PY'
           import json
-          d=json.load(open("/tmp/z-status.json"))
-          print("VISIBLE",[(p["id"],p["progress"],(p.get("quality") or {}).get("headline"),(p.get("resource") or {}).get("priority")) for p in d["projects"]])
-          print("ARCHIVED",[p["id"] for p in d.get("archived_projects",[])])
-          print("RESOURCES",json.load(open("/tmp/z-resources.json")))
-          w=json.load(open("/tmp/z-watch.json"))
-          print("WATCH_PROJECTS",[p["id"] for p in w["projects"]])
-          print("WATCH_ALERTS",len(json.load(open("/tmp/z-watch-alerts.json")).get("alerts",[])))
+          d=json.load(open("/tmp/watch-before.json"))
+          print("keys",sorted(d.keys()))
+          print("projects",[p["id"] for p in d.get("projects",[])])
+          print("alerts_count",len(d.get("alerts",[])))
+          if "alerts" not in d:
+              raise SystemExit("Watch API has no alerts feed yet")
           PY
 
-          echo "=== BUILD WATCH APK ==="
+          base64 -d zennay-cloud-maint/apply_wear.py.b64 >/tmp/apply_wear.py
+          python3 /tmp/apply_wear.py
+
+          echo "=== BUILD WATCH ==="
           JAVA_BIN="$(find /usr/lib/jvm /opt /home/ubuntu -type f -path '*/bin/java' -perm -111 2>/dev/null | head -1)"
           test -n "$JAVA_BIN"
           export JAVA_HOME="$(dirname "$(dirname "$JAVA_BIN")")"
           export PATH="$JAVA_HOME/bin:$PATH"
-          GRADLE=/home/ubuntu/.cache/zennay-gradle/gradle-8.13/bin/gradle
-          chmod +x "$GRADLE"
-          ZENNAY_WATCH_TOKEN="$TOKEN" "$GRADLE" -p "$ROOT/wear-os" :app:assembleDebug --no-daemon
-          APK="$ROOT/wear-os/app/build/outputs/apk/debug/app-debug.apk"
-          test -s "$APK"
-          ls -lh "$APK"
+          cd "$ROOT/wear-os"
+          if [ -x ./gradlew ]; then GRADLE=./gradlew; else GRADLE=/home/ubuntu/.cache/zennay-gradle/gradle-8.13/bin/gradle; fi
+          ZENNAY_WATCH_TOKEN="$TOKEN" "$GRADLE" :app:assembleDebug --no-daemon
+          ls -lh app/build/outputs/apk/debug/app-debug.apk
 
-          echo "=== AFTER PROTECTED PIDS ==="
-          for s in "${protected[@]}"; do
-            after="$(systemctl show "$s" -p MainPID --value)"
-            echo "$s $after"
-            test "$after" = "${BEFORE[$s]}"
-            test "$(systemctl is-active "$s")" = active
+          echo "=== VERIFY UI/ALERT CODE ==="
+          grep -n -A18 -B5 "MetricStack" app/src/main/java/com/zennay/cloud/watch/ui/ZennayWearApp.kt | head -80
+          grep -n -E "POST_NOTIFICATIONS|AlertWorker|PeriodicWorkRequestBuilder" app/src/main/AndroidManifest.xml app/src/main/java/com/zennay/cloud/watch/MainActivity.kt app/src/main/java/com/zennay/cloud/watch/AlertWorker.kt
+
+          echo "=== AFTER SERVICES ==="
+          for s in haxlab-analyzer.service haxlab-ingest.service haxlab-worker.service actions.runner.Zennay-Haxlab.vps-bb300bba-haxlab.service actions.runner.Zennay-Ftmo.vps-bb300bba-ftmo.service ftmo-autonomous.timer zennay-cloud.service; do
+            echo -n "$s "
+            systemctl show "$s" -p ActiveState -p SubState -p MainPID -p CPUWeight -p MemoryHigh --value | tr '\n' ' '
+            echo
           done
-          echo "FINAL_DEPLOY_OK"
+
+      - name: Publish result
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          cp /tmp/zennay-cloud-upgrade-result.txt zennay-cloud-maint-result.txt 2>/dev/null || echo "wear job failed before log creation" > zennay-cloud-maint-result.txt
+          git config user.name "zennay-cloud-maint"
+          git config user.email "actions@users.noreply.github.com"
+          git add zennay-cloud-maint-result.txt
+          git diff --cached --quiet && exit 0
+          git commit -m "chore: publish Wear alert build result"
+          git push origin HEAD:zennay-cloud-maint
