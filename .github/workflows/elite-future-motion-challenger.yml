@@ -1,0 +1,183 @@
+name: Elite Future Motion Challenger
+
+on:
+  push:
+    branches:
+      - feature/elite-4v4-player-v01
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-elite-future-motion-challenger
+  cancel-in-progress: true
+
+jobs:
+  challenger:
+    if: contains(github.event.head_commit.message, '[future]')
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify champion shards and model
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=/var/lib/haxlab/derived/training/elite-player-champion-candidate
+          test -f "$ROOT/model/runtime-model.json"
+          test -f "$ROOT/model/metrics.json"
+          test -f "$ROOT/shards/train/_index.json"
+          test -f "$ROOT/shards/validation/_index.json"
+          test -f "$ROOT/shards/holdout/_index.json"
+
+      - name: Train future-motion challenger from existing shards
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=/var/lib/haxlab/derived/training/elite-player-champion-candidate
+          OUT=/var/lib/haxlab/derived/training/elite-player-future-challenger/model
+          sudo -u haxlab rm -rf "$OUT"
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m haxlab.learning.elite \
+            --train-index "$ROOT/shards/train/_index.json" \
+            --validation-index "$ROOT/shards/validation/_index.json" \
+            --holdout-index "$ROOT/shards/holdout/_index.json" \
+            --output-dir "$OUT" \
+            --window 8 \
+            --sequence-stride 1 \
+            --hidden-dim 128 \
+            --hidden-dim-2 96 \
+            --epochs 3 \
+            --batch-size 2048 \
+            --learning-rate 0.0008 \
+            --future-horizon-steps 5 \
+            --future-loss-weight 0.35 \
+            --seed 1337 \
+            | tee /tmp/haxlab-future-challenger-training.log
+
+      - name: Select healthy 4v4 replay
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m haxlab.evaluation.scenario_source \
+            --state-db /var/lib/haxlab/state/haxlab.sqlite3 \
+            --max-candidates 1500 \
+            --output /tmp/haxlab-future-scenario-source.json
+
+      - name: Export identical stadium and scenarios
+        shell: bash
+        run: |
+          set -euo pipefail
+          RAW_REPLAY="$(
+            /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          print(json.load(open("/tmp/haxlab-future-scenario-source.json"))["raw_path"])
+          PY
+          )"
+          ANALYSIS="$(
+            /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          print(json.load(open("/tmp/haxlab-future-scenario-source.json"))["analysis_path"])
+          PY
+          )"
+
+          NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/extract_stadium_from_replay.js" \
+            "$RAW_REPLAY" \
+            /tmp/haxlab-future-stadium.hbs
+
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/extract_replay_scenarios.js" \
+            "$RAW_REPLAY" \
+            "$ANALYSIS" \
+            /tmp/haxlab-future-scenarios.json \
+            16 \
+            8 \
+            6
+
+      - name: Benchmark current champion
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js" \
+            --model /var/lib/haxlab/derived/training/elite-player-champion-candidate/model/runtime-model.json \
+            --stadium /tmp/haxlab-future-stadium.hbs \
+            --scenarios /tmp/haxlab-future-scenarios.json \
+            --max-scenarios 8 \
+            --seconds 30 \
+            --sample-every 6 \
+            --disable-recovery \
+            --output /tmp/haxlab-future-champion.json
+
+      - name: Benchmark future challenger without assist
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js" \
+            --model /var/lib/haxlab/derived/training/elite-player-future-challenger/model/runtime-model.json \
+            --stadium /tmp/haxlab-future-stadium.hbs \
+            --scenarios /tmp/haxlab-future-scenarios.json \
+            --max-scenarios 8 \
+            --seconds 30 \
+            --sample-every 6 \
+            --disable-recovery \
+            --output /tmp/haxlab-future-plain.json
+
+      - name: Benchmark future challenger with learned assist
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js" \
+            --model /var/lib/haxlab/derived/training/elite-player-future-challenger/model/runtime-model.json \
+            --stadium /tmp/haxlab-future-stadium.hbs \
+            --scenarios /tmp/haxlab-future-scenarios.json \
+            --max-scenarios 8 \
+            --seconds 30 \
+            --sample-every 6 \
+            --disable-recovery \
+            --future-assist \
+            --future-assist-confidence 0.45 \
+            --future-assist-min-distance 80 \
+            --output /tmp/haxlab-future-assisted.json
+
+      - name: Evaluate challenger promotion
+        shell: bash
+        run: |
+          set -euo pipefail
+          node "$GITHUB_WORKSPACE/tools/compare_future_challenger.js" \
+            /var/lib/haxlab/derived/training/elite-player-champion-candidate/model/metrics.json \
+            /var/lib/haxlab/derived/training/elite-player-future-challenger/model/metrics.json \
+            /tmp/haxlab-future-champion.json \
+            /tmp/haxlab-future-plain.json \
+            /tmp/haxlab-future-assisted.json \
+            /tmp/haxlab-future-promotion.json
+
+      - name: Publish evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo cat /var/lib/haxlab/derived/training/elite-player-future-challenger/model/metrics.json > future-metrics.json
+          cp /tmp/haxlab-future-champion.json future-champion.json
+          cp /tmp/haxlab-future-plain.json future-plain.json
+          cp /tmp/haxlab-future-assisted.json future-assisted.json
+          cp /tmp/haxlab-future-promotion.json future-promotion.json
+
+          echo '## HaxLab Future Motion Challenger' >> "$GITHUB_STEP_SUMMARY"
+          cat future-promotion.json >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: elite-future-motion-challenger
+          path: |
+            future-metrics.json
+            future-champion.json
+            future-plain.json
+            future-assisted.json
+            future-promotion.json
+          retention-days: 30
