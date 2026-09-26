@@ -30,7 +30,7 @@ jobs:
           node --check "$GITHUB_WORKSPACE/tools/elite_champion_config.js"
           node --check "$GITHUB_WORKSPACE/tools/elite_bot_plugin.js"
 
-      - name: Require canary-validated current champion
+      - name: Require runtime-validated current champion
         shell: bash
         run: |
           set -euo pipefail
@@ -40,17 +40,17 @@ jobs:
 
           root = Path("/var/lib/haxlab/derived/champions/elite-player")
           pointer = json.loads((root / "current.json").read_text())
-          if pointer.get("validation_stage") != "canary":
+          if pointer.get("validation_stage") != "runtime":
               raise SystemExit(
-                  "Current champion must be canary validated before live activation; "
+                  "Current champion must pass plugin runtime validation before live activation; "
                   f"got {pointer.get('validation_stage')!r}"
               )
           evidence = Path(pointer["validation_evidence_path"])
           if not evidence.is_file():
-              raise SystemExit(f"Canary evidence missing: {evidence}")
+              raise SystemExit(f"Runtime evidence missing: {evidence}")
           payload = json.loads(evidence.read_text())
           if payload.get("validated") is not True:
-              raise SystemExit("Canary evidence no longer passes")
+              raise SystemExit("Runtime evidence no longer passes")
           print(json.dumps({
               "version_id": pointer["version_id"],
               "validation_stage": pointer["validation_stage"],
@@ -79,7 +79,7 @@ jobs:
 
           assert live["version_id"] == current["version_id"], (live, current)
           assert live["validation_stage"] == "live", live
-          assert live["source_validation_stage"] == "canary", live
+          assert live["source_validation_stage"] == "runtime", live
 
           runtime = Path(live["runtime_model_path"])
           model = Path(live["model_path"])
