@@ -27,7 +27,7 @@ jobs:
             echo "=== APP SOURCE ==="
             sed -n '1,95p' /home/ubuntu/zennay-cloud/public/app.js
             echo "=== RESOURCE IMPLEMENTATION ==="
-            grep -n -A120 -B20 "def set_priority" /home/ubuntu/zennay-cloud/enhancements.py || true
+            sed -n '1,125p' /home/ubuntu/zennay-cloud/enhancements.py
             echo "=== SERVER RESOURCE ENDPOINT ==="
             sed -n '360,410p' /home/ubuntu/zennay-cloud/server.py
             echo "=== CSS REFS ==="
