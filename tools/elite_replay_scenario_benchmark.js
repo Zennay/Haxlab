@@ -19,6 +19,7 @@ const {
   enforceKickRange,
   recoveryAction,
   shouldRecoverFromStall,
+  futureMotionAssist,
 } = require("./elite_tactics");
 const {
   prepareReplayScenario,
@@ -38,7 +39,8 @@ function usage() {
       "[--seconds 25] [--max-scenarios 8] [--sample-every 6] " +
       "[--disable-recovery] [--recovery-min-distance 120] " +
       "[--recovery-stall-decisions 3] [--recovery-ticks 5] " +
-      "[--output result.json]",
+      "[--future-assist] [--future-assist-confidence 0.45] " +
+      "[--future-assist-min-distance 80] [--output result.json]",
   );
   process.exit(2);
 }
@@ -53,6 +55,9 @@ function parseArgs(argv) {
     recoveryMinDistance: 120,
     recoveryStallDecisions: 3,
     recoveryTicks: 5,
+    futureAssistEnabled: false,
+    futureAssistConfidence: 0.45,
+    futureAssistMinDistance: 80,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const key = argv[i];
@@ -74,6 +79,15 @@ function parseArgs(argv) {
     else if (key === "--recovery-ticks") {
       args.recoveryTicks = Number(value); i += 1;
     }
+    else if (key === "--future-assist") {
+      args.futureAssistEnabled = true;
+    }
+    else if (key === "--future-assist-confidence") {
+      args.futureAssistConfidence = Number(value); i += 1;
+    }
+    else if (key === "--future-assist-min-distance") {
+      args.futureAssistMinDistance = Number(value); i += 1;
+    }
     else if (key === "--help" || key === "-h") usage();
     else throw new Error("Unknown argument: " + key);
   }
@@ -87,6 +101,14 @@ function parseArgs(argv) {
     Math.floor(Number(args.recoveryStallDecisions) || 3),
   );
   args.recoveryTicks = Math.max(1, Math.floor(Number(args.recoveryTicks) || 5));
+  args.futureAssistConfidence = Math.max(
+    0,
+    Math.min(1, Number(args.futureAssistConfidence) || 0.45),
+  );
+  args.futureAssistMinDistance = Math.max(
+    0,
+    Number(args.futureAssistMinDistance) || 80,
+  );
   return args;
 }
 
@@ -108,6 +130,9 @@ function runScenarioMatch({
   recoveryMinDistance,
   recoveryStallDecisions,
   recoveryTicks,
+  futureAssistEnabled,
+  futureAssistConfidence,
+  futureAssistMinDistance,
 }) {
   const policy = new ElitePolicyRuntime(runtimeModel);
   const baselineTeamId = eliteTeamId === 1 ? 2 : 1;
@@ -151,6 +176,7 @@ function runScenarioMatch({
       stallStreak: 0,
       recoveryTicks: 0,
       recoveryOverrides: 0,
+      futureAssistApplied: 0,
     });
     baselineBots.push({
       id: baselineId,
@@ -201,17 +227,30 @@ function runScenarioMatch({
             features.score_diff = redGoals - blueGoals;
             if (eliteTeamId === 2) features.score_diff *= -1;
 
-            const canonical = policy.act({
+            let canonical = policy.act({
               agent_id: String(bot.id),
               role: bot.role,
               features,
             });
-            let action = canonicalActionToWorld(canonical, eliteTeamId);
 
             const ballDistanceFromFeatures = Math.hypot(
               Number(features.ball_dx || 0),
               Number(features.ball_dy || 0),
             );
+            if (futureAssistEnabled) {
+              canonical = futureMotionAssist(
+                canonical,
+                ballDistanceFromFeatures,
+                {
+                  minimumConfidence: futureAssistConfidence,
+                  minimumBallDistance: futureAssistMinDistance,
+                },
+              );
+              if (canonical.future_assist_applied) {
+                bot.futureAssistApplied += 1;
+              }
+            }
+            let action = canonicalActionToWorld(canonical, eliteTeamId);
             const stationary =
               Number(action.dirX || 0) === 0 &&
               Number(action.dirY || 0) === 0;
@@ -355,6 +394,11 @@ function runScenarioMatch({
       minimum_stall_decisions: recoveryStallDecisions,
       recovery_ticks: recoveryTicks,
     },
+    future_assist_enabled: Boolean(futureAssistEnabled),
+    future_assist_config: {
+      minimum_confidence: futureAssistConfidence,
+      minimum_ball_distance: futureAssistMinDistance,
+    },
     seconds,
     goals: { elite: eliteGoals, baseline: baselineGoals },
     result:
@@ -386,6 +430,13 @@ function runScenarioMatch({
       recovery_override_rate:
         eliteBots.reduce((sum, bot) => sum + bot.recoveryOverrides, 0) /
         Math.max(1, totalActions),
+      future_assist_applied: eliteBots.reduce(
+        (sum, bot) => sum + bot.futureAssistApplied,
+        0,
+      ),
+      future_assist_rate:
+        eliteBots.reduce((sum, bot) => sum + bot.futureAssistApplied, 0) /
+        Math.max(1, totalActions),
       roles: Object.fromEntries(
         eliteBots.map((bot) => [
           bot.role,
@@ -403,6 +454,9 @@ function runScenarioMatch({
             recovery_overrides: bot.recoveryOverrides,
             recovery_override_rate:
               bot.recoveryOverrides / Math.max(1, bot.actions),
+            future_assist_applied: bot.futureAssistApplied,
+            future_assist_rate:
+              bot.futureAssistApplied / Math.max(1, bot.actions),
             direction_counts: bot.directionCounts,
           },
         ]),
@@ -467,6 +521,12 @@ function summarize(matches, modelPath, scenarioPath, stadium) {
     recovery_config: matches.length
       ? matches[0].recovery_config
       : null,
+    future_assist_enabled: matches.length
+      ? Boolean(matches[0].future_assist_enabled)
+      : null,
+    future_assist_config: matches.length
+      ? matches[0].future_assist_config
+      : null,
     stadium: {
       name: stadium.name || null,
       width: stadium.width ?? null,
@@ -506,6 +566,13 @@ function summarize(matches, modelPath, scenarioPath, stadium) {
       ),
       recovery_override_rate: avg(
         (row) => Number(row.policy.recovery_override_rate || 0),
+      ),
+      future_assist_applied: matches.reduce(
+        (sum, row) => sum + Number(row.policy.future_assist_applied || 0),
+        0,
+      ),
+      future_assist_rate: avg(
+        (row) => Number(row.policy.future_assist_rate || 0),
       ),
     },
     paired_side_gap: {
@@ -563,6 +630,9 @@ function main() {
         recoveryMinDistance: args.recoveryMinDistance,
         recoveryStallDecisions: args.recoveryStallDecisions,
         recoveryTicks: args.recoveryTicks,
+        futureAssistEnabled: args.futureAssistEnabled,
+        futureAssistConfidence: args.futureAssistConfidence,
+        futureAssistMinDistance: args.futureAssistMinDistance,
       });
       matches.push(result);
       console.error(
