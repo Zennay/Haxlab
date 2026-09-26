@@ -11,6 +11,10 @@ from typing import Any
 
 from haxlab.evaluation.champion_gate import decide_champion_promotion
 from haxlab.evaluation.duel_gate import decide_duel_gate
+from haxlab.evaluation.multisource_duel import (
+    MULTISOURCE_DUEL_SCHEMA,
+    decide_multisource_duel_gate,
+)
 
 
 REGISTRY_SCHEMA = "haxlab-elite-champion-registry-v1"
@@ -95,7 +99,10 @@ def evaluate_candidate(
             eligible = False
             reasons.append("duel_required_for_existing_champion")
         else:
-            decision = decide_duel_gate(duel)
+            if duel.get("schema") == MULTISOURCE_DUEL_SCHEMA:
+                decision = decide_multisource_duel_gate(duel)
+            else:
+                decision = decide_duel_gate(duel)
             duel_result = {
                 "eligible_to_replace_champion": (
                     decision.eligible_to_replace_champion
