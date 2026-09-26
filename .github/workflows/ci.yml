@@ -64,6 +64,9 @@ jobs:
           node --check tools/elite_bot_plugin.js
           node --check tools/elite_sandbox_benchmark.js
           node --check tools/sandbox_side_sanity.js
+          node --check tools/elite_replay_scenario_benchmark.js
+          node --check tools/sandbox_replay_start.js
+          node --check tools/extract_replay_scenarios.js
           node tests/test_elite_mirror.js
 
       - name: Test
