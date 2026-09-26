@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import json
 import math
 import os
@@ -23,6 +24,9 @@ ACTION_DIRS = tuple(
 )
 DIR_TO_CLASS = {direction: index for index, direction in enumerate(ACTION_DIRS)}
 ROLE_NAMES = {0: "gk", 1: "dm", 2: "am", 3: "st"}
+ROLE_IDS = {name: role_id for role_id, name in ROLE_NAMES.items()}
+RECOVERY_CONTRACT_SCHEMA = "haxlab-candidate-f-recovery-contract-v1"
+RECOVERY_OPTIMIZER_KEYS = ("w1", "b1", "w2", "b2", "wd", "bd")
 LABEL_COLUMNS = ("dir_x", "dir_y", "kick")
 META_COLUMNS = ("frame", "player_index", "team_id", "role_id", "skill_weight")
 EXCLUDED_INPUT_COLUMNS = (*META_COLUMNS, *LABEL_COLUMNS)
@@ -404,6 +408,137 @@ def _iter_batches(
                     )
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _require_sha256(path: Path, expected: str, label: str) -> str:
+    actual = _sha256_file(path)
+    if actual != str(expected).lower():
+        raise ValueError(
+            f"{label} SHA-256 mismatch: expected {expected}, got {actual}"
+        )
+    return actual
+
+
+def _load_recovery_contract(
+    path: Path,
+    expected_sha256: str,
+) -> tuple[dict[str, Any], str]:
+    actual_sha = _require_sha256(path, expected_sha256, "recovery contract")
+    contract = json.loads(path.read_text(encoding="utf-8"))
+    if contract.get("schema") != RECOVERY_CONTRACT_SCHEMA:
+        raise ValueError("unsupported Candidate-F recovery contract schema")
+    if contract.get("candidate") != "F" or not contract.get("frozen_before_training"):
+        raise ValueError("Candidate-F recovery contract is not frozen")
+    return contract, actual_sha
+
+
+def _recovery_direction_component(delta: float, deadzone: float) -> int:
+    if delta > deadzone:
+        return 1
+    if delta < -deadzone:
+        return -1
+    return 0
+
+
+def _load_recovery_examples(
+    path: Path,
+    *,
+    split: str,
+    expected_count: int,
+    input_columns: list[str],
+    mean: np.ndarray,
+    std: np.ndarray,
+    window: int,
+    failure_any_of: set[str],
+    deadzone: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str]]:
+    rows: list[tuple[str, np.ndarray, int, int]] = []
+    role_eye = np.eye(4, dtype=np.float32)
+    with path.open("r", encoding="utf-8") as handle:
+        for line_no, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if row.get("split") != split:
+                raise ValueError(f"{path}:{line_no}: unexpected recovery split")
+            failures = set(row.get("failure_types") or [])
+            recovery_window = row.get("recovery_window") or []
+            if len(recovery_window) != window or not (failure_any_of & failures):
+                continue
+            target = (row.get("auxiliary_targets") or {}).get("role_target")
+            if not isinstance(target, dict):
+                raise ValueError(f"{path}:{line_no}: eligible row missing role_target")
+            role_name = str(row.get("role") or "").lower()
+            if role_name not in ROLE_IDS:
+                raise ValueError(f"{path}:{line_no}: invalid role {role_name!r}")
+            raw_frames = []
+            for frame in recovery_window:
+                features = frame.get("features") or {}
+                missing = [name for name in input_columns if name not in features]
+                if missing:
+                    raise ValueError(
+                        f"{path}:{line_no}: recovery frame missing features {missing}"
+                    )
+                raw_frames.append([float(features[name]) for name in input_columns])
+            raw = np.asarray(raw_frames, dtype=np.float32)
+            normalized = ((raw - mean) / std).astype(np.float32, copy=False)
+            flat = normalized.reshape(-1)
+            role_id = ROLE_IDS[role_name]
+            model_x = np.concatenate([flat, role_eye[role_id]], axis=0)
+            final_features = recovery_window[-1].get("features") or {}
+            dx = float(target["canonical_x"]) - float(final_features["own_x"])
+            dy = float(target["y"]) - float(final_features["own_y"])
+            direction = (
+                _recovery_direction_component(dx, deadzone),
+                _recovery_direction_component(dy, deadzone),
+            )
+            fingerprint = str(row.get("state_fingerprint") or "")
+            if len(fingerprint) != 64:
+                raise ValueError(f"{path}:{line_no}: invalid state fingerprint")
+            rows.append((fingerprint, model_x, DIR_TO_CLASS[direction], role_id))
+    rows.sort(key=lambda item: item[0])
+    if len(rows) != int(expected_count):
+        raise ValueError(
+            f"{split} recovery eligible count mismatch: "
+            f"expected {expected_count}, got {len(rows)}"
+        )
+    if not rows:
+        raise ValueError(f"{split} recovery split produced zero eligible examples")
+    return (
+        np.stack([row[1] for row in rows]).astype(np.float32, copy=False),
+        np.asarray([row[2] for row in rows], dtype=np.int64),
+        np.asarray([row[3] for row in rows], dtype=np.int64),
+        [row[0] for row in rows],
+    )
+
+
+def _recovery_draw_indices(
+    population: int,
+    draws: int,
+    *,
+    seed: int,
+) -> np.ndarray:
+    population = int(population)
+    draws = int(draws)
+    if population <= 0 or draws <= 0:
+        raise ValueError("recovery population and draws must be positive")
+    rng = np.random.default_rng(int(seed))
+    chunks: list[np.ndarray] = []
+    remaining = draws
+    while remaining > 0:
+        permutation = rng.permutation(population)
+        take = min(remaining, population)
+        chunks.append(permutation[:take])
+        remaining -= take
+    return np.concatenate(chunks).astype(np.int64, copy=False)
+
+
 def _softmax(logits: np.ndarray) -> np.ndarray:
     shifted = logits - logits.max(axis=1, keepdims=True)
     exp = np.exp(shifted)
@@ -456,6 +591,43 @@ def _forward(
     kick_prob = _sigmoid(h2 @ params["wk"] + params["bk"]).reshape(-1)
     future_prob = _softmax(h2 @ params["wf"] + params["bf"])
     return h1, h2, dir_prob, kick_prob, future_prob
+
+
+def _train_direction_only_batch(
+    x: np.ndarray,
+    direction: np.ndarray,
+    params: dict[str, np.ndarray],
+) -> tuple[dict[str, np.ndarray], float]:
+    batch = x.shape[0]
+    h1, h2, dir_prob, _, _ = _forward(x, params)
+    eps = 1e-7
+    loss = -float(
+        np.log(np.clip(dir_prob[np.arange(batch), direction], eps, 1.0)).mean()
+    )
+
+    ddir = dir_prob.copy()
+    ddir[np.arange(batch), direction] -= 1.0
+    ddir /= max(1, batch)
+
+    grad_wd = h2.T @ ddir
+    grad_bd = ddir.sum(axis=0)
+    dh2 = ddir @ params["wd"].T
+    dpre2 = dh2 * (h2 > 0.0)
+    grad_w2 = h1.T @ dpre2
+    grad_b2 = dpre2.sum(axis=0)
+    dh1 = dpre2 @ params["w2"].T
+    dpre1 = dh1 * (h1 > 0.0)
+    grad_w1 = x.T @ dpre1
+    grad_b1 = dpre1.sum(axis=0)
+
+    return {
+        "w1": grad_w1.astype(np.float32),
+        "b1": grad_b1.astype(np.float32),
+        "w2": grad_w2.astype(np.float32),
+        "b2": grad_b2.astype(np.float32),
+        "wd": grad_wd.astype(np.float32),
+        "bd": grad_bd.astype(np.float32),
+    }, loss
 
 
 def _adam_update(
@@ -897,6 +1069,233 @@ def _calibrate_kick_threshold(
     return float(best["threshold"]), best, candidates
 
 
+def _contract_value_matches(actual: Any, expected: Any) -> bool:
+    if isinstance(expected, float):
+        return math.isclose(float(actual), expected, rel_tol=0.0, abs_tol=1e-12)
+    return actual == expected
+
+
+def _prepare_candidate_f_recovery(
+    *,
+    contract_path: Path,
+    contract_sha256: str,
+    recovery_dataset_dir: Path,
+    promotion_suite_manifest_path: Path,
+    train_index_path: Path,
+    validation_index_path: Path,
+    holdout_index_path: Path,
+    input_columns: list[str],
+    mean: np.ndarray,
+    std: np.ndarray,
+    window: int,
+    sequence_stride: int,
+    hidden_dim: int,
+    hidden_dim_2: int,
+    epochs: int,
+    batch_size: int,
+    learning_rate: float,
+    l2: float,
+    future_horizon_steps: int,
+    future_loss_weight: float,
+    state_jitter_std: float,
+    seed: int,
+    train_limit: int | None,
+    validation_limit: int | None,
+    holdout_limit: int | None,
+) -> dict[str, Any]:
+    contract, actual_contract_sha = _load_recovery_contract(
+        contract_path,
+        contract_sha256,
+    )
+    base = contract["base"]
+    expected_runtime = {
+        "seed": seed,
+        "epochs": epochs,
+        "human_batch_size": batch_size,
+        "learning_rate": learning_rate,
+        "l2": l2,
+        "future_loss_weight": future_loss_weight,
+        "future_horizon_steps": future_horizon_steps,
+        "window": window,
+        "state_jitter_std": state_jitter_std,
+    }
+    for key, actual in expected_runtime.items():
+        expected = base[key]
+        if not _contract_value_matches(actual, expected):
+            raise ValueError(
+                f"Candidate-F contract mismatch for {key}: "
+                f"expected {expected}, got {actual}"
+            )
+    if list(base.get("state_jitter_roles") or []) != ["am", "st"]:
+        raise ValueError("Candidate-F contract changed state-jitter roles")
+    if sequence_stride != 1 or hidden_dim != 128 or hidden_dim_2 != 96:
+        raise ValueError("Candidate-F base architecture/runtime arguments changed")
+    if any(value is not None for value in (train_limit, validation_limit, holdout_limit)):
+        raise ValueError("Candidate-F contract forbids split limits")
+
+    for split, path in (
+        ("train", train_index_path),
+        ("validation", validation_index_path),
+        ("holdout", holdout_index_path),
+    ):
+        _require_sha256(
+            path,
+            contract["human_indexes"][split]["sha256"],
+            f"human {split} index",
+        )
+
+    dataset_contract = contract["recovery_dataset"]
+    if recovery_dataset_dir.name != dataset_contract["dataset_id"]:
+        raise ValueError("Candidate-F recovery dataset ID/path mismatch")
+    manifest_path = recovery_dataset_dir / "manifest.json"
+    _require_sha256(
+        manifest_path,
+        dataset_contract["manifest_sha256"],
+        "recovery dataset manifest",
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("dataset_id") != dataset_contract["dataset_id"]:
+        raise ValueError("recovery manifest dataset ID mismatch")
+    if manifest.get("human_replay_data_included") is not False:
+        raise ValueError("recovery manifest unexpectedly includes human replay data")
+    for key in ("raw_trace_rows", "deduplicated_rows", "split_counts"):
+        if manifest.get(key) != dataset_contract[key]:
+            raise ValueError(f"recovery manifest contract mismatch for {key}")
+
+    expected_promotion_sha = contract["selection_and_evaluation"][
+        "promotion_suite_manifest_sha256"
+    ]
+    _require_sha256(
+        promotion_suite_manifest_path,
+        expected_promotion_sha,
+        "promotion suite manifest",
+    )
+
+    eligible_filter = dataset_contract["eligible_filter"]
+    if int(eligible_filter["recovery_window_length"]) != window:
+        raise ValueError("recovery eligible window differs from model window")
+    failure_any_of = set(eligible_filter["failure_any_of"])
+    deadzone = float(
+        contract["recovery_supervision"]["target_formula"]["deadzone"]
+    )
+    eligible_counts = dataset_contract["eligible_counts"]
+
+    arrays: dict[str, dict[str, Any]] = {}
+    for split, filename in (
+        ("train", "train.jsonl"),
+        ("validation", "validation.jsonl"),
+        ("evaluation", "evaluation.jsonl"),
+    ):
+        x, direction, roles, fingerprints = _load_recovery_examples(
+            recovery_dataset_dir / filename,
+            split=split,
+            expected_count=int(eligible_counts[split]),
+            input_columns=input_columns,
+            mean=mean,
+            std=std,
+            window=window,
+            failure_any_of=failure_any_of,
+            deadzone=deadzone,
+        )
+        arrays[split] = {
+            "x": x,
+            "direction": direction,
+            "roles": roles,
+            "fingerprints": fingerprints,
+        }
+
+    mixing = contract["mixing"]
+    recovery_batch_size = int(mixing["recovery_batch_size"])
+    recovery_every = int(mixing["insert_recovery_update_after_every_human_updates"])
+    expected_updates = int(mixing["expected_recovery_updates_per_epoch"])
+    expected_draws = int(mixing["expected_recovery_draws_per_epoch"])
+    if recovery_batch_size * expected_updates != expected_draws:
+        raise ValueError("Candidate-F recovery mixing counts are inconsistent")
+    if recovery_every <= 0 or recovery_batch_size <= 0:
+        raise ValueError("Candidate-F recovery mixing cadence is invalid")
+    if float(contract["recovery_supervision"]["recovery_sample_weight"]) != 1.0:
+        raise ValueError("Candidate-F recovery sample weight changed")
+    forbidden_losses = (
+        "kick_loss",
+        "future_direction_loss",
+        "team_shape_loss",
+        "recovery_state_jitter",
+        "recovery_l2_term",
+    )
+    if any(contract["recovery_supervision"].get(key) for key in forbidden_losses):
+        raise ValueError("Candidate-F recovery contract enabled a forbidden loss")
+    if not contract["recovery_supervision"].get(
+        "failed_policy_action_is_never_a_target"
+    ):
+        raise ValueError("Candidate-F recovery contract permits failed action targets")
+
+    return {
+        "contract": contract,
+        "contract_sha256": actual_contract_sha,
+        "dataset_manifest_sha256": dataset_contract["manifest_sha256"],
+        "promotion_manifest_sha256": expected_promotion_sha,
+        "arrays": arrays,
+        "batch_size": recovery_batch_size,
+        "every_human_updates": recovery_every,
+        "expected_updates_per_epoch": expected_updates,
+        "expected_draws_per_epoch": expected_draws,
+        "expected_human_batches_per_epoch": int(
+            base["expected_human_batches_per_epoch"]
+        ),
+        "expected_human_sequence_samples_per_epoch": int(
+            base["expected_human_sequence_samples_per_epoch"]
+        ),
+        "epoch_seed_base": int(base["seed"]),
+    }
+
+
+def _evaluate_recovery_direction(
+    x: np.ndarray,
+    direction: np.ndarray,
+    roles: np.ndarray,
+    params: dict[str, np.ndarray],
+    *,
+    batch_size: int = 2048,
+) -> dict[str, Any]:
+    correct = 0
+    total = 0
+    loss_total = 0.0
+    role_total = Counter()
+    role_correct = Counter()
+    eps = 1e-7
+    for start in range(0, len(direction), max(1, int(batch_size))):
+        end = start + max(1, int(batch_size))
+        bx = x[start:end]
+        by = direction[start:end]
+        br = roles[start:end]
+        _, _, prob, _, _ = _forward(bx, params)
+        pred = np.argmax(prob, axis=1)
+        correct += int((pred == by).sum())
+        total += len(by)
+        loss_total += float(
+            -np.log(np.clip(prob[np.arange(len(by)), by], eps, 1.0)).sum()
+        )
+        for role_id in range(4):
+            mask = br == role_id
+            role_total[role_id] += int(mask.sum())
+            if mask.any():
+                role_correct[role_id] += int((pred[mask] == by[mask]).sum())
+    return {
+        "samples": total,
+        "direction_accuracy": correct / max(1, total),
+        "direction_cross_entropy": loss_total / max(1, total),
+        "by_role": {
+            ROLE_NAMES[role_id]: {
+                "samples": int(role_total[role_id]),
+                "direction_accuracy": (
+                    role_correct[role_id] / max(1, role_total[role_id])
+                ),
+            }
+            for role_id in range(4)
+        },
+    }
+
+
 def train_elite_policy(
     *,
     train_index_path: Path,
@@ -919,6 +1318,10 @@ def train_elite_policy(
     state_jitter_std: float = 0.0,
     seed: int = 1337,
     progress_path: Path | None = None,
+    recovery_contract_path: Path | None = None,
+    recovery_contract_sha256: str | None = None,
+    recovery_dataset_dir: Path | None = None,
+    promotion_suite_manifest_path: Path | None = None,
 ) -> dict[str, Any]:
     train_index = _load_index(train_index_path, train_limit)
     validation_index = _load_index(validation_index_path, validation_limit)
@@ -937,12 +1340,65 @@ def train_elite_policy(
     state_jitter_std = max(0.0, float(state_jitter_std))
     input_dim = len(input_columns) * window + 4
 
+    recovery: dict[str, Any] | None = None
+    recovery_args = (
+        recovery_contract_sha256,
+        recovery_dataset_dir,
+        promotion_suite_manifest_path,
+    )
+    if recovery_contract_path is not None:
+        if any(value is None for value in recovery_args):
+            raise ValueError(
+                "Candidate-F recovery requires contract SHA, dataset dir, "
+                "and promotion suite manifest"
+            )
+        recovery = _prepare_candidate_f_recovery(
+            contract_path=recovery_contract_path,
+            contract_sha256=str(recovery_contract_sha256),
+            recovery_dataset_dir=Path(recovery_dataset_dir),
+            promotion_suite_manifest_path=Path(promotion_suite_manifest_path),
+            train_index_path=train_index_path,
+            validation_index_path=validation_index_path,
+            holdout_index_path=holdout_index_path,
+            input_columns=input_columns,
+            mean=mean,
+            std=std,
+            window=window,
+            sequence_stride=sequence_stride,
+            hidden_dim=hidden_dim,
+            hidden_dim_2=hidden_dim_2,
+            epochs=max(1, epochs),
+            batch_size=max(32, batch_size),
+            learning_rate=learning_rate,
+            l2=max(0.0, l2),
+            future_horizon_steps=future_horizon_steps,
+            future_loss_weight=future_loss_weight,
+            state_jitter_std=state_jitter_std,
+            seed=seed,
+            train_limit=train_limit,
+            validation_limit=validation_limit,
+            holdout_limit=holdout_limit,
+        )
+    elif any(value is not None for value in recovery_args):
+        raise ValueError("recovery arguments provided without a recovery contract")
+
     rng = np.random.default_rng(seed)
     params = _init_params(input_dim, hidden_dim, hidden_dim_2, rng)
     m = {key: np.zeros_like(value) for key, value in params.items()}
     v = {key: np.zeros_like(value) for key, value in params.items()}
+    recovery_m = (
+        {key: np.zeros_like(params[key]) for key in RECOVERY_OPTIMIZER_KEYS}
+        if recovery is not None
+        else {}
+    )
+    recovery_v = (
+        {key: np.zeros_like(params[key]) for key in RECOVERY_OPTIMIZER_KEYS}
+        if recovery is not None
+        else {}
+    )
 
     step = 0
+    recovery_step = 0
     history: list[dict[str, Any]] = []
     kick_pos_weight = float(train_stats["kick_positive_weight"])
     best_score = -math.inf
@@ -954,6 +1410,16 @@ def train_elite_policy(
         direction_losses: list[float] = []
         kick_losses: list[float] = []
         future_losses: list[float] = []
+        recovery_losses: list[float] = []
+        recovery_updates = 0
+        recovery_draw_cursor = 0
+        recovery_draw_indices = None
+        if recovery is not None:
+            recovery_draw_indices = _recovery_draw_indices(
+                len(recovery["arrays"]["train"]["direction"]),
+                recovery["expected_draws_per_epoch"],
+                seed=recovery["epoch_seed_base"] + epoch,
+            )
         batches = 0
         sequence_samples = 0
 
@@ -998,11 +1464,57 @@ def train_elite_policy(
             batches += 1
             sequence_samples += len(direction)
 
+            if (
+                recovery is not None
+                and batches % recovery["every_human_updates"] == 0
+                and recovery_updates < recovery["expected_updates_per_epoch"]
+            ):
+                start = recovery_draw_cursor
+                end = start + recovery["batch_size"]
+                assert recovery_draw_indices is not None
+                selected = recovery_draw_indices[start:end]
+                if len(selected) != recovery["batch_size"]:
+                    raise ValueError("Candidate-F recovery draw schedule truncated")
+                recovery_train = recovery["arrays"]["train"]
+                recovery_grads, recovery_loss = _train_direction_only_batch(
+                    recovery_train["x"][selected],
+                    recovery_train["direction"][selected],
+                    params,
+                )
+                recovery_step += 1
+                _adam_update(
+                    {key: params[key] for key in RECOVERY_OPTIMIZER_KEYS},
+                    recovery_grads,
+                    recovery_m,
+                    recovery_v,
+                    step=recovery_step,
+                    learning_rate=learning_rate,
+                )
+                recovery_losses.append(recovery_loss)
+                recovery_updates += 1
+                recovery_draw_cursor = end
+
         if batches == 0:
             raise ValueError(
                 "elite training produced zero temporal sequences; "
                 "reduce window or inspect shard continuity"
             )
+
+        if recovery is not None:
+            expected_human_batches = recovery["expected_human_batches_per_epoch"]
+            expected_human_samples = recovery["expected_human_sequence_samples_per_epoch"]
+            if batches != expected_human_batches:
+                raise ValueError(
+                    f"Candidate-F human batch count mismatch: {batches} != {expected_human_batches}"
+                )
+            if sequence_samples != expected_human_samples:
+                raise ValueError(
+                    f"Candidate-F human sequence count mismatch: {sequence_samples} != {expected_human_samples}"
+                )
+            if recovery_updates != recovery["expected_updates_per_epoch"]:
+                raise ValueError("Candidate-F recovery update count mismatch")
+            if recovery_draw_cursor != recovery["expected_draws_per_epoch"]:
+                raise ValueError("Candidate-F recovery draw count mismatch")
 
         validation_metrics, _, _ = evaluate(
             validation_index,
@@ -1042,6 +1554,12 @@ def train_elite_policy(
             "validation_at_0_5": validation_metrics,
             "validation_selection_score": validation_score,
         }
+        if recovery is not None:
+            epoch_record["recovery_updates"] = recovery_updates
+            epoch_record["recovery_draws"] = recovery_draw_cursor
+            epoch_record["recovery_direction_loss_mean"] = float(
+                np.mean(recovery_losses)
+            )
         history.append(epoch_record)
         if progress_path is not None:
             _atomic_json(
@@ -1058,6 +1576,24 @@ def train_elite_policy(
             )
 
     params = best_params
+
+    recovery_validation_metrics = None
+    recovery_evaluation_metrics = None
+    if recovery is not None:
+        recovery_validation = recovery["arrays"]["validation"]
+        recovery_validation_metrics = _evaluate_recovery_direction(
+            recovery_validation["x"],
+            recovery_validation["direction"],
+            recovery_validation["roles"],
+            params,
+        )
+        recovery_evaluation = recovery["arrays"]["evaluation"]
+        recovery_evaluation_metrics = _evaluate_recovery_direction(
+            recovery_evaluation["x"],
+            recovery_evaluation["direction"],
+            recovery_evaluation["roles"],
+            params,
+        )
 
     validation_default, _, _ = evaluate(
         validation_index,
@@ -1192,6 +1728,22 @@ def train_elite_policy(
     }
     _atomic_json(runtime_model_path, runtime_model)
 
+    recovery_metadata = None
+    if recovery is not None:
+        recovery_metadata = {
+            "contract_path": str(recovery_contract_path),
+            "contract_sha256": recovery["contract_sha256"],
+            "dataset_id": recovery["contract"]["recovery_dataset"]["dataset_id"],
+            "dataset_manifest_sha256": recovery["dataset_manifest_sha256"],
+            "promotion_manifest_sha256": recovery["promotion_manifest_sha256"],
+            "direction_only": True,
+            "separate_optimizer_state": True,
+            "batch_size": recovery["batch_size"],
+            "every_human_updates": recovery["every_human_updates"],
+            "expected_updates_per_epoch": recovery["expected_updates_per_epoch"],
+            "expected_draws_per_epoch": recovery["expected_draws_per_epoch"],
+        }
+
     metadata = {
         "schema": MODEL_SCHEMA,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -1263,11 +1815,14 @@ def train_elite_policy(
             },
             "kick_threshold_candidates": threshold_candidates,
             "frozen_holdout_used_for_selection": False,
+            "recovery": recovery_metadata,
         },
         "history": history,
         "validation_default_threshold": validation_default,
         "final_validation": validation_final,
         "final_holdout": holdout_final,
+        "recovery_validation": recovery_validation_metrics,
+        "recovery_evaluation": recovery_evaluation_metrics,
     }
     _atomic_json(output_dir / "metrics.json", metadata)
     if progress_path is not None:
@@ -1321,6 +1876,10 @@ def main() -> int:
         default=None,
         help="Optional JSON progress file updated during training.",
     )
+    parser.add_argument("--recovery-contract", type=Path, default=None)
+    parser.add_argument("--recovery-contract-sha256", default=None)
+    parser.add_argument("--recovery-dataset-dir", type=Path, default=None)
+    parser.add_argument("--promotion-suite-manifest", type=Path, default=None)
     args = parser.parse_args()
 
     result = train_elite_policy(
@@ -1344,6 +1903,10 @@ def main() -> int:
         state_jitter_std=max(0.0, args.state_jitter_std),
         seed=args.seed,
         progress_path=args.progress_path,
+        recovery_contract_path=args.recovery_contract,
+        recovery_contract_sha256=args.recovery_contract_sha256,
+        recovery_dataset_dir=args.recovery_dataset_dir,
+        promotion_suite_manifest_path=args.promotion_suite_manifest,
     )
     print(json.dumps(result["final_holdout"], indent=2, sort_keys=True))
     print("model:", result["model_path"])
