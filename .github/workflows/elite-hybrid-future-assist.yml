@@ -109,17 +109,19 @@ jobs:
             --disable-recovery \
             --output /tmp/haxlab-hybrid-champion.json
 
-      - name: Benchmark hybrid future-head sweep
+      - name: Benchmark role-gated hybrid future-head sweep
         shell: bash
         run: |
           set -euo pipefail
           BASE=/var/lib/haxlab/derived/training/elite-player-champion-candidate/model/runtime-model.json
           FUTURE=/var/lib/haxlab/derived/training/elite-player-future-challenger/model/runtime-model.json
 
-          for CONF in 0.60 0.75 0.85; do
-            for DIST in 80 120 160; do
-              C="$(printf '%s' "$CONF" | tr '.' '_')"
-              OUT="/tmp/haxlab-hybrid-c${C}-d${DIST}.json"
+          for CONF in 0.68 0.70 0.72 0.74 0.75; do
+            C="$(printf '%s' "$CONF" | tr '.' '_')"
+            for SPEC in "dma:dm,am,st" "da:dm,am" "a:am"; do
+              KEY="${SPEC%%:*}"
+              ROLES="${SPEC#*:}"
+              OUT="/tmp/haxlab-hybrid-c${C}-r${KEY}.json"
               sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
                 tools/elite_replay_scenario_benchmark.js \
                 --model "$BASE" \
@@ -130,12 +132,13 @@ jobs:
                 --disable-recovery \
                 --future-assist \
                 --future-assist-confidence "$CONF" \
-                --future-assist-min-distance "$DIST" \
+                --future-assist-min-distance 80 \
+                --future-assist-roles "$ROLES" \
                 --output "$OUT"
             done
           done
 
-      - name: Select hybrid candidate
+      - name: Select role-gated hybrid candidate
         shell: bash
         run: |
           set -euo pipefail
@@ -145,15 +148,21 @@ jobs:
             /tmp/haxlab-hybrid-future-offline.json \
             /tmp/haxlab-hybrid-champion.json \
             /tmp/haxlab-hybrid-champion.json \
-            c0_60_d80 /tmp/haxlab-hybrid-c0_60-d80.json \
-            c0_60_d120 /tmp/haxlab-hybrid-c0_60-d120.json \
-            c0_60_d160 /tmp/haxlab-hybrid-c0_60-d160.json \
-            c0_75_d80 /tmp/haxlab-hybrid-c0_75-d80.json \
-            c0_75_d120 /tmp/haxlab-hybrid-c0_75-d120.json \
-            c0_75_d160 /tmp/haxlab-hybrid-c0_75-d160.json \
-            c0_85_d80 /tmp/haxlab-hybrid-c0_85-d80.json \
-            c0_85_d120 /tmp/haxlab-hybrid-c0_85-d120.json \
-            c0_85_d160 /tmp/haxlab-hybrid-c0_85-d160.json \
+            c0_68_rdma /tmp/haxlab-hybrid-c0_68-rdma.json \
+            c0_68_rda /tmp/haxlab-hybrid-c0_68-rda.json \
+            c0_68_ra /tmp/haxlab-hybrid-c0_68-ra.json \
+            c0_70_rdma /tmp/haxlab-hybrid-c0_70-rdma.json \
+            c0_70_rda /tmp/haxlab-hybrid-c0_70-rda.json \
+            c0_70_ra /tmp/haxlab-hybrid-c0_70-ra.json \
+            c0_72_rdma /tmp/haxlab-hybrid-c0_72-rdma.json \
+            c0_72_rda /tmp/haxlab-hybrid-c0_72-rda.json \
+            c0_72_ra /tmp/haxlab-hybrid-c0_72-ra.json \
+            c0_74_rdma /tmp/haxlab-hybrid-c0_74-rdma.json \
+            c0_74_rda /tmp/haxlab-hybrid-c0_74-rda.json \
+            c0_74_ra /tmp/haxlab-hybrid-c0_74-ra.json \
+            c0_75_rdma /tmp/haxlab-hybrid-c0_75-rdma.json \
+            c0_75_rda /tmp/haxlab-hybrid-c0_75-rda.json \
+            c0_75_ra /tmp/haxlab-hybrid-c0_75-ra.json \
             /tmp/haxlab-hybrid-selection.json
 
       - name: Publish evidence
