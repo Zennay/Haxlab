@@ -460,6 +460,7 @@ def _empty_metric_counter() -> dict[str, Any]:
         "kick_fn": 0,
         "kick_tn": 0,
         "direction_counts": np.zeros(9, dtype=np.int64),
+        "direction_correct_by_class": np.zeros(9, dtype=np.int64),
     }
 
 
@@ -475,9 +476,35 @@ def _finalize_metrics(counter: dict[str, Any], threshold: float) -> dict[str, An
     recall = tp / max(1, tp + fn)
     f1 = 2.0 * precision * recall / max(1e-12, precision + recall)
     direction_counts = counter["direction_counts"]
+    direction_correct_by_class = counter["direction_correct_by_class"]
+    recalls = [
+        (
+            int(direction_correct_by_class[class_id])
+            / int(direction_counts[class_id])
+            if int(direction_counts[class_id]) > 0
+            else None
+        )
+        for class_id in range(9)
+    ]
+    observed_recalls = [value for value in recalls if value is not None]
+    macro_recall = (
+        float(sum(observed_recalls) / len(observed_recalls))
+        if observed_recalls
+        else 0.0
+    )
     return {
         "samples": total,
         "direction_accuracy": int(counter["direction_correct"]) / total,
+        "macro_direction_recall": macro_recall,
+        "direction_recall_by_class": {
+            str(class_id): {
+                "dir_x": ACTION_DIRS[class_id][0],
+                "dir_y": ACTION_DIRS[class_id][1],
+                "samples": int(direction_counts[class_id]),
+                "recall": recalls[class_id],
+            }
+            for class_id in range(9)
+        },
         "joint_accuracy": int(counter["joint_correct"]) / total,
         "kick_precision": precision,
         "kick_recall": recall,
@@ -502,6 +529,12 @@ def _update_counter(
 ) -> None:
     counter["samples"] += len(direction)
     counter["direction_correct"] += int((dir_pred == direction).sum())
+    for class_id in range(9):
+        mask = direction == class_id
+        if mask.any():
+            counter["direction_correct_by_class"][class_id] += int(
+                (dir_pred[mask] == class_id).sum()
+            )
     counter["joint_correct"] += int(
         ((dir_pred == direction) & (kick_pred == kick_true)).sum()
     )
