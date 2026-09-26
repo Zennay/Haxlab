@@ -23,6 +23,7 @@ let reader = null;
 let settled = false;
 let stadium = null;
 let frameCaptured = null;
+let timeoutHandle = null;
 
 function capture() {
   if (stadium || !reader?.state?.exportStadium) return;
@@ -37,6 +38,10 @@ function capture() {
 function finish(error = null) {
   if (settled) return;
   settled = true;
+  if (timeoutHandle) {
+    clearTimeout(timeoutHandle);
+    timeoutHandle = null;
+  }
   try {
     capture();
     reader?.destroy?.();
@@ -86,7 +91,7 @@ try {
   reader.onEnd = () => finish();
   reader.setSpeed(100000);
 
-  setTimeout(() => {
+  timeoutHandle = setTimeout(() => {
     if (!settled) finish(new Error("stadium_extract_timeout"));
   }, 30000);
 } catch (error) {
