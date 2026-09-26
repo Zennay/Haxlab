@@ -173,6 +173,15 @@ module.exports = function(API) {
   });
 
   this.defineVariable({
+    name: "liveGuardRoleLeash",
+    type: VariableType.Integer,
+    value: 190,
+    range: { min: 80, max: 400, step: 10 },
+    description:
+      "Maximum distance from the role-aware recovery target before live steering recenters the bot.",
+  });
+
+  this.defineVariable({
     name: "autoSpawn",
     type: VariableType.Boolean,
     value: process.env.HAXLAB_ELITE_AUTOSPAWN === "1",
@@ -301,6 +310,7 @@ module.exports = function(API) {
         boundary_x: Number(that.liveGuardBoundaryX || 760),
         boundary_y: Number(that.liveGuardBoundaryY || 320),
         ood_max_z: Number(that.liveGuardOodMaxZ || 8),
+        role_leash: Number(that.liveGuardRoleLeash || 190),
       },
       bots: bots.map((bot) => ({
         id: bot.id,
@@ -509,15 +519,28 @@ module.exports = function(API) {
           const oodDrift =
             Number(action.ood_max_abs_z || 0) > oodLimit &&
             ballDistance >= 500;
+          const teamId = teamIdForPlayer(player);
+          const recovery = recoveryAction(
+            bot.role,
+            player,
+            gameState,
+            teamId,
+          );
+          const roleTargetDistance = recovery
+            ? Math.hypot(
+                Number(recovery.target_canonical_x || 0) -
+                  Number(recovery.canonical_player_x || 0),
+                Number(recovery.target_y || 0) -
+                  Number(playerDisc?.pos?.y || 0),
+              )
+            : 0;
+          const roleDrift =
+            Boolean(recovery) &&
+            ballDistance >= 120 &&
+            roleTargetDistance >
+              (Number(that.liveGuardRoleLeash) || 190);
 
-          if (outOfBounds || stalledFar || oodDrift) {
-            const teamId = teamIdForPlayer(player);
-            const recovery = recoveryAction(
-              bot.role,
-              player,
-              gameState,
-              teamId,
-            );
+          if (outOfBounds || stalledFar || oodDrift || roleDrift) {
             if (recovery) {
               bot.liveGuardOverrides += 1;
               bot.stallStreak = 0;
@@ -527,9 +550,11 @@ module.exports = function(API) {
                 kick: recovery.kick,
                 source: outOfBounds
                   ? "live_guard_boundary"
-                  : stalledFar
-                    ? "live_guard_stall"
-                    : "live_guard_ood",
+                  : roleDrift
+                    ? "live_guard_role_leash"
+                    : stalledFar
+                      ? "live_guard_stall"
+                      : "live_guard_ood",
               });
               continue;
             }
