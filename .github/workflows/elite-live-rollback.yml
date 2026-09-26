@@ -1,0 +1,174 @@
+name: Elite Live Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_current_version:
+        description: "Exact version_id currently expected in live.json"
+        required: true
+        type: string
+      reason:
+        description: "Short rollback reason for the run summary"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-elite-live-mutation
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preflight rollback target
+        shell: bash
+        env:
+          EXPECTED_CURRENT_VERSION: ${{ inputs.expected_current_version }}
+          ROLLBACK_REASON: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m py_compile \
+            src/haxlab/evaluation/champion_registry.py
+
+          sudo -u haxlab env \
+            EXPECTED_CURRENT_VERSION="$EXPECTED_CURRENT_VERSION" \
+            ROLLBACK_REASON="$ROLLBACK_REASON" \
+            /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path("/var/lib/haxlab/derived/champions/elite-player")
+          live = json.loads((root / "live.json").read_text())
+
+          expected = os.environ["EXPECTED_CURRENT_VERSION"].strip()
+          reason = os.environ["ROLLBACK_REASON"].strip()
+          current = str(live.get("version_id") or "")
+          previous = str(live.get("previous_live_version_id") or "")
+
+          if not reason:
+              raise SystemExit("Rollback reason must not be empty")
+          if current != expected:
+              raise SystemExit(
+                  f"Live version changed: expected={expected!r}, actual={current!r}"
+              )
+          if not previous:
+              raise SystemExit(
+                  "Rollback unavailable: live.json has no previous_live_version_id"
+              )
+          if previous == current:
+              raise SystemExit(
+                  "Rollback refused: previous live version equals current"
+              )
+
+          validation = (
+              root / "validations" / previous / "current.json"
+          )
+          if not validation.is_file():
+              raise SystemExit(
+                  f"Previous live version has no validation record: {validation}"
+              )
+          record = json.loads(validation.read_text())
+          if record.get("stage") != "runtime":
+              raise SystemExit(
+                  "Previous live version is not runtime validated: "
+                  f"{record.get('stage')!r}"
+              )
+
+          print(json.dumps({
+              "current_version": current,
+              "rollback_target": previous,
+              "rollback_reason": reason,
+              "target_validation_stage": record["stage"],
+          }, indent=2))
+          PY
+
+      - name: Roll back live pointer atomically
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python \
+            -m haxlab.evaluation.champion_registry \
+            --registry-root /var/lib/haxlab/derived/champions/elite-player \
+            --rollback-live \
+            --output /tmp/haxlab-live-rollback.json
+
+      - name: Verify rollback pointer and hashes
+        shell: bash
+        env:
+          EXPECTED_OLD_VERSION: ${{ inputs.expected_current_version }}
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env EXPECTED_OLD_VERSION="$EXPECTED_OLD_VERSION" \
+            /opt/haxlab/.venv/bin/python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path("/var/lib/haxlab/derived/champions/elite-player")
+          live = json.loads((root / "live.json").read_text())
+          rollback = json.loads(
+              Path("/tmp/haxlab-live-rollback.json").read_text()
+          )
+
+          assert rollback["rolled_back"] is True, rollback
+          assert rollback["activation_reason"] == "rollback", rollback
+          assert rollback["from_version_id"] == os.environ["EXPECTED_OLD_VERSION"]
+          assert live["version_id"] == rollback["to_version_id"], (live, rollback)
+          assert live["previous_live_version_id"] == rollback["from_version_id"]
+          assert live["activation_reason"] == "rollback"
+          assert "live_health" not in live
+
+          def sha(path):
+              h = hashlib.sha256()
+              with Path(path).open("rb") as handle:
+                  for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                      h.update(chunk)
+              return h.hexdigest()
+
+          assert sha(live["runtime_model_path"]) == live["runtime_model_sha256"]
+          assert sha(live["model_path"]) == live["model_sha256"]
+
+          print(json.dumps({
+              "rolled_back": True,
+              "from_version_id": rollback["from_version_id"],
+              "to_version_id": rollback["to_version_id"],
+              "previous_live_version_id": live["previous_live_version_id"],
+              "health_status": "pending_revalidation",
+          }, indent=2))
+          PY
+
+      - name: Publish rollback evidence
+        shell: bash
+        env:
+          ROLLBACK_REASON: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          sudo cat /tmp/haxlab-live-rollback.json > live-rollback.json
+          sudo cat /var/lib/haxlab/derived/champions/elite-player/live.json \
+            > live-pointer-after-rollback.json
+          {
+            echo '## HaxLab Live Rollback'
+            echo
+            echo "Reason: $ROLLBACK_REASON"
+            echo
+            cat live-rollback.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: elite-live-rollback
+          path: |
+            live-rollback.json
+            live-pointer-after-rollback.json
+          retention-days: 30
