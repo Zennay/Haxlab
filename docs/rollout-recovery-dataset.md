@@ -24,11 +24,14 @@ Enable tracing with:
 ```bash
 node tools/elite_closed_loop_arena_v2.js ... \
   --recovery-trace-output /path/source-01.jsonl \
-  --source-ref <git-sha>
+  --source-ref <git-sha> \
+  --source-replay-sha256 <64-char-replay-sha256>
 ```
 
 The trace header freezes the challenger/champion/partner model SHA-256 values,
-stadium SHA-256, scenario SHA-256, Arena config, seed and source ref.
+stadium SHA-256, scenario SHA-256, the exact source replay SHA-256, Arena config,
+seed and source ref. Recovery tracing fails closed if the source replay SHA is
+missing or malformed.
 
 Only challenger states are mined. Candidate/reference comparisons and promotion
 thresholds are unchanged.
@@ -59,22 +62,36 @@ Build a versioned dataset with:
 PYTHONPATH=src python -m haxlab.learning.recovery_dataset \
   source-01.jsonl source-02.jsonl source-03.jsonl \
   --output-root /var/lib/haxlab/derived/training/recovery \
-  --dataset-id candidate-e-arena-v2-v1
+  --dataset-id candidate-e-arena-v2-v1 \
+  --forbidden-source-sha256-file /path/promotion-reserved-sha256.txt
 ```
 
 The builder validates the trace schema and records every input trace hash plus
-model/scenario/stadium/seed provenance. State fingerprints quantize the current
-role/features/player/ball state to 3 decimals, SHA-256 hash it, and merge
-repeated states while preserving all observed failure labels and source refs.
+source-replay/model/scenario/stadium/seed provenance. State fingerprints still
+quantize the current role/features/player/ball state to 3 decimals for global
+dedupe, but **split assignment is no longer state-level**.
 
-Splits are deterministic from the fingerprint and never depend on row order:
+Each replay-seeded Arena rollout gets a stable rollout-group fingerprint from
+the source replay, challenger, scenario/stadium hashes, seed, scenario index,
+mode, tested role, side and repeat. The whole rollout inherits one split:
 
-- train: hash bucket 0-79;
+- train: rollout-group hash bucket 0-79;
 - validation: 80-89;
 - evaluation: 90-99.
 
+If an identical state appears in rollout groups assigned to different splits,
+only the deterministic canonical-owner observation is emitted; cross-split
+duplicate observations are audit-counted and dropped rather than leaking into
+another split.
+
+`--forbidden-source-sha256-file` provides a fail-closed reserve list for unseen
+promotion sources. Any recovery trace sourced from a replay in that list is
+rejected before dataset construction.
+
 Outputs are `train.jsonl`, `validation.jsonl`, `evaluation.jsonl` and
-`manifest.json`; the manifest stores SHA-256 for every output.
+`manifest.json`; the manifest stores SHA-256 for every output. Dataset IDs are
+immutable: an exact byte-identical rebuild is idempotent, but reusing an
+existing ID with different content raises an error instead of overwriting it.
 
 ## Data-separation invariant
 
