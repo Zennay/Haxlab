@@ -990,6 +990,7 @@ def train_elite_policy(
         "source_model_schema": MODEL_SCHEMA,
         "window": window,
         "base_input_columns": input_columns,
+        "feature_ordering": "team-line-order-v1",
         "role_ids": {name: role_id for role_id, name in ROLE_NAMES.items()},
         "direction_classes": [
             {"class_id": i, "dir_x": dx, "dir_y": dy}
