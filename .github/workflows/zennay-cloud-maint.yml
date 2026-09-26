@@ -29,7 +29,17 @@ jobs:
           echo "WHOAMI=$(whoami)"
           sudo -n true && echo "SUDO_OK=1" || echo "SUDO_OK=0"
           echo "=== watch metric pill ==="
-          sed -n '390,470p' /home/ubuntu/zennay-cloud/wear-os/app/src/main/java/com/zennay/cloud/watch/ui/ZennayWearApp.kt
+          sed -n '1,470p' /home/ubuntu/zennay-cloud/wear-os/app/src/main/java/com/zennay/cloud/watch/ui/ZennayWearApp.kt
+          echo "=== gradle ==="
+          cat /home/ubuntu/zennay-cloud/wear-os/app/build.gradle.kts
+          echo "=== models ==="
+          cat /home/ubuntu/zennay-cloud/wear-os/app/src/main/java/com/zennay/cloud/watch/data/Models.kt
+          echo "=== repo ==="
+          cat /home/ubuntu/zennay-cloud/wear-os/app/src/main/java/com/zennay/cloud/watch/data/ZennayCloudRepository.kt
+          echo "=== server core ==="
+          sed -n '90,340p' /home/ubuntu/zennay-cloud/server.py
+          echo "=== app functions ==="
+          sed -n '1,80p' /home/ubuntu/zennay-cloud/public/app.js
           echo "=== manifest ==="
           cat /home/ubuntu/zennay-cloud/wear-os/app/src/main/AndroidManifest.xml
           echo "=== index ==="
