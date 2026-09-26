@@ -445,6 +445,30 @@ function summarize(matches, stadium, modelPath) {
     };
   }
 
+  const totalPolicyActions = matches.reduce(
+    (sum, match) => sum + Number(match.policy.total_actions || 0),
+    0,
+  );
+  const totalPolicyKicks = matches.reduce(
+    (sum, match) => sum + Number(match.policy.total_kicks || 0),
+    0,
+  );
+  const stationaryActions = matches.reduce(
+    (sum, match) =>
+      sum + Number((match.policy.direction_counts || {})["0,0"] || 0),
+    0,
+  );
+  const totalNearBallSamples = matches.reduce(
+    (sum, match) =>
+      sum + Object.values(match.policy.roles || {}).reduce(
+        (roleSum, role) =>
+          roleSum +
+          Number(role.near_ball_rate || 0) * Number(role.actions || 0),
+        0,
+      ),
+    0,
+  );
+
   const byProfile = {};
   for (const profile of BASELINE_PROFILES) {
     const rows = matches.filter((match) => match.baseline_profile === profile);
@@ -496,6 +520,16 @@ function summarize(matches, stadium, modelPath) {
       baseline_positive_x: avg((match) => match.progression.baseline_positive_x),
     },
     runtime_errors: runtimeErrors,
+    policy_activity: {
+      total_actions: totalPolicyActions,
+      total_kicks: totalPolicyKicks,
+      stationary_actions: stationaryActions,
+      nonzero_movement_rate:
+        (totalPolicyActions - stationaryActions) /
+        Math.max(1, totalPolicyActions),
+      near_ball_rate:
+        totalNearBallSamples / Math.max(1, totalPolicyActions),
+    },
     by_elite_side: bySide,
     by_profile: byProfile,
     match_results: matches,
