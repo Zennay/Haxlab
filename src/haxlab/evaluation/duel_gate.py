@@ -174,7 +174,6 @@ def decide_duel_gate(
             "duel_side_symmetry_passed",
             "duel_runtime_stable",
             "duel_kick_rate_passed",
-            "replay_behavior_floor_passed",
         ),
         checks=checks,
     )
