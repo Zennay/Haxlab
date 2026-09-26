@@ -269,11 +269,51 @@ jobs:
               --promotion-evidence /tmp/haxlab-frozen-promotion.json \
               --registry-root /var/lib/haxlab/derived/champions/elite-player \
               --candidate-name frozen-future-v01 \
-              --output /tmp/haxlab-frozen-registry-promotion.json
+              --output /var/lib/haxlab/derived/champions/elite-player/last-promotion.json
           else
-            echo '{"promoted": false, "reason": "promotion_gate_rejected"}' \
-              > /tmp/haxlab-frozen-registry-promotion.json
+            sudo -u haxlab sh -c \
+              'echo '"'"'{"promoted": false, "reason": "promotion_gate_rejected"}'"'"' > /var/lib/haxlab/derived/champions/elite-player/last-promotion.json'
           fi
+
+      - name: Validate promoted frozen champion pointer
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path("/var/lib/haxlab/derived/champions/elite-player")
+          pointer = json.loads((root / "current.json").read_text())
+          promotion = json.loads((root / "last-promotion.json").read_text())
+
+          assert promotion.get("promoted") is True, promotion
+          assert pointer.get("version_id") == promotion.get("version_id"), (pointer, promotion)
+          assert str(pointer.get("version_id") or "").startswith("frozen-future-v01-"), pointer
+
+          cfg = pointer.get("runtime_config") or {}
+          assert abs(float(cfg.get("minimum_confidence")) - 0.68) < 1e-12, cfg
+          assert int(cfg.get("minimum_ball_distance")) == 80, cfg
+
+          runtime_path = Path(pointer["runtime_model_path"])
+          metrics_path = Path(pointer["metrics_path"])
+          assert runtime_path.is_file(), runtime_path
+          assert metrics_path.is_file(), metrics_path
+
+          runtime = json.loads(runtime_path.read_text())
+          weights = runtime.get("weights") or {}
+          assert isinstance(weights.get("wf"), list) and weights["wf"], "future head wf missing"
+          assert isinstance(weights.get("bf"), list) and weights["bf"], "future head bf missing"
+
+          print(json.dumps({
+              "version_id": pointer["version_id"],
+              "runtime_config": cfg,
+              "runtime_model_path": str(runtime_path),
+              "future_head_available": True,
+              "idempotent": promotion.get("idempotent"),
+          }, indent=2))
+          PY
 
       - name: Publish frozen challenger evidence
         shell: bash
@@ -288,7 +328,7 @@ jobs:
             sudo cat "$FILE" > "$(basename "$FILE")"
           done
           sudo cat /tmp/haxlab-frozen-promotion.json > frozen-promotion.json
-          sudo cat /tmp/haxlab-frozen-registry-promotion.json > frozen-registry-promotion.json
+          sudo cat /var/lib/haxlab/derived/champions/elite-player/last-promotion.json > frozen-registry-promotion.json
 
           echo '## HaxLab Frozen Future Head Challenger' >> "$GITHUB_STEP_SUMMARY"
           cat frozen-promotion.json >> "$GITHUB_STEP_SUMMARY"
