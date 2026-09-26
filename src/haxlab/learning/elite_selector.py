@@ -32,6 +32,20 @@ def _identity_key(player: dict[str, Any]) -> str | None:
     return f"name:{name}" if name else None
 
 
+def _canonical_player_identity(
+    player: dict[str, Any],
+    aliases: dict[str, str],
+) -> str | None:
+    name = _name_key(player.get("name"))
+    if name:
+        target = aliases.get(name)
+        if target:
+            return f"alias:{target}"
+        if name in set(aliases.values()):
+            return f"alias:{name}"
+    return _identity_key(player)
+
+
 def _conservative_score(row: dict[str, Any]) -> float:
     return float(row.get("rating", 0.0)) - float(row.get("rating_uncertainty", 0.0))
 
@@ -258,7 +272,10 @@ def build_elite_manifest(
         min_minutes=min_minutes,
         max_uncertainty=max_uncertainty,
     )
-    selected_by_id = {row["player_id"]: row for row in selected_players}
+    selected_by_id: dict[str, dict[str, Any]] = {}
+    for row in selected_players:
+        selected_by_id[str(row["player_id"])] = row
+        selected_by_id[str(row["canonical_identity"])] = row
 
     split_names = {
         bucket: "holdout" for bucket in holdout_buckets
@@ -296,7 +313,13 @@ def build_elite_manifest(
         selected_in_replay: list[dict[str, Any]] = []
         for player in payload.get("players") or []:
             source_identity = _identity_key(player)
-            selected = selected_by_id.get(source_identity or "")
+            canonical_source_identity = _canonical_player_identity(
+                player,
+                aliases,
+            )
+            selected = selected_by_id.get(canonical_source_identity or "")
+            if selected is None:
+                selected = selected_by_id.get(source_identity or "")
             replay_player_id = player.get("id")
             if (
                 selected is None
@@ -319,6 +342,7 @@ def build_elite_manifest(
                 {
                     "replay_player_id": int(replay_player_id),
                     "source_identity": source_identity,
+                    "canonical_source_identity": canonical_source_identity,
                     "identity": selected["canonical_identity"],
                     "name": player.get("name"),
                     "role": replay_role,
