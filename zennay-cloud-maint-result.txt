@@ -1,4 +1,4 @@
-generated_at=2026-09-26T13:13:03+00:00
+generated_at=2026-09-26T13:14:42+00:00
 === BEFORE SERVICES ===
 haxlab-analyzer.service active running 889202 100 infinity 
 haxlab-ingest.service active running 889200 100 infinity 
@@ -13,3 +13,110 @@ projects ['haxlab', 'ftmo', 'supa']
 alerts_count 5
 wear patched
 === BUILD WATCH ===
+openjdk version "17.0.20.1" 2026-08-18
+OpenJDK Runtime Environment Temurin-17.0.20.1+1 (build 17.0.20.1+1)
+OpenJDK 64-Bit Server VM Temurin-17.0.20.1+1 (build 17.0.20.1+1, mixed mode, sharing)
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/8.13/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+Daemon will be stopped at the end of the build 
+Warning: SDK processing. This version only understands SDK XML versions up to 3 but an SDK XML file of version 4 was encountered. This can happen if you use versions of Android Studio and the command-line tools that were released at different times.
+> Task :app:preBuild UP-TO-DATE
+> Task :app:preDebugBuild UP-TO-DATE
+> Task :app:mergeDebugNativeDebugMetadata NO-SOURCE
+> Task :app:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :app:generateDebugBuildConfig UP-TO-DATE
+> Task :app:checkDebugAarMetadata UP-TO-DATE
+> Task :app:processDebugNavigationResources UP-TO-DATE
+> Task :app:compileDebugNavigationResources UP-TO-DATE
+> Task :app:generateDebugResValues UP-TO-DATE
+> Task :app:mapDebugSourceSetPaths UP-TO-DATE
+> Task :app:generateDebugResources UP-TO-DATE
+> Task :app:mergeDebugResources UP-TO-DATE
+> Task :app:packageDebugResources UP-TO-DATE
+> Task :app:parseDebugLocalResources UP-TO-DATE
+> Task :app:createDebugCompatibleScreenManifests UP-TO-DATE
+> Task :app:extractDeepLinksDebug UP-TO-DATE
+> Task :app:processDebugMainManifest UP-TO-DATE
+> Task :app:processDebugManifest UP-TO-DATE
+> Task :app:processDebugManifestForPackage UP-TO-DATE
+> Task :app:processDebugResources UP-TO-DATE
+> Task :app:javaPreCompileDebug UP-TO-DATE
+> Task :app:mergeDebugShaders UP-TO-DATE
+> Task :app:compileDebugShaders NO-SOURCE
+> Task :app:generateDebugAssets UP-TO-DATE
+> Task :app:mergeDebugAssets UP-TO-DATE
+> Task :app:compressDebugAssets UP-TO-DATE
+> Task :app:desugarDebugFileDependencies UP-TO-DATE
+> Task :app:checkDebugDuplicateClasses UP-TO-DATE
+> Task :app:mergeExtDexDebug UP-TO-DATE
+> Task :app:mergeLibDexDebug UP-TO-DATE
+> Task :app:mergeDebugJniLibFolders UP-TO-DATE
+> Task :app:mergeDebugNativeLibs UP-TO-DATE
+> Task :app:stripDebugDebugSymbols UP-TO-DATE
+> Task :app:validateSigningDebug UP-TO-DATE
+> Task :app:writeDebugAppMetadata UP-TO-DATE
+> Task :app:writeDebugSigningConfigVersions UP-TO-DATE
+
+> Task :app:compileDebugKotlin
+w: file:///home/ubuntu/zennay-cloud/wear-os/app/src/main/java/com/zennay/cloud/watch/AlertWorker.kt:25:132 'constructor(p0: Context!): Notification.Builder' is deprecated. Deprecated in Java.
+
+> Task :app:compileDebugJavaWithJavac
+> Task :app:dexBuilderDebug
+> Task :app:mergeDebugGlobalSynthetics UP-TO-DATE
+> Task :app:processDebugJavaRes
+> Task :app:mergeProjectDexDebug
+> Task :app:mergeDebugJavaResource
+> Task :app:packageDebug
+> Task :app:createDebugApkListingFileRedirect
+> Task :app:assembleDebug
+
+BUILD SUCCESSFUL in 36s
+39 actionable tasks: 8 executed, 31 up-to-date
+GRADLE_RC=0
+-rw-r--r-- 1 ubuntu ubuntu 27M Sep 26 13:15 app/build/outputs/apk/debug/app-debug.apk
+=== VERIFY UI/ALERT CODE ===
+338-        Row(
+339-            modifier = Modifier.fillMaxWidth(),
+340-            horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+341-            verticalAlignment = Alignment.CenterVertically
+342-        ) {
+343:            MetricStack("ACTIVE", "$active")
+344:            MetricStack("CPU", cpu?.let { "${it.toInt()}%" } ?: "—")
+345:            MetricStack("RAM", "$ram%")
+346-        }
+347-    }
+348-}
+349-@Composable
+350:private fun MetricStack(label: String, value: String) {
+351-    Column(
+352-        modifier = Modifier.width(56.dp).background(Surface2, RoundedCornerShape(12.dp)).padding(horizontal = 7.dp, vertical = 8.dp),
+353-        horizontalAlignment = Alignment.CenterHorizontally
+354-    ) {
+355-        Text(label, color = TextMuted, fontSize = 7.sp, letterSpacing = .8.sp, maxLines = 1)
+356-        Spacer(Modifier.height(3.dp))
+357-        Text(value, color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+358-    }
+359-}
+360-
+361-@Composable
+362-private fun ProjectHero(p: ProjectDetail) {
+363-    SurfaceCard {
+364-        Row(
+365-            modifier = Modifier.fillMaxWidth(),
+366-            verticalAlignment = Alignment.CenterVertically,
+367-            horizontalArrangement = Arrangement.SpaceBetween
+368-        ) {
+app/src/main/AndroidManifest.xml:4:    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+app/src/main/java/com/zennay/cloud/watch/MainActivity.kt:12:import androidx.work.PeriodicWorkRequestBuilder
+app/src/main/java/com/zennay/cloud/watch/MainActivity.kt:24:        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+app/src/main/java/com/zennay/cloud/watch/MainActivity.kt:25:            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+app/src/main/java/com/zennay/cloud/watch/MainActivity.kt:32:        val work = PeriodicWorkRequestBuilder<AlertWorker>(1, TimeUnit.HOURS).setConstraints(constraints).build()
+app/src/main/java/com/zennay/cloud/watch/MainActivity.kt:39:        manager.enqueue(OneTimeWorkRequestBuilder<AlertWorker>().setConstraints(constraints).build())
+app/src/main/java/com/zennay/cloud/watch/AlertWorker.kt:12:class AlertWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
+=== AFTER SERVICES ===
+haxlab-analyzer.service active running 889202 100 infinity 
+haxlab-ingest.service active running 889200 100 infinity 
+haxlab-worker.service active running 889201 100 infinity 
+actions.runner.Zennay-Haxlab.vps-bb300bba-haxlab.service active running 411098 100 infinity 
+actions.runner.Zennay-Ftmo.vps-bb300bba-ftmo.service active running 61158 800 infinity 
+ftmo-autonomous.timer active waiting 
+zennay-cloud.service active running 1327661 400 infinity 
