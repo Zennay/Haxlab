@@ -1,0 +1,377 @@
+WHOAMI=ubuntu
+SUDO_OK=1
+=== project config ===
+haxlab None None [None, None, None, None, None, None, None, None]
+ftmo None None [None, None, None, None, None, None, None, None]
+cloud None None [None, None, None, None, None, None, None]
+supa active Production rebuild · mobile-first foundation [None, None, None, None, None, None, None, None]
+=== watch home stats ===
+106-        modifier = Modifier.fillMaxSize(),
+107-        contentPadding = PaddingValues(start = 26.dp, end = 26.dp, top = 18.dp, bottom = 34.dp),
+108-        verticalArrangement = Arrangement.spacedBy(12.dp)
+109-    ) {
+110-        item {
+111-            HeaderRow(
+112-                title = "Zennay Cloud",
+113-                subtitle = if (loading) "SYNCING" else "LIVE",
+114-                onRefresh = { scope.launch { reload() } }
+115-            )
+116-        }
+117-        if (error != null && data == null) {
+118-            item { ErrorCard(error ?: "Cloud offline", onRetry = { scope.launch { reload() } }) }
+119-        }
+120-        data?.let { snapshot ->
+121-            item {
+122-                OverviewHero(
+123-                    progress = snapshot.overallProgress,
+124:                    active = snapshot.activeProjects,
+125-                    cpu = snapshot.host.cpu,
+126-                    ram = snapshot.host.memoryPercent
+127-                )
+128-            }
+129-            if (snapshot.warnings.isNotEmpty()) {
+130-                item {
+131-                    SurfaceCard {
+132-                        Label("WARNING", Warning)
+133-                        Text(
+134-                            snapshot.warnings.first().message,
+135-                            color = TextMain,
+136-                            fontSize = 11.sp,
+137-                            fontWeight = FontWeight.SemiBold,
+138-                            textAlign = TextAlign.Center,
+139-                            modifier = Modifier.fillMaxWidth(),
+140-                            maxLines = 2,
+141-                            overflow = TextOverflow.Ellipsis
+142-                        )
+143-                    }
+144-                }
+145-            }
+146-            item { SectionLabel("PROJECTS") }
+147-            items(snapshot.projects, key = { it.id }) { project ->
+148-                ProjectCard(project = project, onClick = { onProject(project.id) })
+149-            }
+150-            item {
+151-                Text(
+152-                    if (snapshot.stale) "Data stale" else "Live · ${shortAge(snapshot.generatedAt)}",
+153-                    color = if (snapshot.stale) Warning else TextMuted,
+154-                    fontSize = 9.sp,
+155-                    modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+156-                    textAlign = TextAlign.Center
+157-                )
+158-            }
+159-        }
+--
+326-        Text(label, color = TextMain, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+327-    }
+328-}
+329-
+330-@Composable
+331-private fun OverviewHero(progress: Int, active: Int, cpu: Double?, ram: Int) {
+332-    Column(
+333-        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+334-        horizontalAlignment = Alignment.CenterHorizontally
+335-    ) {
+336-        ProgressRing(progress, 108.dp)
+337-        Spacer(Modifier.height(12.dp))
+338-        Row(
+339-            modifier = Modifier.fillMaxWidth(),
+340-            horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+341-            verticalAlignment = Alignment.CenterVertically
+342-        ) {
+343-            MetricPill("ACTIVE", "$active")
+344:            MetricPill("CPU", cpu?.let { "${it.toInt()}%" } ?: "—")
+345:            MetricPill("RAM", "$ram%")
+346-        }
+347-    }
+348-}
+349-@Composable
+350-private fun ProjectHero(p: ProjectDetail) {
+351-    SurfaceCard {
+352-        Row(
+353-            modifier = Modifier.fillMaxWidth(),
+354-            verticalAlignment = Alignment.CenterVertically,
+355-            horizontalArrangement = Arrangement.SpaceBetween
+356-        ) {
+357-            ProgressRing(p.progress, 70.dp)
+358-            Column(horizontalAlignment = Alignment.End) {
+359-                StatusDot(p.health)
+360-                Spacer(Modifier.height(7.dp))
+361-                Text(p.status.uppercase(), color = TextMuted, fontSize = 9.sp, letterSpacing = 0.8.sp)
+362-            }
+363-        }
+364-    }
+365-}
+366-
+367-@Composable
+368-private fun ProjectCard(project: ProjectSummary, onClick: () -> Unit) {
+369-    SurfaceCard(modifier = Modifier.clickable(onClick = onClick)) {
+370-        Row(
+371-            modifier = Modifier.fillMaxWidth(),
+372-            verticalAlignment = Alignment.CenterVertically
+373-        ) {
+374-            MiniRing(project.progress)
+375-            Spacer(Modifier.width(10.dp))
+376-            Column(modifier = Modifier.weight(1f)) {
+377-                Row(
+378-                    modifier = Modifier.fillMaxWidth(),
+379-                    horizontalArrangement = Arrangement.SpaceBetween,
+380-                    verticalAlignment = Alignment.CenterVertically
+=== main activity ===
+package com.zennay.cloud.watch
+
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import com.zennay.cloud.watch.ui.ZennayWearApp
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent { ZennayWearApp() }
+    }
+}
+=== gradle ===
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
+}
+val apiBase = System.getenv("ZENNAY_API_BASE") ?: "http://198.244.191.182:8765"
+val apiToken = System.getenv("ZENNAY_WATCH_TOKEN") ?: ""
+fun quoted(value: String) = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
+android {
+    namespace = "com.zennay.cloud.watch"
+    compileSdk = 36
+
+    defaultConfig {
+        applicationId = "com.zennay.cloud.watch"
+        minSdk = 30
+        targetSdk = 35
+        versionCode = 2
+        versionName = "0.2.0"
+        buildConfigField("String", "API_BASE", quoted(apiBase))
+        buildConfigField("String", "API_TOKEN", quoted(apiToken))
+    }
+
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = "17" }
+}
+
+dependencies {
+    implementation("androidx.compose.ui:ui:1.11.0")
+    implementation("androidx.compose.ui:ui-graphics:1.11.0")
+    implementation("androidx.compose.foundation:foundation:1.11.0")
+    implementation("androidx.activity:activity-compose:1.13.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
+    implementation("androidx.wear.compose:compose-foundation:1.6.1")
+    implementation("androidx.wear.compose:compose-material:1.6.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+}
+=== models ===
+package com.zennay.cloud.watch.data
+
+data class ActivityItem(
+    val time: String,
+    val kind: String,
+    val title: String,
+    val detail: String?
+)
+
+data class AiRun(
+    val time: String,
+    val label: String,
+    val estimated: Boolean
+)
+
+data class ProjectSummary(
+    val id: String,
+    val name: String,
+    val progress: Int,
+    val status: String,
+    val health: String,
+    val milestone: String,
+    val nextStep: String,
+    val lastActivity: ActivityItem?,
+    val lastAiRun: AiRun?
+)
+
+data class HostSummary(
+    val cpu: Double?,
+    val memoryPercent: Int,
+    val load: Double
+)
+
+data class WarningItem(
+    val level: String,
+    val project: String?,
+    val message: String
+)
+
+data class WatchSnapshot(
+    val generatedAt: String,
+    val stale: Boolean,
+    val overallProgress: Int,
+    val activeProjects: Int,
+    val host: HostSummary,
+    val warnings: List<WarningItem>,
+    val projects: List<ProjectSummary>
+)
+
+data class ServiceState(
+    val name: String,
+    val state: String,
+    val result: String?
+)
+
+data class ProgressPoint(
+    val time: String,
+    val progress: Float
+)
+
+data class ProjectDetail(
+    val id: String,
+    val name: String,
+    val progress: Int,
+    val health: String,
+    val status: String,
+    val currentMilestone: String,
+    val nextStep: String,
+    val lastAiRun: AiRun?,
+    val recentActivity: List<ActivityItem>,
+    val progressHistory: List<ProgressPoint>,
+    val services: List<ServiceState>
+)
+=== repo ===
+package com.zennay.cloud.watch.data
+
+import com.zennay.cloud.watch.BuildConfig
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+
+class ZennayCloudRepository(
+    private val baseUrl: String = BuildConfig.API_BASE.trimEnd('/'),
+    private val token: String = BuildConfig.API_TOKEN
+) {
+    suspend fun loadHome(): WatchSnapshot = withContext(Dispatchers.IO) {
+        parseHome(request("/api/v1/watch"))
+    }
+
+    suspend fun loadProject(id: String): ProjectDetail = withContext(Dispatchers.IO) {
+        val encoded = URLEncoder.encode(id, Charsets.UTF_8.name())
+        parseProject(request("/api/v1/watch/project?project=$encoded").getJSONObject("project"))
+    }
+
+    private fun request(path: String): JSONObject {
+        val connection = (URL(baseUrl + path).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 5_000
+            readTimeout = 5_000
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("Authorization", "Bearer $token")
+            setRequestProperty("User-Agent", "ZennayCloudWear/0.1")
+        }
+        try {
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            if (code !in 200..299) throw IllegalStateException("Cloud HTTP $code")
+            return JSONObject(body)
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun parseHome(root: JSONObject): WatchSnapshot {
+        val host = root.getJSONObject("host")
+        return WatchSnapshot(
+
+            generatedAt = root.getString("time"),
+            stale = root.optBoolean("stale", false),
+            overallProgress = root.getInt("overall_progress"),
+            activeProjects = root.getInt("active_projects"),
+            host = HostSummary(
+                cpu = if (host.isNull("cpu")) null else host.getDouble("cpu"),
+                memoryPercent = host.getInt("memory_percent"),
+                load = host.optDouble("load", 0.0)
+            ),
+            warnings = root.getJSONArray("warnings").mapObjects(::parseWarning),
+            projects = root.getJSONArray("projects").mapObjects(::parseSummary)
+        )
+    }
+
+    private fun parseSummary(o: JSONObject) = ProjectSummary(
+        id = o.getString("id"),
+        name = o.getString("name"),
+        progress = o.getInt("progress"),
+        status = o.getString("status"),
+        health = o.getString("health"),
+        milestone = o.optString("milestone"),
+        nextStep = o.optString("next_step"),
+        lastActivity = o.optJSONObject("last_activity")?.let(::parseActivity),
+        lastAiRun = o.optJSONObject("last_chatgpt_run")?.let(::parseAiRun)
+    )
+
+    private fun parseProject(o: JSONObject) = ProjectDetail(
+        id = o.getString("id"),
+        name = o.getString("name"),
+        progress = o.getInt("progress"),
+        health = o.getString("health"),
+        status = o.getString("status"),
+        currentMilestone = o.optString("current_milestone"),
+        nextStep = o.optString("next_step"),
+        lastAiRun = o.optJSONObject("last_chatgpt_run")?.let(::parseAiRun),
+        recentActivity = o.getJSONArray("recent_activity").mapObjects(::parseActivity),
+        progressHistory = o.getJSONArray("progress_history").mapObjects {
+            ProgressPoint(it.getString("date"), it.getDouble("progress").toFloat())
+        },
+        services = o.getJSONArray("services").mapObjects {
+            ServiceState(it.getString("name"), it.getString("state"), it.optNullableString("result"))
+        }
+    )
+
+    private fun parseActivity(o: JSONObject) = ActivityItem(
+        time = o.getString("ts"),
+        kind = o.optString("kind"),
+        title = o.optString("title"),
+        detail = o.optNullableString("detail")
+    )
+
+    private fun parseAiRun(o: JSONObject) = AiRun(
+        time = o.getString("time"),
+        label = o.optString("label"),
+        estimated = o.optBoolean("estimated", false)
+    )
+
+    private fun parseWarning(o: JSONObject) = WarningItem(
+        level = o.optString("level"),
+        project = o.optNullableString("project"),
+        message = o.optString("message")
+    )
+}
+
+private fun JSONObject.optNullableString(key: String): String? =
+    if (isNull(key) || !has(key)) null else optString(key).takeIf { it.isNotBlank() }
+
+private inline fun <T> JSONArray.mapObjects(mapper: (JSONObject) -> T): List<T> =
+    (0 until length()).map { mapper(getJSONObject(it)) }
+=== service pids/resources ===
+haxlab-analyzer.service active running 889202 40804352 [not set] 
+haxlab-ingest.service active running 889200 23367680 [not set] 
+haxlab-worker.service active running 889201 10604544 [not set] 
+ftmo-autonomous.timer active waiting 
+actions.runner.Zennay-Haxlab.vps-bb300bba-haxlab.service active running 411098 513519616 [not set] 
+actions.runner.Zennay-Ftmo.vps-bb300bba-ftmo.service active running 61158 2025631744 [not set] 
+zennay-cloud.service active running 1290532 102088704 [not set] 
