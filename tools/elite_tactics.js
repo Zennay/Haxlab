@@ -87,6 +87,30 @@ function shouldRecoverFromStall(
   );
 }
 
+function attachFutureSignal(policyAction, futureAction) {
+  if (!policyAction) return policyAction;
+  if (!futureAction?.future_head_available) {
+    return {
+      ...policyAction,
+      future_head_available: false,
+      future_signal_source: "missing",
+    };
+  }
+
+  return {
+    ...policyAction,
+    future_head_available: true,
+    future_direction_class: Number(futureAction.future_direction_class),
+    future_dir_x: Number(futureAction.future_dir_x || 0),
+    future_dir_y: Number(futureAction.future_dir_y || 0),
+    future_direction_probability: Number(
+      futureAction.future_direction_probability || 0,
+    ),
+    future_signal_source: "secondary_model",
+  };
+}
+
+
 function futureMotionAssist(
   policyAction,
   ballDistance,
@@ -188,5 +212,6 @@ module.exports = {
   enforceKickRange,
   recoveryAction,
   shouldRecoverFromStall,
+  attachFutureSignal,
   futureMotionAssist,
 };
