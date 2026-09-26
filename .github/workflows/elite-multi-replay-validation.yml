@@ -1,0 +1,219 @@
+name: Elite Multi Replay Validation
+
+on:
+  push:
+    branches:
+      - experiment/frozen-future-head-v01
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-elite-multi-replay-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    if: contains(github.event.head_commit.message, '[multi-replay]')
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preflight multi-replay tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m pytest -q \
+            "$GITHUB_WORKSPACE/tests/test_scenario_source.py"
+          node --check "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js"
+          node --check "$GITHUB_WORKSPACE/tools/validate_multi_replay_champion.js"
+          node "$GITHUB_WORKSPACE/tests/test_multi_replay_champion.js"
+
+      - name: Select five diverse 4v4 replay sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m haxlab.evaluation.scenario_source \
+            --state-db /var/lib/haxlab/state/haxlab.sqlite3 \
+            --max-candidates 1500 \
+            --count 5 \
+            --max-shared-players 4 \
+            --output /tmp/haxlab-multi-sources.json
+
+      - name: Benchmark registered champion across replay set
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mapfile -t CFG < <(
+            sudo -u haxlab /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+
+          pointer = json.loads(
+              Path("/var/lib/haxlab/derived/champions/elite-player/current.json").read_text()
+          )
+          manifest_path = Path(pointer["manifest_path"])
+          model = pointer.get("runtime_model_path") or str(
+              manifest_path.parent / "runtime-model.json"
+          )
+          cfg = pointer.get("runtime_config") or {}
+          roles = ",".join(cfg.get("allowed_roles") or ["gk", "dm", "am", "st"])
+
+          print(model)
+          print(float(cfg.get("minimum_confidence", 0.68)))
+          print(int(cfg.get("minimum_ball_distance", 80)))
+          print(roles)
+          print(pointer.get("version_id") or "")
+          PY
+          )
+          CANDIDATE_MODEL="${CFG[0]}"
+          CONF="${CFG[1]}"
+          DIST="${CFG[2]}"
+          ROLES="${CFG[3]}"
+          VERSION="${CFG[4]}"
+
+          mapfile -t SOURCES < <(
+            sudo -u haxlab /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("/tmp/haxlab-multi-sources.json").read_text())
+          for index, source in enumerate(payload["sources"], start=1):
+              print("\t".join([
+                  str(index),
+                  source["sha256"],
+                  source["raw_path"],
+                  source["analysis_path"],
+              ]))
+          PY
+          )
+
+          for ROW in "${SOURCES[@]}"; do
+            IFS=$'\t' read -r IDX SHA RAW ANALYSIS <<< "$ROW"
+            PREFIX="/tmp/haxlab-multi-${IDX}"
+
+            sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+              "$GITHUB_WORKSPACE/tools/extract_stadium_from_replay.js" \
+              "$RAW" "${PREFIX}.hbs"
+
+            sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+              "$GITHUB_WORKSPACE/tools/extract_replay_scenarios.js" \
+              "$RAW" "$ANALYSIS" "${PREFIX}-scenarios.json" 16 8 6
+
+            sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+              "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js" \
+              --model /var/lib/haxlab/derived/training/elite-player-champion-candidate/model/runtime-model.json \
+              --stadium "${PREFIX}.hbs" \
+              --scenarios "${PREFIX}-scenarios.json" \
+              --max-scenarios 8 \
+              --seconds 30 \
+              --sample-every 6 \
+              --disable-recovery \
+              --output "${PREFIX}-champion.json"
+
+            sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+              "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js" \
+              --model "$CANDIDATE_MODEL" \
+              --stadium "${PREFIX}.hbs" \
+              --scenarios "${PREFIX}-scenarios.json" \
+              --max-scenarios 8 \
+              --seconds 30 \
+              --sample-every 6 \
+              --disable-recovery \
+              --future-assist \
+              --future-assist-confidence "$CONF" \
+              --future-assist-min-distance "$DIST" \
+              --future-assist-roles "$ROLES" \
+              --output "${PREFIX}-candidate.json"
+          done
+
+          sudo -u haxlab /opt/haxlab/.venv/bin/python - \
+            "$VERSION" "$CANDIDATE_MODEL" "$CONF" "$DIST" "$ROLES" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          version, model, confidence, distance, roles = sys.argv[1:]
+          source_set = json.loads(Path("/tmp/haxlab-multi-sources.json").read_text())
+          cases = []
+          for index, source in enumerate(source_set["sources"], start=1):
+              cases.append({
+                  "label": f"{index}:{source['sha256'][:12]}",
+                  "sha256": source["sha256"],
+                  "champion_path": f"/tmp/haxlab-multi-{index}-champion.json",
+                  "candidate_path": f"/tmp/haxlab-multi-{index}-candidate.json",
+              })
+          payload = {
+              "schema": "haxlab-multi-replay-validation-manifest-v1",
+              "candidate": {
+                  "version_id": version,
+                  "runtime_model_path": model,
+                  "future_assist_config": {
+                      "minimum_confidence": float(confidence),
+                      "minimum_ball_distance": int(distance),
+                      "allowed_roles": [row for row in roles.split(",") if row],
+                  },
+              },
+              "source_set": source_set,
+              "cases": cases,
+          }
+          Path("/tmp/haxlab-multi-manifest.json").write_text(
+              json.dumps(payload, indent=2) + "\n"
+          )
+          PY
+
+      - name: Evaluate multi-replay generalization
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/validate_multi_replay_champion.js" \
+            /tmp/haxlab-multi-manifest.json \
+            /tmp/haxlab-multi-validation.json
+
+      - name: Publish multi-replay evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo cat /tmp/haxlab-multi-sources.json > multi-replay-sources.json
+          sudo cat /tmp/haxlab-multi-manifest.json > multi-replay-manifest.json
+          sudo cat /tmp/haxlab-multi-validation.json > multi-replay-validation.json
+          for FILE in /tmp/haxlab-multi-*-champion.json /tmp/haxlab-multi-*-candidate.json; do
+            sudo cat "$FILE" > "$(basename "$FILE")"
+          done
+
+          echo '## HaxLab Multi-Replay Champion Validation' >> "$GITHUB_STEP_SUMMARY"
+          cat multi-replay-validation.json >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: elite-multi-replay-validation
+          path: |
+            multi-replay-sources.json
+            multi-replay-manifest.json
+            multi-replay-validation.json
+            haxlab-multi-*-champion.json
+            haxlab-multi-*-candidate.json
+          retention-days: 30
+
+      - name: Enforce multi-replay gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          data = json.load(open("multi-replay-validation.json"))
+          print(json.dumps({
+              "validated": data.get("validated"),
+              "aggregate": data.get("aggregate"),
+              "checks": data.get("checks"),
+          }, indent=2))
+          raise SystemExit(0 if data.get("validated") else 1)
+          PY
