@@ -224,7 +224,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node "$GITHUB_WORKSPACE/tools/select_future_assist.js" \
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/select_future_assist.js" \
             /tmp/haxlab-future-champion-offline.json \
             /tmp/haxlab-future-challenger-offline.json \
             /tmp/haxlab-future-champion.json \
@@ -238,7 +239,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if /opt/haxlab/.venv/bin/python - <<'PY'
+          if sudo -u haxlab /opt/haxlab/.venv/bin/python - <<'PY'
           import json
           p = json.load(open("/tmp/haxlab-future-promotion.json"))
           raise SystemExit(0 if p.get("promote_future_challenger") else 1)
@@ -262,15 +263,15 @@ jobs:
         run: |
           set -euo pipefail
           sudo cat /var/lib/haxlab/derived/training/elite-player-future-challenger/model/metrics.json > future-metrics.json
-          cp /tmp/haxlab-future-champion-offline.json future-champion-offline.json
-          cp /tmp/haxlab-future-challenger-offline.json future-challenger-offline.json
-          cp /tmp/haxlab-future-champion.json future-champion.json
-          cp /tmp/haxlab-future-plain.json future-plain.json
-          cp /tmp/haxlab-future-assisted-0_45.json future-assisted-0_45.json
-          cp /tmp/haxlab-future-assisted-0_60.json future-assisted-0_60.json
-          cp /tmp/haxlab-future-assisted-0_75.json future-assisted-0_75.json
-          cp /tmp/haxlab-future-promotion.json future-promotion.json
-          cp /tmp/haxlab-future-registry-promotion.json future-registry-promotion.json
+          sudo cat /tmp/haxlab-future-champion-offline.json > future-champion-offline.json
+          sudo cat /tmp/haxlab-future-challenger-offline.json > future-challenger-offline.json
+          sudo cat /tmp/haxlab-future-champion.json > future-champion.json
+          sudo cat /tmp/haxlab-future-plain.json > future-plain.json
+          sudo cat /tmp/haxlab-future-assisted-0_45.json > future-assisted-0_45.json
+          sudo cat /tmp/haxlab-future-assisted-0_60.json > future-assisted-0_60.json
+          sudo cat /tmp/haxlab-future-assisted-0_75.json > future-assisted-0_75.json
+          sudo cat /tmp/haxlab-future-promotion.json > future-promotion.json
+          sudo cat /tmp/haxlab-future-registry-promotion.json > future-registry-promotion.json
 
           echo '## HaxLab Future Motion Challenger' >> "$GITHUB_STEP_SUMMARY"
           cat future-promotion.json >> "$GITHUB_STEP_SUMMARY"
