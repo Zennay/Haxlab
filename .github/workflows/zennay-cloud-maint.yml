@@ -1,44 +1,127 @@
-name: Zennay Cloud maintenance
+name: Zennay Cloud final deploy
 
 on:
   push:
     branches: [zennay-cloud-maint]
     paths:
       - ".github/workflows/zennay-cloud-maint.yml"
+      - "maintenance/AlertWorker.kt"
+      - "maintenance/MainActivity.kt"
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: zennay-cloud-final
+  cancel-in-progress: false
 
 jobs:
-  inspect:
+  deploy:
     runs-on: [self-hosted, haxlab]
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
           ref: zennay-cloud-maint
-      - name: Inspect alert and resource integration
+
+      - name: Finalize dashboard and Wear app
         shell: bash
         run: |
           set -euo pipefail
-          {
-            echo "generated_at=$(date -Is)"
-            echo "=== SERVER WATCH ==="
-            sed -n '260,380p' /home/ubuntu/zennay-cloud/server.py
-            echo "=== ENHANCEMENTS ==="
-            sed -n '1,360p' /home/ubuntu/zennay-cloud/enhancements.py
-            echo "=== APP QUALITY/RESOURCE ==="
-            grep -n -E "quality|resource|milestone-progress|priority" /home/ubuntu/zennay-cloud/public/app.js | head -120
-            echo "=== LAYOUT ==="
-            cat /home/ubuntu/zennay-cloud/project-layout.json
-          } >/tmp/zennay-cloud-upgrade-result.txt
-      - name: Publish result
-        shell: bash
-        run: |
-          cp /tmp/zennay-cloud-upgrade-result.txt zennay-cloud-maint-result.txt
-          git config user.name "zennay-cloud-maint"
-          git config user.email "actions@users.noreply.github.com"
-          git add zennay-cloud-maint-result.txt
-          git diff --cached --quiet && exit 0
-          git commit -m "chore: publish alert integration inspection"
-          git push origin HEAD:zennay-cloud-maint
+          ROOT=/home/ubuntu/zennay-cloud
+          echo "=== BEFORE PROTECTED PIDS ==="
+          protected=(
+            haxlab-analyzer.service
+            haxlab-ingest.service
+            haxlab-worker.service
+            actions.runner.Zennay-Haxlab.vps-bb300bba-haxlab.service
+            actions.runner.Zennay-Ftmo.vps-bb300bba-ftmo.service
+          )
+          declare -A BEFORE
+          for s in "${protected[@]}"; do
+            BEFORE["$s"]="$(systemctl show "$s" -p MainPID --value)"
+            echo "$s ${BEFORE[$s]}"
+          done
+
+          echo "=== APPLY WATCH SOURCE FIXES ==="
+          mkdir -p "$ROOT/wear-os/app/src/main/java/com/zennay/cloud/watch/notifications"
+          cp maintenance/AlertWorker.kt "$ROOT/wear-os/app/src/main/java/com/zennay/cloud/watch/notifications/AlertWorker.kt"
+          cp maintenance/MainActivity.kt "$ROOT/wear-os/app/src/main/java/com/zennay/cloud/watch/MainActivity.kt"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          root=Path("/home/ubuntu/zennay-cloud")
+          ui=root/"wear-os/app/src/main/java/com/zennay/cloud/watch/ui/ZennayWearApp.kt"
+          s=ui.read_text()
+          s=s.replace(".width(62.dp)", ".width(56.dp)")
+          ui.write_text(s)
+
+          server=root/"server.py"
+          s=server.read_text()
+          needle="            if u.path=='/api/resource-priority':\n                project=str(payload.get('project') or '')\n"
+          secured="            if u.path=='/api/resource-priority':\n                if self.client_address[0] not in ('127.0.0.1','::1'):return self.reply({'error':'Alleen lokaal'},403)\n                project=str(payload.get('project') or '')\n"
+          if needle in s:
+              s=s.replace(needle,secured,1)
+          server.write_text(s)
+
+          index=root/"public/index.html"
+          x=index.read_text()
+          x=x.replace("Wear OS komt later.<br>De compacte API staat klaar.","Wear OS actief.<br>Alerts & dashboard om je pols.")
+          index.write_text(x)
+          PY
+
+          echo "=== VALIDATE SOURCES ==="
+          python3 -m py_compile "$ROOT/server.py" "$ROOT/enhancements.py"
+          node --check "$ROOT/public/app.js"
+          node --check "$ROOT/public/enhancements.js"
+          grep -q "POST_NOTIFICATIONS" "$ROOT/wear-os/app/src/main/AndroidManifest.xml"
+          grep -q "work-runtime-ktx" "$ROOT/wear-os/app/build.gradle.kts"
+          grep -q 'width(56.dp)' "$ROOT/wear-os/app/src/main/java/com/zennay/cloud/watch/ui/ZennayWearApp.kt"
+          grep -q "getSystemService" "$ROOT/wear-os/app/src/main/java/com/zennay/cloud/watch/notifications/AlertWorker.kt"
+
+          echo "=== RESOURCE PRIORITIES ==="
+          sudo -n /usr/local/sbin/zennay-resource-control apply all
+
+          echo "=== RESTART CLOUD ONLY ==="
+          sudo systemctl restart zennay-cloud.service
+          sleep 3
+          test "$(systemctl is-active zennay-cloud.service)" = active
+
+          echo "=== API VALIDATION ==="
+          curl -fsS http://127.0.0.1:8765/api/status >/tmp/z-status.json
+          curl -fsS http://127.0.0.1:8765/api/resources >/tmp/z-resources.json
+          curl -fsS http://127.0.0.1:8765/api/alerts >/tmp/z-alerts.json
+          TOKEN="$(cat "$ROOT/.watch-token")"
+          curl -fsS -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8765/api/v1/watch >/tmp/z-watch.json
+          curl -fsS -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8765/api/v1/alerts >/tmp/z-watch-alerts.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open("/tmp/z-status.json"))
+          print("VISIBLE",[(p["id"],p["progress"],(p.get("quality") or {}).get("headline"),(p.get("resource") or {}).get("priority")) for p in d["projects"]])
+          print("ARCHIVED",[p["id"] for p in d.get("archived_projects",[])])
+          print("RESOURCES",json.load(open("/tmp/z-resources.json")))
+          w=json.load(open("/tmp/z-watch.json"))
+          print("WATCH_PROJECTS",[p["id"] for p in w["projects"]])
+          print("WATCH_ALERTS",len(json.load(open("/tmp/z-watch-alerts.json")).get("alerts",[])))
+          PY
+
+          echo "=== BUILD WATCH APK ==="
+          JAVA_BIN="$(find /usr/lib/jvm /opt /home/ubuntu -type f -path '*/bin/java' -perm -111 2>/dev/null | head -1)"
+          test -n "$JAVA_BIN"
+          export JAVA_HOME="$(dirname "$(dirname "$JAVA_BIN")")"
+          export PATH="$JAVA_HOME/bin:$PATH"
+          GRADLE=/home/ubuntu/.cache/zennay-gradle/gradle-8.13/bin/gradle
+          chmod +x "$GRADLE"
+          ZENNAY_WATCH_TOKEN="$TOKEN" "$GRADLE" -p "$ROOT/wear-os" :app:assembleDebug --no-daemon
+          APK="$ROOT/wear-os/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          ls -lh "$APK"
+
+          echo "=== AFTER PROTECTED PIDS ==="
+          for s in "${protected[@]}"; do
+            after="$(systemctl show "$s" -p MainPID --value)"
+            echo "$s $after"
+            test "$after" = "${BEFORE[$s]}"
+            test "$(systemctl is-active "$s")" = active
+          done
+          echo "FINAL_DEPLOY_OK"
