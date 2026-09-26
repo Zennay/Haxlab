@@ -33,6 +33,8 @@ haxlab-train-elite = "haxlab.learning.elite:main"
 haxlab-elite-agent = "haxlab.learning.elite_runtime:main"
 haxlab-elite-pipeline = "haxlab.learning.elite_pipeline:main"
 haxlab-elite-gate = "haxlab.evaluation.elite_gate:main"
+haxlab-elite-sandbox-gate = "haxlab.evaluation.sandbox_gate:main"
+haxlab-elite-champion-gate = "haxlab.evaluation.champion_gate:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
