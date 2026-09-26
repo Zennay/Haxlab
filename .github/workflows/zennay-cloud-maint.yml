@@ -28,23 +28,14 @@ jobs:
           exec > >(tee /tmp/zcm-result.txt) 2>&1
           echo "WHOAMI=$(whoami)"
           sudo -n true && echo "SUDO_OK=1" || echo "SUDO_OK=0"
-          echo "=== project config ==="
-          python3 - <<'PY'
-          import json
-          p=json.load(open("/home/ubuntu/zennay-cloud/projects.json"))
-          for x in p:
-              print(x["id"], x.get("status"), x.get("phase"), [m.get("progress") for m in x["milestones"]])
-          PY
-          echo "=== watch home stats ==="
-          grep -n -B18 -A35 -E 'CPU|RAM|activeProjects|active_projects' /home/ubuntu/zennay-cloud/wear-os/app/src/main/java/com/zennay/cloud/watch/ui/ZennayWearApp.kt | head -260 || true
-          echo "=== main activity ==="
-          sed -n '1,260p' /home/ubuntu/zennay-cloud/wear-os/app/src/main/java/com/zennay/cloud/watch/MainActivity.kt || true
-          echo "=== gradle ==="
-          cat /home/ubuntu/zennay-cloud/wear-os/app/build.gradle.kts
-          echo "=== models ==="
-          cat /home/ubuntu/zennay-cloud/wear-os/app/src/main/java/com/zennay/cloud/watch/data/Models.kt
-          echo "=== repo ==="
-          cat /home/ubuntu/zennay-cloud/wear-os/app/src/main/java/com/zennay/cloud/watch/data/ZennayCloudRepository.kt
+          echo "=== watch metric pill ==="
+          sed -n '390,470p' /home/ubuntu/zennay-cloud/wear-os/app/src/main/java/com/zennay/cloud/watch/ui/ZennayWearApp.kt
+          echo "=== manifest ==="
+          cat /home/ubuntu/zennay-cloud/wear-os/app/src/main/AndroidManifest.xml
+          echo "=== index ==="
+          cat /home/ubuntu/zennay-cloud/public/index.html
+          echo "=== server resource/alert insertion anchors ==="
+          grep -n -E 'def replay_metrics|def collect|def persist|def sampler|def watch_warnings|def watch_summary|def watch_project|class Handler|def do_POST|def route' /home/ubuntu/zennay-cloud/server.py
           echo "=== service pids/resources ==="
           for s in haxlab-analyzer.service haxlab-ingest.service haxlab-worker.service ftmo-autonomous.timer actions.runner.Zennay-Haxlab.vps-bb300bba-haxlab.service actions.runner.Zennay-Ftmo.vps-bb300bba-ftmo.service zennay-cloud.service; do
             echo -n "$s "
@@ -60,5 +51,5 @@ jobs:
           git config user.email "actions@users.noreply.github.com"
           git add zennay-cloud-maint-result.txt
           git diff --cached --quiet && exit 0
-          git commit -m "chore: record Zennay Cloud maintenance inspection"
+          git commit -m "chore: refresh Zennay Cloud maintenance inspection"
           git push origin HEAD:zennay-cloud-maint
