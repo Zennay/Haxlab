@@ -46,3 +46,11 @@ same champion and scenarios:
 
 A selector may promote only a candidate that passes all closed-loop safety
 checks. Among passing candidates it prefers the lowest fallback usage.
+
+## Distribution-drift telemetry
+
+The Python and Node runtimes also report mean/max absolute input z-score for the
+current frame. These OOD values are diagnostic only in the first recovery A/B:
+recovery is still triggered solely by sustained inactivity at large ball
+distance. This keeps the experiment attributable. OOD-triggered recovery can be
+introduced only if the stall-only sweep leaves a measurable closed-loop gap.
