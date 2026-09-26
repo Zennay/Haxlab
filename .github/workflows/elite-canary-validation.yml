@@ -118,11 +118,11 @@ jobs:
           print(data["version_id"])
           PY
           )
-          CANDIDATE_MODEL="\${CFG[0]}"
-          CONF="\${CFG[1]}"
-          DIST="\${CFG[2]}"
-          ROLES="\${CFG[3]}"
-          VERSION="\${CFG[4]}"
+          CANDIDATE_MODEL="${CFG[0]}"
+          CONF="${CFG[1]}"
+          DIST="${CFG[2]}"
+          ROLES="${CFG[3]}"
+          VERSION="${CFG[4]}"
 
           mapfile -t SOURCES < <(
             sudo -u haxlab /opt/haxlab/.venv/bin/python - <<'PY'
@@ -139,34 +139,34 @@ jobs:
           PY
           )
 
-          for ROW in "\${SOURCES[@]}"; do
+          for ROW in "${SOURCES[@]}"; do
             IFS=$'\t' read -r IDX SHA RAW ANALYSIS <<< "$ROW"
-            PREFIX="/tmp/haxlab-canary-\${IDX}"
+            PREFIX="/tmp/haxlab-canary-${IDX}"
 
             sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
               "$GITHUB_WORKSPACE/tools/extract_stadium_from_replay.js" \
-              "$RAW" "\${PREFIX}.hbs"
+              "$RAW" "${PREFIX}.hbs"
 
             sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
               "$GITHUB_WORKSPACE/tools/extract_replay_scenarios.js" \
-              "$RAW" "$ANALYSIS" "\${PREFIX}-scenarios.json" 20 10 6
+              "$RAW" "$ANALYSIS" "${PREFIX}-scenarios.json" 20 10 6
 
             sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
               "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js" \
               --model /var/lib/haxlab/derived/training/elite-player-champion-candidate/model/runtime-model.json \
-              --stadium "\${PREFIX}.hbs" \
-              --scenarios "\${PREFIX}-scenarios.json" \
+              --stadium "${PREFIX}.hbs" \
+              --scenarios "${PREFIX}-scenarios.json" \
               --max-scenarios 10 \
               --seconds 60 \
               --sample-every 6 \
               --disable-recovery \
-              --output "\${PREFIX}-champion.json"
+              --output "${PREFIX}-champion.json"
 
             sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
               "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js" \
               --model "$CANDIDATE_MODEL" \
-              --stadium "\${PREFIX}.hbs" \
-              --scenarios "\${PREFIX}-scenarios.json" \
+              --stadium "${PREFIX}.hbs" \
+              --scenarios "${PREFIX}-scenarios.json" \
               --max-scenarios 10 \
               --seconds 60 \
               --sample-every 6 \
@@ -175,7 +175,7 @@ jobs:
               --future-assist-confidence "$CONF" \
               --future-assist-min-distance "$DIST" \
               --future-assist-roles "$ROLES" \
-              --output "\${PREFIX}-candidate.json"
+              --output "${PREFIX}-candidate.json"
           done
 
           sudo -u haxlab /opt/haxlab/.venv/bin/python - \
