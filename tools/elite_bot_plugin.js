@@ -62,6 +62,15 @@ module.exports = function(API) {
       "Optional promoted champion pointer. Falls back to modelDir when absent.",
   });
   this.defineVariable({
+    name: "minimumChampionValidationStage",
+    type: VariableType.String,
+    value:
+      process.env.HAXLAB_ELITE_MIN_VALIDATION_STAGE ||
+      "canary",
+    description:
+      "Minimum registry validation stage required for live loading: promotion, multi_replay, canary, or live.",
+  });
+  this.defineVariable({
     name: "sampleEveryTicks",
     type: VariableType.Integer,
     value: 6,
@@ -141,6 +150,9 @@ module.exports = function(API) {
     return resolveEliteChampionConfig({
       pointerPath: String(that.championPointer || ""),
       fallbackModelDir: String(that.modelDir),
+      minimumValidationStage: String(
+        that.minimumChampionValidationStage || "canary",
+      ),
     });
   }
 
@@ -165,6 +177,10 @@ module.exports = function(API) {
         version_id: resolved.version_id,
         runtime_model_path: resolved.runtime_model_path,
         behavior_sha256: resolved.behavior_sha256,
+        validation_stage: resolved.validation_stage || null,
+        fallback_reason: resolved.fallback_reason || null,
+        blocked_registry_version_id:
+          resolved.blocked_registry_version_id || null,
       }),
     );
     return policy;
