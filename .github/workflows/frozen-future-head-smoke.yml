@@ -1,0 +1,33 @@
+name: Frozen Future Head Smoke
+
+on:
+  push:
+    branches:
+      - experiment/frozen-future-head-v01
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-frozen-future-head-smoke
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile frozen future trainer
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src"             /opt/haxlab/.venv/bin/python -m py_compile             "$GITHUB_WORKSPACE/src/haxlab/learning/frozen_future.py"
+
+      - name: Run frozen-backbone integration smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src"             /opt/haxlab/.venv/bin/python             "$GITHUB_WORKSPACE/tests/test_frozen_future.py"
