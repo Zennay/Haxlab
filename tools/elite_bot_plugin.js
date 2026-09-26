@@ -7,7 +7,12 @@ const {
   buildFeatureObject,
   canonicalActionToWorld,
 } = require("./elite_features");
-const { kickoffAction, enforceKickRange } = require("./elite_tactics");
+const {
+  kickoffAction,
+  enforceKickRange,
+  recoveryAction,
+  shouldRecoverFromStall,
+} = require("./elite_tactics");
 
 module.exports = function(API) {
   const {
@@ -112,6 +117,9 @@ module.exports = function(API) {
       role,
       keyState: 0,
       lastAction: null,
+      stallStreak: 0,
+      recoveryTicks: 0,
+      recoveryOverrides: 0,
     }));
 
     for (const bot of bots) {
@@ -153,6 +161,9 @@ module.exports = function(API) {
     runtimeErrorCount = 0;
     for (const bot of bots) {
       bot.keyState = 0;
+      bot.stallStreak = 0;
+      bot.recoveryTicks = 0;
+      bot.recoveryOverrides = 0;
       policy?.reset(String(bot.id));
     }
   };
@@ -194,6 +205,53 @@ module.exports = function(API) {
           role: bot.role,
           features,
         });
+
+        const ballDistance = Math.hypot(
+          Number(features.ball_dx || 0),
+          Number(features.ball_dy || 0),
+        );
+        const stationary =
+          Number(action.dir_x || 0) === 0 &&
+          Number(action.dir_y || 0) === 0;
+        bot.stallStreak =
+          stationary && ballDistance >= 120
+            ? bot.stallStreak + 1
+            : 0;
+
+        if (
+          bot.recoveryTicks <= 0 &&
+          shouldRecoverFromStall(
+            { dirX: action.dir_x, dirY: action.dir_y },
+            ballDistance,
+            bot.stallStreak,
+          )
+        ) {
+          bot.recoveryTicks = 5;
+          bot.recoveryOverrides += 1;
+          bot.stallStreak = 0;
+        }
+
+        if (bot.recoveryTicks > 0) {
+          const teamId = teamIdForPlayer(player);
+          const recovery = recoveryAction(
+            bot.role,
+            player,
+            gameState,
+            teamId,
+          );
+          if (recovery) {
+            bot.recoveryTicks -= 1;
+            applyAction(bot, {
+              dir_x: teamId === 2 ? -recovery.dirX : recovery.dirX,
+              dir_y: recovery.dirY,
+              kick: recovery.kick,
+              source: recovery.source,
+            });
+            continue;
+          }
+          bot.recoveryTicks = 0;
+        }
+
         applyAction(bot, action);
       } catch (error) {
         runtimeErrorCount += 1;
