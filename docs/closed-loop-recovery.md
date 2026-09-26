@@ -54,3 +54,24 @@ current frame. These OOD values are diagnostic only in the first recovery A/B:
 recovery is still triggered solely by sustained inactivity at large ball
 distance. This keeps the experiment attributable. OOD-triggered recovery can be
 introduced only if the stall-only sweep leaves a measurable closed-loop gap.
+
+
+## Latest replay-seeded recovery sweep
+
+Using the current champion on the same 16 side-swapped replay-seeded matches:
+
+| mode | movement | progression share | territory | near-ball | override rate |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| disabled | 33.71% | 58.03% | 49.21% | 0.41% | 0.00% |
+| conservative | 85.56% | 48.99% | 50.65% | 0.78% | 1.35% |
+| medium | 91.35% | 52.64% | 49.60% | 0.61% | 1.24% |
+| aggressive | 95.40% | 44.39% | 49.21% | 0.32% | 1.22% |
+
+No scripted recovery profile passes the promotion gate. Medium is the least harmful
+trade-off, but its progression share still drops by about 5.4 percentage points,
+beyond the allowed 3-point regression. The live runtime therefore keeps scripted
+recovery disabled.
+
+The next challenger is learned future-motion: predict where the elite human will
+move roughly 0.5 seconds ahead and use that learned signal only when the immediate
+policy stalls.
