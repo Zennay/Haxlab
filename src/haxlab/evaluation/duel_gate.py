@@ -19,6 +19,7 @@ class DuelGatePolicy:
     minimum_replay_progression_share: float = 0.42
     minimum_replay_nonzero_movement_rate: float = 0.10
     require_replay_kick_activity: bool = True
+    minimum_multisource_sources: int = 3
 
 
 @dataclass(frozen=True)
@@ -44,11 +45,21 @@ def decide_duel_gate(
     supported_schemas = {
         "haxlab-elite-model-duel-v1",
         "haxlab-elite-replay-seeded-duel-v1",
+        "haxlab-elite-multisource-duel-v1",
     }
     checks["evaluation_schema"] = schema
     checks["evaluation_mode"] = duel.get("evaluation_mode")
     if schema not in supported_schemas:
         failures.append(f"unsupported_duel_schema:{schema or 'missing'}")
+
+    if schema == "haxlab-elite-multisource-duel-v1":
+        source_count = int(duel.get("source_count") or 0)
+        checks["source_count"] = source_count
+        if source_count < policy.minimum_multisource_sources:
+            failures.append(
+                f"insufficient_sources:{source_count}<"
+                f"{policy.minimum_multisource_sources}"
+            )
 
     matches = int(duel.get("matches") or 0)
     checks["matches"] = matches
@@ -114,7 +125,10 @@ def decide_duel_gate(
             f"{kick_rate:.4f}>{policy.maximum_kick_action_rate:.4f}"
         )
 
-    if schema == "haxlab-elite-replay-seeded-duel-v1":
+    if schema in {
+        "haxlab-elite-replay-seeded-duel-v1",
+        "haxlab-elite-multisource-duel-v1",
+    }:
         progression_share = float(
             duel.get("challenger_progression_share") or 0.0
         )
