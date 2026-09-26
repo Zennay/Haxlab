@@ -34,9 +34,22 @@ function resolveEliteChampionConfig({
     );
   }
 
-  const runtimeModelPath = String(pointer.runtime_model_path || "");
+  let runtimeModelPath = String(pointer.runtime_model_path || "");
+  if (!runtimeModelPath && pointer.manifest_path) {
+    const manifestPath = String(pointer.manifest_path);
+    if (!fsModule.existsSync(manifestPath)) {
+      throw new Error(
+        "champion manifest does not exist: " + manifestPath,
+      );
+    }
+    const manifest = JSON.parse(fsModule.readFileSync(manifestPath, "utf8"));
+    const versionDir = path.dirname(manifestPath);
+    runtimeModelPath = path.join(versionDir, "runtime-model.json");
+  }
   if (!runtimeModelPath) {
-    throw new Error("champion pointer missing runtime_model_path");
+    throw new Error(
+      "champion pointer missing runtime_model_path and manifest fallback",
+    );
   }
   if (!fsModule.existsSync(runtimeModelPath)) {
     throw new Error(
