@@ -1,4 +1,4 @@
-generated_at=2026-09-26T13:07:58+00:00
+generated_at=2026-09-26T13:08:52+00:00
 === BEFORE ===
 haxlab-analyzer.service active running 889202 100 infinity 
 haxlab-ingest.service active running 889200 100 infinity 
@@ -8,8 +8,6 @@ actions.runner.Zennay-Ftmo.vps-bb300bba-ftmo.service active running 61158 800 in
 ftmo-autonomous.timer active waiting 
 zennay-cloud.service active running 1319721 400 infinity 
 Traceback (most recent call last):
-  File "/opt/actions-runner-haxlab/_work/Haxlab/Haxlab/zennay-cloud-maint/apply_backend.py", line 132, in <module>
-    s=rep(s,old,new,"granular progress")
-  File "/opt/actions-runner-haxlab/_work/Haxlab/Haxlab/zennay-cloud-maint/apply_backend.py", line 10, in rep
-    raise RuntimeError("missing anchor: "+label)
-RuntimeError: missing anchor: granular progress
+  File "/opt/actions-runner-haxlab/_work/Haxlab/Haxlab/zennay-cloud-maint/apply_backend.py", line 139, in <module>
+    raise RuntimeError("cannot adapt granular progress block")
+RuntimeError: cannot adapt granular progress block
