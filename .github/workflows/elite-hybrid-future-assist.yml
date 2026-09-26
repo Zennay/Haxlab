@@ -1,0 +1,179 @@
+name: Elite Hybrid Future Assist
+
+on:
+  push:
+    branches:
+      - experiment/hybrid-future-assist-v01
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-elite-hybrid-future-shared-vps
+  cancel-in-progress: true
+
+jobs:
+  evaluate:
+    if: contains(github.event.head_commit.message, '[hybrid]')
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preflight hybrid runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check tools/elite_tactics.js
+          node --check tools/elite_replay_scenario_benchmark.js
+          node tests/test_elite_hybrid_future_assist.js
+          node --check tools/select_future_assist.js
+
+      - name: Verify frozen models and holdout
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=/var/lib/haxlab/derived/training/elite-player-champion-candidate
+          FUTURE=/var/lib/haxlab/derived/training/elite-player-future-challenger/model
+          test -f "$ROOT/model/runtime-model.json"
+          test -f "$ROOT/model/metrics.json"
+          test -f "$FUTURE/runtime-model.json"
+          test -f "$FUTURE/metrics.json"
+          test -f "$ROOT/shards/holdout/_index.json"
+
+      - name: Re-evaluate offline models on identical holdout
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=/var/lib/haxlab/derived/training/elite-player-champion-candidate
+          FUTURE=/var/lib/haxlab/derived/training/elite-player-future-challenger/model
+          HOLDOUT="$ROOT/shards/holdout/_index.json"
+
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m haxlab.evaluation.elite_model_eval \
+            --model-dir "$ROOT/model" \
+            --index "$HOLDOUT" \
+            --future-horizon-steps 5 \
+            --output /tmp/haxlab-hybrid-champion-offline.json
+
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m haxlab.evaluation.elite_model_eval \
+            --model-dir "$FUTURE" \
+            --index "$HOLDOUT" \
+            --future-horizon-steps 5 \
+            --output /tmp/haxlab-hybrid-future-offline.json
+
+      - name: Select healthy 4v4 replay and scenarios
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m haxlab.evaluation.scenario_source \
+            --state-db /var/lib/haxlab/state/haxlab.sqlite3 \
+            --max-candidates 1500 \
+            --output /tmp/haxlab-hybrid-scenario-source.json
+
+          RAW_REPLAY="$(
+            sudo -u haxlab /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          print(json.load(open("/tmp/haxlab-hybrid-scenario-source.json"))["raw_path"])
+          PY
+          )"
+          ANALYSIS="$(
+            sudo -u haxlab /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          print(json.load(open("/tmp/haxlab-hybrid-scenario-source.json"))["analysis_path"])
+          PY
+          )"
+
+          NODE_PATH=/opt/haxlab/node_modules node \
+            tools/extract_stadium_from_replay.js \
+            "$RAW_REPLAY" /tmp/haxlab-hybrid-stadium.hbs
+
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            tools/extract_replay_scenarios.js \
+            "$RAW_REPLAY" "$ANALYSIS" \
+            /tmp/haxlab-hybrid-scenarios.json 16 8 6
+
+      - name: Benchmark champion controller
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            tools/elite_replay_scenario_benchmark.js \
+            --model /var/lib/haxlab/derived/training/elite-player-champion-candidate/model/runtime-model.json \
+            --stadium /tmp/haxlab-hybrid-stadium.hbs \
+            --scenarios /tmp/haxlab-hybrid-scenarios.json \
+            --max-scenarios 8 --seconds 30 --sample-every 6 \
+            --disable-recovery \
+            --output /tmp/haxlab-hybrid-champion.json
+
+      - name: Benchmark hybrid future-head sweep
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE=/var/lib/haxlab/derived/training/elite-player-champion-candidate/model/runtime-model.json
+          FUTURE=/var/lib/haxlab/derived/training/elite-player-future-challenger/model/runtime-model.json
+
+          for CONF in 0.60 0.75 0.85; do
+            for DIST in 80 120 160; do
+              C="$(printf '%s' "$CONF" | tr '.' '_')"
+              OUT="/tmp/haxlab-hybrid-c${C}-d${DIST}.json"
+              sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+                tools/elite_replay_scenario_benchmark.js \
+                --model "$BASE" \
+                --future-model "$FUTURE" \
+                --stadium /tmp/haxlab-hybrid-stadium.hbs \
+                --scenarios /tmp/haxlab-hybrid-scenarios.json \
+                --max-scenarios 8 --seconds 30 --sample-every 6 \
+                --disable-recovery \
+                --future-assist \
+                --future-assist-confidence "$CONF" \
+                --future-assist-min-distance "$DIST" \
+                --output "$OUT"
+            done
+          done
+
+      - name: Select hybrid candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            tools/select_future_assist.js \
+            /tmp/haxlab-hybrid-champion-offline.json \
+            /tmp/haxlab-hybrid-future-offline.json \
+            /tmp/haxlab-hybrid-champion.json \
+            /tmp/haxlab-hybrid-champion.json \
+            c0_60_d80 /tmp/haxlab-hybrid-c0_60-d80.json \
+            c0_60_d120 /tmp/haxlab-hybrid-c0_60-d120.json \
+            c0_60_d160 /tmp/haxlab-hybrid-c0_60-d160.json \
+            c0_75_d80 /tmp/haxlab-hybrid-c0_75-d80.json \
+            c0_75_d120 /tmp/haxlab-hybrid-c0_75-d120.json \
+            c0_75_d160 /tmp/haxlab-hybrid-c0_75-d160.json \
+            c0_85_d80 /tmp/haxlab-hybrid-c0_85-d80.json \
+            c0_85_d120 /tmp/haxlab-hybrid-c0_85-d120.json \
+            c0_85_d160 /tmp/haxlab-hybrid-c0_85-d160.json \
+            /tmp/haxlab-hybrid-selection.json
+
+      - name: Publish evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo cat /tmp/haxlab-hybrid-selection.json > hybrid-selection.json
+          sudo cat /tmp/haxlab-hybrid-champion.json > hybrid-champion.json
+          for FILE in /tmp/haxlab-hybrid-c*.json; do
+            sudo cat "$FILE" > "$(basename "$FILE")"
+          done
+
+          echo '## HaxLab Hybrid Future Assist' >> "$GITHUB_STEP_SUMMARY"
+          cat hybrid-selection.json >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: elite-hybrid-future-assist
+          path: |
+            hybrid-selection.json
+            hybrid-champion.json
+            haxlab-hybrid-c*.json
+          retention-days: 30
