@@ -72,6 +72,9 @@ function futureMotionRuntimeSettings(resolved, fallback) {
       enabled: Boolean(fallback.enabled),
       minimumConfidence: Number(fallback.minimumConfidence),
       minimumBallDistance: Number(fallback.minimumBallDistance),
+      allowedRoles: Array.isArray(fallback.allowedRoles)
+        ? fallback.allowedRoles.map((role) => String(role).toLowerCase())
+        : null,
       source: "plugin_variables",
     };
   }
@@ -91,10 +94,25 @@ function futureMotionRuntimeSettings(resolved, fallback) {
     );
   }
 
+  const configuredRoles = Array.isArray(config.allowed_roles)
+    ? config.allowed_roles.map((role) => String(role).trim().toLowerCase())
+    : null;
+  const validRoles = new Set(["gk", "dm", "am", "st"]);
+  const allowedRoles = configuredRoles
+    ? configuredRoles.filter(
+        (role, index, rows) =>
+          validRoles.has(role) && rows.indexOf(role) === index,
+      )
+    : null;
+  if (configuredRoles && !allowedRoles.length) {
+    throw new Error("champion future allowed_roles contains no valid roles");
+  }
+
   return {
     enabled: true,
     minimumConfidence: confidence,
     minimumBallDistance: distance,
+    allowedRoles,
     source: "champion_registry",
   };
 }
