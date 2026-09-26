@@ -1,3 +1,5 @@
+import pytest
+
 from haxlab.learning.compare_elite import compare_metrics
 
 
@@ -30,6 +32,6 @@ def test_compare_metrics_reports_overall_and_role_deltas() -> None:
 
     result = compare_metrics(baseline, challenger)
 
-    assert result["overall_holdout"]["direction_accuracy"]["delta"] == 0.01
-    assert result["by_role_holdout"]["am"]["direction_accuracy"]["delta"] == 0.03
+    assert result["overall_holdout"]["direction_accuracy"]["delta"] == pytest.approx(0.01)
+    assert result["by_role_holdout"]["am"]["direction_accuracy"]["delta"] == pytest.approx(0.03)
     assert result["challenger_training"]["state_jitter"]["std_normalized"] == 0.1
