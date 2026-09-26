@@ -63,3 +63,30 @@ assert.strictEqual(untouched.dir_y, 0);
 assert.strictEqual(untouched.future_assist_applied, undefined);
 
 console.log("elite hybrid future assist: ok");
+
+
+const blockedGk = futureMotionAssist(
+  { ...hybrid, role: "gk" },
+  150,
+  {
+    minimumConfidence: 0.75,
+    minimumBallDistance: 80,
+    allowedRoles: ["dm", "am", "st"],
+  },
+);
+assert.strictEqual(blockedGk.dir_x, 0);
+assert.strictEqual(blockedGk.dir_y, 0);
+assert.strictEqual(blockedGk.future_assist_applied, undefined);
+
+const allowedAm = futureMotionAssist(
+  { ...hybrid, role: "am" },
+  150,
+  {
+    minimumConfidence: 0.75,
+    minimumBallDistance: 80,
+    allowedRoles: "dm,am,st",
+  },
+);
+assert.strictEqual(allowedAm.dir_x, 1);
+assert.strictEqual(allowedAm.dir_y, 1);
+assert.strictEqual(allowedAm.future_assist_applied, true);
