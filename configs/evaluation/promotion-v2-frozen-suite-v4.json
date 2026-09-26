@@ -1,0 +1,52 @@
+{
+  "schema": "haxlab-promotion-v2-frozen-suite-v4",
+  "frozen_before_next_challenger": true,
+  "supersedes": "haxlab-promotion-v2-frozen-suite-v3",
+  "superseded_reason": "v3 source-02 failed calibrated champion-self identity: GK absolute context-adaptation 0.213677 < 0.25",
+  "base_excluded_sha256_count": 1154,
+  "base_exclusion_sha256": "1d1b1e77b709e79d04ee2551ea1f807d9e682c0cf83ca0b4f95f5aa126378f83",
+  "source_count": 3,
+  "scenarios_per_source": 16,
+  "mirrored_matches_per_source": 32,
+  "total_mirrored_matches": 96,
+  "excluded_sha256_count": 1157,
+  "excluded_manifest_sha256": "83f5d451dd6ab59ff6475610e1006b56454a2739d13320a631ce50a8046d6cc4",
+  "sources": [
+    {
+      "id": "source-01",
+      "replay_sha256": "ab71fee5d886a664ad6bd83791b007f10b7e0ffcc32b6f8cb91cdfcbdf3f16d8",
+      "scenario_count": 16,
+      "history_window": 8,
+      "sample_every_ticks": 6,
+      "files_sha256": {
+        "source.json": "ac28d4c3ffe10023053ce89a81bcd4f9ebc65393c00653a5e51ae5070a73f1dc",
+        "stadium.hbs": "81597b6bbb62f4e5340b82bd7d1c00a1aef167b1ea53e966c3b281acc08cd0b1",
+        "scenarios.json": "82a3a2efda3e99f790f5b5bd6a863456823e22766432a86c2227d387e6e96755"
+      }
+    },
+    {
+      "id": "source-02",
+      "replay_sha256": "d9c83baa7bbbbfdcbfa42d3b250c042d0c38820c57a15a35965f7fad4b3df07b",
+      "scenario_count": 16,
+      "history_window": 8,
+      "sample_every_ticks": 6,
+      "files_sha256": {
+        "source.json": "31778cf87c422ea8391dc34de92d829d373a32ebce12ba1b1bec384c93377d80",
+        "stadium.hbs": "bf5fd9ea7c22d3b058981da8272c011d9588ed1a698991a69cbdb090eccd5e9e",
+        "scenarios.json": "53b83f79a2ad6adeaf5d5993d531056ba46e0b434fa3debdf19d912426eeabad"
+      }
+    },
+    {
+      "id": "source-03",
+      "replay_sha256": "96bb03a76765cca300c67b2bbd163ca396c6f0a7fd14e5b926f97916e88c63d1",
+      "scenario_count": 16,
+      "history_window": 8,
+      "sample_every_ticks": 6,
+      "files_sha256": {
+        "source.json": "828c42ca6401dd62a7efc8293e91377d4cbc044bda37b2be44e24b21add35336",
+        "stadium.hbs": "bf5fd9ea7c22d3b058981da8272c011d9588ed1a698991a69cbdb090eccd5e9e",
+        "scenarios.json": "5f1dbd06ed99d155dd397ab01d1e93926bc636a3e320b049edaac2235c0645d0"
+      }
+    }
+  ]
+}
