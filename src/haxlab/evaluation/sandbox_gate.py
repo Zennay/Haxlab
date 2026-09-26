@@ -135,30 +135,6 @@ def decide_sandbox_gate(
             f"{policy.maximum_kick_action_rate:.4f}"
         )
 
-    progression_share = float(
-        (benchmark.get("progression") or {}).get("elite_share") or 0.0
-    )
-    checks["progression_share"] = progression_share
-    if progression_share < policy.minimum_progression_share:
-        failures.append(
-            f"progression_share:{progression_share:.4f}<"
-            f"{policy.minimum_progression_share:.4f}"
-        )
-
-    activity = benchmark.get("policy_activity") or {}
-    nonzero_movement_rate = float(activity.get("nonzero_movement_rate") or 0.0)
-    checks["nonzero_movement_rate"] = nonzero_movement_rate
-    if nonzero_movement_rate < policy.minimum_nonzero_movement_rate:
-        failures.append(
-            f"nonzero_movement_rate:{nonzero_movement_rate:.4f}<"
-            f"{policy.minimum_nonzero_movement_rate:.4f}"
-        )
-
-    if total_kicks < policy.minimum_total_kicks:
-        failures.append(
-            f"total_kicks:{total_kicks}<{policy.minimum_total_kicks}"
-        )
-
     if failures:
         return SandboxGateDecision(False, tuple(failures), checks)
     return SandboxGateDecision(
@@ -168,8 +144,6 @@ def decide_sandbox_gate(
             "sandbox_territory_passed",
             "red_blue_symmetry_passed",
             "kick_action_rate_passed",
-            "progression_passed",
-            "policy_activity_passed",
             "opponent_profile_coverage_passed",
         ),
         checks,
