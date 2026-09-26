@@ -394,7 +394,8 @@ def activate_live_champion(
         registry_root / "validations" / version_id / "current.json"
     )
     if not validation_path.is_file():
-        raise FileNotFoundError(
+        raise ValueError(
+            "live activation requires canary validation; "
             f"champion has no validation record: {validation_path}"
         )
     validation = json.loads(validation_path.read_text(encoding="utf-8"))
