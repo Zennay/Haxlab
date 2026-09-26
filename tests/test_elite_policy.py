@@ -138,6 +138,11 @@ def test_temporal_elite_policy_trains_with_validation_only_calibration(
     calibration = result["training"]["kick_calibration"]
     assert calibration["constraint_satisfied"] is True
     assert calibration["predicted_rate"] <= calibration["predicted_rate_cap"] + 1e-9
+    role_thresholds = result["training"]["calibrated_kick_thresholds_by_role"]
+    assert set(role_thresholds) == {"gk", "dm", "am", "st"}
+    for role, role_calibration in result["training"]["kick_calibration_by_role"].items():
+        assert role in {"gk", "dm", "am", "st"}
+        assert role_calibration["constraint_satisfied"] is True
     assert result["training"]["best_epoch"] >= 1
     assert result["final_validation"]["samples"] > 0
     assert result["final_holdout"]["samples"] > 0
@@ -149,6 +154,7 @@ def test_temporal_elite_policy_trains_with_validation_only_calibration(
     runtime_model = json.loads((output / "runtime-model.json").read_text())
     assert runtime_model["schema"] == "haxlab-elite-js-runtime-v1"
     assert runtime_model["window"] == 4
+    assert set(runtime_model["kick_thresholds_by_role"]) == {"gk", "dm", "am", "st"}
     assert runtime_model["base_input_columns"] == result["base_input_columns"]
     assert len(runtime_model["weights"]["w1"]) == result["architecture"]["input_dim"]
 
@@ -156,6 +162,9 @@ def test_temporal_elite_policy_trains_with_validation_only_calibration(
     features = {name: 0.0 for name in policy.input_columns}
     action = policy.act(agent_id="dm-1", role="dm", features=features)
 
+    assert abs(
+        action["kick_threshold"] - role_thresholds["dm"]
+    ) < 1e-9
     assert action["dir_x"] in (-1, 0, 1)
     assert action["dir_y"] in (-1, 0, 1)
     assert isinstance(action["kick"], bool)
