@@ -8,6 +8,7 @@ const {
 } = require("./elite_champion_config");
 const {
   discOf,
+  num,
   buildFeatureObject,
   canonicalActionToWorld,
 } = require("./elite_features");
@@ -136,6 +137,42 @@ module.exports = function(API) {
   });
 
   this.defineVariable({
+    name: "imputeMissingPlayers",
+    type: VariableType.Boolean,
+    value: process.env.HAXLAB_ELITE_IMPUTE_MISSING === "1",
+    description:
+      "Neutral-impute missing teammate/opponent slots for solo live testing.",
+  });
+  this.defineVariable({
+    name: "enableLiveGuard",
+    type: VariableType.Boolean,
+    value: process.env.HAXLAB_ELITE_LIVE_GUARD === "1",
+    description:
+      "Live-only safety guard that recovers extreme OOD/boundary/stall drift.",
+  });
+  this.defineVariable({
+    name: "liveGuardBoundaryX",
+    type: VariableType.Integer,
+    value: 760,
+    range: { min: 300, max: 1200, step: 10 },
+    description: "Canonical absolute X boundary for live recovery.",
+  });
+  this.defineVariable({
+    name: "liveGuardBoundaryY",
+    type: VariableType.Integer,
+    value: 320,
+    range: { min: 120, max: 600, step: 10 },
+    description: "Absolute Y boundary for live recovery.",
+  });
+  this.defineVariable({
+    name: "liveGuardOodMaxZ",
+    type: VariableType.Float,
+    value: 8,
+    range: { min: 2, max: 30, step: 0.5 },
+    description: "Maximum feature z-score before live OOD recovery.",
+  });
+
+  this.defineVariable({
     name: "autoSpawn",
     type: VariableType.Boolean,
     value: process.env.HAXLAB_ELITE_AUTOSPAWN === "1",
@@ -256,6 +293,15 @@ module.exports = function(API) {
         source: futureSettings.source,
       },
       runtime_errors: runtimeErrorCount,
+      feature_imputation: {
+        enabled: Boolean(that.imputeMissingPlayers),
+      },
+      live_guard: {
+        enabled: Boolean(that.enableLiveGuard),
+        boundary_x: Number(that.liveGuardBoundaryX || 760),
+        boundary_y: Number(that.liveGuardBoundaryY || 320),
+        ood_max_z: Number(that.liveGuardOodMaxZ || 8),
+      },
       bots: bots.map((bot) => ({
         id: bot.id,
         role: bot.role,
@@ -271,9 +317,21 @@ module.exports = function(API) {
             }
           : null,
         recovery_overrides: bot.recoveryOverrides,
+        live_guard_overrides: Number(bot.liveGuardOverrides || 0),
         policy_decisions: Number(bot.policyDecisions || 0),
         inputs_sent: Number(bot.inputsSent || 0),
         future_assists: Number(bot.futureAssists || 0),
+        feature_roster: bot.lastFeatureRoster,
+        inference: bot.lastAction
+          ? {
+              direction_probability:
+                Number(bot.lastAction.direction_probability || 0),
+              ball_distance: Number(bot.lastAction.ball_distance || 0),
+              history_frames: Number(bot.lastAction.history_frames || 0),
+              ood_mean_abs_z: Number(bot.lastAction.ood_mean_abs_z || 0),
+              ood_max_abs_z: Number(bot.lastAction.ood_max_abs_z || 0),
+            }
+          : null,
       })),
     };
   };
@@ -282,7 +340,7 @@ module.exports = function(API) {
     if (bots.length) return bots.map((bot) => bot.id);
     ensurePolicy();
 
-    const firstId = 65000;
+    const firstId = 100;
     bots = roles.map((role, index) => ({
       id: firstId - index,
       role,
@@ -291,9 +349,12 @@ module.exports = function(API) {
       stallStreak: 0,
       recoveryTicks: 0,
       recoveryOverrides: 0,
+      liveGuardOverrides: 0,
       policyDecisions: 0,
       inputsSent: 0,
       futureAssists: 0,
+      lastFeatureRoster: null,
+      imputedEntities: [],
     }));
 
     for (const bot of bots) {
@@ -340,9 +401,12 @@ module.exports = function(API) {
       bot.stallStreak = 0;
       bot.recoveryTicks = 0;
       bot.recoveryOverrides = 0;
+      bot.liveGuardOverrides = 0;
       bot.policyDecisions = 0;
       bot.inputsSent = 0;
       bot.futureAssists = 0;
+      bot.lastFeatureRoster = null;
+      bot.imputedEntities = [];
       policy?.reset(String(bot.id));
     }
   };
@@ -364,8 +428,29 @@ module.exports = function(API) {
     for (const bot of bots) {
       const player = state.getPlayer?.(bot.id);
       if (!player || !discOf(player)?.pos) continue;
-      const features = buildFeatureObject(player, state, gameState);
-      if (!features) continue;
+      const observedFeatures = buildFeatureObject(player, state, gameState);
+      if (!observedFeatures) continue;
+      const runtime = ensurePolicy();
+      let features = observedFeatures;
+      let imputedEntities = [];
+      if (that.imputeMissingPlayers) {
+        const imputed = runtime.imputeMissingEntities(observedFeatures);
+        features = imputed.features;
+        imputedEntities = imputed.imputed_entities;
+      }
+      bot.imputedEntities = imputedEntities;
+      bot.lastFeatureRoster = {
+        teammates:
+          Number(observedFeatures.tm1_present || 0) +
+          Number(observedFeatures.tm2_present || 0) +
+          Number(observedFeatures.tm3_present || 0),
+        opponents:
+          Number(observedFeatures.op1_present || 0) +
+          Number(observedFeatures.op2_present || 0) +
+          Number(observedFeatures.op3_present || 0) +
+          Number(observedFeatures.op4_present || 0),
+        imputed_entities: imputedEntities.slice(),
+      };
 
       try {
         const tactical = kickoffAction(bot.role, player, gameState);
@@ -379,7 +464,7 @@ module.exports = function(API) {
           continue;
         }
 
-        let action = ensurePolicy().act({
+        let action = runtime.act({
           agent_id: String(bot.id),
           role: bot.role,
           features,
@@ -408,6 +493,48 @@ module.exports = function(API) {
           stationary && ballDistance >= 120
             ? bot.stallStreak + 1
             : 0;
+
+        if (that.enableLiveGuard) {
+          const playerDisc = discOf(player);
+          const boundaryX = Number(that.liveGuardBoundaryX) || 760;
+          const boundaryY = Number(that.liveGuardBoundaryY) || 320;
+          const oodLimit = Number(that.liveGuardOodMaxZ) || 8;
+          const outOfBounds =
+            Math.abs(num(playerDisc?.pos?.x)) > boundaryX ||
+            Math.abs(num(playerDisc?.pos?.y)) > boundaryY;
+          const stalledFar =
+            stationary &&
+            ballDistance >= 240 &&
+            bot.stallStreak >= 5;
+          const oodDrift =
+            Number(action.ood_max_abs_z || 0) > oodLimit &&
+            ballDistance >= 500;
+
+          if (outOfBounds || stalledFar || oodDrift) {
+            const teamId = teamIdForPlayer(player);
+            const recovery = recoveryAction(
+              bot.role,
+              player,
+              gameState,
+              teamId,
+            );
+            if (recovery) {
+              bot.liveGuardOverrides += 1;
+              bot.stallStreak = 0;
+              applyAction(bot, {
+                dir_x: teamId === 2 ? -recovery.dirX : recovery.dirX,
+                dir_y: recovery.dirY,
+                kick: recovery.kick,
+                source: outOfBounds
+                  ? "live_guard_boundary"
+                  : stalledFar
+                    ? "live_guard_stall"
+                    : "live_guard_ood",
+              });
+              continue;
+            }
+          }
+        }
 
         if (
           that.enableRecovery &&
