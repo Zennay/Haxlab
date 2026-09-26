@@ -10,8 +10,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: haxlab-elite-future-motion-challenger-${{ github.ref_name }}-${{ contains(github.event.head_commit.message, '[future]') }}
-  cancel-in-progress: true
+  # All branches write the same VPS model/evaluation paths. Serialize the
+  # complete workflow across branches; never cancel an in-flight training run.
+  group: haxlab-elite-future-motion-shared-vps
+  cancel-in-progress: false
 
 jobs:
   challenger:
