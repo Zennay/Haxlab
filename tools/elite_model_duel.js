@@ -61,8 +61,11 @@ function parseArgs(argv) {
 function makeRng(seed) {
   let state = (seed >>> 0) || 1;
   return function rng() {
-    state = (1664525 * state + 1013904223) >>> 0;
-    return state / 4294967296;
+    state = (state + 0x6D2B79F5) >>> 0;
+    let value = state;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
   };
 }
 
@@ -208,10 +211,15 @@ function runMatch({
   room.runSteps(5);
 
   const rng = makeRng(seed);
-  const startX = (rng() * 2 - 1) * Math.min(120, Number(stadium.width || 800) * 0.15);
-  const startY = (rng() * 2 - 1) * Math.min(90, Number(stadium.height || 350) * 0.22);
-  const startVx = (rng() * 2 - 1) * 0.8;
+  const sideSign = challengerTeamId === 1 ? 1 : -1;
+  const canonicalStartX =
+    (rng() * 2 - 1) * Math.min(120, Number(stadium.width || 800) * 0.15);
+  const startY =
+    (rng() * 2 - 1) * Math.min(90, Number(stadium.height || 350) * 0.22);
+  const canonicalStartVx = (rng() * 2 - 1) * 0.8;
   const startVy = (rng() * 2 - 1) * 0.8;
+  const startX = sideSign * canonicalStartX;
+  const startVx = sideSign * canonicalStartVx;
   room.setDiscProperties(
     0,
     0,
