@@ -15,7 +15,11 @@ const {
   canonicalActionToWorld,
   num,
 } = require("./elite_features");
-const { enforceKickRange } = require("./elite_tactics");
+const {
+  enforceKickRange,
+  recoveryAction,
+  shouldRecoverFromStall,
+} = require("./elite_tactics");
 const {
   prepareReplayScenario,
   primeElitePolicy,
@@ -117,6 +121,9 @@ function runScenarioMatch({
       canonicalXSum: 0,
       ballDistanceSum: 0,
       nearBall: 0,
+      stallStreak: 0,
+      recoveryTicks: 0,
+      recoveryOverrides: 0,
     });
     baselineBots.push({
       id: baselineId,
@@ -173,6 +180,48 @@ function runScenarioMatch({
               features,
             });
             let action = canonicalActionToWorld(canonical, eliteTeamId);
+
+            const ballDistanceFromFeatures = Math.hypot(
+              Number(features.ball_dx || 0),
+              Number(features.ball_dy || 0),
+            );
+            const stationary =
+              Number(action.dirX || 0) === 0 &&
+              Number(action.dirY || 0) === 0;
+            bot.stallStreak =
+              stationary && ballDistanceFromFeatures >= 120
+                ? bot.stallStreak + 1
+                : 0;
+
+            if (
+              bot.recoveryTicks <= 0 &&
+              shouldRecoverFromStall(
+                action,
+                ballDistanceFromFeatures,
+                bot.stallStreak,
+              )
+            ) {
+              bot.recoveryTicks = 5;
+              bot.recoveryOverrides += 1;
+              bot.stallStreak = 0;
+            }
+
+            if (bot.recoveryTicks > 0) {
+              const recovery = recoveryAction(
+                bot.role,
+                player,
+                gameState,
+                eliteTeamId,
+                { stadiumWidth: Number(stadium.width || 800) },
+              );
+              if (recovery) {
+                action = recovery;
+                bot.recoveryTicks -= 1;
+              } else {
+                bot.recoveryTicks = 0;
+              }
+            }
+
             action = enforceKickRange(action, player, gameState);
 
             const pDisc = discOf(player);
@@ -292,6 +341,13 @@ function runScenarioMatch({
       nonzero_movement_rate:
         (totalActions - stationary) / Math.max(1, totalActions),
       near_ball_rate: nearBallSamples / Math.max(1, totalActions),
+      recovery_overrides: eliteBots.reduce(
+        (sum, bot) => sum + bot.recoveryOverrides,
+        0,
+      ),
+      recovery_override_rate:
+        eliteBots.reduce((sum, bot) => sum + bot.recoveryOverrides, 0) /
+        Math.max(1, totalActions),
       roles: Object.fromEntries(
         eliteBots.map((bot) => [
           bot.role,
@@ -306,6 +362,9 @@ function runScenarioMatch({
             average_ball_distance:
               bot.ballDistanceSum / Math.max(1, bot.actions),
             near_ball_rate: bot.nearBall / Math.max(1, bot.actions),
+            recovery_overrides: bot.recoveryOverrides,
+            recovery_override_rate:
+              bot.recoveryOverrides / Math.max(1, bot.actions),
             direction_counts: bot.directionCounts,
           },
         ]),
@@ -396,6 +455,13 @@ function summarize(matches, modelPath, scenarioPath, stadium) {
       runtime_errors: matches.reduce(
         (sum, row) => sum + row.policy.runtime_errors,
         0,
+      ),
+      recovery_overrides: matches.reduce(
+        (sum, row) => sum + Number(row.policy.recovery_overrides || 0),
+        0,
+      ),
+      recovery_override_rate: avg(
+        (row) => Number(row.policy.recovery_override_rate || 0),
       ),
     },
     paired_side_gap: {
