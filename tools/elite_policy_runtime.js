@@ -152,6 +152,15 @@ class ElitePolicyRuntime {
       frames.splice(0, frames.length - this.window);
     }
 
+    const currentNormalized = this.normalizeFrame(raw);
+    const oodMeanAbs =
+      currentNormalized.reduce((sum, value) => sum + Math.abs(value), 0) /
+      Math.max(1, currentNormalized.length);
+    const oodMaxAbs = currentNormalized.reduce(
+      (best, value) => Math.max(best, Math.abs(value)),
+      0,
+    );
+
     const sequence = [];
     const first = frames[0];
     for (let i = frames.length; i < this.window; i += 1) {
@@ -230,6 +239,8 @@ class ElitePolicyRuntime {
       direction_probability: directionProbabilities[directionClass],
       history_frames: frames.length,
       window: this.window,
+      ood_mean_abs_z: oodMeanAbs,
+      ood_max_abs_z: oodMaxAbs,
     };
   }
 
