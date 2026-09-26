@@ -216,3 +216,89 @@ def test_replay_quality_rejects_7v7_contamination() -> None:
         reason.startswith("average_team_size_not_4v4_team_2:7.")
         for reason in reasons
     )
+
+
+def test_manifest_resolves_replay_alias_even_with_auth_hash(
+    tmp_path: Path,
+) -> None:
+    analysis_root = tmp_path / "derived" / "state-pass-v4"
+    leaderboard = tmp_path / "leaderboard.json"
+    aliases = tmp_path / "aliases.json"
+    raw_root = tmp_path / "raw"
+    analysis_root.mkdir(parents=True)
+
+    leaderboard.write_text(
+        json.dumps(
+            {
+                "analysis_version": "state-pass-v4",
+                "rows": [
+                    _row("alias:sekai", "sekai", "am", 60.0, 0.4),
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    aliases.write_text(
+        json.dumps({"aliases": {"misio": "sekai"}}),
+        encoding="utf-8",
+    )
+
+    sha = "2" * 64
+    players = [
+        {"id": 1, "name": "GK", "teamId": 1, "samples": 6000, "averageX": -160},
+        {"id": 2, "name": "DM", "teamId": 1, "samples": 6000, "averageX": -50},
+        {
+            "id": 3,
+            "name": "misio",
+            "authHash": "different-replay-auth",
+            "teamId": 1,
+            "samples": 6000,
+            "averageX": 50,
+        },
+        {"id": 4, "name": "ST", "teamId": 1, "samples": 6000, "averageX": 150},
+        {"id": 5, "name": "GK2", "teamId": 2, "samples": 6000, "averageX": 160},
+        {"id": 6, "name": "DM2", "teamId": 2, "samples": 6000, "averageX": 50},
+        {"id": 7, "name": "AM2", "teamId": 2, "samples": 6000, "averageX": -50},
+        {"id": 8, "name": "ST2", "teamId": 2, "samples": 6000, "averageX": -150},
+    ]
+    (analysis_root / f"{sha}.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 4,
+                "totalFrames": 36000,
+                "simulation": {
+                    "sampledStateCount": 6000,
+                    "sampleEveryTicks": 6,
+                },
+                "featureSummary": {"touches": 300},
+                "players": players,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = build_elite_manifest(
+        analysis_root=analysis_root,
+        leaderboard_path=leaderboard,
+        raw_root=raw_root,
+        aliases_path=aliases,
+        top_fraction_per_role=1.0,
+        min_players_per_role=1,
+        min_matches=1,
+        min_minutes=0.0,
+        max_uncertainty=10.0,
+    )
+    entries = (
+        manifest["train_replays"]
+        + manifest["validation_replays"]
+        + manifest["holdout_replays"]
+    )
+
+    assert len(entries) == 1
+    selected = entries[0]["selected_players"]
+    assert len(selected) == 1
+    assert selected[0]["name"] == "misio"
+    assert selected[0]["source_identity"] == "auth:different-replay-auth"
+    assert selected[0]["canonical_source_identity"] == "alias:sekai"
+    assert selected[0]["identity"] == "alias:sekai"
+    assert selected[0]["role"] == "am"

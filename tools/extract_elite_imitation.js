@@ -32,6 +32,7 @@ if (os.endianness() !== "LE") {
 }
 
 const ROLE_IDS = { gk: 0, dm: 1, am: 2, st: 3, unknown: -1 };
+const KICK_MAX_DISTANCE = 31.0;
 
 function normalizeSpec(value) {
   if (typeof value === "string") {
@@ -79,22 +80,29 @@ function entityVector(origin, other, sign) {
   ];
 }
 
-function nearestVectors(origin, candidates, sign, limit) {
+function teamAttackSign(teamId) {
+  return Number(teamId) === 1 ? 1 : Number(teamId) === 2 ? -1 : 0;
+}
+
+function lineOrderedVectors(origin, candidates, sign, limit) {
   const ownPos = origin?.disc?.pos;
   if (!ownPos) return Array.from({ length: limit * 5 }, () => 0);
 
   const ranked = candidates
     .filter((candidate) => candidate?.disc?.pos)
-    .map((candidate) => {
-      const dx = num(candidate.disc.pos.x) - num(ownPos.x);
-      const dy = num(candidate.disc.pos.y) - num(ownPos.y);
-      return { candidate, distance2: dx * dx + dy * dy };
+    .slice()
+    .sort((a, b) => {
+      const aAxis = teamAttackSign(a.team?.id) * num(a.disc.pos.x);
+      const bAxis = teamAttackSign(b.team?.id) * num(b.disc.pos.x);
+      if (aAxis !== bAxis) return aAxis - bAxis;
+      return Number(a.id || 0) - Number(b.id || 0);
     })
-    .sort((a, b) => a.distance2 - b.distance2)
     .slice(0, limit);
 
   const result = [];
-  for (const item of ranked) result.push(...entityVector(origin, item.candidate, sign));
+  for (const candidate of ranked) {
+    result.push(...entityVector(origin, candidate, sign));
+  }
   while (result.length < limit * 5) result.push(0, 0, 0, 0, 0);
   return result;
 }
@@ -194,6 +202,10 @@ function writeSample(player, statePlayers, ballDisc) {
 
   const role = spec.role in ROLE_IDS ? spec.role : "unknown";
   const scoreDiff = num(teamGoals[teamId]) - num(teamGoals[3 - teamId]);
+  const ballWorldDx = num(ballDisc.pos.x) - num(ownDisc.pos.x);
+  const ballWorldDy = num(ballDisc.pos.y) - num(ownDisc.pos.y);
+  const effectiveKick = Boolean(action?.kick) &&
+    Math.hypot(ballWorldDx, ballWorldDy) <= KICK_MAX_DISTANCE;
 
   const sample = [
     Number(reader.getCurrentFrameNo()),
@@ -209,12 +221,12 @@ function writeSample(player, statePlayers, ballDisc) {
     num(ballDisc.pos.y) - num(ownDisc.pos.y),
     sign * (num(ballDisc.speed?.x) - num(ownDisc.speed?.x)),
     num(ballDisc.speed?.y) - num(ownDisc.speed?.y),
-    ...nearestVectors(player, teammates, sign, 3),
-    ...nearestVectors(player, opponents, sign, 4),
+    ...lineOrderedVectors(player, teammates, sign, 3),
+    ...lineOrderedVectors(player, opponents, sign, 4),
     scoreDiff,
     sign * num(action?.dirX),
     num(action?.dirY),
-    action?.kick ? 1 : 0,
+    effectiveKick ? 1 : 0,
   ];
 
   const values = new Float32Array(sample);
@@ -318,7 +330,10 @@ function closeOutput() {
     process.stdout.write(
       JSON.stringify({
         schema: "haxlab-elite-imitation-extract-summary-v1",
-        shardSchema: "haxlab-elite-imitation-shard-v1",
+        shardSchema: "haxlab-elite-imitation-shard-v3",
+        featureOrdering: "team-line-order-v1",
+        kickLabelPolicy: "effective-within-31px-v1",
+        kickMaxDistance: KICK_MAX_DISTANCE,
         format: "float32-le-gzip",
         dtype: "float32-le",
         rowWidth: columns.length,

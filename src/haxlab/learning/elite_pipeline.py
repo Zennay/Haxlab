@@ -11,6 +11,22 @@ from haxlab.learning.elite_selector import build_elite_manifest
 from haxlab.learning.elite_shards import build_elite_shards
 
 
+def _write_progress(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "haxlab-elite-progress-v1",
+                **payload,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def run_elite_pipeline(
     *,
     analysis_root: Path,
@@ -45,6 +61,14 @@ def run_elite_pipeline(
     manifest_path = work_root / "elite-4v4-manifest.json"
     shards_root = work_root / "shards"
     model_dir = work_root / "model"
+    progress_path = work_root / "progress.json"
+    _write_progress(
+        progress_path,
+        {
+            "phase": "manifest",
+            "work_root": str(work_root),
+        },
+    )
 
     manifest = build_elite_manifest(
         analysis_root=analysis_root,
@@ -60,6 +84,14 @@ def run_elite_pipeline(
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
+    )
+    _write_progress(
+        progress_path,
+        {
+            "phase": "shards",
+            "current_split": "train",
+            "selection": manifest["stats"],
+        },
     )
 
     indexes: dict[str, dict[str, Any]] = {}
@@ -90,6 +122,17 @@ def run_elite_pipeline(
         )
         indexes[split] = index
         index_paths[split] = shards_root / split / "_index.json"
+        _write_progress(
+            progress_path,
+            {
+                "phase": "shards",
+                "completed_split": split,
+                "successful_replays": index["successful_replays"],
+                "failed_replays": index["failed_replays"],
+                "samples": index["samples"],
+                "role_sample_counts": index.get("role_sample_counts", {}),
+            },
+        )
         if index["failed_replays"]:
             raise RuntimeError(
                 f"{split} shard extraction failed for "
@@ -97,6 +140,20 @@ def run_elite_pipeline(
             )
         if int(index["samples"]) <= 0:
             raise RuntimeError(f"{split} produced zero elite samples")
+
+    _write_progress(
+        progress_path,
+        {
+            "phase": "training_start",
+            "splits": {
+                split: {
+                    "replays": indexes[split]["successful_replays"],
+                    "samples": indexes[split]["samples"],
+                }
+                for split in ("train", "validation", "holdout")
+            },
+        },
+    )
 
     model = train_elite_policy(
         train_index_path=index_paths["train"],
@@ -112,6 +169,7 @@ def run_elite_pipeline(
         learning_rate=learning_rate,
         l2=l2,
         seed=seed,
+        progress_path=progress_path,
     )
 
     live_gate = decide_elite_live_gate(model)
@@ -142,6 +200,15 @@ def run_elite_pipeline(
     (work_root / "pipeline-summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
+    )
+    _write_progress(
+        progress_path,
+        {
+            "phase": "pipeline_complete",
+            "summary_path": str(work_root / "pipeline-summary.json"),
+            "live_test_gate": summary["live_test_gate"],
+            "best_epoch": summary["best_epoch"],
+        },
     )
     return summary
 

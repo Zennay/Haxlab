@@ -60,3 +60,14 @@ def test_missing_role_blocks_live_test() -> None:
     decision = decide_elite_live_gate(payload)
     assert not decision.eligible_for_live_test
     assert "missing_role_metrics:gk" in decision.reasons
+
+
+def test_role_kick_calibration_failure_blocks_live_test() -> None:
+    payload = _metrics()
+    payload["training"]["kick_calibration_by_role"] = {
+        role: {"constraint_satisfied": role != "am"}
+        for role in ("gk", "dm", "am", "st")
+    }
+    decision = decide_elite_live_gate(payload)
+    assert not decision.eligible_for_live_test
+    assert "role_kick_rate_constraint_failed:am" in decision.reasons
