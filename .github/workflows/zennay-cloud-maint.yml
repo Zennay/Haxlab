@@ -53,7 +53,7 @@ jobs:
           python3 /tmp/apply_wear.py
 
           echo "=== BUILD WATCH ==="
-          JAVA_BIN="$(find /usr/lib/jvm /opt /home/ubuntu -type f -path '*/bin/java' -perm -111 2>/dev/null | head -1)"
+          JAVA_BIN="$(find /usr/lib/jvm /opt /home/ubuntu -type f -path '*/bin/java' -perm -111 -print -quit 2>/dev/null)"
           test -n "$JAVA_BIN"
           export JAVA_HOME="$(dirname "$(dirname "$JAVA_BIN")")"
           export PATH="$JAVA_HOME/bin:$PATH"
