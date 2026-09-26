@@ -25,3 +25,10 @@ closed-loop progression/territory may not materially regress.
 
 Future-challenger runs are isolated from ordinary branch pushes so unrelated
 scenario/audit commits cannot cancel an active model training job.
+
+
+## Isolated experiment run
+
+The challenger is trained from the frozen champion shard indices on its own
+experiment branch. This prevents unrelated scenario, audit or documentation
+pushes on the main feature branch from cancelling the long-running training job.
