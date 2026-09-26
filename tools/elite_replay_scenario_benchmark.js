@@ -42,7 +42,8 @@ function usage() {
       "[--recovery-stall-decisions 3] [--recovery-ticks 5] " +
       "[--future-assist] [--future-model runtime-model.json] " +
       "[--future-assist-confidence 0.45] " +
-      "[--future-assist-min-distance 80] [--output result.json]",
+      "[--future-assist-min-distance 80] " +
+      "[--future-assist-roles gk,dm,am,st] [--output result.json]",
   );
   process.exit(2);
 }
@@ -61,6 +62,7 @@ function parseArgs(argv) {
     futureModel: null,
     futureAssistConfidence: 0.45,
     futureAssistMinDistance: 80,
+    futureAssistRoles: ["gk", "dm", "am", "st"],
   };
   for (let i = 0; i < argv.length; i += 1) {
     const key = argv[i];
@@ -94,6 +96,13 @@ function parseArgs(argv) {
     else if (key === "--future-assist-min-distance") {
       args.futureAssistMinDistance = Number(value); i += 1;
     }
+    else if (key === "--future-assist-roles") {
+      args.futureAssistRoles = String(value || "")
+        .split(",")
+        .map((role) => role.trim().toLowerCase())
+        .filter(Boolean);
+      i += 1;
+    }
     else if (key === "--help" || key === "-h") usage();
     else throw new Error("Unknown argument: " + key);
   }
@@ -115,6 +124,14 @@ function parseArgs(argv) {
     0,
     Number(args.futureAssistMinDistance) || 80,
   );
+  const validRoles = new Set(ROLES);
+  args.futureAssistRoles = args.futureAssistRoles.filter(
+    (role, index, array) =>
+      validRoles.has(role) && array.indexOf(role) === index,
+  );
+  if (!args.futureAssistRoles.length) {
+    throw new Error("future assist roles must include at least one of: " + ROLES.join(","));
+  }
   return args;
 }
 
@@ -140,6 +157,7 @@ function runScenarioMatch({
   futureAssistEnabled,
   futureAssistConfidence,
   futureAssistMinDistance,
+  futureAssistRoles,
 }) {
   const policy = new ElitePolicyRuntime(runtimeModel);
   const futurePolicy = futureRuntimeModel
@@ -288,6 +306,7 @@ function runScenarioMatch({
                 {
                   minimumConfidence: futureAssistConfidence,
                   minimumBallDistance: futureAssistMinDistance,
+                  allowedRoles: futureAssistRoles,
                 },
               );
               if (canonical.future_assist_applied) {
@@ -468,6 +487,7 @@ function runScenarioMatch({
     future_assist_config: {
       minimum_confidence: futureAssistConfidence,
       minimum_ball_distance: futureAssistMinDistance,
+      allowed_roles: futureAssistRoles.slice(),
     },
     seconds,
     goals: { elite: eliteGoals, baseline: baselineGoals },
@@ -755,6 +775,7 @@ function main() {
         futureAssistEnabled: args.futureAssistEnabled,
         futureAssistConfidence: args.futureAssistConfidence,
         futureAssistMinDistance: args.futureAssistMinDistance,
+        futureAssistRoles: args.futureAssistRoles,
       });
       matches.push(result);
       console.error(
