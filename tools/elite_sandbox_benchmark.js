@@ -204,6 +204,9 @@ function runMatch({
     directionCounts: {},
     roleCanonicalXSum: { gk: 0, dm: 0, am: 0, st: 0 },
     roleCanonicalXSamples: { gk: 0, dm: 0, am: 0, st: 0 },
+    roleBallDistanceSum: { gk: 0, dm: 0, am: 0, st: 0 },
+    roleBallDistanceSamples: { gk: 0, dm: 0, am: 0, st: 0 },
+    roleNearBallSamples: { gk: 0, dm: 0, am: 0, st: 0 },
   };
 
   for (let tick = 0; tick < totalTicks; tick += 1) {
@@ -234,6 +237,27 @@ function runMatch({
               action = canonicalActionToWorld(canonical, eliteTeamId);
             }
             action = enforceKickRange(action, player, gameState);
+
+            const playerDisc = discOf(player);
+            const canonicalX =
+              (eliteTeamId === 1 ? 1 : -1) * num(playerDisc?.pos?.x);
+            metrics.roleCanonicalXSum[bot.role] += canonicalX;
+            metrics.roleCanonicalXSamples[bot.role] += 1;
+
+            const ballDx = num(ball.pos.x) - num(playerDisc?.pos?.x);
+            const ballDy = num(ball.pos.y) - num(playerDisc?.pos?.y);
+            const ballDistance = Math.hypot(ballDx, ballDy);
+            metrics.roleBallDistanceSum[bot.role] += ballDistance;
+            metrics.roleBallDistanceSamples[bot.role] += 1;
+            if (ballDistance <= 32) metrics.roleNearBallSamples[bot.role] += 1;
+
+            const canonicalDirX =
+              eliteTeamId === 2 ? -Number(action.dirX || 0) : Number(action.dirX || 0);
+            const directionKey =
+              String(canonicalDirX) + "," + String(Number(action.dirY || 0));
+            metrics.directionCounts[directionKey] =
+              (metrics.directionCounts[directionKey] || 0) + 1;
+
             const keyState = Utils.keyState(action.dirX, action.dirY, action.kick);
             room.playerInput(keyState, bot.id);
             bot.keyState = keyState;
@@ -329,6 +353,12 @@ function runMatch({
             average_canonical_x:
               metrics.roleCanonicalXSum[bot.role] /
               Math.max(1, metrics.roleCanonicalXSamples[bot.role]),
+            average_ball_distance:
+              metrics.roleBallDistanceSum[bot.role] /
+              Math.max(1, metrics.roleBallDistanceSamples[bot.role]),
+            near_ball_rate:
+              metrics.roleNearBallSamples[bot.role] /
+              Math.max(1, metrics.roleBallDistanceSamples[bot.role]),
           },
         ]),
       ),
