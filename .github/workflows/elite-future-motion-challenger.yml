@@ -4,12 +4,13 @@ on:
   push:
     branches:
       - feature/elite-4v4-player-v01
+      - experiment/future-motion-v01
 
 permissions:
   contents: read
 
 concurrency:
-  group: haxlab-elite-future-motion-challenger-${{ contains(github.event.head_commit.message, '[future]') }}
+  group: haxlab-elite-future-motion-challenger-${{ github.ref_name }}-${{ contains(github.event.head_commit.message, '[future]') }}
   cancel-in-progress: true
 
 jobs:
