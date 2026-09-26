@@ -523,6 +523,7 @@ def evaluate(
     sequence_stride: int,
     batch_size: int,
     kick_threshold: float,
+    kick_thresholds_by_role: dict[int, float] | None = None,
     collect_kick: bool = False,
 ) -> tuple[dict[str, Any], np.ndarray | None, np.ndarray | None]:
     overall = _empty_metric_counter()
@@ -545,7 +546,15 @@ def evaluate(
         _, _, dir_prob, kick_prob = _forward(x, params)
         dir_pred = dir_prob.argmax(axis=1)
         kick_true = kick > 0.5
-        kick_pred = kick_prob >= float(kick_threshold)
+        thresholds = np.full(
+            len(kick_prob),
+            float(kick_threshold),
+            dtype=np.float32,
+        )
+        if kick_thresholds_by_role:
+            for role_id, role_threshold in kick_thresholds_by_role.items():
+                thresholds[roles == int(role_id)] = float(role_threshold)
+        kick_pred = kick_prob >= thresholds
         _update_counter(overall, direction, dir_pred, kick_true, kick_pred)
 
         for role_id in range(4):
@@ -564,8 +573,23 @@ def evaluate(
             collected_true.append(kick_true.astype(bool, copy=True))
 
     metrics = _finalize_metrics(overall, kick_threshold)
+    if kick_thresholds_by_role:
+        metrics["kick_threshold_mode"] = "per_role"
+        metrics["kick_thresholds_by_role"] = {
+            ROLE_NAMES[role_id]: float(
+                kick_thresholds_by_role.get(role_id, kick_threshold)
+            )
+            for role_id in range(4)
+        }
     metrics["by_role"] = {
-        ROLE_NAMES[role_id]: _finalize_metrics(counter, kick_threshold)
+        ROLE_NAMES[role_id]: _finalize_metrics(
+            counter,
+            (
+                kick_thresholds_by_role.get(role_id, kick_threshold)
+                if kick_thresholds_by_role
+                else kick_threshold
+            ),
+        )
         for role_id, counter in by_role.items()
         if counter["samples"] > 0
     }
@@ -573,6 +597,47 @@ def evaluate(
     probs = np.concatenate(collected_probs) if collected_probs else None
     truth = np.concatenate(collected_true) if collected_true else None
     return metrics, probs, truth
+
+
+def _collect_kick_predictions(
+    index: dict[str, Any],
+    *,
+    params: dict[str, np.ndarray],
+    mean: np.ndarray,
+    std: np.ndarray,
+    role_weights: np.ndarray,
+    window: int,
+    sequence_stride: int,
+    batch_size: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    probs: list[np.ndarray] = []
+    truth: list[np.ndarray] = []
+    roles_out: list[np.ndarray] = []
+    rng = np.random.default_rng(0)
+
+    for x, _, kick, roles, _ in _iter_batches(
+        index,
+        mean=mean,
+        std=std,
+        role_weights=role_weights,
+        window=window,
+        sequence_stride=sequence_stride,
+        batch_size=batch_size,
+        rng=rng,
+        shuffle=False,
+    ):
+        _, _, _, kick_prob = _forward(x, params)
+        probs.append(kick_prob.astype(np.float32, copy=True))
+        truth.append((kick > 0.5).astype(bool, copy=True))
+        roles_out.append(roles.astype(np.int64, copy=True))
+
+    if not probs:
+        raise ValueError("split has no kick predictions")
+    return (
+        np.concatenate(probs),
+        np.concatenate(truth),
+        np.concatenate(roles_out),
+    )
 
 
 def _kick_threshold_metrics(
@@ -773,7 +838,7 @@ def train_elite_policy(
 
     params = best_params
 
-    validation_default, kick_probs, kick_truth = evaluate(
+    validation_default, _, _ = evaluate(
         validation_index,
         params=params,
         mean=mean,
@@ -783,10 +848,17 @@ def train_elite_policy(
         sequence_stride=sequence_stride,
         batch_size=max(32, batch_size),
         kick_threshold=0.5,
-        collect_kick=True,
     )
-    if kick_probs is None or kick_truth is None:
-        raise ValueError("validation split has no kick predictions")
+    kick_probs, kick_truth, kick_roles = _collect_kick_predictions(
+        validation_index,
+        params=params,
+        mean=mean,
+        std=std,
+        role_weights=role_weights,
+        window=window,
+        sequence_stride=sequence_stride,
+        batch_size=max(32, batch_size),
+    )
 
     best_threshold, kick_calibration, threshold_candidates = (
         _calibrate_kick_threshold(
@@ -796,6 +868,35 @@ def train_elite_policy(
         )
     )
     best_kick_f1 = float(kick_calibration["f1"])
+
+    kick_thresholds_by_role: dict[int, float] = {}
+    kick_calibration_by_role: dict[str, dict[str, Any]] = {}
+    for role_id in range(4):
+        mask = kick_roles == role_id
+        role_name = ROLE_NAMES[role_id]
+        if int(mask.sum()) >= 100 and bool(kick_truth[mask].any()):
+            role_threshold, role_calibration, role_candidates = (
+                _calibrate_kick_threshold(
+                    kick_probs[mask],
+                    kick_truth[mask],
+                    max_rate_multiplier=1.5,
+                )
+            )
+            kick_thresholds_by_role[role_id] = role_threshold
+            kick_calibration_by_role[role_name] = {
+                **role_calibration,
+                "samples": int(mask.sum()),
+                "source": "role_validation",
+                "candidates": role_candidates,
+            }
+        else:
+            kick_thresholds_by_role[role_id] = best_threshold
+            kick_calibration_by_role[role_name] = {
+                **kick_calibration,
+                "samples": int(mask.sum()),
+                "source": "global_fallback",
+                "candidates": threshold_candidates,
+            }
 
     validation_final, _, _ = evaluate(
         validation_index,
@@ -807,6 +908,7 @@ def train_elite_policy(
         sequence_stride=sequence_stride,
         batch_size=max(32, batch_size),
         kick_threshold=best_threshold,
+        kick_thresholds_by_role=kick_thresholds_by_role,
     )
 
     # Frozen holdout: exactly one final evaluation after architecture/model
@@ -821,6 +923,7 @@ def train_elite_policy(
         sequence_stride=sequence_stride,
         batch_size=max(32, batch_size),
         kick_threshold=best_threshold,
+        kick_thresholds_by_role=kick_thresholds_by_role,
     )
     if int(holdout_final.get("samples", 0)) <= 0:
         raise ValueError("frozen holdout produced zero temporal sequences")
@@ -847,6 +950,10 @@ def train_elite_policy(
             for i, (dx, dy) in enumerate(ACTION_DIRS)
         ],
         "kick_threshold": float(best_threshold),
+        "kick_thresholds_by_role": {
+            ROLE_NAMES[role_id]: float(threshold)
+            for role_id, threshold in kick_thresholds_by_role.items()
+        },
         "kick_max_distance": RUNTIME_KICK_MAX_DISTANCE,
         "mean": mean.astype(float).tolist(),
         "std": std.astype(float).tolist(),
@@ -906,6 +1013,11 @@ def train_elite_policy(
             "calibrated_kick_threshold": best_threshold,
             "validation_best_kick_f1": best_kick_f1,
             "kick_calibration": kick_calibration,
+            "kick_calibration_by_role": kick_calibration_by_role,
+            "calibrated_kick_thresholds_by_role": {
+                ROLE_NAMES[role_id]: float(threshold)
+                for role_id, threshold in kick_thresholds_by_role.items()
+            },
             "kick_threshold_candidates": threshold_candidates,
             "frozen_holdout_used_for_selection": False,
         },
