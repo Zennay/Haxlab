@@ -226,6 +226,7 @@ VALIDATION_STAGE_ORDER = {
     "promotion": 0,
     "multi_replay": 10,
     "canary": 20,
+    "runtime": 25,
     "live": 30,
 }
 
@@ -402,16 +403,16 @@ def activate_live_champion(
     )
     if not validation_path.is_file():
         raise ValueError(
-            "live activation requires canary validation; "
+            "live activation requires runtime validation; "
             f"champion has no validation record: {validation_path}"
         )
     validation = json.loads(validation_path.read_text(encoding="utf-8"))
     if validation.get("schema") != "haxlab-champion-validation-record-v1":
         raise ValueError("unsupported champion validation record schema")
     validation_stage = str(validation.get("stage") or "promotion")
-    if VALIDATION_STAGE_ORDER.get(validation_stage, -1) < VALIDATION_STAGE_ORDER["canary"]:
+    if VALIDATION_STAGE_ORDER.get(validation_stage, -1) < VALIDATION_STAGE_ORDER["runtime"]:
         raise ValueError(
-            "live activation requires canary validation; "
+            "live activation requires runtime validation; "
             f"got {validation_stage!r}"
         )
 
