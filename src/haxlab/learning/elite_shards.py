@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -51,6 +52,37 @@ def _extract_one(
     shard_path = output_dir / f"{replay_sha256}.f32.gz"
     meta_path = output_dir / f"{replay_sha256}.meta.json"
 
+    selected_players = list(entry.get("selected_players") or [])
+    if not selected_players:
+        raise ValueError(f"{replay_sha256}: no elite players in replay")
+
+    player_spec: dict[str, dict[str, Any]] = {}
+    for row in selected_players:
+        role_confidence = max(
+            0.25,
+            min(1.0, float(row.get("role_confidence", 1.0))),
+        )
+        skill_weight = float(row.get("skill_weight", 1.0))
+        effective_weight = max(
+            0.1,
+            min(5.0, skill_weight * role_confidence),
+        )
+        player_spec[str(int(row["replay_player_id"]))] = {
+            "identity": str(row["identity"]),
+            "role": str(row["role"]),
+            "weight": effective_weight,
+        }
+
+    player_spec_json = json.dumps(
+        player_spec,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    player_spec_hash = hashlib.sha256(
+        player_spec_json.encode("utf-8")
+    ).hexdigest()
+
     if not force and shard_path.exists() and meta_path.exists():
         try:
             previous = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -60,21 +92,9 @@ def _extract_one(
             previous.get("schema") == "haxlab-elite-imitation-extract-summary-v1"
             and int(previous.get("sampleEveryTicks", 0)) == sample_every_ticks
             and int(previous.get("samples", 0)) > 0
+            and previous.get("selected_player_spec_hash") == player_spec_hash
         ):
             return {**previous, "status": "cached"}
-
-    selected_players = list(entry.get("selected_players") or [])
-    if not selected_players:
-        raise ValueError(f"{replay_sha256}: no elite players in replay")
-
-    player_spec = {
-        str(int(row["replay_player_id"])): {
-            "identity": str(row["identity"]),
-            "role": str(row["role"]),
-            "weight": float(row.get("skill_weight", 1.0)),
-        }
-        for row in selected_players
-    }
 
     raw_path = Path(str(entry["raw_path"]))
     if not raw_path.exists():
@@ -86,7 +106,7 @@ def _extract_one(
         str(node_script),
         str(raw_path),
         str(shard_path),
-        json.dumps(player_spec, ensure_ascii=False, separators=(",", ":")),
+        player_spec_json,
         str(sample_every_ticks),
     ]
 
@@ -120,6 +140,8 @@ def _extract_one(
             "raw_path": str(raw_path),
             "shard_path": str(shard_path),
             "selected_players": selected_players,
+            "selected_player_spec_hash": player_spec_hash,
+            "role_confidence_weighting": "skill_weight_x_clamped_role_confidence",
             "status": "ok",
         }
     )
