@@ -1,0 +1,28 @@
+name: Live Validation Guard Smoke
+
+on:
+  push:
+    branches:
+      - experiment/live-validation-guard-v01
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-live-validation-guard-smoke
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate live guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check tools/elite_champion_config.js
+          node --check tools/elite_bot_plugin.js
+          node tests/test_elite_champion_config.js
