@@ -35,6 +35,7 @@ haxlab-elite-pipeline = "haxlab.learning.elite_pipeline:main"
 haxlab-elite-gate = "haxlab.evaluation.elite_gate:main"
 haxlab-sandbox-gate = "haxlab.evaluation.sandbox_gate:main"
 haxlab-scenario-source = "haxlab.evaluation.scenario_source:main"
+haxlab-replay-audit = "haxlab.evaluation.replay_population_audit:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
