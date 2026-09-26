@@ -3,6 +3,10 @@
 const path = require("path");
 const { ElitePolicyRuntime } = require("./elite_policy_runtime");
 const {
+  resolveEliteChampionConfig,
+  futureMotionRuntimeSettings,
+} = require("./elite_champion_config");
+const {
   discOf,
   buildFeatureObject,
   canonicalActionToWorld,
@@ -37,6 +41,7 @@ module.exports = function(API) {
   let tickCounter = 0;
   let bots = [];
   let policy = null;
+  let policySource = null;
   let runtimeErrorCount = 0;
 
   this.defineVariable({
@@ -46,6 +51,15 @@ module.exports = function(API) {
       process.env.HAXLAB_ELITE_MODEL_DIR ||
       "/var/lib/haxlab/derived/training/elite-player-v01/model",
     description: "Directory containing runtime-model.json and metrics.json.",
+  });
+  this.defineVariable({
+    name: "championPointer",
+    type: VariableType.String,
+    value:
+      process.env.HAXLAB_ELITE_CHAMPION_POINTER ||
+      "/var/lib/haxlab/derived/champions/elite-player/current.json",
+    description:
+      "Optional promoted champion pointer. Falls back to modelDir when absent.",
   });
   this.defineVariable({
     name: "sampleEveryTicks",
@@ -123,12 +137,45 @@ module.exports = function(API) {
     return Number(player?.team?.id || player?.teamId || 0);
   }
 
-  function ensurePolicy() {
-    if (policy) return policy;
-    policy = ElitePolicyRuntime.fromFile(
-      path.join(String(that.modelDir), "runtime-model.json"),
+  function resolvePolicySource() {
+    return resolveEliteChampionConfig({
+      pointerPath: String(that.championPointer || ""),
+      fallbackModelDir: String(that.modelDir),
+    });
+  }
+
+  function ensurePolicy({ reloadIfChanged = false } = {}) {
+    const resolved = resolvePolicySource();
+    const changed =
+      !policySource ||
+      resolved.runtime_model_path !== policySource.runtime_model_path ||
+      resolved.version_id !== policySource.version_id ||
+      resolved.behavior_sha256 !== policySource.behavior_sha256;
+
+    if (policy && (!reloadIfChanged || !changed)) return policy;
+
+    const next = ElitePolicyRuntime.fromFile(resolved.runtime_model_path);
+    policy = next;
+    policySource = resolved;
+
+    console.log(
+      "HaxLab elite policy loaded:",
+      JSON.stringify({
+        source: resolved.source,
+        version_id: resolved.version_id,
+        runtime_model_path: resolved.runtime_model_path,
+        behavior_sha256: resolved.behavior_sha256,
+      }),
     );
     return policy;
+  }
+
+  function effectiveFutureMotionSettings() {
+    return futureMotionRuntimeSettings(policySource, {
+      enabled: that.enableFutureMotion,
+      minimumConfidence: Number(that.futureMotionConfidence) || 0.45,
+      minimumBallDistance: Number(that.futureMotionMinDistance) || 80,
+    });
   }
 
   function applyAction(bot, action) {
@@ -206,9 +253,11 @@ module.exports = function(API) {
   this.finalize = function() {
     that.removeEliteTeam();
     policy = null;
+    policySource = null;
   };
 
   this.onGameStart = function() {
+    ensurePolicy({ reloadIfChanged: true });
     tickCounter = 0;
     runtimeErrorCount = 0;
     for (const bot of bots) {
@@ -262,10 +311,11 @@ module.exports = function(API) {
           Number(features.ball_dx || 0),
           Number(features.ball_dy || 0),
         );
-        if (that.enableFutureMotion) {
+        const futureSettings = effectiveFutureMotionSettings();
+        if (futureSettings.enabled) {
           action = futureMotionAssist(action, ballDistance, {
-            minimumConfidence: Number(that.futureMotionConfidence) || 0.45,
-            minimumBallDistance: Number(that.futureMotionMinDistance) || 80,
+            minimumConfidence: futureSettings.minimumConfidence,
+            minimumBallDistance: futureSettings.minimumBallDistance,
           });
         }
         const stationary =
