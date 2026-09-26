@@ -756,6 +756,7 @@ def train_elite_policy(
     learning_rate: float = 8e-4,
     l2: float = 1e-5,
     seed: int = 1337,
+    progress_path: Path | None = None,
 ) -> dict[str, Any]:
     train_index = _load_index(train_index_path, train_limit)
     validation_index = _load_index(validation_index_path, validation_limit)
@@ -856,18 +857,30 @@ def train_elite_policy(
             best_epoch = epoch
             best_params = {key: value.copy() for key, value in params.items()}
 
-        history.append(
-            {
-                "epoch": epoch,
-                "batches": batches,
-                "sequence_samples": sequence_samples,
-                "train_loss_mean": float(np.mean(losses)),
-                "direction_loss_mean": float(np.mean(direction_losses)),
-                "kick_loss_mean": float(np.mean(kick_losses)),
-                "validation_at_0_5": validation_metrics,
-                "validation_selection_score": validation_score,
-            }
-        )
+        epoch_record = {
+            "epoch": epoch,
+            "batches": batches,
+            "sequence_samples": sequence_samples,
+            "train_loss_mean": float(np.mean(losses)),
+            "direction_loss_mean": float(np.mean(direction_losses)),
+            "kick_loss_mean": float(np.mean(kick_losses)),
+            "validation_at_0_5": validation_metrics,
+            "validation_selection_score": validation_score,
+        }
+        history.append(epoch_record)
+        if progress_path is not None:
+            _atomic_json(
+                progress_path,
+                {
+                    "schema": "haxlab-elite-progress-v1",
+                    "phase": "training",
+                    "epoch": epoch,
+                    "epochs_total": max(1, epochs),
+                    "best_epoch": best_epoch,
+                    "best_validation_selection_score": best_score,
+                    "latest": epoch_record,
+                },
+            )
 
     params = best_params
 
@@ -1060,6 +1073,19 @@ def train_elite_policy(
         "final_holdout": holdout_final,
     }
     _atomic_json(output_dir / "metrics.json", metadata)
+    if progress_path is not None:
+        _atomic_json(
+            progress_path,
+            {
+                "schema": "haxlab-elite-progress-v1",
+                "phase": "training_complete",
+                "best_epoch": best_epoch,
+                "epochs_total": max(1, epochs),
+                "final_validation": validation_final,
+                "final_holdout": holdout_final,
+                "model_path": str(model_path),
+            },
+        )
     return metadata
 
 
