@@ -1,0 +1,38 @@
+name: Live Pointer Smoke
+
+on:
+  push:
+    branches:
+      - experiment/live-pointer-v01
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-live-pointer-smoke
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create isolated environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .live-pointer-venv
+          python3 -m venv .live-pointer-venv
+          .live-pointer-venv/bin/pip install --upgrade pip
+          .live-pointer-venv/bin/pip install -e '.[dev]'
+
+      - name: Test live registry pointer and resolver
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src"             .live-pointer-venv/bin/python -m pytest -q             tests/test_champion_registry.py
+          node --check tools/elite_champion_config.js
+          node --check tools/elite_bot_plugin.js
+          node tests/test_elite_champion_config.js
