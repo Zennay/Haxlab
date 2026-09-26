@@ -19,6 +19,7 @@ const {
   enforceKickRange,
   recoveryAction,
   shouldRecoverFromStall,
+  attachFutureSignal,
   futureMotionAssist,
 } = require("./elite_tactics");
 const {
@@ -39,7 +40,8 @@ function usage() {
       "[--seconds 25] [--max-scenarios 8] [--sample-every 6] " +
       "[--disable-recovery] [--recovery-min-distance 120] " +
       "[--recovery-stall-decisions 3] [--recovery-ticks 5] " +
-      "[--future-assist] [--future-assist-confidence 0.45] " +
+      "[--future-assist] [--future-model runtime-model.json] " +
+      "[--future-assist-confidence 0.45] " +
       "[--future-assist-min-distance 80] [--output result.json]",
   );
   process.exit(2);
@@ -56,6 +58,7 @@ function parseArgs(argv) {
     recoveryStallDecisions: 3,
     recoveryTicks: 5,
     futureAssistEnabled: false,
+    futureModel: null,
     futureAssistConfidence: 0.45,
     futureAssistMinDistance: 80,
   };
@@ -81,6 +84,9 @@ function parseArgs(argv) {
     }
     else if (key === "--future-assist") {
       args.futureAssistEnabled = true;
+    }
+    else if (key === "--future-model") {
+      args.futureModel = value; i += 1;
     }
     else if (key === "--future-assist-confidence") {
       args.futureAssistConfidence = Number(value); i += 1;
@@ -119,6 +125,7 @@ function addPlayer(room, id, name, teamId) {
 
 function runScenarioMatch({
   runtimeModel,
+  futureRuntimeModel,
   stadium,
   scenario,
   scenarioIndex,
@@ -135,6 +142,9 @@ function runScenarioMatch({
   futureAssistMinDistance,
 }) {
   const policy = new ElitePolicyRuntime(runtimeModel);
+  const futurePolicy = futureRuntimeModel
+    ? new ElitePolicyRuntime(futureRuntimeModel)
+    : null;
   const baselineTeamId = eliteTeamId === 1 ? 2 : 1;
   let redGoals = 0;
   let blueGoals = 0;
@@ -205,6 +215,7 @@ function runScenarioMatch({
     eliteTeamId,
   );
   primeElitePolicy(policy, eliteBots, scenario);
+  if (futurePolicy) primeElitePolicy(futurePolicy, eliteBots, scenario);
 
   const totalTicks = Math.floor(seconds * 60);
   let samples = 0;
@@ -240,6 +251,14 @@ function runScenarioMatch({
               role: bot.role,
               features,
             });
+            if (futurePolicy) {
+              const futureAction = futurePolicy.act({
+                agent_id: String(bot.id),
+                role: bot.role,
+                features,
+              });
+              canonical = attachFutureSignal(canonical, futureAction);
+            }
 
             const policyStationary =
               Number(canonical.dir_x || 0) === 0 &&
@@ -443,6 +462,9 @@ function runScenarioMatch({
       recovery_ticks: recoveryTicks,
     },
     future_assist_enabled: Boolean(futureAssistEnabled),
+    future_signal_source: futureRuntimeModel
+      ? "secondary_model"
+      : "primary_model",
     future_assist_config: {
       minimum_confidence: futureAssistConfidence,
       minimum_ball_distance: futureAssistMinDistance,
@@ -539,7 +561,13 @@ function runScenarioMatch({
   return result;
 }
 
-function summarize(matches, modelPath, scenarioPath, stadium) {
+function summarize(
+  matches,
+  modelPath,
+  futureModelPath,
+  scenarioPath,
+  stadium,
+) {
   const avg = (selector) =>
     matches.reduce((sum, row) => sum + selector(row), 0) /
     Math.max(1, matches.length);
@@ -584,6 +612,7 @@ function summarize(matches, modelPath, scenarioPath, stadium) {
   return {
     schema: "haxlab-elite-replay-scenario-benchmark-v1",
     model_path: modelPath,
+    future_model_path: futureModelPath || null,
     scenario_path: scenarioPath,
     recovery_enabled: matches.length
       ? Boolean(matches[0].recovery_enabled)
@@ -689,6 +718,9 @@ function summarize(matches, modelPath, scenarioPath, stadium) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const runtimeModel = JSON.parse(fs.readFileSync(args.model, "utf8"));
+  const futureRuntimeModel = args.futureModel
+    ? JSON.parse(fs.readFileSync(args.futureModel, "utf8"))
+    : null;
   const scenarioPayload = JSON.parse(fs.readFileSync(args.scenarios, "utf8"));
   if (scenarioPayload.schema !== "haxlab-replay-seeded-scenarios-v1") {
     throw new Error("unsupported scenario schema: " + scenarioPayload.schema);
@@ -708,6 +740,7 @@ function main() {
     for (const eliteTeamId of [1, 2]) {
       const result = runScenarioMatch({
         runtimeModel,
+        futureRuntimeModel,
         stadium,
         scenario,
         scenarioIndex: index + 1,
@@ -735,7 +768,13 @@ function main() {
     }
   }
 
-  const summary = summarize(matches, args.model, args.scenarios, stadium);
+  const summary = summarize(
+    matches,
+    args.model,
+    args.futureModel,
+    args.scenarios,
+    stadium,
+  );
   const rendered = JSON.stringify(summary, null, 2) + "\n";
   if (args.output) {
     fs.mkdirSync(path.dirname(args.output), { recursive: true });
