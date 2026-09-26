@@ -14,6 +14,7 @@ const {
   canonicalActionToWorld,
   num,
 } = require("./elite_features");
+const { kickoffAction, enforceKickRange } = require("./elite_tactics");
 
 const ROLES = ["gk", "dm", "am", "st"];
 
@@ -212,14 +213,21 @@ function runMatch({
       if (!player || !discOf(player)?.pos) continue;
 
       try {
-        const features = buildFeatureObject(player, state, gameState);
-        if (!features) continue;
-        const canonical = policy.act({
-          agent_id: String(bot.id),
-          role: bot.role,
-          features,
-        });
-        const action = canonicalActionToWorld(canonical, teamId);
+        const tactical = kickoffAction(bot.role, player, gameState);
+        let action;
+        if (tactical) {
+          action = tactical;
+        } else {
+          const features = buildFeatureObject(player, state, gameState);
+          if (!features) continue;
+          const canonical = policy.act({
+            agent_id: String(bot.id),
+            role: bot.role,
+            features,
+          });
+          action = canonicalActionToWorld(canonical, teamId);
+        }
+        action = enforceKickRange(action, player, gameState);
         room.playerInput(
           Utils.keyState(action.dirX, action.dirY, action.kick),
           bot.id,
