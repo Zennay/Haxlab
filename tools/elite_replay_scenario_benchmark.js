@@ -36,7 +36,9 @@ function usage() {
     "Usage: node tools/elite_replay_scenario_benchmark.js " +
       "--model runtime-model.json --stadium stadium.hbs --scenarios scenarios.json " +
       "[--seconds 25] [--max-scenarios 8] [--sample-every 6] " +
-      "[--disable-recovery] [--output result.json]",
+      "[--disable-recovery] [--recovery-min-distance 120] " +
+      "[--recovery-stall-decisions 3] [--recovery-ticks 5] " +
+      "[--output result.json]",
   );
   process.exit(2);
 }
@@ -48,6 +50,9 @@ function parseArgs(argv) {
     sampleEvery: 6,
     output: null,
     recoveryEnabled: true,
+    recoveryMinDistance: 120,
+    recoveryStallDecisions: 3,
+    recoveryTicks: 5,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const key = argv[i];
@@ -60,6 +65,15 @@ function parseArgs(argv) {
     else if (key === "--sample-every") { args.sampleEvery = Number(value); i += 1; }
     else if (key === "--output") { args.output = value; i += 1; }
     else if (key === "--disable-recovery") { args.recoveryEnabled = false; }
+    else if (key === "--recovery-min-distance") {
+      args.recoveryMinDistance = Number(value); i += 1;
+    }
+    else if (key === "--recovery-stall-decisions") {
+      args.recoveryStallDecisions = Number(value); i += 1;
+    }
+    else if (key === "--recovery-ticks") {
+      args.recoveryTicks = Number(value); i += 1;
+    }
     else if (key === "--help" || key === "-h") usage();
     else throw new Error("Unknown argument: " + key);
   }
@@ -67,6 +81,12 @@ function parseArgs(argv) {
   args.seconds = Math.max(5, Number(args.seconds) || 25);
   args.maxScenarios = Math.max(1, Math.floor(args.maxScenarios));
   args.sampleEvery = Math.max(1, Math.floor(args.sampleEvery));
+  args.recoveryMinDistance = Math.max(60, Number(args.recoveryMinDistance) || 120);
+  args.recoveryStallDecisions = Math.max(
+    2,
+    Math.floor(Number(args.recoveryStallDecisions) || 3),
+  );
+  args.recoveryTicks = Math.max(1, Math.floor(Number(args.recoveryTicks) || 5));
   return args;
 }
 
@@ -85,6 +105,9 @@ function runScenarioMatch({
   seconds,
   sampleEvery,
   recoveryEnabled,
+  recoveryMinDistance,
+  recoveryStallDecisions,
+  recoveryTicks,
 }) {
   const policy = new ElitePolicyRuntime(runtimeModel);
   const baselineTeamId = eliteTeamId === 1 ? 2 : 1;
@@ -204,9 +227,13 @@ function runScenarioMatch({
                 action,
                 ballDistanceFromFeatures,
                 bot.stallStreak,
+                {
+                  minimumBallDistance: recoveryMinDistance,
+                  minimumStallDecisions: recoveryStallDecisions,
+                },
               )
             ) {
-              bot.recoveryTicks = 5;
+              bot.recoveryTicks = recoveryTicks;
               bot.recoveryOverrides += 1;
               bot.stallStreak = 0;
             }
@@ -323,6 +350,11 @@ function runScenarioMatch({
     elite_team_id: eliteTeamId,
     baseline_profile: baselineProfile,
     recovery_enabled: Boolean(recoveryEnabled),
+    recovery_config: {
+      minimum_ball_distance: recoveryMinDistance,
+      minimum_stall_decisions: recoveryStallDecisions,
+      recovery_ticks: recoveryTicks,
+    },
     seconds,
     goals: { elite: eliteGoals, baseline: baselineGoals },
     result:
@@ -432,6 +464,9 @@ function summarize(matches, modelPath, scenarioPath, stadium) {
     recovery_enabled: matches.length
       ? Boolean(matches[0].recovery_enabled)
       : null,
+    recovery_config: matches.length
+      ? matches[0].recovery_config
+      : null,
     stadium: {
       name: stadium.name || null,
       width: stadium.width ?? null,
@@ -525,6 +560,9 @@ function main() {
         seconds: args.seconds,
         sampleEvery: args.sampleEvery,
         recoveryEnabled: args.recoveryEnabled,
+        recoveryMinDistance: args.recoveryMinDistance,
+        recoveryStallDecisions: args.recoveryStallDecisions,
+        recoveryTicks: args.recoveryTicks,
       });
       matches.push(result);
       console.error(
