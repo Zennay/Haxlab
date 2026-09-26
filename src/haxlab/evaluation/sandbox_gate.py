@@ -13,6 +13,8 @@ class SandboxGatePolicy:
     maximum_runtime_errors: int = 0
     minimum_progression_share: float = 0.42
     minimum_non_loss_rate: float = 0.50
+    minimum_nonzero_movement_rate: float = 0.10
+    minimum_total_kicks: int = 1
 
 
 def evaluate_sandbox_evidence(
@@ -22,12 +24,21 @@ def evaluate_sandbox_evidence(
 ) -> dict[str, Any]:
     reasons: list[str] = []
 
-    side_bias = float(side_sanity.get("average_side_bias_abs") or 0.0)
+    side_bias = float(
+        side_sanity.get("aggregate_side_bias_abs")
+        if side_sanity.get("aggregate_side_bias_abs") is not None
+        else side_sanity.get("average_side_bias_abs") or 0.0
+    )
     runtime_errors = int(benchmark.get("runtime_errors") or 0)
     progression_share = float(
         (benchmark.get("progression") or {}).get("elite_share") or 0.0
     )
     non_loss_rate = float(benchmark.get("non_loss_rate") or 0.0)
+    activity = benchmark.get("policy_activity") or {}
+    nonzero_movement_rate = float(
+        activity.get("nonzero_movement_rate") or 0.0
+    )
+    total_kicks = int(activity.get("total_kicks") or 0)
 
     arena_valid = side_bias <= policy.maximum_model_free_side_bias
     if not arena_valid:
@@ -54,6 +65,18 @@ def evaluate_sandbox_evidence(
             f"{policy.minimum_non_loss_rate:.4f}"
         )
 
+    if nonzero_movement_rate < policy.minimum_nonzero_movement_rate:
+        reasons.append(
+            f"nonzero_movement_rate:{nonzero_movement_rate:.4f}<"
+            f"{policy.minimum_nonzero_movement_rate:.4f}"
+        )
+
+    if total_kicks < policy.minimum_total_kicks:
+        reasons.append(
+            f"total_kicks:{total_kicks}<"
+            f"{policy.minimum_total_kicks}"
+        )
+
     eligible = arena_valid and not reasons
     return {
         "schema": "haxlab-sandbox-promotion-gate-v1",
@@ -70,6 +93,8 @@ def evaluate_sandbox_evidence(
             "runtime_errors": runtime_errors,
             "progression_share": progression_share,
             "non_loss_rate": non_loss_rate,
+            "nonzero_movement_rate": nonzero_movement_rate,
+            "total_kicks": total_kicks,
         },
         "policy": asdict(policy),
     }
