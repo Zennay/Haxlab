@@ -1,4 +1,5 @@
 name: Zennay Cloud maintenance
+# retry: adaptive-backend
 
 on:
   push:
