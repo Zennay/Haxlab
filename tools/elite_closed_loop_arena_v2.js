@@ -174,9 +174,11 @@ function validateFrozenSuite(suiteRoot) {
       id: sourceId,
       replay_sha256: replaySha,
       dir,
+      source_json_sha256: String(expectedFiles["source.json"]),
       scenario_path: scenarioPath,
       scenario_sha256: scenarioSha,
       stadium_path: path.join(dir, "stadium.hbs"),
+      stadium_sha256: String(expectedFiles["stadium.hbs"]),
       scenarios,
     });
   }
@@ -399,7 +401,9 @@ function runEpisode({
   let teamShapeSamples = 0;
   let formationOrderCorrect = 0;
   let teamXSpanSum = 0;
+  let teamXSpanSqSum = 0;
   let teamPairwiseSum = 0;
+  let teamPairwiseSqSum = 0;
 
   for (let tick = 0; tick < totalTicks; tick += 1) {
     if (tick % sampleEvery === 0) {
@@ -559,7 +563,10 @@ function runEpisode({
           teamShapeSamples += 1;
           if (shape.ordered) formationOrderCorrect += 1;
           teamXSpanSum += shape.x_span;
+          teamXSpanSqSum += shape.x_span * shape.x_span;
           teamPairwiseSum += shape.mean_pairwise_distance;
+          teamPairwiseSqSum +=
+            shape.mean_pairwise_distance * shape.mean_pairwise_distance;
         }
 
         const eliteAxisX =
@@ -626,8 +633,28 @@ function runEpisode({
       formation_order_rate:
         formationOrderCorrect / Math.max(1, teamShapeSamples),
       mean_x_span: teamXSpanSum / Math.max(1, teamShapeSamples),
+      std_x_span: Math.sqrt(
+        Math.max(
+          0,
+          teamXSpanSqSum / Math.max(1, teamShapeSamples) -
+            Math.pow(
+              teamXSpanSum / Math.max(1, teamShapeSamples),
+              2,
+            ),
+        ),
+      ),
       mean_pairwise_distance:
         teamPairwiseSum / Math.max(1, teamShapeSamples),
+      std_pairwise_distance: Math.sqrt(
+        Math.max(
+          0,
+          teamPairwiseSqSum / Math.max(1, teamShapeSamples) -
+            Math.pow(
+              teamPairwiseSum / Math.max(1, teamShapeSamples),
+              2,
+            ),
+        ),
+      ),
     },
     telemetry: {
       runtime_errors: runtimeErrors,
@@ -806,9 +833,17 @@ function summarizeEpisodes(episodes) {
         episodes,
         (row) => row.team_shape.mean_x_span,
       ),
+      mean_std_x_span: mean(
+        episodes,
+        (row) => row.team_shape.std_x_span,
+      ),
       mean_pairwise_distance: mean(
         episodes,
         (row) => row.team_shape.mean_pairwise_distance,
+      ),
+      mean_std_pairwise_distance: mean(
+        episodes,
+        (row) => row.team_shape.std_pairwise_distance,
       ),
     },
     runtime_errors: episodes.reduce(
@@ -978,6 +1013,8 @@ function runArena(args) {
     sources.push({
       source_id: source.id,
       replay_sha256: source.replay_sha256,
+      source_json_sha256: source.source_json_sha256,
+      stadium_sha256: source.stadium_sha256,
       scenario_sha256: source.scenario_sha256,
       scenario_count: scenarios.length,
       raw: rawSummary,
@@ -1006,6 +1043,12 @@ function runArena(args) {
       config_sha256: configSha,
       source_replay_sha256s: suite.sources.map(
         (source) => source.replay_sha256,
+      ),
+      source_json_sha256s: suite.sources.map(
+        (source) => source.source_json_sha256,
+      ),
+      stadium_sha256s: suite.sources.map(
+        (source) => source.stadium_sha256,
       ),
       scenario_sha256s: suite.sources.map(
         (source) => source.scenario_sha256,
