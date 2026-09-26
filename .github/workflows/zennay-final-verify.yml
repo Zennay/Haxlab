@@ -1,0 +1,123 @@
+name: Zennay Cloud final verification
+
+on:
+  push:
+    branches: [zennay-cloud-maint]
+    paths:
+      - ".github/workflows/zennay-final-verify.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zennay-final-verify
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: zennay-cloud-maint
+      - name: Verify and build
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=/home/ubuntu/zennay-cloud
+          protected=(
+            haxlab-analyzer.service
+            haxlab-ingest.service
+            haxlab-worker.service
+            actions.runner.Zennay-Haxlab.vps-bb300bba-haxlab.service
+            actions.runner.Zennay-Ftmo.vps-bb300bba-ftmo.service
+          )
+          declare -A BEFORE
+          echo "=== BEFORE ==="
+          for s in "${protected[@]}"; do
+            BEFORE["$s"]="$(systemctl show "$s" -p MainPID --value)"
+            echo "$s pid=${BEFORE[$s]} state=$(systemctl is-active "$s")"
+          done
+
+          echo "=== SOURCE CHECKS ==="
+          grep -n -A12 -B3 "private fun MetricStack" "$ROOT/wear-os/app/src/main/java/com/zennay/cloud/watch/ui/ZennayWearApp.kt" | head -60
+          grep -n "getSystemService" "$ROOT/wear-os/app/src/main/java/com/zennay/cloud/watch/AlertWorker.kt"
+          grep -n "OneTimeWorkRequestBuilder" "$ROOT/wear-os/app/src/main/java/com/zennay/cloud/watch/MainActivity.kt"
+          grep -n "POST_NOTIFICATIONS" "$ROOT/wear-os/app/src/main/AndroidManifest.xml"
+          grep -n "work-runtime-ktx" "$ROOT/wear-os/app/build.gradle.kts"
+          grep -n -A2 "api/resource-priority" "$ROOT/server.py"
+
+          echo "=== API/QUALITY/RESOURCES ==="
+          curl -fsS http://127.0.0.1:8765/api/status >/tmp/status.json
+          curl -fsS http://127.0.0.1:8765/api/resources >/tmp/resources.json
+          TOKEN="$(cat "$ROOT/.watch-token")"
+          curl -fsS -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8765/api/v1/alerts >/tmp/alerts-before.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open("/tmp/status.json"))
+          for p in d["projects"]:
+              q=p.get("quality") or {}
+              print("PROJECT",p["id"],"progress",p["progress"],"quality",q.get("headline"),"resource",(p.get("resource") or {}).get("priority"))
+              print("MILESTONES",[(m["title"],m.get("progress")) for m in p.get("milestones",[])])
+          print("ARCHIVED",[p["id"] for p in d.get("archived_projects",[])])
+          print("RESOURCES",json.load(open("/tmp/resources.json")))
+          print("OLD_ALERTS",json.load(open("/tmp/alerts-before.json")).get("alerts",[]))
+          PY
+
+          echo "=== BASELINE FUTURE-ONLY ALERTS ==="
+          python3 - <<'PY'
+          import sqlite3
+          db="/home/ubuntu/zennay-cloud/history.db"
+          with sqlite3.connect(db) as c:
+              n=c.execute("SELECT COUNT(*) FROM alerts").fetchone()[0]
+              c.execute("DELETE FROM alerts")
+              c.commit()
+          print("CLEARED_ALERTS",n)
+          PY
+          curl -fsS -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8765/api/v1/alerts >/tmp/alerts-after.json
+          python3 - <<'PY'
+          import json
+          a=json.load(open("/tmp/alerts-after.json")).get("alerts",[])
+          print("ALERTS_AFTER_CLEAR",a)
+          assert len(a)==0
+          PY
+
+          echo "=== JAVA ==="
+          if ! command -v java >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y openjdk-17-jdk-headless
+          fi
+          JAVA_BIN="$(command -v java)"
+          JAVA_REAL="$(readlink -f "$JAVA_BIN")"
+          export JAVA_HOME="$(dirname "$(dirname "$JAVA_REAL")")"
+          export PATH="$JAVA_HOME/bin:$PATH"
+          java -version
+
+          echo "=== BUILD APK ==="
+          GRADLE=/home/ubuntu/.cache/zennay-gradle/gradle-8.13/bin/gradle
+          test -f "$GRADLE"
+          chmod +x "$GRADLE"
+          ZENNAY_WATCH_TOKEN="$TOKEN" "$GRADLE" -p "$ROOT/wear-os" :app:assembleDebug --no-daemon
+          APK="$ROOT/wear-os/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          ls -lh "$APK"
+          stat -c 'APK_MTIME=%y APK_BYTES=%s' "$APK"
+
+          echo "=== RESOURCE WEIGHTS ==="
+          for s in haxlab-analyzer.service actions.runner.Zennay-Haxlab.vps-bb300bba-haxlab.service actions.runner.Zennay-Ftmo.vps-bb300bba-ftmo.service zennay-cloud.service; do
+            echo -n "$s "
+            systemctl show "$s" -p CPUWeight -p IOWeight -p MemoryCurrent --value | tr '\n' ' '
+            echo
+          done
+
+          echo "=== AFTER ==="
+          for s in "${protected[@]}"; do
+            after="$(systemctl show "$s" -p MainPID --value)"
+            state="$(systemctl is-active "$s")"
+            echo "$s pid=$after state=$state"
+            test "$after" = "${BEFORE[$s]}"
+            test "$state" = active
+          done
+          test "$(systemctl is-active zennay-cloud.service)" = active
+          echo "FINAL_VERIFY_OK"
