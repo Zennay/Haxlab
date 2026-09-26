@@ -505,8 +505,103 @@ def activate_live_champion(
 
 
 
+
+def record_live_health(
+    *,
+    registry_root: Path,
+    health_evidence_path: Path,
+) -> dict[str, Any]:
+    registry_root = registry_root.resolve()
+    health_evidence_path = health_evidence_path.resolve()
+    live_path = registry_root / "live.json"
+
+    if not live_path.is_file():
+        raise FileNotFoundError(live_path)
+    if not health_evidence_path.is_file():
+        raise FileNotFoundError(health_evidence_path)
+
+    live = json.loads(live_path.read_text(encoding="utf-8"))
+    if live.get("schema") != "haxlab-champion-pointer-v1":
+        raise ValueError("unsupported live champion pointer schema")
+    version_id = str(live.get("version_id") or "")
+    if not version_id:
+        raise ValueError("live champion pointer missing version_id")
+    if str(live.get("validation_stage") or "") != "live":
+        raise ValueError("live health requires an activated live champion")
+
+    evidence = json.loads(health_evidence_path.read_text(encoding="utf-8"))
+    if evidence.get("validated") is not True:
+        raise ValueError("live health evidence does not pass its gate")
+    candidate = evidence.get("candidate")
+    if isinstance(candidate, dict):
+        evidence_version = str(candidate.get("version_id") or "")
+        if evidence_version and evidence_version != version_id:
+            raise ValueError(
+                "live health evidence version mismatch: "
+                f"{evidence_version} != {version_id}"
+            )
+
+    evidence_sha = _sha256(health_evidence_path)
+    destination_dir = registry_root / "live-health" / version_id
+    destination = destination_dir / f"{evidence_sha}.json"
+    destination_dir.mkdir(parents=True, exist_ok=True)
+
+    if destination.exists():
+        if _sha256(destination) != evidence_sha:
+            raise ValueError("live health evidence hash collision")
+    else:
+        shutil.copy2(health_evidence_path, destination)
+        if _sha256(destination) != evidence_sha:
+            destination.unlink(missing_ok=True)
+            raise ValueError("live health evidence copy checksum mismatch")
+
+    checked_at = datetime.now(timezone.utc).isoformat()
+    summary = _validation_summary(evidence)
+    record = {
+        "schema": "haxlab-live-health-record-v1",
+        "version_id": version_id,
+        "healthy": True,
+        "checked_at": checked_at,
+        "evidence_path": str(destination),
+        "evidence_sha256": evidence_sha,
+        "summary": summary,
+    }
+    _atomic_json(destination_dir / "current.json", record)
+
+    updated_live = {
+        **live,
+        "live_health": {
+            "healthy": True,
+            "checked_at": checked_at,
+            "evidence_path": str(destination),
+            "evidence_sha256": evidence_sha,
+            "summary": summary,
+        },
+        "updated_at": checked_at,
+    }
+    _atomic_json(live_path, updated_live)
+
+    return {
+        "recorded": True,
+        "healthy": True,
+        "version_id": version_id,
+        "checked_at": checked_at,
+        "evidence_path": str(destination),
+        "evidence_sha256": evidence_sha,
+        "live_path": str(live_path),
+        "summary": summary,
+    }
+
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="haxlab-champion-registry")
+    parser.add_argument(
+        "--record-live-health",
+        type=Path,
+        default=None,
+        help="Record passing post-activation health evidence for live.json.",
+    )
     parser.add_argument(
         "--activate-live",
         action="store_true",
@@ -541,7 +636,12 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
 
-    if args.activate_live:
+    if args.record_live_health is not None:
+        result = record_live_health(
+            registry_root=args.registry_root,
+            health_evidence_path=args.record_live_health,
+        )
+    elif args.activate_live:
         result = activate_live_champion(
             registry_root=args.registry_root,
             version_id=args.activate_version,
