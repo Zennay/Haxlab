@@ -109,3 +109,32 @@ def test_diverse_selector_fails_closed_when_pool_is_too_similar(
             max_candidates=100,
             max_shared_players=4,
         )
+
+
+
+def test_selector_excludes_explicit_replay_sha256(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_keys = [f"a{i}" for i in range(8)]
+    second_keys = [f"b{i}" for i in range(8)]
+    rows = [
+        _candidate(tmp_path, "a", first_keys),
+        _candidate(tmp_path, "b", second_keys),
+    ]
+    monkeypatch.setattr(
+        scenario_source,
+        "_candidate_rows",
+        lambda db_path, max_candidates: rows,
+    )
+
+    selected = scenario_source.select_scenario_sources(
+        tmp_path / "unused.sqlite3",
+        count=1,
+        max_candidates=100,
+        max_shared_players=8,
+        exclude_sha256s={rows[0][0]},
+    )
+
+    assert len(selected) == 1
+    assert selected[0]["sha256"] == rows[1][0]
