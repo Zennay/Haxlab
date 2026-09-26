@@ -64,20 +64,43 @@ Role leash, OOD recovery and boundary recovery are useful runtime protection,
 but they may not create promotion evidence for the underlying policy. A future
 guard-assisted comparison can be recorded separately.
 
-## Initial fail-closed calibration
+## Frozen calibration v1
 
-`haxlab.evaluation.closed_loop_arena` ships with initial structural/behavior
-checks, but promotion eligibility remains disabled until thresholds have been
-calibrated and frozen against real reference runs.
+Arena v2 thresholds are frozen from GitHub Actions run `36266477245` at
+calibration code SHA `46efb908a0e7323eff952287f9df85bb4d3c3824`.
 
-The first calibration set is:
+The batch used all three frozen Candidate-D holdout sources, 16 scenarios per
+source, 30-second rollouts, raw-policy-only execution, and a plug-and-play
+partner population consisting of the live champion plus Candidates B and C.
+It compared three policy classes:
 
-1. current live/legacy champion;
-2. Candidate D after its active training run finishes;
-3. at least one deliberately weak or ablated policy where available.
+1. champion vs itself as the identity control;
+2. Candidate D;
+3. an ablated control with all policy weights zeroed.
 
-Only after those distributions are inspected should the policy be marked
-`calibrated=True` and wired into the champion promotion workflow.
+Observed behavior-gate results were champion-self 3/3, Candidate D 0/3 and
+zero-policy 0/3. The most persistent Candidate-D regression was boundary drift
+across all four roles, with additional role-target deviation in GK/DM/AM.
+
+The frozen absolute thresholds are:
+
+- team proxy match score >= 0.50;
+- per-role plug-and-play proxy match score >= 0.50;
+- absolute far-stall rate <= 0.90;
+- absolute held-action duration <= 30 seconds;
+- context-adaptation rate >= 0.25.
+
+These thresholds are intentionally combined with the stricter paired-reference
+regression checks. Proxy score alone is not sufficient: the zero-policy control
+sometimes reached proxy scores above 0.50 while still failing the behavior
+gate strongly.
+
+The policy remains fail-closed unless the caller explicitly enables the frozen
+thresholds with `calibrated=True` / `--calibrated`. The three full
+champion-self sources were replayed with the frozen policy enabled and all
+three remained structurally valid, behavior-pass and promotion-eligible.
+
+Production champion pointers were not changed by calibration.
 
 ## Runner
 
