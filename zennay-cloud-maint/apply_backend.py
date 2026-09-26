@@ -129,7 +129,15 @@ new="""        for m in p['milestones']:
         p['next']=next((m['title'] for m in p['milestones'] if m['progress']<100), 'Alle milestones afgerond')
         p['resource_policy']=resource_policy(p['id'])
         p['quality']=hax_quality() if p['id']=='haxlab' else ftmo_quality() if p['id']=='ftmo' else None"""
-s=rep(s,old,new,"granular progress")
+if new not in s:
+    if old in s:
+        s=s.replace(old,new,1)
+    elif "p['resource_policy']=resource_policy(p['id'])" not in s:
+        pattern=r"        p\['progress'\]=[^\\n]+\\n        p\['completed'\]=[^\\n]+\\n        p\['next'\]=[^\\n]+"
+        s2,n=re.subn(pattern,new,s,count=1)
+        if n!=1:
+            raise RuntimeError("cannot adapt granular progress block")
+        s=s2
 
 anchor="def watch_warnings(data):\n    warnings=[]"
 alerts="""def important_alerts(data):
