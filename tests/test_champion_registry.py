@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from haxlab.evaluation.champion_registry import (
+    activate_live_champion,
     promote_champion,
     record_champion_validation,
 )
@@ -326,3 +327,133 @@ def test_validation_stage_cannot_downgrade(tmp_path: Path) -> None:
             validation_evidence_path=evidence,
             stage="multi_replay",
         )
+
+
+
+def test_live_activation_requires_canary_and_creates_separate_pointer(
+    tmp_path: Path,
+) -> None:
+    registry, promoted = _promoted_registry(tmp_path)
+
+    evidence = tmp_path / "canary-live.json"
+    evidence.write_text(
+        json.dumps(
+            {
+                "validated": True,
+                "candidate": {"version_id": promoted["version_id"]},
+                "aggregate": {
+                    "replay_count": 10,
+                    "mean_movement_delta": 0.05,
+                    "mean_progression_delta": 0.0,
+                    "total_runtime_errors": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="requires canary"):
+        activate_live_champion(registry_root=registry)
+
+    record_champion_validation(
+        registry_root=registry,
+        validation_evidence_path=evidence,
+        stage="canary",
+    )
+    result = activate_live_champion(registry_root=registry)
+
+    assert result["activated"] is True
+    assert result["idempotent"] is False
+    assert result["version_id"] == promoted["version_id"]
+
+    current = json.loads((registry / "current.json").read_text())
+    live = json.loads((registry / "live.json").read_text())
+
+    assert current["validation_stage"] == "canary"
+    assert live["validation_stage"] == "live"
+    assert live["source_validation_stage"] == "canary"
+    assert live["version_id"] == current["version_id"]
+    assert live["runtime_model_path"] == current["runtime_model_path"]
+    assert live["validation_evidence_path"] == current["validation_evidence_path"]
+    assert live["previous_live_version_id"] is None
+
+    activations = list((registry / "live-activations").glob("*.json"))
+    assert len(activations) == 1
+
+    again = activate_live_champion(registry_root=registry)
+    assert again["activated"] is True
+    assert again["idempotent"] is True
+
+
+def test_live_activation_can_roll_back_to_prior_canary_version(
+    tmp_path: Path,
+) -> None:
+    registry = tmp_path / "registry"
+
+    def promote_and_validate(
+        suffix: str,
+        confidence: float,
+    ) -> dict:
+        model = tmp_path / f"model-{suffix}"
+        _write_model(model)
+        (model / "model.npz").write_bytes(f"model-{suffix}".encode())
+        promotion = tmp_path / f"promotion-{suffix}.json"
+        promotion.write_text(
+            json.dumps(
+                {
+                    "promote": True,
+                    "selected": {
+                        "runtime_config": {
+                            "minimum_confidence": confidence,
+                            "minimum_ball_distance": 80,
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        promoted = promote_champion(
+            model_dir=model,
+            promotion_evidence_path=promotion,
+            registry_root=registry,
+            candidate_name=f"candidate-{suffix}",
+        )
+        evidence = tmp_path / f"canary-{suffix}.json"
+        evidence.write_text(
+            json.dumps(
+                {
+                    "validated": True,
+                    "candidate": {"version_id": promoted["version_id"]},
+                    "aggregate": {
+                        "replay_count": 10,
+                        "total_runtime_errors": 0,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        record_champion_validation(
+            registry_root=registry,
+            validation_evidence_path=evidence,
+            stage="canary",
+        )
+        return promoted
+
+    first = promote_and_validate("a", 0.68)
+    activate_live_champion(registry_root=registry)
+
+    second = promote_and_validate("b", 0.75)
+    second_activation = activate_live_champion(registry_root=registry)
+    assert second_activation["previous_version_id"] == first["version_id"]
+
+    rollback = activate_live_champion(
+        registry_root=registry,
+        version_id=first["version_id"],
+    )
+    assert rollback["activated"] is True
+    assert rollback["version_id"] == first["version_id"]
+    assert rollback["previous_version_id"] == second["version_id"]
+
+    live = json.loads((registry / "live.json").read_text())
+    assert live["version_id"] == first["version_id"]
+    assert live["previous_live_version_id"] == second["version_id"]
