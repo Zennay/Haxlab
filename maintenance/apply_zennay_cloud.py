@@ -294,10 +294,13 @@ wear = ROOT / "wear-os"
 env = dict(os.environ)
 if (ROOT / ".watch-token").exists():
     env["ZENNAY_WATCH_TOKEN"] = (ROOT / ".watch-token").read_text().strip()
+watch_build = "skipped-no-gradle"
 if (wear / "gradlew").exists():
     run([str(wear/"gradlew"),":app:assembleDebug"], env=env)
-else:
+    watch_build = "built-wrapper"
+elif shutil.which("gradle"):
     run(["gradle","-p",str(wear),":app:assembleDebug"], env=env)
+    watch_build = "built-system-gradle"
 
 # Restart only the dashboard backend.
 run(["sudo","systemctl","restart","zennay-cloud.service"])
@@ -342,5 +345,6 @@ summary = {
     "protected_pids_unchanged": before == after,
     "cloud_active": subprocess.check_output(["systemctl","is-active","zennay-cloud.service"], text=True).strip(),
     "watch_apk": str(apks[0]) if apks else None,
+    "watch_build": watch_build,
 }
 print("ZENNAY_PATCH_RESULT=" + json.dumps(summary, ensure_ascii=False))
