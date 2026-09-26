@@ -330,13 +330,13 @@ def test_validation_stage_cannot_downgrade(tmp_path: Path) -> None:
 
 
 
-def test_live_activation_requires_canary_and_creates_separate_pointer(
+def test_live_activation_requires_runtime_and_creates_separate_pointer(
     tmp_path: Path,
 ) -> None:
     registry, promoted = _promoted_registry(tmp_path)
 
-    evidence = tmp_path / "canary-live.json"
-    evidence.write_text(
+    canary = tmp_path / "canary-live.json"
+    canary.write_text(
         json.dumps(
             {
                 "validated": True,
@@ -351,14 +351,41 @@ def test_live_activation_requires_canary_and_creates_separate_pointer(
         ),
         encoding="utf-8",
     )
+    runtime = tmp_path / "runtime-live.json"
+    runtime.write_text(
+        json.dumps(
+            {
+                "schema": "haxlab-elite-plugin-runtime-validation-v1",
+                "validated": True,
+                "candidate": {"version_id": promoted["version_id"]},
+                "aggregate": {
+                    "case_count": 8,
+                    "policy_decisions": 320,
+                    "inputs_sent": 120,
+                    "future_assists": 4,
+                    "forbidden_role_future_assists": 0,
+                    "runtime_errors": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
 
-    with pytest.raises(ValueError, match="requires canary"):
+    with pytest.raises(ValueError, match="requires runtime"):
         activate_live_champion(registry_root=registry)
 
     record_champion_validation(
         registry_root=registry,
-        validation_evidence_path=evidence,
+        validation_evidence_path=canary,
         stage="canary",
+    )
+    with pytest.raises(ValueError, match="requires runtime"):
+        activate_live_champion(registry_root=registry)
+
+    record_champion_validation(
+        registry_root=registry,
+        validation_evidence_path=runtime,
+        stage="runtime",
     )
     result = activate_live_champion(registry_root=registry)
 
@@ -369,9 +396,9 @@ def test_live_activation_requires_canary_and_creates_separate_pointer(
     current = json.loads((registry / "current.json").read_text())
     live = json.loads((registry / "live.json").read_text())
 
-    assert current["validation_stage"] == "canary"
+    assert current["validation_stage"] == "runtime"
     assert live["validation_stage"] == "live"
-    assert live["source_validation_stage"] == "canary"
+    assert live["source_validation_stage"] == "runtime"
     assert live["version_id"] == current["version_id"]
     assert live["runtime_model_path"] == current["runtime_model_path"]
     assert live["validation_evidence_path"] == current["validation_evidence_path"]
@@ -385,7 +412,7 @@ def test_live_activation_requires_canary_and_creates_separate_pointer(
     assert again["idempotent"] is True
 
 
-def test_live_activation_can_roll_back_to_prior_canary_version(
+def test_live_activation_can_roll_back_to_prior_runtime_validated_version(
     tmp_path: Path,
 ) -> None:
     registry = tmp_path / "registry"
@@ -418,8 +445,9 @@ def test_live_activation_can_roll_back_to_prior_canary_version(
             registry_root=registry,
             candidate_name=f"candidate-{suffix}",
         )
-        evidence = tmp_path / f"canary-{suffix}.json"
-        evidence.write_text(
+
+        canary = tmp_path / f"canary-{suffix}.json"
+        canary.write_text(
             json.dumps(
                 {
                     "validated": True,
@@ -434,8 +462,32 @@ def test_live_activation_can_roll_back_to_prior_canary_version(
         )
         record_champion_validation(
             registry_root=registry,
-            validation_evidence_path=evidence,
+            validation_evidence_path=canary,
             stage="canary",
+        )
+
+        runtime = tmp_path / f"runtime-{suffix}.json"
+        runtime.write_text(
+            json.dumps(
+                {
+                    "validated": True,
+                    "candidate": {"version_id": promoted["version_id"]},
+                    "aggregate": {
+                        "case_count": 8,
+                        "policy_decisions": 300,
+                        "inputs_sent": 100,
+                        "future_assists": 3,
+                        "forbidden_role_future_assists": 0,
+                        "runtime_errors": 0,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        record_champion_validation(
+            registry_root=registry,
+            validation_evidence_path=runtime,
+            stage="runtime",
         )
         return promoted
 
