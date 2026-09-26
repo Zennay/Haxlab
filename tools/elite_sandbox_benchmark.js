@@ -16,6 +16,7 @@ const {
   num,
 } = require("./elite_features");
 const { kickoffAction, enforceKickRange } = require("./elite_tactics");
+const { prepareNeutralStart } = require("./sandbox_neutral_start");
 
 const ROLES = ["gk", "dm", "am", "st"];
 const BASELINE_PROFILES = ["balanced", "compact", "press"];
@@ -186,12 +187,14 @@ function runMatch({
     const baselineId = 200 + index;
     addPlayer(room, eliteId, "Elite-" + role.toUpperCase(), eliteTeamId);
     addPlayer(room, baselineId, "Script-" + role.toUpperCase(), baselineTeamId);
-    eliteBots.push({ id: eliteId, role, keyState: 0, kicks: 0, actions: 0 });
-    baselineBots.push({ id: baselineId, role, keyState: 0, kicks: 0, actions: 0 });
+    eliteBots.push({ id: eliteId, role, teamId: eliteTeamId, keyState: 0, kicks: 0, actions: 0 });
+    baselineBots.push({ id: baselineId, role, teamId: baselineTeamId, keyState: 0, kicks: 0, actions: 0 });
   }
 
   room.startGame(0);
   room.runSteps(5);
+  prepareNeutralStart(room, [...eliteBots, ...baselineBots], matchIndex - 1);
+  policy.reset();
 
   const totalTicks = Math.floor(minutes * 60 * 60);
   const metrics = {
