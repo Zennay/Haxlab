@@ -322,10 +322,7 @@ else:
     ]
     gradle_bin = next((p for p in candidates if p.exists()), None)
     if not gradle_bin:
-        root_build = (wear / "build.gradle.kts").read_text()
-        agp = re.search(r'com\\.android\\.application"\\) version "([0-9.]+)"', root_build)
-        major = int((agp.group(1) if agp else "8").split(".")[0])
-        gradle_version = "9.1.0" if major >= 9 else "8.13"
+        gradle_version = "8.13"
         cache = Path("/home/ubuntu/.cache/zennay-gradle")
         gradle_home = cache / ("gradle-" + gradle_version)
         gradle_bin = gradle_home / "bin/gradle"
