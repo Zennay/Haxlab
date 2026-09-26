@@ -123,6 +123,15 @@ def test_same_model_promotion_is_idempotent(tmp_path: Path) -> None:
     assert second["idempotent"] is True
     assert first["version_id"] == second["version_id"]
 
+    current = json.loads((tmp_path / "registry" / "current.json").read_text())
+    version_dir = tmp_path / "registry" / "versions" / first["version_id"]
+    assert current["model_path"] == str(version_dir / "model.npz")
+    assert current["runtime_model_path"] == str(version_dir / "runtime-model.json")
+    assert current["metrics_path"] == str(version_dir / "metrics.json")
+    assert Path(current["model_path"]).is_file()
+    assert Path(current["runtime_model_path"]).is_file()
+    assert Path(current["metrics_path"]).is_file()
+
 
 def test_runtime_config_changes_behavior_version(tmp_path: Path) -> None:
     model_dir = tmp_path / "model"
