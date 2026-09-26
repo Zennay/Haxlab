@@ -14,52 +14,38 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  inspect:
+  apply:
     runs-on: [self-hosted, haxlab]
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
           ref: zennay-cloud-maint
-      - name: Inspect Zennay Cloud safely
+      - name: Apply Zennay Cloud resource, alert and Wear updates
         shell: bash
         run: |
           set -euo pipefail
-          exec > >(tee /tmp/zcm-result.txt) 2>&1
-          echo "WHOAMI=$(whoami)"
-          sudo -n true && echo "SUDO_OK=1" || echo "SUDO_OK=0"
-          echo "=== watch metric pill ==="
-          sed -n '470,650p' /home/ubuntu/zennay-cloud/wear-os/app/src/main/java/com/zennay/cloud/watch/ui/ZennayWearApp.kt
-          echo "=== gradle ==="
-          cat /home/ubuntu/zennay-cloud/wear-os/app/build.gradle.kts
-          echo "=== models ==="
-          cat /home/ubuntu/zennay-cloud/wear-os/app/src/main/java/com/zennay/cloud/watch/data/Models.kt
-          echo "=== repo ==="
-          cat /home/ubuntu/zennay-cloud/wear-os/app/src/main/java/com/zennay/cloud/watch/data/ZennayCloudRepository.kt
-          echo "=== server core ==="
-          sed -n '90,340p' /home/ubuntu/zennay-cloud/server.py
-          echo "=== app functions ==="
-          sed -n '1,80p' /home/ubuntu/zennay-cloud/public/app.js
-          echo "=== manifest ==="
-          cat /home/ubuntu/zennay-cloud/wear-os/app/src/main/AndroidManifest.xml
-          echo "=== index ==="
-          cat /home/ubuntu/zennay-cloud/public/index.html
-          echo "=== server resource/alert insertion anchors ==="
-          grep -n -E 'def replay_metrics|def collect|def persist|def sampler|def watch_warnings|def watch_summary|def watch_project|class Handler|def do_POST|def route' /home/ubuntu/zennay-cloud/server.py
-          echo "=== service pids/resources ==="
-          for s in haxlab-analyzer.service haxlab-ingest.service haxlab-worker.service ftmo-autonomous.timer actions.runner.Zennay-Haxlab.vps-bb300bba-haxlab.service actions.runner.Zennay-Ftmo.vps-bb300bba-ftmo.service zennay-cloud.service; do
-            echo -n "$s "
-            systemctl show "$s" -p ActiveState -p SubState -p MainPID -p CPUWeight -p MemoryCurrent --value | tr '\n' ' '
-            echo
-          done
+          python3 maintenance/apply_zennay_cloud.py 2>&1 | tee /tmp/zcm-result.txt
       - name: Publish maintenance result
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
-          cp /tmp/zcm-result.txt zennay-cloud-maint-result.txt
+          {
+            echo "=== workflow result ==="
+            cat /tmp/zcm-result.txt 2>/dev/null || echo "patch did not produce output"
+            echo
+            echo "=== service health ==="
+            systemctl is-active zennay-cloud.service || true
+            systemctl is-active haxlab-analyzer.service || true
+            systemctl is-active haxlab-ingest.service || true
+            systemctl is-active haxlab-worker.service || true
+            systemctl is-active actions.runner.Zennay-Haxlab.vps-bb300bba-haxlab.service || true
+            systemctl is-active actions.runner.Zennay-Ftmo.vps-bb300bba-ftmo.service || true
+          } > zennay-cloud-maint-result.txt
           git config user.name "zennay-cloud-maint"
           git config user.email "actions@users.noreply.github.com"
           git add zennay-cloud-maint-result.txt
           git diff --cached --quiet && exit 0
-          git commit -m "chore: refresh Zennay Cloud maintenance inspection"
+          git commit -m "chore: record Zennay Cloud maintenance result"
           git push origin HEAD:zennay-cloud-maint
