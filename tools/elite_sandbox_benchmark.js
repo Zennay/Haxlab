@@ -234,6 +234,15 @@ function runMatch({
               action = canonicalActionToWorld(canonical, eliteTeamId);
             }
             action = enforceKickRange(action, player, gameState);
+            const canonicalDirX =
+              eliteTeamId === 2 ? -Number(action.dirX || 0) : Number(action.dirX || 0);
+            const directionKey = canonicalDirX + "," + Number(action.dirY || 0);
+            metrics.directionCounts[directionKey] =
+              (metrics.directionCounts[directionKey] || 0) + 1;
+            const canonicalPos = canonicalPosition(player, eliteTeamId);
+            metrics.roleCanonicalXSum[bot.role] += canonicalPos.x;
+            metrics.roleCanonicalXSamples[bot.role] += 1;
+
             const keyState = Utils.keyState(action.dirX, action.dirY, action.kick);
             room.playerInput(keyState, bot.id);
             bot.keyState = keyState;
