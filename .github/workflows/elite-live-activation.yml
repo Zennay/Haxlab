@@ -1,0 +1,124 @@
+name: Elite Live Activation
+
+on:
+  push:
+    branches:
+      - experiment/frozen-future-head-v01
+      - experiment/live-pointer-v01
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-elite-live-activation
+  cancel-in-progress: false
+
+jobs:
+  activate:
+    if: contains(github.event.head_commit.message, '[activate-live]')
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preflight live activation
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src"             /opt/haxlab/.venv/bin/python -m py_compile             "$GITHUB_WORKSPACE/src/haxlab/evaluation/champion_registry.py"
+          node --check "$GITHUB_WORKSPACE/tools/elite_champion_config.js"
+          node --check "$GITHUB_WORKSPACE/tools/elite_bot_plugin.js"
+
+      - name: Require canary-validated current champion
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path("/var/lib/haxlab/derived/champions/elite-player")
+          pointer = json.loads((root / "current.json").read_text())
+          if pointer.get("validation_stage") != "canary":
+              raise SystemExit(
+                  "Current champion must be canary validated before live activation; "
+                  f"got {pointer.get('validation_stage')!r}"
+              )
+          evidence = Path(pointer["validation_evidence_path"])
+          if not evidence.is_file():
+              raise SystemExit(f"Canary evidence missing: {evidence}")
+          payload = json.loads(evidence.read_text())
+          if payload.get("validated") is not True:
+              raise SystemExit("Canary evidence no longer passes")
+          print(json.dumps({
+              "version_id": pointer["version_id"],
+              "validation_stage": pointer["validation_stage"],
+              "validation_evidence_path": str(evidence),
+          }, indent=2))
+          PY
+
+      - name: Activate current champion into live pointer
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src"             /opt/haxlab/.venv/bin/python -m haxlab.evaluation.champion_registry             --registry-root /var/lib/haxlab/derived/champions/elite-player             --activate-live             --output /tmp/haxlab-live-activation.json
+
+      - name: Verify activated live pointer
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab /opt/haxlab/.venv/bin/python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          root = Path("/var/lib/haxlab/derived/champions/elite-player")
+          current = json.loads((root / "current.json").read_text())
+          live = json.loads((root / "live.json").read_text())
+
+          assert live["version_id"] == current["version_id"], (live, current)
+          assert live["validation_stage"] == "live", live
+          assert live["source_validation_stage"] == "canary", live
+
+          runtime = Path(live["runtime_model_path"])
+          model = Path(live["model_path"])
+          metrics = Path(live["metrics_path"])
+          for path in (runtime, model, metrics):
+              assert path.is_file(), path
+
+          def sha(path):
+              h = hashlib.sha256()
+              with path.open("rb") as handle:
+                  for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                      h.update(chunk)
+              return h.hexdigest()
+
+          assert sha(runtime) == live["runtime_model_sha256"]
+          assert sha(model) == live["model_sha256"]
+
+          print(json.dumps({
+              "version_id": live["version_id"],
+              "validation_stage": live["validation_stage"],
+              "source_validation_stage": live["source_validation_stage"],
+              "runtime_config": live.get("runtime_config"),
+              "previous_live_version_id": live.get("previous_live_version_id"),
+          }, indent=2))
+          PY
+
+      - name: Publish activation evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo cat /tmp/haxlab-live-activation.json > live-activation.json
+          sudo cat /var/lib/haxlab/derived/champions/elite-player/live.json > live-pointer.json
+          echo '## HaxLab Live Activation' >> "$GITHUB_STEP_SUMMARY"
+          cat live-activation.json >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: elite-live-activation
+          path: |
+            live-activation.json
+            live-pointer.json
+          retention-days: 30
