@@ -3,6 +3,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const initAPI = require("node-haxball");
 
 const API = initAPI();
@@ -469,7 +470,7 @@ function runScenarioMatch({
   return result;
 }
 
-function summarize(matches, modelPath, scenarioPath, stadium) {
+function summarize(matches, modelPath, scenarioPath, scenarioSha256, stadium) {
   const avg = (selector) =>
     matches.reduce((sum, row) => sum + selector(row), 0) /
     Math.max(1, matches.length);
@@ -515,6 +516,7 @@ function summarize(matches, modelPath, scenarioPath, stadium) {
     schema: "haxlab-elite-replay-scenario-benchmark-v1",
     model_path: modelPath,
     scenario_path: scenarioPath,
+    scenario_sha256: scenarioSha256,
     recovery_enabled: matches.length
       ? Boolean(matches[0].recovery_enabled)
       : null,
@@ -600,7 +602,12 @@ function summarize(matches, modelPath, scenarioPath, stadium) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const runtimeModel = JSON.parse(fs.readFileSync(args.model, "utf8"));
-  const scenarioPayload = JSON.parse(fs.readFileSync(args.scenarios, "utf8"));
+  const scenarioText = fs.readFileSync(args.scenarios, "utf8");
+  const scenarioPayload = JSON.parse(scenarioText);
+  const scenarioSha256 = crypto
+    .createHash("sha256")
+    .update(scenarioText)
+    .digest("hex");
   if (scenarioPayload.schema !== "haxlab-replay-seeded-scenarios-v1") {
     throw new Error("unsupported scenario schema: " + scenarioPayload.schema);
   }
@@ -646,7 +653,13 @@ function main() {
     }
   }
 
-  const summary = summarize(matches, args.model, args.scenarios, stadium);
+  const summary = summarize(
+    matches,
+    args.model,
+    args.scenarios,
+    scenarioSha256,
+    stadium,
+  );
   const rendered = JSON.stringify(summary, null, 2) + "\n";
   if (args.output) {
     fs.mkdirSync(path.dirname(args.output), { recursive: true });
