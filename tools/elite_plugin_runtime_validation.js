@@ -25,7 +25,7 @@ function usage() {
       "--pointer current.json --fallback-model-dir DIR " +
       "--stadium stadium.hbs --scenarios scenarios.json " +
       "[--max-scenarios 4] [--seconds 30] [--sample-every 6] " +
-      "[--output result.json]",
+      "[--minimum-validation-stage canary] [--output result.json]",
   );
   process.exit(2);
 }
@@ -35,6 +35,7 @@ function parseArgs(argv) {
     maxScenarios: 4,
     seconds: 30,
     sampleEvery: 6,
+    minimumValidationStage: "canary",
     output: null,
   };
   for (let i = 0; i < argv.length; i += 1) {
@@ -54,6 +55,9 @@ function parseArgs(argv) {
     }
     else if (key === "--sample-every") {
       result.sampleEvery = Number(value); i += 1;
+    }
+    else if (key === "--minimum-validation-stage") {
+      result.minimumValidationStage = String(value || "canary"); i += 1;
     }
     else if (key === "--output") { result.output = value; i += 1; }
     else if (key === "--help" || key === "-h") usage();
@@ -132,6 +136,7 @@ function createPluginRoom({
   stadium,
   eliteTeamId,
   sampleEvery,
+  minimumValidationStage,
 }) {
   let plugin = null;
   let gameStarts = 0;
@@ -159,8 +164,8 @@ function createPluginRoom({
   plugin.room = adapter;
   plugin.championPointer = pointerPath;
   plugin.modelDir = fallbackModelDir;
-  // Runtime validation intentionally exercises a canary-approved champion.
-  plugin.minimumChampionValidationStage = "canary";
+  plugin.minimumChampionValidationStage =
+    String(minimumValidationStage || "canary");
   plugin.sampleEveryTicks = sampleEvery;
   plugin.teamId = eliteTeamId;
   plugin.autoSpawn = false;
@@ -232,6 +237,7 @@ function runCase({
   eliteTeamId,
   seconds,
   sampleEvery,
+  minimumValidationStage,
 }) {
   const context = createPluginRoom({
     pointerPath,
@@ -239,6 +245,7 @@ function runCase({
     stadium,
     eliteTeamId,
     sampleEvery,
+    minimumValidationStage,
   });
   const {
     sandbox,
@@ -300,6 +307,7 @@ function runBoundaryProbe({
   fallbackModelDir,
   stadium,
   sampleEvery,
+  minimumValidationStage,
 }) {
   const context = createPluginRoom({
     pointerPath,
@@ -307,6 +315,7 @@ function runBoundaryProbe({
     stadium,
     eliteTeamId: 1,
     sampleEvery,
+    minimumValidationStage,
   });
   const { sandbox, plugin } = context;
 
@@ -502,6 +511,7 @@ function main() {
       fallbackModelDir: args.fallbackModelDir,
       stadium,
       sampleEvery: args.sampleEvery,
+      minimumValidationStage: args.minimumValidationStage,
     });
 
     const cases = [];
@@ -517,6 +527,7 @@ function main() {
             eliteTeamId,
             seconds: args.seconds,
             sampleEvery: args.sampleEvery,
+            minimumValidationStage: args.minimumValidationStage,
           }),
         );
       }
