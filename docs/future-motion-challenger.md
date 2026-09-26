@@ -19,3 +19,9 @@ eligible to break a stationary action when:
 Promotion is evaluated against the existing champion on identical replay-seeded
 states. Immediate frozen-holdout skill must remain essentially intact and
 closed-loop progression/territory may not materially regress.
+
+
+## Concurrency note
+
+Future-challenger runs are isolated from ordinary branch pushes so unrelated
+scenario/audit commits cannot cancel an active model training job.
