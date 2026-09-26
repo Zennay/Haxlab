@@ -20,12 +20,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Create isolated smoke environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .frozen-smoke-venv
+          python3 -m venv .frozen-smoke-venv
+          .frozen-smoke-venv/bin/pip install --upgrade pip
+          .frozen-smoke-venv/bin/pip install -e '.[dev]'
+
       - name: Compile frozen future and promotion tooling
         shell: bash
         run: |
           set -euo pipefail
           PYTHONPATH="$GITHUB_WORKSPACE/src" \
-            /opt/haxlab/.venv/bin/python -m py_compile \
+            .frozen-smoke-venv/bin/python -m py_compile \
             "$GITHUB_WORKSPACE/src/haxlab/learning/frozen_future.py" \
             "$GITHUB_WORKSPACE/src/haxlab/evaluation/champion_registry.py" \
             "$GITHUB_WORKSPACE/src/haxlab/evaluation/scenario_source.py"
@@ -35,7 +44,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONPATH="$GITHUB_WORKSPACE/src" \
-            /opt/haxlab/.venv/bin/python -m pytest -q \
+            .frozen-smoke-venv/bin/python -m pytest -q \
             "$GITHUB_WORKSPACE/tests/test_frozen_future.py" \
             "$GITHUB_WORKSPACE/tests/test_champion_registry.py" \
             "$GITHUB_WORKSPACE/tests/test_scenario_source.py"
