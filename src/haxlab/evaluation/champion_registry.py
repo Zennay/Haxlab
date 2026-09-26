@@ -248,6 +248,13 @@ def _validation_summary(evidence: dict[str, Any]) -> dict[str, Any]:
         "total_runtime_errors",
         "max_assist_rate",
         "max_side_gap",
+        "case_count",
+        "policy_decisions",
+        "inputs_sent",
+        "future_assists",
+        "forbidden_role_future_assists",
+        "runtime_errors",
+        "roles",
     )
     return {key: aggregate[key] for key in keep if key in aggregate}
 
