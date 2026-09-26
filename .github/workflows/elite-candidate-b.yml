@@ -231,23 +231,46 @@ jobs:
           cp /tmp/candidate-b-evolution.json candidate-b-evolution.json
 
       - name: Collect candidate B evidence
+        if: always()
         shell: bash
         run: |
-          set -euo pipefail
-          sudo cat /var/lib/haxlab/derived/training/elite-player-candidate-b/pipeline-summary.json \
-            > candidate-b-pipeline-summary.json
-          sudo cat /var/lib/haxlab/derived/training/elite-player-candidate-b/sandbox-benchmark.json \
-            > candidate-b-sandbox-benchmark.json
-          sudo cat /var/lib/haxlab/derived/training/elite-player-candidate-b/replay-seeded-duel.json \
-            > candidate-b-replay-seeded-duel.json
-          cp /tmp/haxlab-candidate-b-replay.json candidate-b-replay-benchmark.json
-          cp /tmp/haxlab-live-champion-replay.json live-champion-replay-benchmark.json
-          cp /tmp/haxlab-candidate-b-scenario-source.json candidate-b-scenario-source.json
-          cp /tmp/haxlab-candidate-b-replay-scenarios.json candidate-b-replay-scenarios.json
-          cp /tmp/haxlab-candidate-b-replay-stadium.hbs candidate-b-replay-stadium.hbs
+          set -u
+
+          copy_root_file() {
+            local src="$1"
+            local dst="$2"
+            if sudo test -f "$src"; then
+              sudo cat "$src" > "$dst"
+            fi
+          }
+
+          copy_tmp_file() {
+            local src="$1"
+            local dst="$2"
+            if [ -f "$src" ]; then
+              cp "$src" "$dst"
+            fi
+          }
+
+          copy_root_file \
+            /var/lib/haxlab/derived/training/elite-player-candidate-b/pipeline-summary.json \
+            candidate-b-pipeline-summary.json
+          copy_root_file \
+            /var/lib/haxlab/derived/training/elite-player-candidate-b/sandbox-benchmark.json \
+            candidate-b-sandbox-benchmark.json
+          copy_root_file \
+            /var/lib/haxlab/derived/training/elite-player-candidate-b/replay-seeded-duel.json \
+            candidate-b-replay-seeded-duel.json
+          copy_tmp_file /tmp/haxlab-candidate-b-replay.json candidate-b-replay-benchmark.json
+          copy_tmp_file /tmp/haxlab-live-champion-replay.json live-champion-replay-benchmark.json
+          copy_tmp_file /tmp/haxlab-candidate-b-scenario-source.json candidate-b-scenario-source.json
+          copy_tmp_file /tmp/haxlab-candidate-b-replay-scenarios.json candidate-b-replay-scenarios.json
+          copy_tmp_file /tmp/haxlab-candidate-b-replay-stadium.hbs candidate-b-replay-stadium.hbs
+          copy_tmp_file /tmp/candidate-b-evolution.json candidate-b-evolution.json
+          copy_tmp_file /tmp/haxlab-candidate-b.log candidate-b-training.log
 
           CHAMPIONS=/var/lib/haxlab/derived/training/elite-champions
-          if [ -f "$CHAMPIONS/registry.json" ]; then
+          if sudo test -f "$CHAMPIONS/registry.json"; then
             sudo cat "$CHAMPIONS/registry.json" > champion-registry.json
           else
             echo '{"schema":"haxlab-elite-champion-registry-v1","current":null,"history":[]}' \
@@ -256,24 +279,26 @@ jobs:
 
           {
             echo '## HaxLab Candidate B Evolution'
-            echo
-            echo '### Frozen holdout'
-            echo '```json'
-            cat candidate-b-pipeline-summary.json
-            echo '```'
-            echo
-            echo '### Scripted sandbox'
-            echo '```json'
-            cat candidate-b-sandbox-benchmark.json
-            echo '```'
-            echo
-            echo '### Evolution / champion decision'
-            echo '```json'
-            cat candidate-b-evolution.json
-            echo '```'
+            for spec in \
+              'Frozen holdout:candidate-b-pipeline-summary.json' \
+              'Scripted sandbox:candidate-b-sandbox-benchmark.json' \
+              'Replay-seeded duel:candidate-b-replay-seeded-duel.json' \
+              'Evolution / champion decision:candidate-b-evolution.json'
+            do
+              title="${spec%%:*}"
+              file="${spec#*:}"
+              if [ -f "$file" ]; then
+                echo
+                echo "### $title"
+                echo '```json'
+                cat "$file"
+                echo '```'
+              fi
+            done
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload evolution evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: elite-candidate-b-evolution
@@ -287,5 +312,7 @@ jobs:
             candidate-b-replay-scenarios.json
             candidate-b-replay-stadium.hbs
             candidate-b-evolution.json
+            candidate-b-training.log
             champion-registry.json
+          if-no-files-found: warn
           retention-days: 30
