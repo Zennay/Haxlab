@@ -32,6 +32,8 @@ jobs:
             "$GITHUB_WORKSPACE/src/haxlab/evaluation/champion_registry.py"
           node --check "$GITHUB_WORKSPACE/tools/select_future_assist.js"
           node --check "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js"
+          node "$GITHUB_WORKSPACE/tests/test_frozen_future_role_gate.js"
+          node "$GITHUB_WORKSPACE/tests/test_elite_champion_config.js"
 
       - name: Verify frozen champion evidence
         shell: bash
