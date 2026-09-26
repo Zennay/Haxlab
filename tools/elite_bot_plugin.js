@@ -12,6 +12,7 @@ const {
   enforceKickRange,
   recoveryAction,
   shouldRecoverFromStall,
+  futureMotionAssist,
 } = require("./elite_tactics");
 
 module.exports = function(API) {
@@ -60,6 +61,28 @@ module.exports = function(API) {
     range: { min: 1, max: 2, step: 1 },
     description: "Team for the four AI players (1 red, 2 blue).",
   });
+  this.defineVariable({
+    name: "enableFutureMotion",
+    type: VariableType.Boolean,
+    value: process.env.HAXLAB_ELITE_FUTURE_MOTION === "1",
+    description:
+      "Allow a learned future-motion head to break confident far-ball stalls. Off until challenger promotion.",
+  });
+  this.defineVariable({
+    name: "futureMotionConfidence",
+    type: VariableType.Float,
+    value: 0.45,
+    range: { min: 0, max: 1, step: 0.05 },
+    description: "Minimum future-motion confidence before learned assist can act.",
+  });
+  this.defineVariable({
+    name: "futureMotionMinDistance",
+    type: VariableType.Integer,
+    value: 80,
+    range: { min: 0, max: 800, step: 10 },
+    description: "Minimum ball distance before learned future-motion can break a stall.",
+  });
+
   this.defineVariable({
     name: "enableRecovery",
     type: VariableType.Boolean,
@@ -229,7 +252,7 @@ module.exports = function(API) {
           continue;
         }
 
-        const action = ensurePolicy().act({
+        let action = ensurePolicy().act({
           agent_id: String(bot.id),
           role: bot.role,
           features,
@@ -239,6 +262,12 @@ module.exports = function(API) {
           Number(features.ball_dx || 0),
           Number(features.ball_dy || 0),
         );
+        if (that.enableFutureMotion) {
+          action = futureMotionAssist(action, ballDistance, {
+            minimumConfidence: Number(that.futureMotionConfidence) || 0.45,
+            minimumBallDistance: Number(that.futureMotionMinDistance) || 80,
+          });
+        }
         const stationary =
           Number(action.dir_x || 0) === 0 &&
           Number(action.dir_y || 0) === 0;
