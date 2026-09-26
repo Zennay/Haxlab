@@ -219,6 +219,29 @@ jobs:
             conf_0_75 /tmp/haxlab-future-assisted-0_75.json \
             /tmp/haxlab-future-promotion.json
 
+      - name: Promote only if all gates pass
+        shell: bash
+        run: |
+          set -euo pipefail
+          if /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          p = json.load(open("/tmp/haxlab-future-promotion.json"))
+          raise SystemExit(0 if p.get("promote_future_challenger") else 1)
+          PY
+          then
+            sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" GITHUB_SHA="$GITHUB_SHA" \
+              /opt/haxlab/.venv/bin/python -m haxlab.evaluation.champion_registry \
+              --model-dir /var/lib/haxlab/derived/training/elite-player-future-challenger/model \
+              --promotion-evidence /tmp/haxlab-future-promotion.json \
+              --registry-root /var/lib/haxlab/derived/champions/elite-player \
+              --candidate-name future-motion-v01 \
+              --output /tmp/haxlab-future-registry-promotion.json
+          else
+            echo '{"promoted": false, "reason": "promotion_gate_rejected"}' \
+              > /tmp/haxlab-future-registry-promotion.json
+            echo "Future challenger rejected by promotion gate; current champion unchanged."
+          fi
+
       - name: Publish evidence
         shell: bash
         run: |
@@ -232,9 +255,13 @@ jobs:
           cp /tmp/haxlab-future-assisted-0_60.json future-assisted-0_60.json
           cp /tmp/haxlab-future-assisted-0_75.json future-assisted-0_75.json
           cp /tmp/haxlab-future-promotion.json future-promotion.json
+          cp /tmp/haxlab-future-registry-promotion.json future-registry-promotion.json
 
           echo '## HaxLab Future Motion Challenger' >> "$GITHUB_STEP_SUMMARY"
           cat future-promotion.json >> "$GITHUB_STEP_SUMMARY"
+          echo >> "$GITHUB_STEP_SUMMARY"
+          echo '### Registry decision' >> "$GITHUB_STEP_SUMMARY"
+          cat future-registry-promotion.json >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -249,4 +276,5 @@ jobs:
             future-assisted-0_60.json
             future-assisted-0_75.json
             future-promotion.json
+            future-registry-promotion.json
           retention-days: 30
