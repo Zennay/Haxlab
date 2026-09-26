@@ -192,3 +192,58 @@ def test_existing_champion_runs_duel_before_promotion(
     assert second["promotion"]["promoted"] is True
     current = json.loads(registry.read_text(encoding="utf-8"))["current"]
     assert current["candidate_id"] == "candidate-b"
+
+def test_existing_champion_can_use_precomputed_duel_evidence(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    metrics = _write_json(tmp_path / "metrics.json", _metrics())
+    sandbox = _write_json(tmp_path / "sandbox.json", _sandbox())
+    registry = tmp_path / "champions" / "registry.json"
+    champions_root = registry.parent
+
+    first = evolution.run_evolution_cycle(
+        registry_path=registry,
+        champions_root=champions_root,
+        candidate_id="candidate-a",
+        candidate_model_dir=_model_dir(tmp_path, "candidate-a-evidence"),
+        metrics_path=metrics,
+        sandbox_path=sandbox,
+        stadium_path=tmp_path / "unused.hbs",
+        duel_script=tmp_path / "unused.js",
+    )
+    assert first["promotion"]["promoted"] is True
+
+    candidate_b_model = _model_dir(tmp_path, "candidate-b-evidence")
+    current = json.loads(registry.read_text(encoding="utf-8"))["current"]
+    duel = _duel()
+    duel["schema"] = "haxlab-elite-replay-seeded-duel-v1"
+    duel["evaluation_mode"] = "replay_seeded_proxy_v1"
+    duel["challenger_model"] = str(candidate_b_model / "runtime-model.json")
+    duel["champion_model"] = str(
+        Path(current["model_dir"]) / "runtime-model.json"
+    )
+    duel["scenario_sha256"] = "a" * 64
+    evidence = _write_json(tmp_path / "replay-seeded-duel.json", duel)
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("subprocess duel must not run when evidence is supplied")
+
+    monkeypatch.setattr(evolution.subprocess, "run", fail_if_called)
+
+    second = evolution.run_evolution_cycle(
+        registry_path=registry,
+        champions_root=champions_root,
+        candidate_id="candidate-b-evidence",
+        candidate_model_dir=candidate_b_model,
+        metrics_path=metrics,
+        sandbox_path=sandbox,
+        stadium_path=tmp_path / "unused.hbs",
+        duel_script=tmp_path / "unused.js",
+        duel_evidence_path=evidence,
+        source_ref="sha-b-evidence",
+    )
+
+    assert second["duel_path"] == str(evidence)
+    assert second["duel_command"] is None
+    assert second["promotion"]["promoted"] is True
