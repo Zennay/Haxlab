@@ -1,0 +1,339 @@
+name: Elite Candidate E Future Weight
+
+on:
+  push:
+    branches:
+      - experiment/candidate-e-future-weight-v01
+
+permissions:
+  contents: read
+
+jobs:
+  candidate-e:
+    if: contains(github.event.head_commit.message, '[candidate-e]')
+    concurrency:
+      group: haxlab-elite-candidate-e
+      cancel-in-progress: false
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify frozen Candidate E inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src"             /opt/haxlab/.venv/bin/python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          expected = {
+              Path("/var/lib/haxlab/derived/training/elite-player-candidate-b/shards/train/_index.json"):
+                  "920ca18fdbc3682130307c01f91d61ad745d6642824f19962c6a2c614ffe1923",
+              Path("/var/lib/haxlab/derived/training/elite-player-candidate-b/shards/validation/_index.json"):
+                  "baaa00830ec3906640e893344262282d931de15b7a1c5c63485df1da44d6ba27",
+              Path("/var/lib/haxlab/derived/training/elite-player-candidate-b/shards/holdout/_index.json"):
+                  "a80b9789547ba3befd993bfd4c62c84b2c2c999a6d9283d9b2ef3c08451083fe",
+              Path("/var/lib/haxlab/derived/evaluation/promotion-v2-frozen-suite-v2/frozen-manifest.json"):
+                  "fc255d642995638c4d1cc23a709da660c6c0ed3c43ed77a20386f4134415d315",
+          }
+
+          for path, wanted in expected.items():
+              if not path.exists():
+                  raise SystemExit(f"missing frozen input: {path}")
+              actual = hashlib.sha256(path.read_bytes()).hexdigest()
+              if actual != wanted:
+                  raise SystemExit(
+                      f"frozen input hash mismatch: {path}: {actual} != {wanted}"
+                  )
+
+          root = Path("/var/lib/haxlab/derived/evaluation/promotion-v2-frozen-suite-v2")
+          manifest = json.loads((root / "frozen-manifest.json").read_text())
+          descriptor = json.loads(
+              Path("configs/evaluation/promotion-v2-frozen-suite-v2.json").read_text()
+          )
+          if manifest != descriptor:
+              raise SystemExit("repository suite descriptor != frozen VPS manifest")
+          if manifest.get("source_count") != 3:
+              raise SystemExit("Candidate E requires exactly three frozen sources")
+          if manifest.get("scenarios_per_source") != 16:
+              raise SystemExit("Candidate E requires 16 frozen scenarios per source")
+          if manifest.get("total_mirrored_matches") != 96:
+              raise SystemExit("Candidate E requires 96 mirrored replay-duel matches")
+
+          for source in manifest["sources"]:
+              source_root = root / source["id"]
+              for name, wanted in source["files_sha256"].items():
+                  actual = hashlib.sha256((source_root / name).read_bytes()).hexdigest()
+                  if actual != wanted:
+                      raise SystemExit(
+                          f"evaluation file hash mismatch: {source['id']}/{name}"
+                      )
+
+          print(json.dumps({
+              "training_index_hashes_verified": 3,
+              "promotion_manifest_sha256": expected[root / "frozen-manifest.json"],
+              "source_count": manifest["source_count"],
+              "total_mirrored_matches": manifest["total_mirrored_matches"],
+              "replay_sha256s": [
+                  source["replay_sha256"] for source in manifest["sources"]
+              ],
+          }, indent=2))
+          PY
+
+          sha256sum             /var/lib/haxlab/derived/champions/elite-player/current.json             /var/lib/haxlab/derived/champions/elite-player/live.json             > /tmp/candidate-e-production-pointers.before
+
+      - name: Clear stale Candidate E evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab rm -rf             /var/lib/haxlab/derived/training/elite-player-candidate-e             /var/lib/haxlab/derived/training/elite-champions-candidate-e             /var/lib/haxlab/derived/evaluation/candidate-e-arena-v2
+          sudo -u haxlab rm -f             /tmp/haxlab-candidate-e-*.json             /tmp/haxlab-live-e-*.json             /tmp/haxlab-duel-e-*.json             /tmp/haxlab-arena-e-*.json             /tmp/haxlab-arena-e-*-decision.json             /tmp/candidate-e-evolution.json             /tmp/candidate-e-final-decision.json             /tmp/haxlab-candidate-e.log
+          rm -f candidate-e-*.json candidate-e-*.log frozen-manifest.json
+
+      - name: Train Candidate E
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT=/var/lib/haxlab/derived/training/elite-player-candidate-e/model
+          sudo -u haxlab mkdir -p "$OUT"
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src"             /opt/haxlab/.venv/bin/python -m haxlab.learning.elite             --train-index /var/lib/haxlab/derived/training/elite-player-candidate-b/shards/train/_index.json             --validation-index /var/lib/haxlab/derived/training/elite-player-candidate-b/shards/validation/_index.json             --holdout-index /var/lib/haxlab/derived/training/elite-player-candidate-b/shards/holdout/_index.json             --output-dir "$OUT"             --window 8             --sequence-stride 1             --hidden-dim 128             --hidden-dim-2 96             --epochs 3             --batch-size 2048             --learning-rate 0.0008             --l2 0.00001             --future-horizon-steps 5             --future-loss-weight 0.50             --state-jitter-std 0.05             --seed 1337             --progress-path /var/lib/haxlab/derived/training/elite-player-candidate-e/progress.json             | tee /tmp/haxlab-candidate-e.log
+
+      - name: Verify Candidate E training contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+
+          metrics = json.loads(Path(
+              "/var/lib/haxlab/derived/training/elite-player-candidate-e/model/metrics.json"
+          ).read_text())
+          train = metrics.get("training") or {}
+          checks = {
+              "seed": int(train.get("seed") or -1) == 1337,
+              "epochs": int(train.get("epochs_requested") or 0) == 3,
+              "future_horizon_steps": int(train.get("future_horizon_steps") or 0) == 5,
+              "future_loss_weight": abs(
+                  float(train.get("future_loss_weight") or -1.0) - 0.50
+              ) < 1e-12,
+              "holdout_samples": int(
+                  (metrics.get("final_holdout") or {}).get("samples") or 0
+              ) > 0,
+          }
+          print(json.dumps(checks, indent=2))
+          if not all(checks.values()):
+              raise SystemExit("Candidate E training contract mismatch")
+          PY
+
+      - name: Run Candidate E scripted sandbox
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=/var/lib/haxlab/derived/evaluation/promotion-v2-frozen-suite-v2/source-01
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node             "$GITHUB_WORKSPACE/tools/elite_sandbox_benchmark.js"             --model /var/lib/haxlab/derived/training/elite-player-candidate-e/model/runtime-model.json             --stadium "$ROOT/stadium.hbs"             --matches 12             --minutes 1.5             --sample-every 6             --output /var/lib/haxlab/derived/training/elite-player-candidate-e/sandbox-benchmark.json
+
+      - name: Build frozen replay duels
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=/var/lib/haxlab/derived/evaluation/promotion-v2-frozen-suite-v2
+          CAND=/var/lib/haxlab/derived/training/elite-player-candidate-e/model/runtime-model.json
+          LIVE_RUNTIME="$(
+            sudo -u haxlab /opt/haxlab/.venv/bin/python -c               'import json; print(json.load(open("/var/lib/haxlab/derived/champions/elite-player/current.json"))["runtime_model_path"])'
+          )"
+
+          for I in 01 02 03; do
+            SOURCE="$ROOT/source-$I"
+            sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node               "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js"               --model "$CAND"               --stadium "$SOURCE/stadium.hbs"               --scenarios "$SOURCE/scenarios.json"               --max-scenarios 16               --seconds 30               --sample-every 6               --disable-recovery               --output "/tmp/haxlab-candidate-e-$I.json"
+
+            sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node               "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js"               --model "$LIVE_RUNTIME"               --stadium "$SOURCE/stadium.hbs"               --scenarios "$SOURCE/scenarios.json"               --max-scenarios 16               --seconds 30               --sample-every 6               --disable-recovery               --output "/tmp/haxlab-live-e-$I.json"
+
+            sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src"               /opt/haxlab/.venv/bin/python -m haxlab.evaluation.replay_duel               "/tmp/haxlab-candidate-e-$I.json"               "/tmp/haxlab-live-e-$I.json"               --output "/tmp/haxlab-duel-e-$I.json"
+          done
+
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src"             /opt/haxlab/.venv/bin/python -m haxlab.evaluation.multisource_duel             /tmp/haxlab-duel-e-01.json             /tmp/haxlab-duel-e-02.json             /tmp/haxlab-duel-e-03.json             --output /var/lib/haxlab/derived/training/elite-player-candidate-e/multisource-duel.json
+
+      - name: Seed isolated Candidate E registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          CHAMPIONS=/var/lib/haxlab/derived/training/elite-champions-candidate-e
+          LIVE_POINTER=/var/lib/haxlab/derived/champions/elite-player/current.json
+          sudo -u haxlab mkdir -p "$CHAMPIONS"
+          sudo -u haxlab env LIVE_POINTER="$LIVE_POINTER" CHAMPIONS="$CHAMPIONS"             /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          live = json.loads(Path(os.environ["LIVE_POINTER"]).read_text())
+          model_dir = Path(live["model_path"]).parent
+          current = {
+              "candidate_id": f"live-{live['version_id']}",
+              "promoted_at": live.get("updated_at"),
+              "source_ref": live["version_id"],
+              "artifact_dir": str(model_dir),
+              "model_dir": str(model_dir),
+          }
+          root = Path(os.environ["CHAMPIONS"])
+          registry = {
+              "schema": "haxlab-elite-champion-registry-v1",
+              "current": current,
+              "history": [],
+          }
+          (root / "registry.json").write_text(
+              json.dumps(registry, indent=2) + "\n", encoding="utf-8"
+          )
+          (root / "current.json").write_text(
+              json.dumps(current, indent=2) + "\n", encoding="utf-8"
+          )
+          PY
+
+      - name: Evaluate offline sandbox and replay gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          CHAMPIONS=/var/lib/haxlab/derived/training/elite-champions-candidate-e
+          SHORT_SHA="$(echo "$GITHUB_SHA" | cut -c1-8)"
+          set +e
+          sudo -u haxlab env             PYTHONPATH="$GITHUB_WORKSPACE/src"             NODE_PATH=/opt/haxlab/node_modules             /opt/haxlab/.venv/bin/python -m haxlab.learning.evolution             --registry "$CHAMPIONS/registry.json"             --champions-root "$CHAMPIONS"             --candidate-id "candidate-e-$SHORT_SHA"             --candidate-model-dir /var/lib/haxlab/derived/training/elite-player-candidate-e/model             --metrics /var/lib/haxlab/derived/training/elite-player-candidate-e/model/metrics.json             --sandbox /var/lib/haxlab/derived/training/elite-player-candidate-e/sandbox-benchmark.json             --stadium /var/lib/haxlab/derived/evaluation/promotion-v2-frozen-suite-v2/source-01/stadium.hbs             --duel-script "$GITHUB_WORKSPACE/tools/elite_model_duel.js"             --duel-evidence /var/lib/haxlab/derived/training/elite-player-candidate-e/multisource-duel.json             --source-ref "$GITHUB_SHA"             --output /tmp/candidate-e-evolution.json
+          EVOLUTION_CODE=$?
+          set -e
+          echo "evolution exit=$EVOLUTION_CODE"
+          cat /tmp/candidate-e-evolution.json
+
+      - name: Run calibrated Arena v2 on all frozen sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=/var/lib/haxlab/derived/evaluation/promotion-v2-frozen-suite-v2
+          OUT=/var/lib/haxlab/derived/evaluation/candidate-e-arena-v2
+          CAND=/var/lib/haxlab/derived/training/elite-player-candidate-e/model/runtime-model.json
+          B=/var/lib/haxlab/derived/training/elite-player-candidate-b/model/runtime-model.json
+          C=/var/lib/haxlab/derived/training/elite-player-candidate-c/model/runtime-model.json
+          LIVE_RUNTIME="$(
+            sudo -u haxlab /opt/haxlab/.venv/bin/python -c               'import json; print(json.load(open("/var/lib/haxlab/derived/champions/elite-player/current.json"))["runtime_model_path"])'
+          )"
+          sudo -u haxlab mkdir -p "$OUT"
+
+          for P in "$LIVE_RUNTIME" "$B" "$C"; do
+            sudo -u haxlab test -f "$P"
+          done
+
+          for I in 01 02 03; do
+            SOURCE="$ROOT/source-$I"
+            sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node               "$GITHUB_WORKSPACE/tools/elite_closed_loop_arena_v2.js"               --challenger "$CAND"               --champion "$LIVE_RUNTIME"               --stadium "$SOURCE/stadium.hbs"               --scenarios "$SOURCE/scenarios.json"               --partner-model "$LIVE_RUNTIME"               --partner-model "$B"               --partner-model "$C"               --max-scenarios 16               --seconds 30               --sample-every 6               --seed 1337               --output "$OUT/source-$I.json"
+
+            sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src"               /opt/haxlab/.venv/bin/python -m haxlab.evaluation.closed_loop_arena               "$OUT/source-$I.json"               --calibrated               --output "$OUT/source-$I-decision.json"
+          done
+
+      - name: Final Candidate E gate and pointer integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum -c /tmp/candidate-e-production-pointers.before
+
+          sudo -u haxlab /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+
+          evolution = json.loads(Path("/tmp/candidate-e-evolution.json").read_text())
+          arena_root = Path("/var/lib/haxlab/derived/evaluation/candidate-e-arena-v2")
+          arena = []
+          for i in range(1, 4):
+              row = json.loads(
+                  (arena_root / f"source-{i:02d}-decision.json").read_text()
+              )
+              arena.append(row)
+
+          offline_replay_pass = bool(
+              (evolution.get("promotion") or {}).get("promoted")
+          )
+          arena_pass = all(
+              bool(row.get("eligible_for_live_promotion")) for row in arena
+          )
+          result = {
+              "schema": "haxlab-candidate-e-final-decision-v1",
+              "candidate": "candidate-e-future-weight-v01",
+              "future_loss_weight": 0.50,
+              "future_horizon_steps": 5,
+              "state_jitter_std": 0.05,
+              "frozen_suite_manifest_sha256":
+                  "fc255d642995638c4d1cc23a709da660c6c0ed3c43ed77a20386f4134415d315",
+              "offline_sandbox_multisource_pass": offline_replay_pass,
+              "arena_source_passes": [
+                  bool(row.get("eligible_for_live_promotion")) for row in arena
+              ],
+              "arena_v2_all_sources_pass": arena_pass,
+              "eligible_for_private_canary": offline_replay_pass and arena_pass,
+              "production_pointers_changed": False,
+              "live_promoted": False,
+              "decision": (
+                  "eligible_for_private_canary"
+                  if offline_replay_pass and arena_pass
+                  else "rejected"
+              ),
+          }
+          Path("/tmp/candidate-e-final-decision.json").write_text(
+              json.dumps(result, indent=2) + "\n"
+          )
+          print(json.dumps(result, indent=2))
+          PY
+
+      - name: Collect Candidate E evidence
+        if: always()
+        shell: bash
+        run: |
+          set -u
+          ROOT=/var/lib/haxlab/derived/evaluation/promotion-v2-frozen-suite-v2
+          MODEL=/var/lib/haxlab/derived/training/elite-player-candidate-e/model
+          TRAINING=/var/lib/haxlab/derived/training/elite-player-candidate-e
+          ARENA=/var/lib/haxlab/derived/evaluation/candidate-e-arena-v2
+
+          copy_haxlab() {
+            local src="$1"
+            local dst="$2"
+            if sudo -u haxlab test -f "$src"; then
+              sudo -u haxlab cat "$src" > "$dst"
+            fi
+          }
+
+          copy_haxlab "$MODEL/metrics.json" candidate-e-metrics.json
+          copy_haxlab "$TRAINING/sandbox-benchmark.json" candidate-e-sandbox.json
+          copy_haxlab "$TRAINING/multisource-duel.json" candidate-e-multisource-duel.json
+          copy_haxlab "$ROOT/frozen-manifest.json" frozen-manifest.json
+
+          for I in 01 02 03; do
+            [ -f "/tmp/haxlab-duel-e-$I.json" ] &&               cp "/tmp/haxlab-duel-e-$I.json" "candidate-e-duel-$I.json"
+            [ -f "/tmp/haxlab-candidate-e-$I.json" ] &&               cp "/tmp/haxlab-candidate-e-$I.json" "candidate-e-benchmark-$I.json"
+            [ -f "/tmp/haxlab-live-e-$I.json" ] &&               cp "/tmp/haxlab-live-e-$I.json" "live-benchmark-$I.json"
+            copy_haxlab "$ARENA/source-$I.json" "candidate-e-arena-$I.json"
+            copy_haxlab "$ARENA/source-$I-decision.json"               "candidate-e-arena-$I-decision.json"
+          done
+
+          [ -f /tmp/candidate-e-evolution.json ] &&             cp /tmp/candidate-e-evolution.json candidate-e-evolution.json
+          [ -f /tmp/candidate-e-final-decision.json ] &&             cp /tmp/candidate-e-final-decision.json candidate-e-final-decision.json
+          [ -f /tmp/haxlab-candidate-e.log ] &&             cp /tmp/haxlab-candidate-e.log candidate-e-training.log
+
+      - name: Upload Candidate E evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: elite-candidate-e-future-weight
+          path: |
+            candidate-e-metrics.json
+            candidate-e-sandbox.json
+            candidate-e-multisource-duel.json
+            candidate-e-duel-*.json
+            candidate-e-benchmark-*.json
+            live-benchmark-*.json
+            candidate-e-arena-*.json
+            candidate-e-evolution.json
+            candidate-e-final-decision.json
+            candidate-e-training.log
+            frozen-manifest.json
+          if-no-files-found: warn
+          retention-days: 30
