@@ -209,14 +209,14 @@ jobs:
             --model /var/lib/haxlab/derived/training/elite-player-candidate-b/model/runtime-model.json \
             --stadium /tmp/haxlab-candidate-b-replay-stadium.hbs \
             --scenarios /tmp/haxlab-candidate-b-replay-scenarios.json \
-            --max-scenarios 8 --seconds 30 --sample-every 6 \
+            --max-scenarios 16 --seconds 30 --sample-every 6 \
             --disable-recovery --output /tmp/haxlab-candidate-b-replay.json
           sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
             "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js" \
             --model "$LIVE_RUNTIME" \
             --stadium /tmp/haxlab-candidate-b-replay-stadium.hbs \
             --scenarios /tmp/haxlab-candidate-b-replay-scenarios.json \
-            --max-scenarios 8 --seconds 30 --sample-every 6 \
+            --max-scenarios 16 --seconds 30 --sample-every 6 \
             --disable-recovery --output /tmp/haxlab-live-champion-replay.json
           sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
             /opt/haxlab/.venv/bin/python -m haxlab.evaluation.replay_duel \
