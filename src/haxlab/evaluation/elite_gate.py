@@ -113,6 +113,20 @@ def decide_elite_live_gate(
     if calibration and not bool(calibration.get("constraint_satisfied", False)):
         failures.append("validation_kick_rate_constraint_failed")
 
+    role_calibrations = training.get("kick_calibration_by_role") or {}
+    role_calibration_checks: dict[str, bool] = {}
+    for role in ("gk", "dm", "am", "st"):
+        row = role_calibrations.get(role)
+        if not row:
+            # Backward-compatible with v0.1 models trained before per-role
+            # calibration was introduced.
+            continue
+        passed = bool(row.get("constraint_satisfied", False))
+        role_calibration_checks[role] = passed
+        if not passed:
+            failures.append(f"role_kick_rate_constraint_failed:{role}")
+    checks["role_kick_calibration_constraints"] = role_calibration_checks
+
     if failures:
         return EliteLiveGateDecision(
             eligible_for_live_test=False,
