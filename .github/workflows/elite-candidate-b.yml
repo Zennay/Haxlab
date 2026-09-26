@@ -20,6 +20,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Clear stale Candidate B evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f \
+            /tmp/haxlab-candidate-b.log \
+            /tmp/haxlab-candidate-b-stadium.hbs \
+            /tmp/haxlab-candidate-b-scenario-source.json \
+            /tmp/haxlab-candidate-b-replay-stadium.hbs \
+            /tmp/haxlab-candidate-b-replay-scenarios.json \
+            /tmp/haxlab-candidate-b-replay.json \
+            /tmp/haxlab-live-champion-replay.json \
+            /tmp/candidate-b-evolution.json
+          rm -f \
+            candidate-b-pipeline-summary.json \
+            candidate-b-sandbox-benchmark.json \
+            candidate-b-replay-seeded-duel.json \
+            candidate-b-replay-benchmark.json \
+            live-champion-replay-benchmark.json \
+            candidate-b-scenario-source.json \
+            candidate-b-replay-scenarios.json \
+            candidate-b-replay-stadium.hbs \
+            candidate-b-evolution.json \
+            candidate-b-training.log \
+            champion-registry.json
+
       - name: Build canonical elite leaderboard
         shell: bash
         run: |
