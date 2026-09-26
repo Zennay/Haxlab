@@ -306,6 +306,23 @@ wear = ROOT / "wear-os"
 env = dict(os.environ)
 if (ROOT / ".watch-token").exists():
     env["ZENNAY_WATCH_TOKEN"] = (ROOT / ".watch-token").read_text().strip()
+
+# Self-hosted Actions runner may have a minimal PATH. Resolve/install JDK 17 without touching project services.
+java_candidates = []
+for base in [Path("/usr/lib/jvm"), Path("/opt"), Path("/home/ubuntu")]:
+    if base.exists():
+        java_candidates.extend(base.glob("**/bin/java"))
+java_bin = next((p for p in java_candidates if p.is_file() and os.access(p, os.X_OK)), None)
+if not java_bin:
+    run(["sudo","apt-get","update"])
+    run(["sudo","apt-get","install","-y","openjdk-17-jdk-headless"])
+    java_candidates = list(Path("/usr/lib/jvm").glob("**/bin/java"))
+    java_bin = next((p for p in java_candidates if p.is_file() and os.access(p, os.X_OK)), None)
+if not java_bin:
+    raise RuntimeError("JDK 17 not found after bootstrap")
+env["JAVA_HOME"] = str(java_bin.parent.parent)
+env["PATH"] = str(java_bin.parent) + os.pathsep + env.get("PATH","")
+
 watch_build = "skipped-no-gradle"
 if (wear / "gradlew").exists():
     run([str(wear/"gradlew"),":app:assembleDebug"], env=env)
