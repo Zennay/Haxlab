@@ -90,6 +90,9 @@ class ElitePolicy:
 
         sequence = np.stack(values[-self.window :], axis=0)
         normalized = ((sequence - self.mean) / self.std).astype(np.float32)
+        current_normalized = ((raw - self.mean) / self.std).astype(np.float32)
+        ood_mean_abs = float(np.mean(np.abs(current_normalized)))
+        ood_max_abs = float(np.max(np.abs(current_normalized)))
         flat = normalized.reshape(1, -1)
         role_one_hot = np.zeros((1, 4), dtype=np.float32)
         role_one_hot[0, role_id] = 1.0
@@ -124,6 +127,8 @@ class ElitePolicy:
             "direction_probability": float(dir_prob[0, direction_class]),
             "history_frames": len(history),
             "window": self.window,
+            "ood_mean_abs_z": ood_mean_abs,
+            "ood_max_abs_z": ood_max_abs,
         }
 
 
