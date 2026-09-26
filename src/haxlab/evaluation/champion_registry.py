@@ -226,6 +226,7 @@ VALIDATION_STAGE_ORDER = {
     "promotion": 0,
     "multi_replay": 10,
     "canary": 20,
+    "runtime": 25,
     "live": 30,
 }
 
