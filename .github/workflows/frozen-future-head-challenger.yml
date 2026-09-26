@@ -273,7 +273,7 @@ jobs:
               'echo '"'"'{"promoted": false, "reason": "promotion_gate_rejected"}'"'"' > /var/lib/haxlab/derived/champions/elite-player/last-promotion.json'
           fi
 
-      - name: Validate promoted frozen champion pointer
+      - name: Validate frozen champion pointer
         shell: bash
         run: |
           set -euo pipefail
@@ -284,31 +284,56 @@ jobs:
 
           root = Path("/var/lib/haxlab/derived/champions/elite-player")
           pointer = json.loads((root / "current.json").read_text())
+          evidence = json.loads(Path("/tmp/haxlab-frozen-promotion.json").read_text())
           promotion = json.loads((root / "last-promotion.json").read_text())
 
-          assert promotion.get("promoted") is True, promotion
-          assert pointer.get("version_id") == promotion.get("version_id"), (pointer, promotion)
-          assert str(pointer.get("version_id") or "").startswith("frozen-future-v01-"), pointer
+          assert pointer.get("schema") == "haxlab-champion-pointer-v1", pointer
+          manifest_path = Path(pointer["manifest_path"])
+          assert manifest_path.is_file(), manifest_path
 
-          cfg = pointer.get("runtime_config") or {}
-          assert abs(float(cfg.get("minimum_confidence")) - 0.68) < 1e-12, cfg
-          assert int(cfg.get("minimum_ball_distance")) == 80, cfg
-
-          runtime_path = Path(pointer["runtime_model_path"])
-          metrics_path = Path(pointer["metrics_path"])
+          runtime_path = Path(
+              pointer.get("runtime_model_path")
+              or manifest_path.parent / "runtime-model.json"
+          )
+          metrics_path = Path(
+              pointer.get("metrics_path")
+              or manifest_path.parent / "metrics.json"
+          )
           assert runtime_path.is_file(), runtime_path
           assert metrics_path.is_file(), metrics_path
 
+          if evidence.get("promote_future_challenger"):
+              selected = evidence.get("selected") or {}
+              expected_config = selected.get("future_assist_config") or {}
+              assert promotion.get("promoted") is True, promotion
+              assert pointer.get("version_id") == promotion.get("version_id"), (
+                  pointer,
+                  promotion,
+              )
+              assert str(pointer.get("version_id") or "").startswith(
+                  "frozen-future-v01-"
+              ), pointer
+              assert pointer.get("runtime_config") == expected_config, (
+                  pointer.get("runtime_config"),
+                  expected_config,
+              )
+
           runtime = json.loads(runtime_path.read_text())
           weights = runtime.get("weights") or {}
-          assert isinstance(weights.get("wf"), list) and weights["wf"], "future head wf missing"
-          assert isinstance(weights.get("bf"), list) and weights["bf"], "future head bf missing"
+          assert isinstance(weights.get("wf"), list) and weights["wf"], (
+              "future head wf missing"
+          )
+          assert isinstance(weights.get("bf"), list) and weights["bf"], (
+              "future head bf missing"
+          )
 
           print(json.dumps({
-              "version_id": pointer["version_id"],
-              "runtime_config": cfg,
+              "version_id": pointer.get("version_id"),
+              "runtime_config": pointer.get("runtime_config"),
               "runtime_model_path": str(runtime_path),
               "future_head_available": True,
+              "selector_promoted": bool(evidence.get("promote_future_challenger")),
+              "registry_promoted": promotion.get("promoted"),
               "idempotent": promotion.get("idempotent"),
           }, indent=2))
           PY
