@@ -34,6 +34,16 @@ class ElitePolicy:
         self.kick_threshold = float(
             self.metadata["training"]["calibrated_kick_threshold"]
         )
+        self.kick_thresholds_by_role = {
+            ROLE_IDS[name]: float(value)
+            for name, value in (
+                self.metadata["training"].get(
+                    "calibrated_kick_thresholds_by_role",
+                    {},
+                )
+            ).items()
+            if name in ROLE_IDS
+        }
         self.kick_max_distance = float(
             (self.metadata.get("runtime") or {}).get("kick_max_distance", 31.0)
         )
@@ -99,12 +109,15 @@ class ElitePolicy:
         direction_class = int(dir_prob[0].argmax())
         dir_x, dir_y = direction_from_class(direction_class)
         kick_probability = float(kick_prob[0])
+        role_kick_threshold = float(
+            self.kick_thresholds_by_role.get(role_id, self.kick_threshold)
+        )
         ball_distance = math.hypot(
             float(features.get("ball_dx", 0.0)),
             float(features.get("ball_dy", 0.0)),
         )
         kick_in_range = ball_distance <= self.kick_max_distance
-        kick_requested = kick_probability >= self.kick_threshold
+        kick_requested = kick_probability >= role_kick_threshold
         kick = kick_requested and kick_in_range
 
         return {
@@ -115,7 +128,8 @@ class ElitePolicy:
             "dir_y": int(dir_y),
             "kick": bool(kick),
             "kick_probability": kick_probability,
-            "kick_threshold": self.kick_threshold,
+            "kick_threshold": role_kick_threshold,
+            "global_kick_threshold": self.kick_threshold,
             "kick_requested": bool(kick_requested),
             "kick_in_range": bool(kick_in_range),
             "kick_max_distance": self.kick_max_distance,
@@ -152,6 +166,11 @@ def _serve_stdio(policy: ElitePolicy) -> int:
                     "schema": policy.metadata.get("schema"),
                     "window": policy.window,
                     "kick_threshold": policy.kick_threshold,
+                    "kick_thresholds_by_role": {
+                        ROLE_NAMES: policy.kick_thresholds_by_role.get(role_id)
+                        for ROLE_NAMES, role_id in ROLE_IDS.items()
+                        if role_id in policy.kick_thresholds_by_role
+                    },
                     "kick_max_distance": policy.kick_max_distance,
                     "input_columns": policy.input_columns,
                 }
