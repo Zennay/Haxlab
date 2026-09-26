@@ -1,5 +1,5 @@
 from pathlib import Path
-import json, os, re, shutil, subprocess, time, urllib.request
+import json, os, re, shutil, subprocess, time, urllib.request, zipfile
 
 ROOT = Path("/home/ubuntu/zennay-cloud")
 SRC = Path(__file__).resolve().parent
@@ -205,6 +205,18 @@ if "import enhancements" not in s:
     )
     server.write_text(s)
 
+
+# Enforce local-only resource mutation until dashboard authentication exists.
+s = server.read_text()
+needle = "            if u.path=='/api/resource-priority':\n                project=str(payload.get('project') or '')\n"
+if needle in s:
+    s = s.replace(
+        needle,
+        "            if u.path=='/api/resource-priority':\n                if self.client_address[0] not in ('127.0.0.1','::1'):return self.reply({'error':'Alleen lokaal'},403)\n                project=str(payload.get('project') or '')\n",
+        1
+    )
+    server.write_text(s)
+
 # Add UI enhancement assets after the existing app/style.
 index = ROOT / "public/index.html"
 html = index.read_text()
@@ -309,11 +321,30 @@ else:
         Path("/home/ubuntu/.local/bin/gradle"),
     ]
     gradle_bin = next((p for p in candidates if p.exists()), None)
-    if gradle_bin:
-        run([str(gradle_bin),"-p",str(wear),":app:assembleDebug"], env=env)
-        watch_build = "built-found-gradle"
+    if not gradle_bin:
+        root_build = (wear / "build.gradle.kts").read_text()
+        agp = re.search(r'com\\.android\\.application"\\) version "([0-9.]+)"', root_build)
+        major = int((agp.group(1) if agp else "8").split(".")[0])
+        gradle_version = "9.1.0" if major >= 9 else "8.13"
+        cache = Path("/home/ubuntu/.cache/zennay-gradle")
+        gradle_home = cache / ("gradle-" + gradle_version)
+        gradle_bin = gradle_home / "bin/gradle"
+        if not gradle_bin.exists():
+            cache.mkdir(parents=True, exist_ok=True)
+            archive = cache / ("gradle-" + gradle_version + "-bin.zip")
+            if not archive.exists():
+                urllib.request.urlretrieve(
+                    "https://services.gradle.org/distributions/gradle-" + gradle_version + "-bin.zip",
+                    archive
+                )
+            with zipfile.ZipFile(archive) as z:
+                z.extractall(cache)
+        if not gradle_bin.exists():
+            raise RuntimeError("Gradle bootstrap failed")
+        watch_build = "built-bootstrapped-gradle-" + gradle_version
     else:
-        watch_build = "source-updated-build-tool-not-found"
+        watch_build = "built-found-gradle"
+    run([str(gradle_bin),"-p",str(wear),":app:assembleDebug"], env=env)
 
 # Restart only the dashboard backend.
 run(["sudo","systemctl","restart","zennay-cloud.service"])
