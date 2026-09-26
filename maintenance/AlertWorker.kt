@@ -47,7 +47,7 @@ class AlertWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
                 )
                 seen += id
             }
-            prefs.edit().putStringSet("seen", if (seen.size > 200) seen.takeLast(200).toSet() else seen).apply()
+            prefs.edit().putStringSet("seen", if (seen.size > 200) seen.toList().takeLast(200).toSet() else seen).apply()
         }
         Result.success()
     }
