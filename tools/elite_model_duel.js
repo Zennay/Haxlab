@@ -101,6 +101,37 @@ function canonicalPosition(player, teamId) {
   return (teamId === 1 ? 1 : -1) * num(disc.pos.x);
 }
 
+function nearestTeamToBall(players, ball) {
+  if (!ball?.pos) return 0;
+  let bestTeam = 0;
+  let bestDistance2 = Infinity;
+  for (const player of players) {
+    const disc = discOf(player);
+    const teamId = Number(player.team?.id || player.teamId || 0);
+    if (!(teamId === 1 || teamId === 2) || !disc?.pos) continue;
+    const dx = num(disc.pos.x) - num(ball.pos.x);
+    const dy = num(disc.pos.y) - num(ball.pos.y);
+    const distance2 = dx * dx + dy * dy;
+    if (distance2 < bestDistance2) {
+      bestDistance2 = distance2;
+      bestTeam = teamId;
+    }
+  }
+  return bestTeam;
+}
+
+function formationOrderCorrect(bots, players, teamId) {
+  const xs = {};
+  for (const bot of bots) {
+    const player = players.find(
+      (candidate) => Number(candidate.id) === Number(bot.id),
+    );
+    if (!player || !discOf(player)?.pos) return null;
+    xs[bot.role] = canonicalPosition(player, teamId);
+  }
+  return xs.gk <= xs.dm && xs.dm <= xs.am && xs.am <= xs.st;
+}
+
 function runMatch({
   challengerModel,
   championModel,
@@ -196,6 +227,12 @@ function runMatch({
     challengerAttackThirdTicks: 0,
     championAttackThirdTicks: 0,
     sampledTicks: 0,
+    challengerPossessionProxyTicks: 0,
+    championPossessionProxyTicks: 0,
+    challengerFormationSamples: 0,
+    challengerFormationCorrect: 0,
+    championFormationSamples: 0,
+    championFormationCorrect: 0,
   };
 
   function runPolicy(
@@ -248,6 +285,33 @@ function runMatch({
       const gameState = room.gameState;
       const ball = gameState?.physicsState?.discs?.[0];
       if (state && gameState && ball?.pos) {
+        const players = statePlayers(state);
+        const nearestTeam = nearestTeamToBall(players, ball);
+        if (nearestTeam === challengerTeamId) {
+          metrics.challengerPossessionProxyTicks += 1;
+        } else if (nearestTeam === championTeamId) {
+          metrics.championPossessionProxyTicks += 1;
+        }
+
+        const challengerOrdered = formationOrderCorrect(
+          challengerBots,
+          players,
+          challengerTeamId,
+        );
+        if (challengerOrdered !== null) {
+          metrics.challengerFormationSamples += 1;
+          if (challengerOrdered) metrics.challengerFormationCorrect += 1;
+        }
+        const championOrdered = formationOrderCorrect(
+          championBots,
+          players,
+          championTeamId,
+        );
+        if (championOrdered !== null) {
+          metrics.championFormationSamples += 1;
+          if (championOrdered) metrics.championFormationCorrect += 1;
+        }
+
         runPolicy(
           challenger,
           challengerBots,
@@ -329,6 +393,16 @@ function runMatch({
       runtime_errors: challengerErrors,
       total_actions: challengerBots.reduce((sum, bot) => sum + bot.actions, 0),
       total_kicks: challengerBots.reduce((sum, bot) => sum + bot.kicks, 0),
+      possession_proxy_rate:
+        metrics.challengerPossessionProxyTicks /
+        Math.max(
+          1,
+          metrics.challengerPossessionProxyTicks +
+            metrics.championPossessionProxyTicks,
+        ),
+      formation_order_rate:
+        metrics.challengerFormationCorrect /
+        Math.max(1, metrics.challengerFormationSamples),
       roles: Object.fromEntries(
         challengerBots.map((bot) => [
           bot.role,
@@ -345,6 +419,16 @@ function runMatch({
       runtime_errors: championErrors,
       total_actions: championBots.reduce((sum, bot) => sum + bot.actions, 0),
       total_kicks: championBots.reduce((sum, bot) => sum + bot.kicks, 0),
+      possession_proxy_rate:
+        metrics.championPossessionProxyTicks /
+        Math.max(
+          1,
+          metrics.challengerPossessionProxyTicks +
+            metrics.championPossessionProxyTicks,
+        ),
+      formation_order_rate:
+        metrics.championFormationCorrect /
+        Math.max(1, metrics.championFormationSamples),
       roles: Object.fromEntries(
         championBots.map((bot) => [
           bot.role,
@@ -399,6 +483,16 @@ function summarize(matches, challengerPath, championPath, stadium) {
       challenger_attack_third_rate:
         rows.reduce(
           (sum, row) => sum + row.territory.challenger_attack_third_rate,
+          0,
+        ) / rows.length,
+      challenger_possession_proxy_rate:
+        rows.reduce(
+          (sum, row) => sum + row.challenger.possession_proxy_rate,
+          0,
+        ) / rows.length,
+      challenger_formation_order_rate:
+        rows.reduce(
+          (sum, row) => sum + row.challenger.formation_order_rate,
           0,
         ) / rows.length,
     };
@@ -457,6 +551,18 @@ function summarize(matches, challengerPath, championPath, stadium) {
     ),
     challenger_kick_action_rate:
       challengerKicks / Math.max(1, challengerActions),
+    challenger_possession_proxy_rate: avg(
+      (row) => row.challenger.possession_proxy_rate,
+    ),
+    champion_possession_proxy_rate: avg(
+      (row) => row.champion.possession_proxy_rate,
+    ),
+    challenger_formation_order_rate: avg(
+      (row) => row.challenger.formation_order_rate,
+    ),
+    champion_formation_order_rate: avg(
+      (row) => row.champion.formation_order_rate,
+    ),
     by_challenger_side: bySide,
     match_results: matches,
   };
