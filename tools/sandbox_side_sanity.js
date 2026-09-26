@@ -5,6 +5,7 @@ const path = require("path");
 const initAPI = require("node-haxball");
 const { scriptedAction } = require("./elite_sandbox_benchmark");
 const { discOf, statePlayers, num } = require("./elite_features");
+const { prepareNeutralStart } = require("./sandbox_neutral_start");
 
 const API = initAPI();
 const { Room, Utils } = API;
@@ -35,6 +36,7 @@ function runSanityMatch(stadium, profile, minutes, sampleEvery, matchIndex) {
 
   room.startGame(0);
   room.runSteps(5);
+  prepareNeutralStart(room, bots, matchIndex - 1);
 
   const totalTicks = Math.floor(minutes * 60 * 60);
   let redHalf = 0;
