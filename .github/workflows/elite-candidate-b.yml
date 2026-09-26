@@ -24,7 +24,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -f \
+          sudo -u haxlab rm -f \
             /tmp/haxlab-candidate-b.log \
             /tmp/haxlab-candidate-b-stadium.hbs \
             /tmp/haxlab-candidate-b-scenario-source.json \
