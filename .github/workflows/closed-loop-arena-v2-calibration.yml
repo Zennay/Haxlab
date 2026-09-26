@@ -207,7 +207,7 @@ jobs:
               "code_sha": os.environ["GITHUB_SHA"],
               "configuration": {
                   "sources": 3,
-                  "scenarios_per_source": 3,
+                  "scenarios_per_source": 16,
                   "seconds_per_rollout": 30,
                   "partner_population": ["live-champion", "candidate-b", "candidate-c"],
                   "negative_control": "zero-all-policy-weights",
@@ -222,9 +222,9 @@ jobs:
               },
               "threshold_freeze_ready": False,
               "threshold_freeze_blocker": (
-                  "This is the first expanded calibration batch. Keep fail-closed until "
-                  "the full frozen scenario population is run and absolute thresholds "
-                  "are reviewed against the champion, Candidate D and the negative control."
+                  "Full frozen 16-scenario population completed. Keep fail-closed until "
+                  "absolute thresholds are derived from this evidence, reviewed for "
+                  "champion identity safety and committed as a frozen policy."
               ),
           }
           (root / "calibration-summary.json").write_text(
