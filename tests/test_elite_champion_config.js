@@ -51,6 +51,7 @@ try {
       runtime_config: {
         minimum_confidence: 0.6,
         minimum_ball_distance: 90,
+        allowed_roles: ["am"],
       },
     }),
   );
@@ -73,6 +74,7 @@ try {
     enabled: true,
     minimumConfidence: 0.6,
     minimumBallDistance: 90,
+    allowedRoles: ["am"],
     source: "champion_registry",
   });
 
@@ -85,6 +87,7 @@ try {
     enabled: true,
     minimumConfidence: 0.5,
     minimumBallDistance: 100,
+    allowedRoles: null,
     source: "plugin_variables",
   });
 
@@ -105,6 +108,36 @@ try {
     /unsupported HaxLab champion pointer schema/,
   );
 
+
+
+  const invalidRolesPointer = path.join(root, "invalid-roles.json");
+  fs.writeFileSync(
+    invalidRolesPointer,
+    JSON.stringify({
+      schema: "haxlab-champion-pointer-v1",
+      version_id: "future-invalid-roles",
+      runtime_model_path: runtimeModelPath,
+      runtime_config: {
+        minimum_confidence: 0.6,
+        minimum_ball_distance: 90,
+        allowed_roles: ["sweeper"],
+      },
+    }),
+  );
+  const invalidRolesResolved = resolveEliteChampionConfig({
+    pointerPath: invalidRolesPointer,
+    fallbackModelDir: fallbackDir,
+  });
+  assert.throws(
+    () =>
+      futureMotionRuntimeSettings(invalidRolesResolved, {
+        enabled: false,
+        minimumConfidence: 0.45,
+        minimumBallDistance: 80,
+        allowedRoles: null,
+      }),
+    /allowed_roles contains no valid roles/,
+  );
   console.log("elite champion config: ok");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
