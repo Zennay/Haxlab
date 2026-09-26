@@ -103,31 +103,55 @@ jobs:
             --sample-every 6 \
             --output /var/lib/haxlab/derived/training/elite-player-candidate-b/sandbox-benchmark.json
 
-      - name: Bootstrap candidate A as champion if it qualifies
+      - name: Seed evolution registry from live champion
         shell: bash
         run: |
           set -euo pipefail
           CHAMPIONS=/var/lib/haxlab/derived/training/elite-champions
+          LIVE_POINTER=/var/lib/haxlab/derived/champions/elite-player/current.json
           sudo -u haxlab mkdir -p "$CHAMPIONS"
 
-          if [ ! -f "$CHAMPIONS/registry.json" ] \
-             && [ -f /var/lib/haxlab/derived/training/elite-player-champion-candidate/model/metrics.json ] \
-             && [ -f /var/lib/haxlab/derived/training/elite-player-champion-candidate/sandbox-benchmark.json ]; then
-            set +e
-            sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
-              /opt/haxlab/.venv/bin/python -m haxlab.evaluation.champion_registry \
-              --registry "$CHAMPIONS/registry.json" \
-              --champions-root "$CHAMPIONS" \
-              --candidate-id "candidate-a-2dc0f9b8" \
-              --candidate-model-dir /var/lib/haxlab/derived/training/elite-player-champion-candidate/model \
-              --metrics /var/lib/haxlab/derived/training/elite-player-champion-candidate/model/metrics.json \
-              --sandbox /var/lib/haxlab/derived/training/elite-player-champion-candidate/sandbox-benchmark.json \
-              --source-ref 2dc0f9b8 \
-              --output /tmp/candidate-a-bootstrap.json
-            BOOTSTRAP_CODE=$?
-            set -e
-            echo "candidate A bootstrap exit=$BOOTSTRAP_CODE"
-            cat /tmp/candidate-a-bootstrap.json || true
+          if [ ! -f "$CHAMPIONS/registry.json" ]; then
+            test -f "$LIVE_POINTER"
+            sudo -u haxlab env \
+              PYTHONPATH="$GITHUB_WORKSPACE/src" \
+              LIVE_POINTER="$LIVE_POINTER" \
+              CHAMPIONS="$CHAMPIONS" \
+              /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          live = json.loads(Path(os.environ["LIVE_POINTER"]).read_text())
+          model_dir = Path(live["model_path"]).parent
+          for required in ("model.npz", "metrics.json", "runtime-model.json"):
+              path = model_dir / required
+              if not path.exists():
+                  raise SystemExit(f"missing live champion artifact: {path}")
+
+          current = {
+              "candidate_id": f"live-{live['version_id']}",
+              "promoted_at": live.get("updated_at"),
+              "source_ref": live["version_id"],
+              "artifact_dir": str(model_dir),
+              "model_dir": str(model_dir),
+          }
+          registry = {
+              "schema": "haxlab-elite-champion-registry-v1",
+              "current": current,
+              "history": [],
+          }
+          root = Path(os.environ["CHAMPIONS"])
+          (root / "registry.json").write_text(
+              json.dumps(registry, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          (root / "current.json").write_text(
+              json.dumps(current, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(current, indent=2))
+          PY
           fi
 
       - name: Evaluate candidate B and duel current champion
