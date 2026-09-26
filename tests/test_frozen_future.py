@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -160,3 +161,9 @@ def test_frozen_future_head_preserves_champion_base_exactly(tmp_path: Path) -> N
     runtime = json.loads((challenger_dir / "runtime-model.json").read_text())
     assert runtime["source_model_schema"] == FROZEN_FUTURE_SCHEMA
     assert runtime["future_horizon_steps"] == 2
+
+
+if __name__ == "__main__":
+    with tempfile.TemporaryDirectory(prefix="haxlab-frozen-future-smoke-") as tmp:
+        test_frozen_future_head_preserves_champion_base_exactly(Path(tmp))
+    print("frozen future head smoke: ok")
