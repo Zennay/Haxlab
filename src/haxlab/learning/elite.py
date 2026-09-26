@@ -780,6 +780,9 @@ def train_elite_policy(
     m = {key: np.zeros_like(value) for key, value in params.items()}
     v = {key: np.zeros_like(value) for key, value in params.items()}
 
+    output_dir.mkdir(parents=True, exist_ok=True)
+    progress_path = output_dir / "training-progress.json"
+
     step = 0
     history: list[dict[str, Any]] = []
     kick_pos_weight = float(train_stats["kick_positive_weight"])
@@ -867,18 +870,47 @@ def train_elite_policy(
             best_epoch = epoch
             best_params = {key: value.copy() for key, value in params.items()}
 
-        history.append(
-            {
-                "epoch": epoch,
-                "batches": batches,
-                "sequence_samples": sequence_samples,
-                "train_loss_mean": float(np.mean(losses)),
-                "direction_loss_mean": float(np.mean(direction_losses)),
-                "kick_loss_mean": float(np.mean(kick_losses)),
-                "future_direction_loss_mean": float(np.mean(future_losses)),
-                "validation_at_0_5": validation_metrics,
-                "validation_selection_score": validation_score,
-            }
+        epoch_record = {
+            "epoch": epoch,
+            "batches": batches,
+            "sequence_samples": sequence_samples,
+            "train_loss_mean": float(np.mean(losses)),
+            "direction_loss_mean": float(np.mean(direction_losses)),
+            "kick_loss_mean": float(np.mean(kick_losses)),
+            "future_direction_loss_mean": float(np.mean(future_losses)),
+            "validation_at_0_5": validation_metrics,
+            "validation_selection_score": validation_score,
+        }
+        history.append(epoch_record)
+
+        progress = {
+            "schema": "haxlab-elite-training-progress-v1",
+            "status": "training",
+            "epoch": epoch,
+            "epochs_requested": max(1, epochs),
+            "best_epoch": best_epoch,
+            "best_validation_score": float(best_score),
+            "batches": batches,
+            "sequence_samples": sequence_samples,
+            "train_loss_mean": epoch_record["train_loss_mean"],
+            "validation_direction_accuracy": float(
+                validation_metrics["direction_accuracy"]
+            ),
+            "validation_future_direction_accuracy": float(
+                validation_metrics["future_direction_accuracy"]
+            ),
+            "validation_kick_f1": float(validation_metrics["kick_f1"]),
+        }
+        _atomic_json(progress_path, progress)
+        print(
+            json.dumps(
+                {
+                    "event": "elite_epoch_complete",
+                    **progress,
+                },
+                sort_keys=True,
+            ),
+            flush=True,
         )
 
     params = best_params
@@ -1039,6 +1071,26 @@ def train_elite_policy(
         "final_holdout": holdout_final,
     }
     _atomic_json(output_dir / "metrics.json", metadata)
+    _atomic_json(
+        progress_path,
+        {
+            "schema": "haxlab-elite-training-progress-v1",
+            "status": "complete",
+            "epoch": best_epoch,
+            "epochs_requested": max(1, epochs),
+            "best_epoch": best_epoch,
+            "best_validation_score": float(best_score),
+            "final_holdout_direction_accuracy": float(
+                holdout_final["direction_accuracy"]
+            ),
+            "final_holdout_future_direction_accuracy": float(
+                holdout_final["future_direction_accuracy"]
+            ),
+            "final_holdout_kick_f1": float(holdout_final["kick_f1"]),
+            "model_path": str(model_path),
+            "runtime_model_path": str(runtime_model_path),
+        },
+    )
     return metadata
 
 
