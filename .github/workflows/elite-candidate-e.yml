@@ -324,6 +324,10 @@ jobs:
           [ -f /tmp/candidate-e-final-decision.json ] &&             cp /tmp/candidate-e-final-decision.json candidate-e-final-decision.json
           [ -f /tmp/haxlab-candidate-e.log ] &&             cp /tmp/haxlab-candidate-e.log candidate-e-training.log
 
+          # The evidence step runs even after fail-closed upstream stops. Missing
+          # optional artifacts must not turn collection itself into a second failure.
+          true
+
       - name: Upload Candidate E evidence
         if: always()
         uses: actions/upload-artifact@v4
