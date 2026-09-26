@@ -37,6 +37,7 @@ haxlab-elite-sandbox-gate = "haxlab.evaluation.sandbox_gate:main"
 haxlab-elite-champion-gate = "haxlab.evaluation.champion_gate:main"
 haxlab-elite-duel-gate = "haxlab.evaluation.duel_gate:main"
 haxlab-elite-promote = "haxlab.evaluation.champion_registry:main"
+haxlab-elite-evolve = "haxlab.learning.evolution:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
