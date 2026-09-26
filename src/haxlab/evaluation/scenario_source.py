@@ -56,6 +56,7 @@ def _healthy_candidate(
 
     roles = infer_roles_4v4(players)
     core_roles: dict[int, dict[str, int]] = {1: {}, 2: {}}
+    core_player_keys: list[str] = []
     role_confidences: list[float] = []
 
     for team_id in (1, 2):
@@ -83,6 +84,15 @@ def _healthy_candidate(
                 return None
             seen.add(role)
             core_roles[team_id][role] = player_id
+            auth_hash = str(player.get("authHash") or "").strip()
+            name = " ".join(str(player.get("name") or "").lower().split())
+            if auth_hash:
+                player_key = f"auth:{auth_hash}"
+            elif name:
+                player_key = f"name:{name}"
+            else:
+                player_key = f"replay:{sha256}:player:{player_id}"
+            core_player_keys.append(player_key)
             role_confidences.append(confidence)
         if seen != set(ROLES_4V4):
             return None
@@ -100,20 +110,21 @@ def _healthy_candidate(
         },
         "touches": touches,
         "role_confidence_min": min(role_confidences),
+        "core_player_keys": sorted(core_player_keys),
         "roles": {
             str(team_id): mapping for team_id, mapping in core_roles.items()
         },
     }
 
 
-def select_scenario_source(
+def _candidate_rows(
     db_path: Path,
     *,
-    max_candidates: int = 1000,
-) -> dict[str, Any]:
+    max_candidates: int,
+) -> list[tuple[Any, ...]]:
     db = sqlite3.connect(db_path)
     try:
-        rows = db.execute(
+        return db.execute(
             """
             SELECT
                 a.sha256,
@@ -136,6 +147,21 @@ def select_scenario_source(
     finally:
         db.close()
 
+
+def select_scenario_sources(
+    db_path: Path,
+    *,
+    count: int = 5,
+    max_candidates: int = 1000,
+    max_shared_players: int = 4,
+) -> list[dict[str, Any]]:
+    count = max(1, int(count))
+    max_shared_players = max(0, min(8, int(max_shared_players)))
+    rows = _candidate_rows(db_path, max_candidates=max_candidates)
+
+    selected: list[dict[str, Any]] = []
+    selected_keys: list[set[str]] = []
+
     for sha256, raw_path, analysis_path, sampled_states in rows:
         candidate = _healthy_candidate(
             sha256=str(sha256),
@@ -143,13 +169,40 @@ def select_scenario_source(
             analysis_path=str(analysis_path),
             sampled_states=int(sampled_states or 0),
         )
-        if candidate is not None:
-            return candidate
+        if candidate is None:
+            continue
+
+        keys = set(candidate.get("core_player_keys") or [])
+        if any(
+            len(keys & previous) > max_shared_players
+            for previous in selected_keys
+        ):
+            continue
+
+        selected.append(candidate)
+        selected_keys.append(keys)
+        if len(selected) >= count:
+            return selected
 
     raise RuntimeError(
-        "No healthy role-resolved 4v4 replay found among "
-        f"{min(len(rows), max_candidates)} candidates"
+        "Could not find enough diverse healthy role-resolved 4v4 replays: "
+        f"requested={count}, found={len(selected)}, "
+        f"max_shared_players={max_shared_players}, "
+        f"scanned={min(len(rows), max_candidates)}"
     )
+
+
+def select_scenario_source(
+    db_path: Path,
+    *,
+    max_candidates: int = 1000,
+) -> dict[str, Any]:
+    return select_scenario_sources(
+        db_path,
+        count=1,
+        max_candidates=max_candidates,
+        max_shared_players=8,
+    )[0]
 
 
 def main() -> int:
@@ -160,13 +213,32 @@ def main() -> int:
         default=Path("/var/lib/haxlab/state/haxlab.sqlite3"),
     )
     parser.add_argument("--max-candidates", type=int, default=1000)
+    parser.add_argument("--count", type=int, default=1)
+    parser.add_argument("--max-shared-players", type=int, default=4)
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
 
-    result = select_scenario_source(
-        args.state_db,
-        max_candidates=max(1, args.max_candidates),
-    )
+    count = max(1, args.count)
+    if count == 1:
+        result: dict[str, Any] = select_scenario_source(
+            args.state_db,
+            max_candidates=max(1, args.max_candidates),
+        )
+    else:
+        sources = select_scenario_sources(
+            args.state_db,
+            count=count,
+            max_candidates=max(1, args.max_candidates),
+            max_shared_players=args.max_shared_players,
+        )
+        result = {
+            "schema": "haxlab-replay-scenario-source-set-v1",
+            "count": len(sources),
+            "max_shared_players": max(
+                0, min(8, int(args.max_shared_players))
+            ),
+            "sources": sources,
+        }
     rendered = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
