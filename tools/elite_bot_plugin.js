@@ -216,8 +216,10 @@ module.exports = function(API) {
     if (keyState !== bot.keyState || kick !== Boolean(player.isKicking)) {
       if (keyState === bot.keyState && kick && !player.isKicking) {
         that.room.fakeSendPlayerInput(keyState & -17, bot.id);
+        bot.inputsSent += 1;
       }
       that.room.fakeSendPlayerInput(keyState, bot.id);
+      bot.inputsSent += 1;
       bot.keyState = keyState;
     }
     bot.lastAction = action;
@@ -236,6 +238,9 @@ module.exports = function(API) {
       stallStreak: 0,
       recoveryTicks: 0,
       recoveryOverrides: 0,
+      policyDecisions: 0,
+      inputsSent: 0,
+      futureAssists: 0,
     }));
 
     for (const bot of bots) {
@@ -282,6 +287,9 @@ module.exports = function(API) {
       bot.stallStreak = 0;
       bot.recoveryTicks = 0;
       bot.recoveryOverrides = 0;
+      bot.policyDecisions = 0;
+      bot.inputsSent = 0;
+      bot.futureAssists = 0;
       policy?.reset(String(bot.id));
     }
   };
@@ -323,6 +331,7 @@ module.exports = function(API) {
           role: bot.role,
           features,
         });
+        bot.policyDecisions += 1;
 
         const ballDistance = Math.hypot(
           Number(features.ball_dx || 0),
@@ -335,6 +344,9 @@ module.exports = function(API) {
             minimumBallDistance: futureSettings.minimumBallDistance,
             allowedRoles: futureSettings.allowedRoles,
           });
+          if (action.future_assist_applied) {
+            bot.futureAssists += 1;
+          }
         }
         const stationary =
           Number(action.dir_x || 0) === 0 &&
