@@ -11,6 +11,7 @@ from haxlab.evaluation.champion_registry import (
     promote_champion,
     record_champion_validation,
     record_live_health,
+    rollback_live_champion,
 )
 
 
@@ -510,6 +511,140 @@ def test_live_activation_can_roll_back_to_prior_runtime_validated_version(
     live = json.loads((registry / "live.json").read_text())
     assert live["version_id"] == first["version_id"]
     assert live["previous_live_version_id"] == second["version_id"]
+
+
+def test_live_rollback_primitive_is_audited_and_fail_closed(
+    tmp_path: Path,
+) -> None:
+    registry = tmp_path / "registry-rollback"
+
+    def promote_runtime_validated(
+        suffix: str,
+        confidence: float,
+    ) -> dict:
+        model = tmp_path / f"rollback-model-{suffix}"
+        _write_model(model)
+        (model / "model.npz").write_bytes(
+            f"rollback-model-{suffix}".encode()
+        )
+        promotion = tmp_path / f"rollback-promotion-{suffix}.json"
+        promotion.write_text(
+            json.dumps(
+                {
+                    "promote": True,
+                    "selected": {
+                        "runtime_config": {
+                            "minimum_confidence": confidence,
+                            "minimum_ball_distance": 80,
+                            "allowed_roles": ["dm", "am"],
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        promoted = promote_champion(
+            model_dir=model,
+            promotion_evidence_path=promotion,
+            registry_root=registry,
+            candidate_name=f"rollback-{suffix}",
+        )
+
+        canary = tmp_path / f"rollback-canary-{suffix}.json"
+        canary.write_text(
+            json.dumps(
+                {
+                    "validated": True,
+                    "candidate": {"version_id": promoted["version_id"]},
+                    "aggregate": {"replay_count": 10},
+                }
+            ),
+            encoding="utf-8",
+        )
+        record_champion_validation(
+            registry_root=registry,
+            validation_evidence_path=canary,
+            stage="canary",
+        )
+
+        runtime = tmp_path / f"rollback-runtime-{suffix}.json"
+        runtime.write_text(
+            json.dumps(
+                {
+                    "validated": True,
+                    "candidate": {"version_id": promoted["version_id"]},
+                    "aggregate": {
+                        "case_count": 8,
+                        "policy_decisions": 9600,
+                        "inputs_sent": 200,
+                        "future_assists": 40,
+                        "forbidden_role_future_assists": 0,
+                        "runtime_errors": 0,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        record_champion_validation(
+            registry_root=registry,
+            validation_evidence_path=runtime,
+            stage="runtime",
+        )
+        return promoted
+
+    first = promote_runtime_validated("a", 0.68)
+    first_activation = activate_live_champion(registry_root=registry)
+    assert first_activation["activation_reason"] == "activation"
+
+    with pytest.raises(ValueError, match="no previous live champion"):
+        rollback_live_champion(registry_root=registry)
+
+    second = promote_runtime_validated("b", 0.74)
+    second_activation = activate_live_champion(registry_root=registry)
+    assert second_activation["version_id"] == second["version_id"]
+    assert second_activation["previous_version_id"] == first["version_id"]
+
+    # Add health to the second live version; rollback must not carry it into
+    # the restored pointer.
+    health = tmp_path / "rollback-health-b.json"
+    health.write_text(
+        json.dumps(
+            {
+                "validated": True,
+                "candidate": {"version_id": second["version_id"]},
+                "aggregate": {
+                    "case_count": 8,
+                    "runtime_errors": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    record_live_health(
+        registry_root=registry,
+        health_evidence_path=health,
+    )
+
+    result = rollback_live_champion(registry_root=registry)
+    assert result["rolled_back"] is True
+    assert result["activation_reason"] == "rollback"
+    assert result["from_version_id"] == second["version_id"]
+    assert result["to_version_id"] == first["version_id"]
+    assert result["version_id"] == first["version_id"]
+    assert result["previous_version_id"] == second["version_id"]
+
+    live = json.loads((registry / "live.json").read_text())
+    assert live["version_id"] == first["version_id"]
+    assert live["previous_live_version_id"] == second["version_id"]
+    assert live["activation_reason"] == "rollback"
+    assert "live_health" not in live
+
+    records = sorted((registry / "live-activations").glob("*.json"))
+    assert len(records) == 3
+    latest = json.loads(records[-1].read_text())
+    assert latest["activation_reason"] == "rollback"
+    assert latest["version_id"] == first["version_id"]
+    assert latest["previous_live_version_id"] == second["version_id"]
 
 
 
