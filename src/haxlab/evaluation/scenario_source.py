@@ -154,15 +154,19 @@ def select_scenario_sources(
     count: int = 5,
     max_candidates: int = 1000,
     max_shared_players: int = 4,
+    exclude_sha256s: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     count = max(1, int(count))
     max_shared_players = max(0, min(8, int(max_shared_players)))
     rows = _candidate_rows(db_path, max_candidates=max_candidates)
+    excluded = {str(value).lower() for value in (exclude_sha256s or set())}
 
     selected: list[dict[str, Any]] = []
     selected_keys: list[set[str]] = []
 
     for sha256, raw_path, analysis_path, sampled_states in rows:
+        if str(sha256).lower() in excluded:
+            continue
         candidate = _healthy_candidate(
             sha256=str(sha256),
             raw_path=str(raw_path),
@@ -202,6 +206,7 @@ def select_scenario_source(
         count=1,
         max_candidates=max_candidates,
         max_shared_players=8,
+        exclude_sha256s=None,
     )[0]
 
 
@@ -215,21 +220,48 @@ def main() -> int:
     parser.add_argument("--max-candidates", type=int, default=1000)
     parser.add_argument("--count", type=int, default=1)
     parser.add_argument("--max-shared-players", type=int, default=4)
+    parser.add_argument(
+        "--exclude-sha-file",
+        type=Path,
+        default=None,
+        help="Optional newline-delimited replay SHA-256 values to exclude.",
+    )
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
 
     count = max(1, args.count)
+    excluded: set[str] = set()
+    if args.exclude_sha_file is not None:
+        excluded = {
+            line.strip().lower()
+            for line in args.exclude_sha_file.read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.strip()
+        }
+
     if count == 1:
-        result: dict[str, Any] = select_scenario_source(
-            args.state_db,
-            max_candidates=max(1, args.max_candidates),
-        )
+        if excluded:
+            sources = select_scenario_sources(
+                args.state_db,
+                count=1,
+                max_candidates=max(1, args.max_candidates),
+                max_shared_players=8,
+                exclude_sha256s=excluded,
+            )
+            result: dict[str, Any] = sources[0]
+        else:
+            result = select_scenario_source(
+                args.state_db,
+                max_candidates=max(1, args.max_candidates),
+            )
     else:
         sources = select_scenario_sources(
             args.state_db,
             count=count,
             max_candidates=max(1, args.max_candidates),
             max_shared_players=args.max_shared_players,
+            exclude_sha256s=excluded,
         )
         result = {
             "schema": "haxlab-replay-scenario-source-set-v1",
