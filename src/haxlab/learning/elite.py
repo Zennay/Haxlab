@@ -232,6 +232,54 @@ def _future_direction_classes(
     return ((qy + 1) * 3 + (qx + 1)).astype(np.int64)
 
 
+def _physical_jitter_feature_mask(
+    input_columns: list[str],
+) -> np.ndarray:
+    return np.asarray(
+        [
+            name != "score_diff" and not name.endswith("_present")
+            for name in input_columns
+        ],
+        dtype=bool,
+    )
+
+
+def _apply_sequence_state_jitter(
+    sequence: np.ndarray,
+    roles: np.ndarray,
+    *,
+    input_columns: list[str],
+    rng: np.random.Generator,
+    jitter_std: float,
+    role_ids: tuple[int, ...] = (2, 3),
+) -> np.ndarray:
+    jitter_std = max(0.0, float(jitter_std))
+    if jitter_std <= 0.0 or sequence.size == 0:
+        return sequence
+
+    target_roles = np.isin(roles, np.asarray(role_ids, dtype=np.int64))
+    if not target_roles.any():
+        return sequence
+
+    feature_mask = _physical_jitter_feature_mask(input_columns)
+    if not feature_mask.any():
+        return sequence
+
+    result = sequence.copy()
+    offsets = rng.normal(
+        0.0,
+        jitter_std,
+        size=(sequence.shape[0], sequence.shape[2]),
+    ).astype(np.float32)
+    offsets[:, ~feature_mask] = 0.0
+    offsets[~target_roles] = 0.0
+    # Keep each feature offset constant across the temporal window. This
+    # broadens the local state neighbourhood without destroying trajectory
+    # deltas or injecting frame-to-frame sensor noise.
+    result += offsets[:, None, :]
+    return result
+
+
 def _iter_batches(
     index: dict[str, Any],
     *,
@@ -244,6 +292,8 @@ def _iter_batches(
     rng: np.random.Generator,
     shuffle: bool,
     future_horizon_steps: int = 5,
+    state_jitter_std: float = 0.0,
+    state_jitter_role_ids: tuple[int, ...] = (2, 3),
 ) -> Iterator[
     tuple[
         np.ndarray,
@@ -312,9 +362,18 @@ def _iter_batches(
                         ],
                         axis=1,
                     )
+                    roles = prole[ep]
+                    if shuffle and state_jitter_std > 0.0:
+                        sequence = _apply_sequence_state_jitter(
+                            sequence,
+                            roles,
+                            input_columns=arrays["input_columns"],
+                            rng=rng,
+                            jitter_std=state_jitter_std,
+                            role_ids=state_jitter_role_ids,
+                        )
                     flat = sequence.reshape(sequence.shape[0], -1)
 
-                    roles = prole[ep]
                     valid = (roles >= 0) & (roles <= 3)
                     one_hot = np.zeros((len(ep), 4), dtype=np.float32)
                     one_hot[valid] = role_eye[roles[valid]]
@@ -857,6 +916,7 @@ def train_elite_policy(
     l2: float = 1e-5,
     future_horizon_steps: int = 5,
     future_loss_weight: float = 0.35,
+    state_jitter_std: float = 0.0,
     seed: int = 1337,
     progress_path: Path | None = None,
 ) -> dict[str, Any]:
@@ -874,6 +934,7 @@ def train_elite_policy(
     sequence_stride = max(1, int(sequence_stride))
     future_horizon_steps = max(1, int(future_horizon_steps))
     future_loss_weight = max(0.0, min(1.0, float(future_loss_weight)))
+    state_jitter_std = max(0.0, float(state_jitter_std))
     input_dim = len(input_columns) * window + 4
 
     rng = np.random.default_rng(seed)
@@ -907,6 +968,8 @@ def train_elite_policy(
             rng=rng,
             shuffle=True,
             future_horizon_steps=future_horizon_steps,
+            state_jitter_std=state_jitter_std,
+            state_jitter_role_ids=(2, 3),
         ):
             grads, loss = _train_batch(
                 x,
@@ -1176,6 +1239,12 @@ def train_elite_policy(
             "l2": max(0.0, l2),
             "future_loss_weight": future_loss_weight,
             "future_horizon_steps": future_horizon_steps,
+            "state_jitter": {
+                "std_normalized": state_jitter_std,
+                "roles": ["am", "st"],
+                "mode": "sequence_consistent_physical_features_v1",
+                "applied_to": "train_only",
+            },
             "train_replays": len(train_index["entries"]),
             "validation_replays": len(validation_index["entries"]),
             "holdout_replays": len(holdout_index["entries"]),
@@ -1236,6 +1305,15 @@ def main() -> int:
     parser.add_argument("--l2", type=float, default=1e-5)
     parser.add_argument("--future-horizon-steps", type=int, default=5)
     parser.add_argument("--future-loss-weight", type=float, default=0.35)
+    parser.add_argument(
+        "--state-jitter-std",
+        type=float,
+        default=0.0,
+        help=(
+            "Train-only normalized physical-feature jitter for AM/ST. "
+            "A single offset per feature is held across each temporal window."
+        ),
+    )
     parser.add_argument("--seed", type=int, default=1337)
     args = parser.parse_args()
 
@@ -1257,6 +1335,7 @@ def main() -> int:
         l2=max(0.0, args.l2),
         future_horizon_steps=max(1, args.future_horizon_steps),
         future_loss_weight=max(0.0, min(1.0, args.future_loss_weight)),
+        state_jitter_std=max(0.0, args.state_jitter_std),
         seed=args.seed,
     )
     print(json.dumps(result["final_holdout"], indent=2, sort_keys=True))
