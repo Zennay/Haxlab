@@ -4,10 +4,26 @@ const fs = require("fs");
 const path = require("path");
 
 const POINTER_SCHEMA = "haxlab-champion-pointer-v1";
+const VALIDATION_STAGE_ORDER = Object.freeze({
+  promotion: 0,
+  multi_replay: 10,
+  canary: 20,
+  live: 30,
+});
+
+function validationStageRank(stage) {
+  if (stage == null || stage === "") return VALIDATION_STAGE_ORDER.promotion;
+  const normalized = String(stage).trim().toLowerCase();
+  if (!Object.prototype.hasOwnProperty.call(VALIDATION_STAGE_ORDER, normalized)) {
+    throw new Error("unsupported HaxLab validation stage: " + String(stage));
+  }
+  return VALIDATION_STAGE_ORDER[normalized];
+}
 
 function resolveEliteChampionConfig({
   pointerPath,
   fallbackModelDir,
+  minimumValidationStage = null,
   fsModule = fs,
 }) {
   const fallbackRuntimeModelPath = path.join(
@@ -32,6 +48,30 @@ function resolveEliteChampionConfig({
       "unsupported HaxLab champion pointer schema: " +
         String(pointer.schema || "missing"),
     );
+  }
+
+  if (minimumValidationStage != null && minimumValidationStage !== "") {
+    const requiredStage = String(minimumValidationStage).trim().toLowerCase();
+    const currentStage = String(
+      pointer.validation_stage || "promotion",
+    ).trim().toLowerCase();
+    const requiredRank = validationStageRank(requiredStage);
+    const currentRank = validationStageRank(currentStage);
+
+    if (currentRank < requiredRank) {
+      return {
+        source: "fallback",
+        version_id: null,
+        pointer_path: pointerPath,
+        runtime_model_path: fallbackRuntimeModelPath,
+        runtime_config: null,
+        behavior_sha256: null,
+        fallback_reason: "registry_validation_stage_insufficient",
+        blocked_registry_version_id: pointer.version_id || null,
+        blocked_validation_stage: currentStage,
+        minimum_validation_stage: requiredStage,
+      };
+    }
   }
 
   let runtimeModelPath = String(pointer.runtime_model_path || "");
@@ -71,6 +111,8 @@ function resolveEliteChampionConfig({
     behavior_sha256: pointer.behavior_sha256 || null,
     model_sha256: pointer.model_sha256 || null,
     runtime_model_sha256: pointer.runtime_model_sha256 || null,
+    validation_stage: String(pointer.validation_stage || "promotion"),
+    validation_evidence_path: pointer.validation_evidence_path || null,
   };
 }
 
@@ -132,6 +174,8 @@ function futureMotionRuntimeSettings(resolved, fallback) {
 
 module.exports = {
   POINTER_SCHEMA,
+  VALIDATION_STAGE_ORDER,
+  validationStageRank,
   resolveEliteChampionConfig,
   futureMotionRuntimeSettings,
 };
