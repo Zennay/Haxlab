@@ -145,6 +145,37 @@ function scoreFromGameState(gameState) {
   };
 }
 
+function nearestTeamToBall(players, ball) {
+  if (!ball?.pos) return 0;
+  let bestTeam = 0;
+  let bestDistance2 = Infinity;
+  for (const player of players) {
+    const disc = discOf(player);
+    const teamId = Number(player.team?.id || player.teamId || 0);
+    if (!(teamId === 1 || teamId === 2) || !disc?.pos) continue;
+    const dx = num(disc.pos.x) - num(ball.pos.x);
+    const dy = num(disc.pos.y) - num(ball.pos.y);
+    const distance2 = dx * dx + dy * dy;
+    if (distance2 < bestDistance2) {
+      bestDistance2 = distance2;
+      bestTeam = teamId;
+    }
+  }
+  return bestTeam;
+}
+
+function formationOrderCorrect(bots, players, teamId) {
+  const xs = {};
+  for (const bot of bots) {
+    const player = players.find(
+      (candidate) => Number(candidate.id) === Number(bot.id),
+    );
+    if (!player || !discOf(player)?.pos) return null;
+    xs[bot.role] = canonicalPosition(player, teamId).x;
+  }
+  return xs.gk <= xs.dm && xs.dm <= xs.am && xs.am <= xs.st;
+}
+
 function runMatch({
   runtimeModel,
   stadium,
@@ -204,6 +235,10 @@ function runMatch({
     directionCounts: {},
     roleCanonicalXSum: { gk: 0, dm: 0, am: 0, st: 0 },
     roleCanonicalXSamples: { gk: 0, dm: 0, am: 0, st: 0 },
+    elitePossessionProxyTicks: 0,
+    baselinePossessionProxyTicks: 0,
+    formationOrderSamples: 0,
+    formationOrderCorrect: 0,
   };
 
   for (let tick = 0; tick < totalTicks; tick += 1) {
@@ -213,6 +248,21 @@ function runMatch({
       const ball = gameState?.physicsState?.discs?.[0];
       if (state && gameState && ball?.pos) {
         const players = statePlayers(state);
+        const nearestTeam = nearestTeamToBall(players, ball);
+        if (nearestTeam === eliteTeamId) {
+          metrics.elitePossessionProxyTicks += 1;
+        } else if (nearestTeam === baselineTeamId) {
+          metrics.baselinePossessionProxyTicks += 1;
+        }
+        const ordered = formationOrderCorrect(
+          eliteBots,
+          players,
+          eliteTeamId,
+        );
+        if (ordered !== null) {
+          metrics.formationOrderSamples += 1;
+          if (ordered) metrics.formationOrderCorrect += 1;
+        }
 
         for (const bot of eliteBots) {
           const player = state.getPlayer?.(bot.id) ||
@@ -342,6 +392,16 @@ function runMatch({
         ]),
       ),
       direction_counts: metrics.directionCounts,
+      possession_proxy_rate:
+        metrics.elitePossessionProxyTicks /
+        Math.max(
+          1,
+          metrics.elitePossessionProxyTicks +
+            metrics.baselinePossessionProxyTicks,
+        ),
+      formation_order_rate:
+        metrics.formationOrderCorrect /
+        Math.max(1, metrics.formationOrderSamples),
     },
     baseline: {
       total_actions: baselineBots.reduce((sum, bot) => sum + bot.actions, 0),
@@ -399,6 +459,16 @@ function summarize(matches, stadium, modelPath) {
         (sum, match) => sum + match.policy.total_kicks,
         0,
       ),
+      possession_proxy_rate:
+        rows.reduce(
+          (sum, match) => sum + match.policy.possession_proxy_rate,
+          0,
+        ) / rows.length,
+      formation_order_rate:
+        rows.reduce(
+          (sum, match) => sum + match.policy.formation_order_rate,
+          0,
+        ) / rows.length,
     };
   }
 
@@ -448,6 +518,12 @@ function summarize(matches, stadium, modelPath) {
       ),
     },
     runtime_errors: runtimeErrors,
+    possession_proxy_rate: avg(
+      (match) => match.policy.possession_proxy_rate,
+    ),
+    formation_order_rate: avg(
+      (match) => match.policy.formation_order_rate,
+    ),
     by_elite_side: bySide,
     by_profile: byProfile,
     match_results: matches,
