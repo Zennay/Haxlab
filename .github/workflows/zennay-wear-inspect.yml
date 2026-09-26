@@ -1,0 +1,43 @@
+name: Zennay Wear inspect
+on:
+  push:
+    branches: [zennay-cloud-maint]
+    paths:
+      - ".github/workflows/zennay-wear-inspect.yml"
+permissions:
+  contents: write
+jobs:
+  inspect:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: zennay-cloud-maint
+      - name: Inspect Wear build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "=== root build ==="
+            cat /home/ubuntu/zennay-cloud/wear-os/build.gradle.kts
+            echo "=== settings ==="
+            cat /home/ubuntu/zennay-cloud/wear-os/settings.gradle.kts
+            echo "=== gradle candidates ==="
+            find /home/ubuntu /opt /usr/local -maxdepth 5 -type f -name gradle -perm -111 2>/dev/null | head -80
+            echo "=== java ==="
+            java -version 2>&1 || true
+            echo "=== sdk ==="
+            echo "ANDROID_HOME=$ANDROID_HOME"
+            echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+            find /home/ubuntu -maxdepth 4 -type d -name "cmdline-tools" -o -name "platform-tools" 2>/dev/null | head -40
+          } > zennay-wear-inspect.txt
+      - name: Publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "zennay-wear-inspect"
+          git config user.email "actions@users.noreply.github.com"
+          git add zennay-wear-inspect.txt
+          git commit -m "chore: refresh Wear build inspection" || exit 0
+          git push origin HEAD:zennay-cloud-maint
