@@ -369,6 +369,7 @@ def activate_live_champion(
     *,
     registry_root: Path,
     version_id: str | None = None,
+    activation_reason: str = "activation",
 ) -> dict[str, Any]:
     registry_root = registry_root.resolve()
     current_path = registry_root / "current.json"
@@ -386,6 +387,11 @@ def activate_live_champion(
 
     if not version_id:
         raise ValueError("live activation requires a champion version_id")
+    activation_reason = str(activation_reason or "activation").strip().lower()
+    if activation_reason not in {"activation", "rollback"}:
+        raise ValueError(
+            "live activation reason must be 'activation' or 'rollback'"
+        )
 
     version_dir = registry_root / "versions" / version_id
     manifest_path = version_dir / "manifest.json"
@@ -439,6 +445,9 @@ def activate_live_champion(
                 "previous_version_id": existing_live.get(
                     "previous_live_version_id"
                 ),
+                "activation_reason": existing_live.get(
+                    "activation_reason", activation_reason
+                ),
             }
 
     activated_at = datetime.now(timezone.utc).isoformat()
@@ -459,6 +468,7 @@ def activate_live_champion(
         "validation_evidence_sha256": validation.get("evidence_sha256"),
         "validation_summary": validation.get("summary") or {},
         "live_activated_at": activated_at,
+        "activation_reason": activation_reason,
         "previous_live_version_id": (
             existing_live.get("version_id") if existing_live else None
         ),
@@ -469,6 +479,7 @@ def activate_live_champion(
         "schema": "haxlab-live-activation-record-v1",
         "version_id": version_id,
         "activated_at": activated_at,
+        "activation_reason": activation_reason,
         "source_validation_stage": validation_stage,
         "validation_evidence_path": validation.get("evidence_path"),
         "validation_evidence_sha256": validation.get("evidence_sha256"),
@@ -501,6 +512,46 @@ def activate_live_champion(
             "previous_live_version_id"
         ],
         "source_validation_stage": validation_stage,
+        "activation_reason": activation_reason,
+    }
+
+
+def rollback_live_champion(
+    *,
+    registry_root: Path,
+) -> dict[str, Any]:
+    registry_root = registry_root.resolve()
+    live_path = registry_root / "live.json"
+    if not live_path.is_file():
+        raise FileNotFoundError(live_path)
+
+    live = json.loads(live_path.read_text(encoding="utf-8"))
+    if live.get("schema") != "haxlab-champion-pointer-v1":
+        raise ValueError("unsupported live champion pointer schema")
+
+    current_version = str(live.get("version_id") or "")
+    previous_version = str(live.get("previous_live_version_id") or "")
+    if not current_version:
+        raise ValueError("live champion pointer missing version_id")
+    if not previous_version:
+        raise ValueError(
+            "live rollback unavailable: no previous live champion recorded"
+        )
+    if previous_version == current_version:
+        raise ValueError(
+            "live rollback refused: previous version equals current version"
+        )
+
+    result = activate_live_champion(
+        registry_root=registry_root,
+        version_id=previous_version,
+        activation_reason="rollback",
+    )
+    return {
+        **result,
+        "rolled_back": True,
+        "from_version_id": current_version,
+        "to_version_id": previous_version,
     }
 
 
@@ -597,6 +648,11 @@ def record_live_health(
 def main() -> int:
     parser = argparse.ArgumentParser(prog="haxlab-champion-registry")
     parser.add_argument(
+        "--rollback-live",
+        action="store_true",
+        help="Roll live.json back to its previous runtime-validated version.",
+    )
+    parser.add_argument(
         "--record-live-health",
         type=Path,
         default=None,
@@ -636,7 +692,11 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
 
-    if args.record_live_health is not None:
+    if args.rollback_live:
+        result = rollback_live_champion(
+            registry_root=args.registry_root,
+        )
+    elif args.record_live_health is not None:
         result = record_live_health(
             registry_root=args.registry_root,
             health_evidence_path=args.record_live_health,
