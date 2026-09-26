@@ -7,7 +7,7 @@ on:
       - ".github/workflows/zennay-cloud-maint.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: zennay-cloud-maint
@@ -18,10 +18,14 @@ jobs:
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 10
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: zennay-cloud-maint
       - name: Inspect Zennay Cloud safely
         shell: bash
         run: |
           set -euo pipefail
+          exec > >(tee /tmp/zcm-result.txt) 2>&1
           echo "WHOAMI=$(whoami)"
           sudo -n true && echo "SUDO_OK=1" || echo "SUDO_OK=0"
           echo "=== project config ==="
@@ -33,17 +37,28 @@ jobs:
           PY
           echo "=== watch home stats ==="
           grep -n -B18 -A35 -E 'CPU|RAM|activeProjects|active_projects' /home/ubuntu/zennay-cloud/wear-os/app/src/main/java/com/zennay/cloud/watch/ui/ZennayWearApp.kt | head -260 || true
-          echo "=== watch activity ==="
-          sed -n '1,240p' /home/ubuntu/zennay-cloud/wear-os/app/src/main/java/com/zennay/cloud/watch/MainActivity.kt || true
+          echo "=== main activity ==="
+          sed -n '1,260p' /home/ubuntu/zennay-cloud/wear-os/app/src/main/java/com/zennay/cloud/watch/MainActivity.kt || true
           echo "=== gradle ==="
           cat /home/ubuntu/zennay-cloud/wear-os/app/build.gradle.kts
           echo "=== models ==="
           cat /home/ubuntu/zennay-cloud/wear-os/app/src/main/java/com/zennay/cloud/watch/data/Models.kt
           echo "=== repo ==="
           cat /home/ubuntu/zennay-cloud/wear-os/app/src/main/java/com/zennay/cloud/watch/data/ZennayCloudRepository.kt
-          echo "=== service pids ==="
+          echo "=== service pids/resources ==="
           for s in haxlab-analyzer.service haxlab-ingest.service haxlab-worker.service ftmo-autonomous.timer actions.runner.Zennay-Haxlab.vps-bb300bba-haxlab.service actions.runner.Zennay-Ftmo.vps-bb300bba-ftmo.service zennay-cloud.service; do
             echo -n "$s "
             systemctl show "$s" -p ActiveState -p SubState -p MainPID -p CPUWeight -p MemoryCurrent --value | tr '\n' ' '
             echo
           done
+      - name: Publish maintenance result
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp /tmp/zcm-result.txt zennay-cloud-maint-result.txt
+          git config user.name "zennay-cloud-maint"
+          git config user.email "actions@users.noreply.github.com"
+          git add zennay-cloud-maint-result.txt
+          git diff --cached --quiet && exit 0
+          git commit -m "chore: record Zennay Cloud maintenance inspection"
+          git push origin HEAD:zennay-cloud-maint
