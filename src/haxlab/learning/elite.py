@@ -600,15 +600,19 @@ def evaluate(
     sequence_stride: int,
     batch_size: int,
     kick_threshold: float,
+    future_horizon_steps: int = 5,
     collect_kick: bool = False,
 ) -> tuple[dict[str, Any], np.ndarray | None, np.ndarray | None]:
     overall = _empty_metric_counter()
     by_role = {role_id: _empty_metric_counter() for role_id in range(4)}
     collected_probs: list[np.ndarray] = []
     collected_true: list[np.ndarray] = []
+    future_samples = 0
+    future_correct = 0
+    future_counts = np.zeros(9, dtype=np.int64)
 
     rng = np.random.default_rng(0)
-    for x, direction, kick, roles, _ in _iter_batches(
+    for x, direction, kick, future_direction, roles, _ in _iter_batches(
         index,
         mean=mean,
         std=std,
@@ -618,12 +622,18 @@ def evaluate(
         batch_size=batch_size,
         rng=rng,
         shuffle=False,
+        future_horizon_steps=future_horizon_steps,
     ):
-        _, _, dir_prob, kick_prob = _forward(x, params)
+        _, _, dir_prob, kick_prob, future_prob = _forward(x, params)
         dir_pred = dir_prob.argmax(axis=1)
+        future_pred = future_prob.argmax(axis=1)
         kick_true = kick > 0.5
         kick_pred = kick_prob >= float(kick_threshold)
         _update_counter(overall, direction, dir_pred, kick_true, kick_pred)
+
+        future_samples += len(future_direction)
+        future_correct += int((future_pred == future_direction).sum())
+        future_counts += np.bincount(future_direction, minlength=9)
 
         for role_id in range(4):
             mask = roles == role_id
@@ -641,6 +651,17 @@ def evaluate(
             collected_true.append(kick_true.astype(bool, copy=True))
 
     metrics = _finalize_metrics(overall, kick_threshold)
+    metrics["future_direction_accuracy"] = (
+        future_correct / future_samples if future_samples else 0.0
+    )
+    metrics["future_majority_direction_accuracy"] = (
+        int(future_counts.max()) / future_samples if future_samples else 0.0
+    )
+    metrics["future_direction_lift"] = (
+        metrics["future_direction_accuracy"]
+        - metrics["future_majority_direction_accuracy"]
+    )
+    metrics["future_horizon_steps"] = int(future_horizon_steps)
     metrics["by_role"] = {
         ROLE_NAMES[role_id]: _finalize_metrics(counter, kick_threshold)
         for role_id, counter in by_role.items()
@@ -734,6 +755,8 @@ def train_elite_policy(
     batch_size: int = 2048,
     learning_rate: float = 8e-4,
     l2: float = 1e-5,
+    future_horizon_steps: int = 5,
+    future_loss_weight: float = 0.35,
     seed: int = 1337,
 ) -> dict[str, Any]:
     train_index = _load_index(train_index_path, train_limit)
@@ -748,6 +771,8 @@ def train_elite_policy(
 
     window = max(2, int(window))
     sequence_stride = max(1, int(sequence_stride))
+    future_horizon_steps = max(1, int(future_horizon_steps))
+    future_loss_weight = max(0.0, min(1.0, float(future_loss_weight)))
     input_dim = len(input_columns) * window + 4
 
     rng = np.random.default_rng(seed)
@@ -766,10 +791,11 @@ def train_elite_policy(
         losses: list[float] = []
         direction_losses: list[float] = []
         kick_losses: list[float] = []
+        future_losses: list[float] = []
         batches = 0
         sequence_samples = 0
 
-        for x, direction, kick, _, sample_weight in _iter_batches(
+        for x, direction, kick, future_direction, _, sample_weight in _iter_batches(
             train_index,
             mean=mean,
             std=std,
@@ -779,14 +805,17 @@ def train_elite_policy(
             batch_size=max(32, batch_size),
             rng=rng,
             shuffle=True,
+            future_horizon_steps=future_horizon_steps,
         ):
             grads, loss = _train_batch(
                 x,
                 direction,
                 kick,
+                future_direction,
                 sample_weight,
                 params,
                 kick_pos_weight=kick_pos_weight,
+                future_loss_weight=future_loss_weight,
                 l2=max(0.0, l2),
             )
             step += 1
@@ -801,6 +830,7 @@ def train_elite_policy(
             losses.append(loss["loss"])
             direction_losses.append(loss["direction_loss"])
             kick_losses.append(loss["kick_loss"])
+            future_losses.append(loss["future_direction_loss"])
             batches += 1
             sequence_samples += len(direction)
 
@@ -820,6 +850,7 @@ def train_elite_policy(
             sequence_stride=sequence_stride,
             batch_size=max(32, batch_size),
             kick_threshold=0.5,
+            future_horizon_steps=future_horizon_steps,
         )
         if int(validation_metrics.get("samples", 0)) <= 0:
             raise ValueError("validation split produced zero temporal sequences")
@@ -829,6 +860,7 @@ def train_elite_policy(
         validation_score = (
             float(validation_metrics["direction_accuracy"])
             + 0.25 * float(validation_metrics["kick_f1"])
+            + 0.10 * float(validation_metrics["future_direction_accuracy"])
         )
         if validation_score > best_score:
             best_score = validation_score
@@ -843,6 +875,7 @@ def train_elite_policy(
                 "train_loss_mean": float(np.mean(losses)),
                 "direction_loss_mean": float(np.mean(direction_losses)),
                 "kick_loss_mean": float(np.mean(kick_losses)),
+                "future_direction_loss_mean": float(np.mean(future_losses)),
                 "validation_at_0_5": validation_metrics,
                 "validation_selection_score": validation_score,
             }
@@ -860,6 +893,7 @@ def train_elite_policy(
         sequence_stride=sequence_stride,
         batch_size=max(32, batch_size),
         kick_threshold=0.5,
+        future_horizon_steps=future_horizon_steps,
         collect_kick=True,
     )
     if kick_probs is None or kick_truth is None:
@@ -884,6 +918,7 @@ def train_elite_policy(
         sequence_stride=sequence_stride,
         batch_size=max(32, batch_size),
         kick_threshold=best_threshold,
+        future_horizon_steps=future_horizon_steps,
     )
 
     # Frozen holdout: exactly one final evaluation after architecture/model
@@ -898,6 +933,7 @@ def train_elite_policy(
         sequence_stride=sequence_stride,
         batch_size=max(32, batch_size),
         kick_threshold=best_threshold,
+        future_horizon_steps=future_horizon_steps,
     )
     if int(holdout_final.get("samples", 0)) <= 0:
         raise ValueError("frozen holdout produced zero temporal sequences")
@@ -925,6 +961,8 @@ def train_elite_policy(
         ],
         "kick_threshold": float(best_threshold),
         "kick_max_distance": RUNTIME_KICK_MAX_DISTANCE,
+        "future_horizon_steps": future_horizon_steps,
+        "future_deadzone": 8.0,
         "mean": mean.astype(float).tolist(),
         "std": std.astype(float).tolist(),
         "weights": {
@@ -964,6 +1002,13 @@ def train_elite_policy(
             "hidden_dim_2": hidden_dim_2,
             "direction_classes": 9,
             "kick_head": "binary_sigmoid",
+            "future_direction_head": "9_way_displacement_direction",
+            "future_horizon_steps": future_horizon_steps,
+            "future_horizon_seconds": (
+                future_horizon_steps
+                * max(1, int(train_index.get("sample_every_ticks") or 6))
+                / 60.0
+            ),
         },
         "training": {
             "seed": seed,
@@ -972,6 +1017,8 @@ def train_elite_policy(
             "batch_size": max(32, batch_size),
             "learning_rate": learning_rate,
             "l2": max(0.0, l2),
+            "future_loss_weight": future_loss_weight,
+            "future_horizon_steps": future_horizon_steps,
             "train_replays": len(train_index["entries"]),
             "validation_replays": len(validation_index["entries"]),
             "holdout_replays": len(holdout_index["entries"]),
@@ -1012,6 +1059,8 @@ def main() -> int:
     parser.add_argument("--batch-size", type=int, default=2048)
     parser.add_argument("--learning-rate", type=float, default=8e-4)
     parser.add_argument("--l2", type=float, default=1e-5)
+    parser.add_argument("--future-horizon-steps", type=int, default=5)
+    parser.add_argument("--future-loss-weight", type=float, default=0.35)
     parser.add_argument("--seed", type=int, default=1337)
     args = parser.parse_args()
 
@@ -1031,6 +1080,8 @@ def main() -> int:
         batch_size=max(32, args.batch_size),
         learning_rate=max(1e-6, args.learning_rate),
         l2=max(0.0, args.l2),
+        future_horizon_steps=max(1, args.future_horizon_steps),
+        future_loss_weight=max(0.0, min(1.0, args.future_loss_weight)),
         seed=args.seed,
     )
     print(json.dumps(result["final_holdout"], indent=2, sort_keys=True))
