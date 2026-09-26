@@ -49,6 +49,7 @@ jobs:
           node --check tools/elite_model_duel.js
           node tests/test_elite_mirror.js
           node tests/test_elite_feature_order.js
+          node tests/test_elite_duel_start.js
 
       - name: Run Python tests
         shell: bash
