@@ -48,30 +48,55 @@ def build_analytics_batch(
 
     entries: list[dict[str, Any]] = []
     failures: list[dict[str, str]] = []
+    built = 0
+    reused = 0
 
     for source_path in candidates:
         relative_source = source_path.relative_to(source_root).as_posix()
         replay_sha256 = source_path.stem
         try:
             raw = source_path.read_bytes()
-            payload = json.loads(raw)
-            summary = summarize_replay_v1(payload)
-            summary["source"].update(
-                {
-                    "replay_sha256": replay_sha256,
-                    "analysis_sha256": _sha256(raw),
-                    "analysis_relative_path": relative_source,
-                }
-            )
-
+            analysis_sha256 = _sha256(raw)
             destination = _output_path(output_root, replay_sha256)
-            _write_json(destination, summary)
+
+            status = "built"
+            if destination.exists():
+                try:
+                    existing = json.loads(destination.read_text(encoding="utf-8"))
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                    existing = None
+                if (
+                    isinstance(existing, dict)
+                    and existing.get("schema") == ANALYTICS_SCHEMA
+                    and (existing.get("source") or {}).get("replay_sha256")
+                    == replay_sha256
+                    and (existing.get("source") or {}).get("analysis_sha256")
+                    == analysis_sha256
+                ):
+                    status = "reused"
+
+            if status == "built":
+                payload = json.loads(raw)
+                summary = summarize_replay_v1(payload)
+                summary["source"].update(
+                    {
+                        "replay_sha256": replay_sha256,
+                        "analysis_sha256": analysis_sha256,
+                        "analysis_relative_path": relative_source,
+                    }
+                )
+                _write_json(destination, summary)
+                built += 1
+            else:
+                reused += 1
+
             entries.append(
                 {
                     "replay_sha256": replay_sha256,
-                    "analysis_sha256": summary["source"]["analysis_sha256"],
+                    "analysis_sha256": analysis_sha256,
                     "source": relative_source,
                     "output": destination.relative_to(output_root).as_posix(),
+                    "status": status,
                 }
             )
         except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
@@ -89,6 +114,8 @@ def build_analytics_batch(
         "output_root": str(output_root),
         "scanned": len(candidates),
         "succeeded": len(entries),
+        "built": built,
+        "reused": reused,
         "failed": len(failures),
         "entries": entries,
         "failures": failures,
