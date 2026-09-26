@@ -109,7 +109,18 @@ def promote_champion(
 
     model_sha = files["model.npz"]["sha256"]
     runtime_sha = files["runtime-model.json"]["sha256"]
-    version_id = f"{candidate_name}-{model_sha[:12]}"
+    runtime_config = _selected_runtime_config(evidence)
+    behavior_payload = json.dumps(
+        {
+            "model_sha256": model_sha,
+            "runtime_model_sha256": runtime_sha,
+            "runtime_config": runtime_config,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    behavior_sha = hashlib.sha256(behavior_payload).hexdigest()
+    version_id = f"{candidate_name}-{behavior_sha[:12]}"
 
     versions_root = registry_root / "versions"
     destination = versions_root / version_id
@@ -126,8 +137,9 @@ def promote_champion(
         "promotion_key": promotion_key,
         "model_sha256": model_sha,
         "runtime_model_sha256": runtime_sha,
+        "behavior_sha256": behavior_sha,
         "files": files,
-        "runtime_config": _selected_runtime_config(evidence),
+        "runtime_config": runtime_config,
         "promotion_evidence": evidence,
     }
 
@@ -138,9 +150,13 @@ def promote_champion(
                 f"registry version exists without manifest: {destination}"
             )
         existing = json.loads(existing_manifest_path.read_text(encoding="utf-8"))
-        if existing.get("model_sha256") != model_sha:
+        if (
+            existing.get("model_sha256") != model_sha
+            or existing.get("runtime_model_sha256") != runtime_sha
+            or existing.get("runtime_config") != runtime_config
+        ):
             raise FileExistsError(
-                f"registry version collision with different model: {version_id}"
+                f"registry version collision with different behavior: {version_id}"
             )
         # Idempotent re-promotion of the exact same immutable model.
         pointer = {
@@ -149,6 +165,8 @@ def promote_champion(
             "manifest_path": str(existing_manifest_path),
             "model_sha256": model_sha,
             "runtime_model_sha256": runtime_sha,
+            "behavior_sha256": behavior_sha,
+            "runtime_config": runtime_config,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         _atomic_json(current_path, pointer)
@@ -183,6 +201,7 @@ def promote_champion(
         "metrics_path": str(destination / "metrics.json"),
         "model_sha256": model_sha,
         "runtime_model_sha256": runtime_sha,
+        "behavior_sha256": behavior_sha,
         "runtime_config": manifest["runtime_config"],
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -196,6 +215,7 @@ def promote_champion(
         "current_path": str(current_path),
         "model_sha256": model_sha,
         "runtime_model_sha256": runtime_sha,
+        "behavior_sha256": behavior_sha,
     }
 
 
