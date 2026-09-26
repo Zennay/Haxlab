@@ -35,6 +35,25 @@ def _healthy_candidate(
         return None
 
     players = list(payload.get("players") or [])
+    simulation = payload.get("simulation") or {}
+    sampled_state_count = int(
+        simulation.get("sampledStateCount") or sampled_states or 0
+    )
+    if sampled_state_count <= 0:
+        return None
+
+    average_team_sizes: dict[int, float] = {}
+    for team_id in (1, 2):
+        team_sample_total = sum(
+            int(player.get("samples") or 0)
+            for player in players
+            if int(player.get("teamId") or 0) == team_id
+        )
+        average_team_size = team_sample_total / sampled_state_count
+        average_team_sizes[team_id] = average_team_size
+        if not 3.5 <= average_team_size <= 4.5:
+            return None
+
     roles = infer_roles_4v4(players)
     core_roles: dict[int, dict[str, int]] = {1: {}, 2: {}}
     role_confidences: list[float] = []
@@ -75,6 +94,10 @@ def _healthy_candidate(
         "analysis_path": str(analysis_file),
         "duration_seconds": total_frames / 60.0,
         "sampled_states": int(sampled_states),
+        "average_team_sizes": {
+            str(team_id): round(value, 4)
+            for team_id, value in average_team_sizes.items()
+        },
         "touches": touches,
         "role_confidence_min": min(role_confidences),
         "roles": {
