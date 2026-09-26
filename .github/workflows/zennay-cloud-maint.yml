@@ -53,14 +53,24 @@ jobs:
           python3 /tmp/apply_wear.py
 
           echo "=== BUILD WATCH ==="
-          JAVA_BIN="$(find /usr/lib/jvm /opt /home/ubuntu -type f -path '*/bin/java' -perm -111 -print -quit 2>/dev/null)"
-          test -n "$JAVA_BIN"
-          export JAVA_HOME="$(dirname "$(dirname "$JAVA_BIN")")"
+          JAVA_BIN="$(find /usr/lib/jvm /opt /home/ubuntu -type f -path '*/bin/java' -perm -111 -print -quit 2>/dev/null || true)"
+          if [ -z "$JAVA_BIN" ]; then
+            echo "Java 17 missing; installing headless JDK"
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openjdk-17-jdk-headless
+            JAVA_BIN="$(command -v java)"
+          fi
+          export JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$JAVA_BIN")")")"
           export PATH="$JAVA_HOME/bin:$PATH"
+          java -version
           cd "$ROOT/wear-os"
           if [ -x ./gradlew ]; then GRADLE=./gradlew; else GRADLE=/home/ubuntu/.cache/zennay-gradle/gradle-8.13/bin/gradle; fi
-          ZENNAY_WATCH_TOKEN="$TOKEN" "$GRADLE" :app:assembleDebug --no-daemon
-          ls -lh app/build/outputs/apk/debug/app-debug.apk
+          set +e
+          ZENNAY_WATCH_TOKEN="$TOKEN" "$GRADLE" :app:assembleDebug --no-daemon --stacktrace
+          BUILD_RC=$?
+          set -e
+          echo "GRADLE_RC=$BUILD_RC"
+          if [ "$BUILD_RC" -eq 0 ]; then ls -lh app/build/outputs/apk/debug/app-debug.apk; fi
 
           echo "=== VERIFY UI/ALERT CODE ==="
           grep -n -A18 -B5 "MetricStack" app/src/main/java/com/zennay/cloud/watch/ui/ZennayWearApp.kt | head -80
@@ -72,6 +82,7 @@ jobs:
             systemctl show "$s" -p ActiveState -p SubState -p MainPID -p CPUWeight -p MemoryHigh --value | tr '\n' ' '
             echo
           done
+          exit "$BUILD_RC"
 
       - name: Publish result
         if: ${{ always() }}
