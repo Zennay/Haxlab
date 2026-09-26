@@ -16,6 +16,9 @@ class DuelGatePolicy:
     maximum_side_territory_gap: float = 0.20
     maximum_runtime_errors: int = 0
     maximum_kick_action_rate: float = 0.10
+    minimum_replay_progression_share: float = 0.42
+    minimum_replay_nonzero_movement_rate: float = 0.10
+    require_replay_kick_activity: bool = True
 
 
 @dataclass(frozen=True)
@@ -111,6 +114,30 @@ def decide_duel_gate(
             f"{kick_rate:.4f}>{policy.maximum_kick_action_rate:.4f}"
         )
 
+    if schema == "haxlab-elite-replay-seeded-duel-v1":
+        progression_share = float(
+            duel.get("challenger_progression_share") or 0.0
+        )
+        movement_rate = float(
+            duel.get("challenger_nonzero_movement_rate") or 0.0
+        )
+        checks["challenger_progression_share"] = progression_share
+        checks["challenger_nonzero_movement_rate"] = movement_rate
+        if progression_share < policy.minimum_replay_progression_share:
+            failures.append(
+                "challenger_progression_share:"
+                f"{progression_share:.4f}<"
+                f"{policy.minimum_replay_progression_share:.4f}"
+            )
+        if movement_rate < policy.minimum_replay_nonzero_movement_rate:
+            failures.append(
+                "challenger_nonzero_movement_rate:"
+                f"{movement_rate:.4f}<"
+                f"{policy.minimum_replay_nonzero_movement_rate:.4f}"
+            )
+        if policy.require_replay_kick_activity and kick_rate <= 0.0:
+            failures.append("challenger_no_kick_activity")
+
     sides = duel.get("by_challenger_side") or {}
     side_rates: dict[str, float] = {}
     for side in ("1", "2"):
@@ -147,6 +174,7 @@ def decide_duel_gate(
             "duel_side_symmetry_passed",
             "duel_runtime_stable",
             "duel_kick_rate_passed",
+            "replay_behavior_floor_passed",
         ),
         checks=checks,
     )
