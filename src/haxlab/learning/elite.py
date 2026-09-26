@@ -537,6 +537,7 @@ def _empty_metric_counter() -> dict[str, Any]:
         "kick_fn": 0,
         "kick_tn": 0,
         "direction_counts": np.zeros(9, dtype=np.int64),
+        "direction_correct_by_class": np.zeros(9, dtype=np.int64),
     }
 
 
@@ -552,9 +553,35 @@ def _finalize_metrics(counter: dict[str, Any], threshold: float) -> dict[str, An
     recall = tp / max(1, tp + fn)
     f1 = 2.0 * precision * recall / max(1e-12, precision + recall)
     direction_counts = counter["direction_counts"]
+    direction_correct_by_class = counter["direction_correct_by_class"]
+    recalls = [
+        (
+            int(direction_correct_by_class[class_id])
+            / int(direction_counts[class_id])
+            if int(direction_counts[class_id]) > 0
+            else None
+        )
+        for class_id in range(9)
+    ]
+    observed_recalls = [value for value in recalls if value is not None]
+    macro_recall = (
+        float(sum(observed_recalls) / len(observed_recalls))
+        if observed_recalls
+        else 0.0
+    )
     return {
         "samples": total,
         "direction_accuracy": int(counter["direction_correct"]) / total,
+        "macro_direction_recall": macro_recall,
+        "direction_recall_by_class": {
+            str(class_id): {
+                "dir_x": ACTION_DIRS[class_id][0],
+                "dir_y": ACTION_DIRS[class_id][1],
+                "samples": int(direction_counts[class_id]),
+                "recall": recalls[class_id],
+            }
+            for class_id in range(9)
+        },
         "joint_accuracy": int(counter["joint_correct"]) / total,
         "kick_precision": precision,
         "kick_recall": recall,
@@ -579,6 +606,12 @@ def _update_counter(
 ) -> None:
     counter["samples"] += len(direction)
     counter["direction_correct"] += int((dir_pred == direction).sum())
+    for class_id in range(9):
+        mask = direction == class_id
+        if mask.any():
+            counter["direction_correct_by_class"][class_id] += int(
+                (dir_pred[mask] == class_id).sum()
+            )
     counter["joint_correct"] += int(
         ((dir_pred == direction) & (kick_pred == kick_true)).sum()
     )
@@ -600,6 +633,7 @@ def evaluate(
     sequence_stride: int,
     batch_size: int,
     kick_threshold: float,
+    kick_thresholds_by_role: dict[int, float] | None = None,
     future_horizon_steps: int = 5,
     collect_kick: bool = False,
 ) -> tuple[dict[str, Any], np.ndarray | None, np.ndarray | None]:
@@ -628,7 +662,15 @@ def evaluate(
         dir_pred = dir_prob.argmax(axis=1)
         future_pred = future_prob.argmax(axis=1)
         kick_true = kick > 0.5
-        kick_pred = kick_prob >= float(kick_threshold)
+        thresholds = np.full(
+            len(kick_prob),
+            float(kick_threshold),
+            dtype=np.float32,
+        )
+        if kick_thresholds_by_role:
+            for role_id, role_threshold in kick_thresholds_by_role.items():
+                thresholds[roles == int(role_id)] = float(role_threshold)
+        kick_pred = kick_prob >= thresholds
         _update_counter(overall, direction, dir_pred, kick_true, kick_pred)
 
         future_samples += len(future_direction)
@@ -651,6 +693,14 @@ def evaluate(
             collected_true.append(kick_true.astype(bool, copy=True))
 
     metrics = _finalize_metrics(overall, kick_threshold)
+    if kick_thresholds_by_role:
+        metrics["kick_threshold_mode"] = "per_role"
+        metrics["kick_thresholds_by_role"] = {
+            ROLE_NAMES[role_id]: float(
+                kick_thresholds_by_role.get(role_id, kick_threshold)
+            )
+            for role_id in range(4)
+        }
     metrics["future_direction_accuracy"] = (
         future_correct / future_samples if future_samples else 0.0
     )
@@ -663,7 +713,14 @@ def evaluate(
     )
     metrics["future_horizon_steps"] = int(future_horizon_steps)
     metrics["by_role"] = {
-        ROLE_NAMES[role_id]: _finalize_metrics(counter, kick_threshold)
+        ROLE_NAMES[role_id]: _finalize_metrics(
+            counter,
+            (
+                kick_thresholds_by_role.get(role_id, kick_threshold)
+                if kick_thresholds_by_role
+                else kick_threshold
+            ),
+        )
         for role_id, counter in by_role.items()
         if counter["samples"] > 0
     }
@@ -671,6 +728,49 @@ def evaluate(
     probs = np.concatenate(collected_probs) if collected_probs else None
     truth = np.concatenate(collected_true) if collected_true else None
     return metrics, probs, truth
+
+
+def _collect_kick_predictions(
+    index: dict[str, Any],
+    *,
+    params: dict[str, np.ndarray],
+    mean: np.ndarray,
+    std: np.ndarray,
+    role_weights: np.ndarray,
+    window: int,
+    sequence_stride: int,
+    batch_size: int,
+    future_horizon_steps: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    probs: list[np.ndarray] = []
+    truth: list[np.ndarray] = []
+    roles_out: list[np.ndarray] = []
+    rng = np.random.default_rng(0)
+
+    for x, _, kick, _, roles, _ in _iter_batches(
+        index,
+        mean=mean,
+        std=std,
+        role_weights=role_weights,
+        window=window,
+        sequence_stride=sequence_stride,
+        batch_size=batch_size,
+        rng=rng,
+        shuffle=False,
+        future_horizon_steps=future_horizon_steps,
+    ):
+        _, _, _, kick_prob, _ = _forward(x, params)
+        probs.append(kick_prob.astype(np.float32, copy=True))
+        truth.append((kick > 0.5).astype(bool, copy=True))
+        roles_out.append(roles.astype(np.int64, copy=True))
+
+    if not probs:
+        raise ValueError("split has no kick predictions")
+    return (
+        np.concatenate(probs),
+        np.concatenate(truth),
+        np.concatenate(roles_out),
+    )
 
 
 def _kick_threshold_metrics(
@@ -758,6 +858,7 @@ def train_elite_policy(
     future_horizon_steps: int = 5,
     future_loss_weight: float = 0.35,
     seed: int = 1337,
+    progress_path: Path | None = None,
 ) -> dict[str, Any]:
     train_index = _load_index(train_index_path, train_limit)
     validation_index = _load_index(validation_index_path, validation_limit)
@@ -867,23 +968,35 @@ def train_elite_policy(
             best_epoch = epoch
             best_params = {key: value.copy() for key, value in params.items()}
 
-        history.append(
-            {
-                "epoch": epoch,
-                "batches": batches,
-                "sequence_samples": sequence_samples,
-                "train_loss_mean": float(np.mean(losses)),
-                "direction_loss_mean": float(np.mean(direction_losses)),
-                "kick_loss_mean": float(np.mean(kick_losses)),
-                "future_direction_loss_mean": float(np.mean(future_losses)),
-                "validation_at_0_5": validation_metrics,
-                "validation_selection_score": validation_score,
-            }
-        )
+        epoch_record = {
+            "epoch": epoch,
+            "batches": batches,
+            "sequence_samples": sequence_samples,
+            "train_loss_mean": float(np.mean(losses)),
+            "direction_loss_mean": float(np.mean(direction_losses)),
+            "kick_loss_mean": float(np.mean(kick_losses)),
+            "future_direction_loss_mean": float(np.mean(future_losses)),
+            "validation_at_0_5": validation_metrics,
+            "validation_selection_score": validation_score,
+        }
+        history.append(epoch_record)
+        if progress_path is not None:
+            _atomic_json(
+                progress_path,
+                {
+                    "schema": "haxlab-elite-progress-v1",
+                    "phase": "training",
+                    "epoch": epoch,
+                    "epochs_total": max(1, epochs),
+                    "best_epoch": best_epoch,
+                    "best_validation_selection_score": best_score,
+                    "latest": epoch_record,
+                },
+            )
 
     params = best_params
 
-    validation_default, kick_probs, kick_truth = evaluate(
+    validation_default, _, _ = evaluate(
         validation_index,
         params=params,
         mean=mean,
@@ -894,10 +1007,18 @@ def train_elite_policy(
         batch_size=max(32, batch_size),
         kick_threshold=0.5,
         future_horizon_steps=future_horizon_steps,
-        collect_kick=True,
     )
-    if kick_probs is None or kick_truth is None:
-        raise ValueError("validation split has no kick predictions")
+    kick_probs, kick_truth, kick_roles = _collect_kick_predictions(
+        validation_index,
+        params=params,
+        mean=mean,
+        std=std,
+        role_weights=role_weights,
+        window=window,
+        sequence_stride=sequence_stride,
+        batch_size=max(32, batch_size),
+        future_horizon_steps=future_horizon_steps,
+    )
 
     best_threshold, kick_calibration, threshold_candidates = (
         _calibrate_kick_threshold(
@@ -907,6 +1028,35 @@ def train_elite_policy(
         )
     )
     best_kick_f1 = float(kick_calibration["f1"])
+
+    kick_thresholds_by_role: dict[int, float] = {}
+    kick_calibration_by_role: dict[str, dict[str, Any]] = {}
+    for role_id in range(4):
+        mask = kick_roles == role_id
+        role_name = ROLE_NAMES[role_id]
+        if int(mask.sum()) >= 100 and bool(kick_truth[mask].any()):
+            role_threshold, role_calibration, role_candidates = (
+                _calibrate_kick_threshold(
+                    kick_probs[mask],
+                    kick_truth[mask],
+                    max_rate_multiplier=1.5,
+                )
+            )
+            kick_thresholds_by_role[role_id] = role_threshold
+            kick_calibration_by_role[role_name] = {
+                **role_calibration,
+                "samples": int(mask.sum()),
+                "source": "role_validation",
+                "candidates": role_candidates,
+            }
+        else:
+            kick_thresholds_by_role[role_id] = best_threshold
+            kick_calibration_by_role[role_name] = {
+                **kick_calibration,
+                "samples": int(mask.sum()),
+                "source": "global_fallback",
+                "candidates": threshold_candidates,
+            }
 
     validation_final, _, _ = evaluate(
         validation_index,
@@ -918,6 +1068,7 @@ def train_elite_policy(
         sequence_stride=sequence_stride,
         batch_size=max(32, batch_size),
         kick_threshold=best_threshold,
+        kick_thresholds_by_role=kick_thresholds_by_role,
         future_horizon_steps=future_horizon_steps,
     )
 
@@ -933,6 +1084,7 @@ def train_elite_policy(
         sequence_stride=sequence_stride,
         batch_size=max(32, batch_size),
         kick_threshold=best_threshold,
+        kick_thresholds_by_role=kick_thresholds_by_role,
         future_horizon_steps=future_horizon_steps,
     )
     if int(holdout_final.get("samples", 0)) <= 0:
@@ -954,12 +1106,17 @@ def train_elite_policy(
         "source_model_schema": MODEL_SCHEMA,
         "window": window,
         "base_input_columns": input_columns,
+        "feature_ordering": "team-line-order-v1",
         "role_ids": {name: role_id for role_id, name in ROLE_NAMES.items()},
         "direction_classes": [
             {"class_id": i, "dir_x": dx, "dir_y": dy}
             for i, (dx, dy) in enumerate(ACTION_DIRS)
         ],
         "kick_threshold": float(best_threshold),
+        "kick_thresholds_by_role": {
+            ROLE_NAMES[role_id]: float(threshold)
+            for role_id, threshold in kick_thresholds_by_role.items()
+        },
         "kick_max_distance": RUNTIME_KICK_MAX_DISTANCE,
         "future_horizon_steps": future_horizon_steps,
         "future_deadzone": 8.0,
@@ -1030,6 +1187,11 @@ def train_elite_policy(
             "calibrated_kick_threshold": best_threshold,
             "validation_best_kick_f1": best_kick_f1,
             "kick_calibration": kick_calibration,
+            "kick_calibration_by_role": kick_calibration_by_role,
+            "calibrated_kick_thresholds_by_role": {
+                ROLE_NAMES[role_id]: float(threshold)
+                for role_id, threshold in kick_thresholds_by_role.items()
+            },
             "kick_threshold_candidates": threshold_candidates,
             "frozen_holdout_used_for_selection": False,
         },
@@ -1039,6 +1201,19 @@ def train_elite_policy(
         "final_holdout": holdout_final,
     }
     _atomic_json(output_dir / "metrics.json", metadata)
+    if progress_path is not None:
+        _atomic_json(
+            progress_path,
+            {
+                "schema": "haxlab-elite-progress-v1",
+                "phase": "training_complete",
+                "best_epoch": best_epoch,
+                "epochs_total": max(1, epochs),
+                "final_validation": validation_final,
+                "final_holdout": holdout_final,
+                "model_path": str(model_path),
+            },
+        )
     return metadata
 
 

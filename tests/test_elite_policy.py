@@ -143,7 +143,12 @@ def test_temporal_elite_policy_trains_with_validation_only_calibration(
     assert result["final_holdout"]["samples"] > 0
     assert 0.0 <= result["final_holdout"]["future_direction_accuracy"] <= 1.0
     assert result["final_holdout"]["future_horizon_steps"] == 5
+    assert 0.0 <= result["final_holdout"]["macro_direction_recall"] <= 1.0
+    assert len(result["final_holdout"]["direction_recall_by_class"]) == 9
     assert set(result["final_holdout"]["by_role"]) == {"gk", "dm", "am", "st"}
+    for role_metrics in result["final_holdout"]["by_role"].values():
+        assert 0.0 <= role_metrics["macro_direction_recall"] <= 1.0
+        assert len(role_metrics["direction_recall_by_class"]) == 9
     assert (output / "model.npz").exists()
     assert (output / "runtime-model.json").exists()
     assert (output / "metrics.json").exists()
@@ -152,6 +157,7 @@ def test_temporal_elite_policy_trains_with_validation_only_calibration(
     assert runtime_model["schema"] == "haxlab-elite-js-runtime-v1"
     assert runtime_model["window"] == 4
     assert runtime_model["future_horizon_steps"] == 5
+    assert set(runtime_model["kick_thresholds_by_role"]) == {"gk", "dm", "am", "st"}
     assert runtime_model["base_input_columns"] == result["base_input_columns"]
     assert "wf" in runtime_model["weights"]
     assert "bf" in runtime_model["weights"]

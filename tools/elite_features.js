@@ -42,24 +42,32 @@ function entityVector(origin, other, sign) {
   ];
 }
 
-function nearestVectors(origin, candidates, sign, limit) {
+function teamAttackSign(teamId) {
+  return Number(teamId) === 1 ? 1 : Number(teamId) === 2 ? -1 : 0;
+}
+
+function lineOrderedVectors(origin, candidates, sign, limit) {
   const ownDisc = discOf(origin);
   if (!ownDisc?.pos) return Array(limit * 5).fill(0);
 
   const ranked = candidates
     .filter((candidate) => discOf(candidate)?.pos)
-    .map((candidate) => {
-      const disc = discOf(candidate);
-      const dx = num(disc.pos.x) - num(ownDisc.pos.x);
-      const dy = num(disc.pos.y) - num(ownDisc.pos.y);
-      return { candidate, distance2: dx * dx + dy * dy };
+    .slice()
+    .sort((a, b) => {
+      const aDisc = discOf(a);
+      const bDisc = discOf(b);
+      const aTeam = Number(a.team?.id || a.teamId || 0);
+      const bTeam = Number(b.team?.id || b.teamId || 0);
+      const aAxis = teamAttackSign(aTeam) * num(aDisc.pos.x);
+      const bAxis = teamAttackSign(bTeam) * num(bDisc.pos.x);
+      if (aAxis !== bAxis) return aAxis - bAxis;
+      return Number(a.id || 0) - Number(b.id || 0);
     })
-    .sort((a, b) => a.distance2 - b.distance2)
     .slice(0, limit);
 
   const result = [];
-  for (const item of ranked) {
-    result.push(...entityVector(origin, item.candidate, sign));
+  for (const candidate of ranked) {
+    result.push(...entityVector(origin, candidate, sign));
   }
   while (result.length < limit * 5) result.push(0, 0, 0, 0, 0);
   return result;
@@ -112,8 +120,8 @@ function buildFeatureObject(player, state, gameState) {
     num(ballDisc.pos.y) - num(ownDisc.pos.y),
     sign * (num(ballDisc.speed?.x) - num(ownDisc.speed?.x)),
     num(ballDisc.speed?.y) - num(ownDisc.speed?.y),
-    ...nearestVectors(player, teammates, sign, 3),
-    ...nearestVectors(player, opponents, sign, 4),
+    ...lineOrderedVectors(player, teammates, sign, 3),
+    ...lineOrderedVectors(player, opponents, sign, 4),
     scoreDiffFromGameState(gameState, teamId),
   ];
 
@@ -140,7 +148,8 @@ module.exports = {
   discOf,
   statePlayers,
   entityVector,
-  nearestVectors,
+  teamAttackSign,
+  lineOrderedVectors,
   scoreDiffFromGameState,
   buildFeatureObject,
   canonicalActionToWorld,

@@ -68,11 +68,19 @@ class ElitePolicyRuntime {
     this.model = model;
     this.window = Number(model.window);
     this.inputColumns = model.base_input_columns.slice();
+    this.featureOrdering = String(
+      model.feature_ordering || "nearest-distance-v1",
+    );
     this.mean = model.mean.map(Number);
     this.std = model.std.map(Number);
     this.roleIds = { ...ROLE_IDS, ...(model.role_ids || {}) };
     this.directionClasses = model.direction_classes.slice();
     this.kickThreshold = Number(model.kick_threshold);
+    this.kickThresholdsByRole = Object.fromEntries(
+      Object.entries(model.kick_thresholds_by_role || {}).map(
+        ([role, value]) => [role, Number(value)],
+      ),
+    );
     this.kickMaxDistance = Number(model.kick_max_distance ?? 31.0);
     this.weights = model.weights;
     this.futureHeadAvailable =
@@ -228,11 +236,17 @@ class ElitePolicyRuntime {
       false,
     )[0];
     const kickProbability = sigmoid(kickLogit);
+    const roleKey = Object.entries(this.roleIds).find(
+      ([, value]) => Number(value) === roleId,
+    )?.[0];
+    const roleKickThreshold = Number(
+      this.kickThresholdsByRole[roleKey] ?? this.kickThreshold,
+    );
     const ballDx = Number(features.ball_dx || 0);
     const ballDy = Number(features.ball_dy || 0);
     const ballDistance = Math.hypot(ballDx, ballDy);
     const kickInRange = ballDistance <= this.kickMaxDistance;
-    const kickRequested = kickProbability >= this.kickThreshold;
+    const kickRequested = kickProbability >= roleKickThreshold;
     const direction = this.directionClasses[directionClass];
     const futureDirection = this.directionClasses[futureDirectionClass];
     if (!direction || !futureDirection) {
@@ -247,7 +261,8 @@ class ElitePolicyRuntime {
       dir_y: Number(direction.dir_y),
       kick: kickRequested && kickInRange,
       kick_probability: kickProbability,
-      kick_threshold: this.kickThreshold,
+      kick_threshold: roleKickThreshold,
+      global_kick_threshold: this.kickThreshold,
       kick_requested: kickRequested,
       kick_in_range: kickInRange,
       kick_max_distance: this.kickMaxDistance,
@@ -272,7 +287,9 @@ class ElitePolicyRuntime {
       schema: this.model.schema,
       source_model_schema: this.model.source_model_schema,
       window: this.window,
+      feature_ordering: this.featureOrdering,
       kick_threshold: this.kickThreshold,
+      kick_thresholds_by_role: { ...this.kickThresholdsByRole },
       kick_max_distance: this.kickMaxDistance,
       input_columns: this.inputColumns.slice(),
     };
