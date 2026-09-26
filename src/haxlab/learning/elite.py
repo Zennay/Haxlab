@@ -1315,6 +1315,12 @@ def main() -> int:
         ),
     )
     parser.add_argument("--seed", type=int, default=1337)
+    parser.add_argument(
+        "--progress-path",
+        type=Path,
+        default=None,
+        help="Optional JSON progress file updated during training.",
+    )
     args = parser.parse_args()
 
     result = train_elite_policy(
@@ -1337,6 +1343,7 @@ def main() -> int:
         future_loss_weight=max(0.0, min(1.0, args.future_loss_weight)),
         state_jitter_std=max(0.0, args.state_jitter_std),
         seed=args.seed,
+        progress_path=args.progress_path,
     )
     print(json.dumps(result["final_holdout"], indent=2, sort_keys=True))
     print("model:", result["model_path"])
