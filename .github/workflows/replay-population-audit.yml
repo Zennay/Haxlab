@@ -32,6 +32,8 @@ jobs:
 
           cp /tmp/haxlab-4v4-population-audit.json replay-population-audit.json
           cat replay-population-audit.json
+          echo '## HaxLab 4v4 Population Audit' >> "$GITHUB_STEP_SUMMARY"
+          cat replay-population-audit.json >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         with:
