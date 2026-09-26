@@ -356,8 +356,158 @@ def record_champion_validation(
     }
 
 
+
+def activate_live_champion(
+    *,
+    registry_root: Path,
+    version_id: str | None = None,
+) -> dict[str, Any]:
+    registry_root = registry_root.resolve()
+    current_path = registry_root / "current.json"
+    live_path = registry_root / "live.json"
+
+    if version_id is None:
+        if not current_path.is_file():
+            raise FileNotFoundError(current_path)
+        current = json.loads(current_path.read_text(encoding="utf-8"))
+        if current.get("schema") != "haxlab-champion-pointer-v1":
+            raise ValueError("unsupported current champion pointer schema")
+        version_id = str(current.get("version_id") or "")
+    else:
+        version_id = str(version_id).strip()
+
+    if not version_id:
+        raise ValueError("live activation requires a champion version_id")
+
+    version_dir = registry_root / "versions" / version_id
+    manifest_path = version_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(manifest_path)
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("schema") != "haxlab-champion-registry-v1":
+        raise ValueError("unsupported champion manifest schema")
+    if str(manifest.get("version_id") or "") != version_id:
+        raise ValueError("champion manifest version mismatch")
+
+    validation_path = (
+        registry_root / "validations" / version_id / "current.json"
+    )
+    if not validation_path.is_file():
+        raise FileNotFoundError(
+            f"champion has no validation record: {validation_path}"
+        )
+    validation = json.loads(validation_path.read_text(encoding="utf-8"))
+    if validation.get("schema") != "haxlab-champion-validation-record-v1":
+        raise ValueError("unsupported champion validation record schema")
+    validation_stage = str(validation.get("stage") or "promotion")
+    if VALIDATION_STAGE_ORDER.get(validation_stage, -1) < VALIDATION_STAGE_ORDER["canary"]:
+        raise ValueError(
+            "live activation requires canary validation; "
+            f"got {validation_stage!r}"
+        )
+
+    required_files = {
+        "model_path": version_dir / "model.npz",
+        "runtime_model_path": version_dir / "runtime-model.json",
+        "metrics_path": version_dir / "metrics.json",
+    }
+    for key, path in required_files.items():
+        if not path.is_file():
+            raise FileNotFoundError(f"{key} missing: {path}")
+
+    existing_live: dict[str, Any] | None = None
+    if live_path.is_file():
+        existing_live = json.loads(live_path.read_text(encoding="utf-8"))
+        if existing_live.get("schema") != "haxlab-champion-pointer-v1":
+            raise ValueError("unsupported live champion pointer schema")
+        if str(existing_live.get("version_id") or "") == version_id:
+            return {
+                "activated": True,
+                "idempotent": True,
+                "version_id": version_id,
+                "live_path": str(live_path),
+                "previous_version_id": existing_live.get(
+                    "previous_live_version_id"
+                ),
+            }
+
+    activated_at = datetime.now(timezone.utc).isoformat()
+    live_pointer = {
+        "schema": "haxlab-champion-pointer-v1",
+        "version_id": version_id,
+        "manifest_path": str(manifest_path),
+        "model_path": str(required_files["model_path"]),
+        "runtime_model_path": str(required_files["runtime_model_path"]),
+        "metrics_path": str(required_files["metrics_path"]),
+        "model_sha256": manifest.get("model_sha256"),
+        "runtime_model_sha256": manifest.get("runtime_model_sha256"),
+        "behavior_sha256": manifest.get("behavior_sha256"),
+        "runtime_config": manifest.get("runtime_config"),
+        "validation_stage": "live",
+        "source_validation_stage": validation_stage,
+        "validation_evidence_path": validation.get("evidence_path"),
+        "validation_evidence_sha256": validation.get("evidence_sha256"),
+        "validation_summary": validation.get("summary") or {},
+        "live_activated_at": activated_at,
+        "previous_live_version_id": (
+            existing_live.get("version_id") if existing_live else None
+        ),
+        "updated_at": activated_at,
+    }
+
+    activation_record = {
+        "schema": "haxlab-live-activation-record-v1",
+        "version_id": version_id,
+        "activated_at": activated_at,
+        "source_validation_stage": validation_stage,
+        "validation_evidence_path": validation.get("evidence_path"),
+        "validation_evidence_sha256": validation.get("evidence_sha256"),
+        "previous_live_version_id": (
+            existing_live.get("version_id") if existing_live else None
+        ),
+        "behavior_sha256": manifest.get("behavior_sha256"),
+        "runtime_config": manifest.get("runtime_config"),
+    }
+    activation_id = (
+        activated_at.replace("-", "")
+        .replace(":", "")
+        .replace("+00:00", "Z")
+        .replace(".", "_")
+    )
+    _atomic_json(
+        registry_root
+        / "live-activations"
+        / f"{activation_id}-{version_id}.json",
+        activation_record,
+    )
+    _atomic_json(live_path, live_pointer)
+
+    return {
+        "activated": True,
+        "idempotent": False,
+        "version_id": version_id,
+        "live_path": str(live_path),
+        "previous_version_id": activation_record[
+            "previous_live_version_id"
+        ],
+        "source_validation_stage": validation_stage,
+    }
+
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="haxlab-champion-registry")
+    parser.add_argument(
+        "--activate-live",
+        action="store_true",
+        help="Activate a canary-validated champion into live.json.",
+    )
+    parser.add_argument(
+        "--activate-version",
+        default=None,
+        help="Champion version to activate; defaults to current.json.",
+    )
     parser.add_argument(
         "--record-validation",
         type=Path,
@@ -382,7 +532,12 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
 
-    if args.record_validation is not None:
+    if args.activate_live:
+        result = activate_live_champion(
+            registry_root=args.registry_root,
+            version_id=args.activate_version,
+        )
+    elif args.record_validation is not None:
         if not args.validation_stage:
             parser.error("--validation-stage is required with --record-validation")
         result = record_champion_validation(
