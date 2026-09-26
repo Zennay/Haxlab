@@ -1,0 +1,257 @@
+name: Frozen Future Head Challenger
+
+on:
+  push:
+    branches:
+      - experiment/frozen-future-head-v01
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-frozen-future-head-challenger
+  cancel-in-progress: false
+
+jobs:
+  challenger:
+    if: contains(github.event.head_commit.message, '[frozen-future]')
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 150
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preflight frozen future tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m py_compile \
+            "$GITHUB_WORKSPACE/src/haxlab/learning/frozen_future.py" \
+            "$GITHUB_WORKSPACE/src/haxlab/evaluation/elite_model_eval.py" \
+            "$GITHUB_WORKSPACE/src/haxlab/evaluation/champion_registry.py"
+          node --check "$GITHUB_WORKSPACE/tools/select_future_assist.js"
+          node --check "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js"
+
+      - name: Verify frozen champion evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=/var/lib/haxlab/derived/training/elite-player-champion-candidate
+          test -f "$ROOT/model/model.npz"
+          test -f "$ROOT/model/runtime-model.json"
+          test -f "$ROOT/model/metrics.json"
+          test -f "$ROOT/shards/train/_index.json"
+          test -f "$ROOT/shards/validation/_index.json"
+          test -f "$ROOT/shards/holdout/_index.json"
+
+      - name: Train future head only on frozen champion
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=/var/lib/haxlab/derived/training/elite-player-champion-candidate
+          OUT=/var/lib/haxlab/derived/training/elite-player-frozen-future-v01/model
+          sudo -u haxlab rm -rf "$OUT"
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m haxlab.learning.frozen_future \
+            --champion-model-dir "$ROOT/model" \
+            --train-index "$ROOT/shards/train/_index.json" \
+            --validation-index "$ROOT/shards/validation/_index.json" \
+            --holdout-index "$ROOT/shards/holdout/_index.json" \
+            --output-dir "$OUT" \
+            --epochs 2 \
+            --batch-size 4096 \
+            --learning-rate 0.002 \
+            --l2 0.00001 \
+            --future-horizon-steps 5 \
+            --seed 1337 \
+            | tee /tmp/haxlab-frozen-future-training.log
+
+      - name: Re-evaluate both models on identical frozen holdout
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=/var/lib/haxlab/derived/training/elite-player-champion-candidate
+          HOLDOUT="$ROOT/shards/holdout/_index.json"
+          OUT=/var/lib/haxlab/derived/training/elite-player-frozen-future-v01/model
+
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m haxlab.evaluation.elite_model_eval \
+            --model-dir "$ROOT/model" \
+            --index "$HOLDOUT" \
+            --future-horizon-steps 5 \
+            --output /tmp/haxlab-frozen-champion-offline.json
+
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m haxlab.evaluation.elite_model_eval \
+            --model-dir "$OUT" \
+            --index "$HOLDOUT" \
+            --future-horizon-steps 5 \
+            --output /tmp/haxlab-frozen-challenger-offline.json
+
+      - name: Select healthy 4v4 replay
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m haxlab.evaluation.scenario_source \
+            --state-db /var/lib/haxlab/state/haxlab.sqlite3 \
+            --max-candidates 1500 \
+            --output /tmp/haxlab-frozen-scenario-source.json
+
+      - name: Export identical stadium and scenarios
+        shell: bash
+        run: |
+          set -euo pipefail
+          RAW_REPLAY="$(
+            sudo -u haxlab /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          print(json.load(open("/tmp/haxlab-frozen-scenario-source.json"))["raw_path"])
+          PY
+          )"
+          ANALYSIS="$(
+            sudo -u haxlab /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          print(json.load(open("/tmp/haxlab-frozen-scenario-source.json"))["analysis_path"])
+          PY
+          )"
+
+          NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/extract_stadium_from_replay.js" \
+            "$RAW_REPLAY" \
+            /tmp/haxlab-frozen-stadium.hbs
+
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/extract_replay_scenarios.js" \
+            "$RAW_REPLAY" \
+            "$ANALYSIS" \
+            /tmp/haxlab-frozen-scenarios.json \
+            16 \
+            8 \
+            6
+
+      - name: Benchmark current champion
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js" \
+            --model /var/lib/haxlab/derived/training/elite-player-champion-candidate/model/runtime-model.json \
+            --stadium /tmp/haxlab-frozen-stadium.hbs \
+            --scenarios /tmp/haxlab-frozen-scenarios.json \
+            --max-scenarios 8 \
+            --seconds 30 \
+            --sample-every 6 \
+            --disable-recovery \
+            --output /tmp/haxlab-frozen-champion.json
+
+      - name: Benchmark frozen challenger without assist
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js" \
+            --model /var/lib/haxlab/derived/training/elite-player-frozen-future-v01/model/runtime-model.json \
+            --stadium /tmp/haxlab-frozen-stadium.hbs \
+            --scenarios /tmp/haxlab-frozen-scenarios.json \
+            --max-scenarios 8 \
+            --seconds 30 \
+            --sample-every 6 \
+            --disable-recovery \
+            --output /tmp/haxlab-frozen-plain.json
+
+      - name: Benchmark frozen future assist sweep
+        shell: bash
+        run: |
+          set -euo pipefail
+          MODEL=/var/lib/haxlab/derived/training/elite-player-frozen-future-v01/model/runtime-model.json
+          for CONF in 0.45 0.60 0.75; do
+            LABEL="$(printf '%s' "$CONF" | tr '.' '_')"
+            sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+              "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js" \
+              --model "$MODEL" \
+              --stadium /tmp/haxlab-frozen-stadium.hbs \
+              --scenarios /tmp/haxlab-frozen-scenarios.json \
+              --max-scenarios 8 \
+              --seconds 30 \
+              --sample-every 6 \
+              --disable-recovery \
+              --future-assist \
+              --future-assist-confidence "$CONF" \
+              --future-assist-min-distance 80 \
+              --output "/tmp/haxlab-frozen-assisted-\${LABEL}.json"
+          done
+
+      - name: Select frozen future promotion
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/select_future_assist.js" \
+            /tmp/haxlab-frozen-champion-offline.json \
+            /tmp/haxlab-frozen-challenger-offline.json \
+            /tmp/haxlab-frozen-champion.json \
+            /tmp/haxlab-frozen-plain.json \
+            conf_0_45 /tmp/haxlab-frozen-assisted-0_45.json \
+            conf_0_60 /tmp/haxlab-frozen-assisted-0_60.json \
+            conf_0_75 /tmp/haxlab-frozen-assisted-0_75.json \
+            /tmp/haxlab-frozen-promotion.json
+
+      - name: Promote only if all gates pass
+        shell: bash
+        run: |
+          set -euo pipefail
+          if sudo -u haxlab /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          p = json.load(open("/tmp/haxlab-frozen-promotion.json"))
+          raise SystemExit(0 if p.get("promote_future_challenger") else 1)
+          PY
+          then
+            sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" GITHUB_SHA="$GITHUB_SHA" \
+              /opt/haxlab/.venv/bin/python -m haxlab.evaluation.champion_registry \
+              --model-dir /var/lib/haxlab/derived/training/elite-player-frozen-future-v01/model \
+              --promotion-evidence /tmp/haxlab-frozen-promotion.json \
+              --registry-root /var/lib/haxlab/derived/champions/elite-player \
+              --candidate-name frozen-future-v01 \
+              --output /tmp/haxlab-frozen-registry-promotion.json
+          else
+            echo '{"promoted": false, "reason": "promotion_gate_rejected"}' \
+              > /tmp/haxlab-frozen-registry-promotion.json
+          fi
+
+      - name: Publish frozen challenger evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo cat /var/lib/haxlab/derived/training/elite-player-frozen-future-v01/model/metrics.json > frozen-metrics.json
+          sudo cat /tmp/haxlab-frozen-champion-offline.json > frozen-champion-offline.json
+          sudo cat /tmp/haxlab-frozen-challenger-offline.json > frozen-challenger-offline.json
+          sudo cat /tmp/haxlab-frozen-champion.json > frozen-champion.json
+          sudo cat /tmp/haxlab-frozen-plain.json > frozen-plain.json
+          sudo cat /tmp/haxlab-frozen-assisted-0_45.json > frozen-assisted-0_45.json
+          sudo cat /tmp/haxlab-frozen-assisted-0_60.json > frozen-assisted-0_60.json
+          sudo cat /tmp/haxlab-frozen-assisted-0_75.json > frozen-assisted-0_75.json
+          sudo cat /tmp/haxlab-frozen-promotion.json > frozen-promotion.json
+          sudo cat /tmp/haxlab-frozen-registry-promotion.json > frozen-registry-promotion.json
+
+          echo '## HaxLab Frozen Future Head Challenger' >> "$GITHUB_STEP_SUMMARY"
+          cat frozen-promotion.json >> "$GITHUB_STEP_SUMMARY"
+          echo >> "$GITHUB_STEP_SUMMARY"
+          echo '### Registry decision' >> "$GITHUB_STEP_SUMMARY"
+          cat frozen-registry-promotion.json >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frozen-future-head-challenger
+          path: |
+            frozen-metrics.json
+            frozen-champion-offline.json
+            frozen-challenger-offline.json
+            frozen-champion.json
+            frozen-plain.json
+            frozen-assisted-0_45.json
+            frozen-assisted-0_60.json
+            frozen-assisted-0_75.json
+            frozen-promotion.json
+            frozen-registry-promotion.json
+          retention-days: 30
