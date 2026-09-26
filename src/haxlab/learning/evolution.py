@@ -56,10 +56,11 @@ def run_evolution_cycle(
             duel_payload = json.loads(
                 duel_evidence_path.read_text(encoding="utf-8")
             )
-            if (
-                duel_payload.get("schema")
-                == "haxlab-elite-replay-seeded-duel-v1"
-            ):
+            replay_schema = str(duel_payload.get("schema") or "")
+            if replay_schema in {
+                "haxlab-elite-replay-seeded-duel-v1",
+                "haxlab-elite-replay-multisource-duel-v1",
+            }:
                 challenger_evidence = Path(
                     str(duel_payload.get("challenger_model") or "")
                 )
@@ -86,11 +87,55 @@ def run_evolution_cycle(
                         "Replay duel champion model does not match "
                         "the current champion runtime model"
                     )
-                scenario_sha = str(duel_payload.get("scenario_sha256") or "")
-                if len(scenario_sha) != 64:
-                    raise ValueError(
-                        "Replay duel scenario_sha256 is missing or invalid"
+
+                if replay_schema == "haxlab-elite-replay-seeded-duel-v1":
+                    scenario_sha = str(
+                        duel_payload.get("scenario_sha256") or ""
                     )
+                    if len(scenario_sha) != 64:
+                        raise ValueError(
+                            "Replay duel scenario_sha256 is missing or invalid"
+                        )
+                else:
+                    sources = list(duel_payload.get("sources") or [])
+                    hashes = list(duel_payload.get("scenario_sha256s") or [])
+                    if len(sources) < 3 or len(hashes) != len(sources):
+                        raise ValueError(
+                            "Multisource replay duel must contain at least "
+                            "three source/hash pairs"
+                        )
+                    if len(set(hashes)) != len(hashes):
+                        raise ValueError(
+                            "Multisource replay duel contains duplicate "
+                            "scenario hashes"
+                        )
+                    for index, (source, scenario_sha) in enumerate(
+                        zip(sources, hashes),
+                        start=1,
+                    ):
+                        if len(str(scenario_sha)) != 64:
+                            raise ValueError(
+                                f"Multisource scenario hash {index} is invalid"
+                            )
+                        source_duel = source.get("duel") or {}
+                        if (
+                            source_duel.get("schema")
+                            != "haxlab-elite-replay-seeded-duel-v1"
+                        ):
+                            raise ValueError(
+                                f"Multisource duel source {index} "
+                                "has unsupported schema"
+                            )
+                        if (
+                            str(source.get("scenario_sha256") or "")
+                            != str(scenario_sha)
+                            or str(source_duel.get("scenario_sha256") or "")
+                            != str(scenario_sha)
+                        ):
+                            raise ValueError(
+                                f"Multisource duel source {index} "
+                                "scenario hash mismatch"
+                            )
             duel_path = duel_evidence_path
         else:
             if not stadium_path.exists():
