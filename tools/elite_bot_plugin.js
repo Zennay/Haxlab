@@ -57,16 +57,16 @@ module.exports = function(API) {
     type: VariableType.String,
     value:
       process.env.HAXLAB_ELITE_CHAMPION_POINTER ||
-      "/var/lib/haxlab/derived/champions/elite-player/current.json",
+      "/var/lib/haxlab/derived/champions/elite-player/live.json",
     description:
-      "Optional promoted champion pointer. Falls back to modelDir when absent.",
+      "Approved live champion pointer. Falls back to modelDir when absent.",
   });
   this.defineVariable({
     name: "minimumChampionValidationStage",
     type: VariableType.String,
     value:
       process.env.HAXLAB_ELITE_MIN_VALIDATION_STAGE ||
-      "canary",
+      "live",
     description:
       "Minimum registry validation stage required for live loading: promotion, multi_replay, canary, or live.",
   });
@@ -151,7 +151,7 @@ module.exports = function(API) {
       pointerPath: String(that.championPointer || ""),
       fallbackModelDir: String(that.modelDir),
       minimumValidationStage: String(
-        that.minimumChampionValidationStage || "canary",
+        that.minimumChampionValidationStage || "live",
       ),
     });
   }
