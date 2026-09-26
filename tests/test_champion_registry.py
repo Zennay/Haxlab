@@ -10,6 +10,7 @@ from haxlab.evaluation.champion_registry import (
     activate_live_champion,
     promote_champion,
     record_champion_validation,
+    record_live_health,
 )
 
 
@@ -509,3 +510,177 @@ def test_live_activation_can_roll_back_to_prior_runtime_validated_version(
     live = json.loads((registry / "live.json").read_text())
     assert live["version_id"] == first["version_id"]
     assert live["previous_live_version_id"] == second["version_id"]
+
+
+
+def test_live_health_records_versioned_evidence_without_moving_current(
+    tmp_path: Path,
+) -> None:
+    registry, promoted = _promoted_registry(tmp_path)
+
+    canary = tmp_path / "health-canary.json"
+    canary.write_text(
+        json.dumps(
+            {
+                "validated": True,
+                "candidate": {"version_id": promoted["version_id"]},
+                "aggregate": {"replay_count": 10, "total_runtime_errors": 0},
+            }
+        ),
+        encoding="utf-8",
+    )
+    record_champion_validation(
+        registry_root=registry,
+        validation_evidence_path=canary,
+        stage="canary",
+    )
+
+    runtime = tmp_path / "health-runtime.json"
+    runtime.write_text(
+        json.dumps(
+            {
+                "validated": True,
+                "candidate": {"version_id": promoted["version_id"]},
+                "aggregate": {
+                    "case_count": 8,
+                    "policy_decisions": 9600,
+                    "inputs_sent": 200,
+                    "future_assists": 40,
+                    "forbidden_role_future_assists": 0,
+                    "runtime_errors": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    record_champion_validation(
+        registry_root=registry,
+        validation_evidence_path=runtime,
+        stage="runtime",
+    )
+    activate_live_champion(registry_root=registry)
+
+    current_before = json.loads((registry / "current.json").read_text())
+
+    health = tmp_path / "live-health.json"
+    health.write_text(
+        json.dumps(
+            {
+                "schema": "haxlab-elite-plugin-runtime-validation-v1",
+                "validated": True,
+                "candidate": {
+                    "version_id": promoted["version_id"],
+                    "validation_stage_before_runtime": "live",
+                },
+                "aggregate": {
+                    "case_count": 8,
+                    "policy_decisions": 9600,
+                    "inputs_sent": 222,
+                    "future_assists": 51,
+                    "forbidden_role_future_assists": 0,
+                    "runtime_errors": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = record_live_health(
+        registry_root=registry,
+        health_evidence_path=health,
+    )
+    assert result["recorded"] is True
+    assert result["healthy"] is True
+    assert result["version_id"] == promoted["version_id"]
+
+    current_after = json.loads((registry / "current.json").read_text())
+    assert current_after == current_before
+
+    live = json.loads((registry / "live.json").read_text())
+    assert live["validation_stage"] == "live"
+    assert live["live_health"]["healthy"] is True
+    assert live["live_health"]["summary"]["runtime_errors"] == 0
+    assert live["live_health"]["summary"]["future_assists"] == 51
+
+    record = json.loads(
+        (
+            registry
+            / "live-health"
+            / promoted["version_id"]
+            / "current.json"
+        ).read_text()
+    )
+    assert record["healthy"] is True
+    assert record["evidence_sha256"] == result["evidence_sha256"]
+
+
+def test_live_health_rejects_wrong_version_or_failed_gate(
+    tmp_path: Path,
+) -> None:
+    registry, promoted = _promoted_registry(tmp_path)
+
+    canary = tmp_path / "reject-canary.json"
+    canary.write_text(
+        json.dumps(
+            {
+                "validated": True,
+                "candidate": {"version_id": promoted["version_id"]},
+                "aggregate": {"replay_count": 10},
+            }
+        ),
+        encoding="utf-8",
+    )
+    record_champion_validation(
+        registry_root=registry,
+        validation_evidence_path=canary,
+        stage="canary",
+    )
+    runtime = tmp_path / "reject-runtime.json"
+    runtime.write_text(
+        json.dumps(
+            {
+                "validated": True,
+                "candidate": {"version_id": promoted["version_id"]},
+                "aggregate": {"case_count": 8, "runtime_errors": 0},
+            }
+        ),
+        encoding="utf-8",
+    )
+    record_champion_validation(
+        registry_root=registry,
+        validation_evidence_path=runtime,
+        stage="runtime",
+    )
+    activate_live_champion(registry_root=registry)
+
+    failed = tmp_path / "failed-health.json"
+    failed.write_text(
+        json.dumps(
+            {
+                "validated": False,
+                "candidate": {"version_id": promoted["version_id"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="does not pass"):
+        record_live_health(
+            registry_root=registry,
+            health_evidence_path=failed,
+        )
+
+    wrong = tmp_path / "wrong-health.json"
+    wrong.write_text(
+        json.dumps(
+            {
+                "validated": True,
+                "candidate": {"version_id": "different-version"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="version mismatch"):
+        record_live_health(
+            registry_root=registry,
+            health_evidence_path=wrong,
+        )
