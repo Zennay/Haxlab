@@ -81,8 +81,13 @@ jobs:
           PY
 
           echo "=== BUILD WATCH ==="
+          JAVA_BIN="$(find /usr/lib/jvm /opt /home/ubuntu -type f -path '*/bin/java' -perm -111 2>/dev/null | head -1)"
+          if [ -z "$JAVA_BIN" ]; then echo "No Java runtime found" >&2; exit 1; fi
+          export JAVA_HOME="$(dirname "$(dirname "$JAVA_BIN")")"
+          export PATH="$JAVA_HOME/bin:$PATH"
           cd "$ROOT/wear-os"
-          ZENNAY_WATCH_TOKEN="$TOKEN" ./gradlew :app:assembleDebug --no-daemon
+          if [ -x ./gradlew ]; then GRADLE=./gradlew; else GRADLE=/home/ubuntu/.cache/zennay-gradle/gradle-8.13/bin/gradle; fi
+          ZENNAY_WATCH_TOKEN="$TOKEN" "$GRADLE" :app:assembleDebug --no-daemon
           ls -lh app/build/outputs/apk/debug/app-debug.apk
 
           echo "=== AFTER ==="
