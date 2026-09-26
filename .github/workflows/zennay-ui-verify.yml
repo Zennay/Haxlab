@@ -28,8 +28,10 @@ jobs:
             sed -n '1,95p' /home/ubuntu/zennay-cloud/public/app.js
             echo "=== RESOURCE IMPLEMENTATION ==="
             sed -n '1,125p' /home/ubuntu/zennay-cloud/enhancements.py
-            echo "=== SERVER RESOURCE ENDPOINT ==="
-            sed -n '360,410p' /home/ubuntu/zennay-cloud/server.py
+            echo "=== WATCH PROJECT / ALERTS ==="
+            sed -n '285,390p' /home/ubuntu/zennay-cloud/server.py
+            echo "=== ALERT ENGINE ==="
+            grep -n -A180 -B20 "def evaluate_alerts" /home/ubuntu/zennay-cloud/enhancements.py || true
             echo "=== CSS REFS ==="
             grep -n -E "resource|priority|quality|milestone-progress" /home/ubuntu/zennay-cloud/public/style.css | tail -100 || true
           } > "$OUT"
