@@ -1,6 +1,7 @@
 "use strict";
 
-const { Utils } = require("node-haxball");
+const initAPI = require("node-haxball");
+const { Utils } = initAPI();
 
 const ROLE_STARTS = Object.freeze({
   gk: { x: -620, y: 0 },
