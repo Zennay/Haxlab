@@ -1,0 +1,214 @@
+name: Elite Live Health Validation
+
+on:
+  push:
+    branches:
+      - experiment/frozen-future-head-v01
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-elite-live-health-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    if: contains(github.event.head_commit.message, '[live-health]')
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preflight live health tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check "$GITHUB_WORKSPACE/tools/elite_plugin_runtime_validation.js"
+          node --check "$GITHUB_WORKSPACE/tools/elite_bot_plugin.js"
+          node --check "$GITHUB_WORKSPACE/tools/elite_champion_config.js"
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m py_compile \
+            "$GITHUB_WORKSPACE/src/haxlab/evaluation/champion_registry.py"
+
+      - name: Require activated live champion
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path("/var/lib/haxlab/derived/champions/elite-player")
+          live = json.loads((root / "live.json").read_text())
+          if live.get("validation_stage") != "live":
+              raise SystemExit(
+                  "Live health validation requires live.json stage='live'"
+              )
+          if live.get("source_validation_stage") != "runtime":
+              raise SystemExit(
+                  "Live champion was not sourced from runtime validation"
+              )
+          for key in ("runtime_model_path", "model_path", "metrics_path"):
+              path = Path(live[key])
+              if not path.is_file():
+                  raise SystemExit(f"Live artifact missing: {path}")
+          print(json.dumps({
+              "version_id": live["version_id"],
+              "runtime_config": live.get("runtime_config"),
+              "live_activated_at": live.get("live_activated_at"),
+          }, indent=2))
+          PY
+
+      - name: Select live health replay
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m haxlab.evaluation.scenario_source \
+            --state-db /var/lib/haxlab/state/haxlab.sqlite3 \
+            --max-candidates 2500 \
+            --output /tmp/haxlab-live-health-source.json
+
+          mapfile -t SRC < <(
+            sudo -u haxlab /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          data = json.load(open("/tmp/haxlab-live-health-source.json"))
+          print(data["raw_path"])
+          print(data["analysis_path"])
+          PY
+          )
+          RAW="${SRC[0]}"
+          ANALYSIS="${SRC[1]}"
+
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/extract_stadium_from_replay.js" \
+            "$RAW" /tmp/haxlab-live-health-stadium.hbs
+
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/extract_replay_scenarios.js" \
+            "$RAW" "$ANALYSIS" \
+            /tmp/haxlab-live-health-scenarios.json 12 6 6
+
+      - name: Exercise activated live pointer
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/elite_plugin_runtime_validation.js" \
+            --pointer /var/lib/haxlab/derived/champions/elite-player/live.json \
+            --fallback-model-dir /var/lib/haxlab/derived/training/elite-player-champion-candidate/model \
+            --stadium /tmp/haxlab-live-health-stadium.hbs \
+            --scenarios /tmp/haxlab-live-health-scenarios.json \
+            --max-scenarios 4 \
+            --seconds 30 \
+            --sample-every 6 \
+            --minimum-validation-stage live \
+            --output /tmp/haxlab-live-health-validation.json
+
+      - name: Record passing live health
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          data = json.load(open("/tmp/haxlab-live-health-validation.json"))
+          if data.get("validated") is not True:
+              raise SystemExit("Live health gate rejected activated champion")
+          print(json.dumps({
+              "validated": True,
+              "candidate": data.get("candidate"),
+              "aggregate": data.get("aggregate"),
+              "checks": data.get("checks"),
+          }, indent=2))
+          PY
+
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m haxlab.evaluation.champion_registry \
+            --registry-root /var/lib/haxlab/derived/champions/elite-player \
+            --record-live-health /tmp/haxlab-live-health-validation.json \
+            --output /tmp/haxlab-live-health-registry.json
+
+      - name: Verify live health record
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path("/var/lib/haxlab/derived/champions/elite-player")
+          live = json.loads((root / "live.json").read_text())
+          health = live.get("live_health") or {}
+          if health.get("healthy") is not True:
+              raise SystemExit("live.json does not contain healthy evidence")
+          evidence = Path(health["evidence_path"])
+          if not evidence.is_file():
+              raise SystemExit(f"Live health evidence missing: {evidence}")
+          payload = json.loads(evidence.read_text())
+          if payload.get("validated") is not True:
+              raise SystemExit("Stored live health evidence no longer passes")
+          candidate = payload.get("candidate") or {}
+          if candidate.get("version_id") != live.get("version_id"):
+              raise SystemExit("Stored live health evidence version mismatch")
+          print(json.dumps({
+              "version_id": live["version_id"],
+              "healthy": health["healthy"],
+              "checked_at": health["checked_at"],
+              "evidence_sha256": health["evidence_sha256"],
+              "summary": health.get("summary"),
+          }, indent=2))
+          PY
+
+      - name: Publish live health evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          copy_if_present() {
+            local src="$1"
+            local dst="$2"
+            if sudo test -f "$src"; then
+              sudo cat "$src" > "$dst"
+            fi
+          }
+          copy_if_present /tmp/haxlab-live-health-source.json live-health-source.json
+          copy_if_present /tmp/haxlab-live-health-validation.json live-health-validation.json
+          copy_if_present /tmp/haxlab-live-health-registry.json live-health-registry.json
+          copy_if_present /var/lib/haxlab/derived/champions/elite-player/live.json live-pointer.json
+
+          echo '## HaxLab Live Health Validation' >> "$GITHUB_STEP_SUMMARY"
+          if test -f live-health-validation.json; then
+            cat live-health-validation.json >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Live health validation did not produce evidence.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: elite-live-health-validation
+          path: |
+            live-health-source.json
+            live-health-validation.json
+            live-health-registry.json
+            live-pointer.json
+          retention-days: 30
+
+      - name: Enforce live health gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          data = json.load(open("live-health-validation.json"))
+          print(json.dumps({
+              "validated": data.get("validated"),
+              "candidate": data.get("candidate"),
+              "aggregate": data.get("aggregate"),
+              "checks": data.get("checks"),
+              "boundary_reload": data.get("boundary_reload"),
+          }, indent=2))
+          raise SystemExit(0 if data.get("validated") else 1)
+          PY
