@@ -112,10 +112,24 @@ jobs:
             echo "ARENA_WEAK=$OUT/ablated-zero-policy.json"
           } >> "$GITHUB_ENV"
 
-      - name: Run three-source paired calibration batch
+      - name: Run full frozen paired calibration batch
         shell: bash
         run: |
           set -euo pipefail
+
+          run_source() {
+            local LABEL="$1"
+            local CHALLENGER="$2"
+            local I="$3"
+            local SOURCE="$ARENA_ROOT/source-$I"
+            local RESULT="$ARENA_OUT/$LABEL-source-$I.json"
+            local DECISION="$ARENA_OUT/$LABEL-source-$I-decision.json"
+
+            echo "=== arena-v2 label=$LABEL source=$I scenarios=16 ==="
+            sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node "$GITHUB_WORKSPACE/tools/elite_closed_loop_arena_v2.js" --challenger "$CHALLENGER" --champion "$ARENA_LIVE" --stadium "$SOURCE/stadium.hbs" --scenarios "$SOURCE/scenarios.json" --partner-model "$ARENA_LIVE" --partner-model "$ARENA_PARTNER_B" --partner-model "$ARENA_PARTNER_C" --max-scenarios 16 --seconds 30 --sample-every 6 --plug-repeats 1 --seed 1337 --output "$RESULT" >/dev/null
+            sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" /opt/haxlab/.venv/bin/python -m haxlab.evaluation.closed_loop_arena "$RESULT" --output "$DECISION" >/dev/null
+          }
+
           for LABEL in champion-self candidate-d weak-zero; do
             case "$LABEL" in
               champion-self) CHALLENGER="$ARENA_LIVE" ;;
@@ -123,15 +137,13 @@ jobs:
               weak-zero) CHALLENGER="$ARENA_WEAK" ;;
             esac
 
+            PIDS=()
             for I in 01 02 03; do
-              SOURCE="$ARENA_ROOT/source-$I"
-              RESULT="$ARENA_OUT/$LABEL-source-$I.json"
-              DECISION="$ARENA_OUT/$LABEL-source-$I-decision.json"
-
-              echo "=== arena-v2 label=$LABEL source=$I ==="
-              sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node                 "$GITHUB_WORKSPACE/tools/elite_closed_loop_arena_v2.js"                 --challenger "$CHALLENGER"                 --champion "$ARENA_LIVE"                 --stadium "$SOURCE/stadium.hbs"                 --scenarios "$SOURCE/scenarios.json"                 --partner-model "$ARENA_LIVE"                 --partner-model "$ARENA_PARTNER_B"                 --partner-model "$ARENA_PARTNER_C"                 --max-scenarios 3                 --seconds 30                 --sample-every 6                 --plug-repeats 1                 --seed 1337                 --output "$RESULT" >/dev/null
-
-              sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src"                 /opt/haxlab/.venv/bin/python -m haxlab.evaluation.closed_loop_arena                 "$RESULT" --output "$DECISION" >/dev/null
+              run_source "$LABEL" "$CHALLENGER" "$I" &
+              PIDS+=("$!")
+            done
+            for PID in "${PIDS[@]}"; do
+              wait "$PID"
             done
           done
 
