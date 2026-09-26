@@ -72,7 +72,7 @@ jobs:
             8 \
             6
 
-      - name: Benchmark champion from real replay states
+      - name: Benchmark champion with recovery disabled
         shell: bash
         run: |
           set -euo pipefail
@@ -84,7 +84,31 @@ jobs:
             --max-scenarios 8 \
             --seconds 30 \
             --sample-every 6 \
-            --output /tmp/haxlab-replay-scenario-benchmark.json
+            --disable-recovery \
+            --output /tmp/haxlab-replay-scenario-baseline.json
+
+      - name: Benchmark champion with recovery enabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js" \
+            --model /var/lib/haxlab/derived/training/elite-player-champion-candidate/model/runtime-model.json \
+            --stadium /tmp/haxlab-replay-scenario-stadium.hbs \
+            --scenarios /tmp/haxlab-replay-scenarios.json \
+            --max-scenarios 8 \
+            --seconds 30 \
+            --sample-every 6 \
+            --output /tmp/haxlab-replay-scenario-recovery.json
+
+      - name: Compare recovery A B
+        shell: bash
+        run: |
+          set -euo pipefail
+          node "$GITHUB_WORKSPACE/tools/compare_recovery_benchmark.js" \
+            /tmp/haxlab-replay-scenario-baseline.json \
+            /tmp/haxlab-replay-scenario-recovery.json \
+            /tmp/haxlab-recovery-ab.json
 
       - name: Publish evidence
         shell: bash
@@ -92,13 +116,19 @@ jobs:
           set -euo pipefail
           cp /tmp/haxlab-scenario-source.json scenario-source.json
           cp /tmp/haxlab-replay-scenarios.json replay-scenarios.json
-          cp /tmp/haxlab-replay-scenario-benchmark.json replay-scenario-benchmark.json
+          cp /tmp/haxlab-replay-scenario-baseline.json replay-scenario-baseline.json
+          cp /tmp/haxlab-replay-scenario-recovery.json replay-scenario-recovery.json
+          cp /tmp/haxlab-recovery-ab.json recovery-ab.json
 
           echo '## HaxLab Replay-Seeded Closed-Loop Benchmark' >> "$GITHUB_STEP_SUMMARY"
           echo '### Source' >> "$GITHUB_STEP_SUMMARY"
           cat scenario-source.json >> "$GITHUB_STEP_SUMMARY"
-          echo '### Benchmark' >> "$GITHUB_STEP_SUMMARY"
-          cat replay-scenario-benchmark.json >> "$GITHUB_STEP_SUMMARY"
+          echo '### Baseline - recovery OFF' >> "$GITHUB_STEP_SUMMARY"
+          cat replay-scenario-baseline.json >> "$GITHUB_STEP_SUMMARY"
+          echo '### Candidate - recovery ON' >> "$GITHUB_STEP_SUMMARY"
+          cat replay-scenario-recovery.json >> "$GITHUB_STEP_SUMMARY"
+          echo '### Recovery A/B' >> "$GITHUB_STEP_SUMMARY"
+          cat recovery-ab.json >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -106,5 +136,7 @@ jobs:
           path: |
             scenario-source.json
             replay-scenarios.json
-            replay-scenario-benchmark.json
+            replay-scenario-baseline.json
+            replay-scenario-recovery.json
+            recovery-ab.json
           retention-days: 30
