@@ -1,0 +1,40 @@
+name: Live Control Plane Smoke
+
+on:
+  push:
+    branches:
+      - experiment/live-control-plane-v01
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-live-control-plane-smoke
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create isolated environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .live-control-venv
+          python3 -m venv .live-control-venv
+          .live-control-venv/bin/pip install --upgrade pip
+          .live-control-venv/bin/pip install -e '.[dev]'
+
+      - name: Validate registry rollback controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .live-control-venv/bin/python -m pytest -q \
+            tests/test_champion_registry.py
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .live-control-venv/bin/python -m py_compile \
+            src/haxlab/evaluation/champion_registry.py
