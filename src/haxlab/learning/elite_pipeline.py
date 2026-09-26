@@ -50,6 +50,7 @@ def run_elite_pipeline(
     batch_size: int = 2048,
     learning_rate: float = 8e-4,
     l2: float = 1e-5,
+    state_jitter_std: float = 0.0,
     seed: int = 1337,
     replay_limit: int | None = None,
     train_replay_limit: int | None = None,
@@ -168,6 +169,7 @@ def run_elite_pipeline(
         batch_size=batch_size,
         learning_rate=learning_rate,
         l2=l2,
+        state_jitter_std=state_jitter_std,
         seed=seed,
         progress_path=progress_path,
     )
@@ -188,6 +190,7 @@ def run_elite_pipeline(
             for split in ("train", "validation", "holdout")
         },
         "best_epoch": model["training"]["best_epoch"],
+        "state_jitter": model["training"].get("state_jitter"),
         "kick_threshold": model["training"]["calibrated_kick_threshold"],
         "validation": model["final_validation"],
         "frozen_holdout": model["final_holdout"],
@@ -260,6 +263,7 @@ def main() -> int:
     parser.add_argument("--batch-size", type=int, default=2048)
     parser.add_argument("--learning-rate", type=float, default=8e-4)
     parser.add_argument("--l2", type=float, default=1e-5)
+    parser.add_argument("--state-jitter-std", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=1337)
     parser.add_argument(
         "--replay-limit",
@@ -295,6 +299,7 @@ def main() -> int:
         batch_size=max(32, args.batch_size),
         learning_rate=max(1e-6, args.learning_rate),
         l2=max(0.0, args.l2),
+        state_jitter_std=max(0.0, args.state_jitter_std),
         seed=args.seed,
         replay_limit=args.replay_limit,
         train_replay_limit=args.train_replay_limit,
