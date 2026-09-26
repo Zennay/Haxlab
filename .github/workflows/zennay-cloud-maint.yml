@@ -5,7 +5,6 @@ on:
     branches: [zennay-cloud-maint]
     paths:
       - ".github/workflows/zennay-cloud-maint.yml"
-      - "maintenance/apply_zennay_cloud.py"
 
 permissions:
   contents: write
@@ -17,36 +16,91 @@ concurrency:
 jobs:
   apply:
     runs-on: [self-hosted, haxlab]
-    timeout-minutes: 30
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
           ref: zennay-cloud-maint
-      - name: Apply Zennay Cloud resource, alert and Wear updates
+
+      - name: Apply upgrade safely
         shell: bash
         run: |
           set -euo pipefail
-          python3 maintenance/apply_zennay_cloud.py 2>&1 | tee /tmp/zcm-result.txt
-      - name: Publish maintenance result
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          {
-            echo "=== workflow result ==="
-            cat /tmp/zcm-result.txt 2>/dev/null || echo "patch did not produce output"
+          exec > >(tee /tmp/zennay-cloud-upgrade-result.txt) 2>&1
+          ROOT=/home/ubuntu/zennay-cloud
+          echo "generated_at=$(date -Is)"
+          echo "=== BEFORE ==="
+          for s in haxlab-analyzer.service haxlab-ingest.service haxlab-worker.service actions.runner.Zennay-Haxlab.vps-bb300bba-haxlab.service actions.runner.Zennay-Ftmo.vps-bb300bba-ftmo.service ftmo-autonomous.timer zennay-cloud.service; do
+            echo -n "$s "
+            systemctl show "$s" -p ActiveState -p SubState -p MainPID -p CPUWeight -p MemoryHigh --value | tr '\n' ' '
             echo
-            echo "=== service health ==="
-            systemctl is-active zennay-cloud.service || true
-            systemctl is-active haxlab-analyzer.service || true
-            systemctl is-active haxlab-ingest.service || true
-            systemctl is-active haxlab-worker.service || true
-            systemctl is-active actions.runner.Zennay-Haxlab.vps-bb300bba-haxlab.service || true
-            systemctl is-active actions.runner.Zennay-Ftmo.vps-bb300bba-ftmo.service || true
-          } > zennay-cloud-maint-result.txt
+          done
+
+          cp "$ROOT/server.py" "$ROOT/server.py.bak-resource-alerts"
+          cp "$ROOT/projects.json" "$ROOT/projects.json.bak-resource-alerts"
+          cp "$ROOT/public/app.js" "$ROOT/public/app.js.bak-resource-alerts"
+
+          python3 zennay-cloud-maint/apply_backend.py
+          base64 -d zennay-cloud-maint/apply_web.py.b64 >/tmp/apply_web.py
+          python3 /tmp/apply_web.py
+          base64 -d zennay-cloud-maint/apply_wear.py.b64 >/tmp/apply_wear.py
+          python3 /tmp/apply_wear.py
+
+          echo "=== VALIDATE SOURCE ==="
+          cd "$ROOT"
+          python3 -m json.tool projects.json >/dev/null
+          python3 -m py_compile server.py
+          node --check public/app.js
+
+          echo "=== RESOURCE POLICY ==="
+          sudo systemctl set-property haxlab-analyzer.service CPUWeight=15
+          sudo systemctl set-property haxlab-ingest.service CPUWeight=10
+          sudo systemctl set-property haxlab-worker.service CPUWeight=15
+          sudo systemctl set-property actions.runner.Zennay-Haxlab.vps-bb300bba-haxlab.service CPUWeight=20 MemoryHigh=2560M
+          sudo systemctl set-property actions.runner.Zennay-Ftmo.vps-bb300bba-ftmo.service CPUWeight=100 MemoryHigh=4096M
+          sudo systemctl set-property ftmo-autonomous.service CPUWeight=100 MemoryHigh=4096M
+          sudo systemctl set-property zennay-cloud.service CPUWeight=40
+
+          echo "=== RESTART CLOUD ONLY ==="
+          sudo systemctl restart zennay-cloud.service
+          sleep 3
+          curl -fsS http://127.0.0.1:8765/api/status >/tmp/status.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open("/tmp/status.json"))
+          print("visible",[(p["id"],p["progress"],p.get("priority"),(p.get("quality") or {}).get("headline_value")) for p in d["projects"]])
+          print("archived",[p["id"] for p in d.get("archived_projects",[])])
+          PY
+          TOKEN="$(cat "$ROOT/.watch-token")"
+          curl -fsS -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8765/api/v1/watch >/tmp/watch.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open("/tmp/watch.json"))
+          print("watch_projects",[p["id"] for p in d["projects"]])
+          print("alerts",[(a["severity"],a.get("project"),a["title"]) for a in d.get("alerts",[])])
+          PY
+
+          echo "=== BUILD WATCH ==="
+          cd "$ROOT/wear-os"
+          ZENNAY_WATCH_TOKEN="$TOKEN" ./gradlew :app:assembleDebug --no-daemon
+          ls -lh app/build/outputs/apk/debug/app-debug.apk
+
+          echo "=== AFTER ==="
+          for s in haxlab-analyzer.service haxlab-ingest.service haxlab-worker.service actions.runner.Zennay-Haxlab.vps-bb300bba-haxlab.service actions.runner.Zennay-Ftmo.vps-bb300bba-ftmo.service ftmo-autonomous.timer zennay-cloud.service; do
+            echo -n "$s "
+            systemctl show "$s" -p ActiveState -p SubState -p MainPID -p CPUWeight -p MemoryHigh --value | tr '\n' ' '
+            echo
+          done
+
+      - name: Publish result
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp /tmp/zennay-cloud-upgrade-result.txt zennay-cloud-maint-result.txt 2>/dev/null || echo "upgrade failed before log creation" > zennay-cloud-maint-result.txt
           git config user.name "zennay-cloud-maint"
           git config user.email "actions@users.noreply.github.com"
           git add zennay-cloud-maint-result.txt
           git diff --cached --quiet && exit 0
-          git commit -m "chore: record Zennay Cloud maintenance result"
+          git commit -m "chore: publish Zennay Cloud upgrade result"
           git push origin HEAD:zennay-cloud-maint
