@@ -167,8 +167,8 @@ def _serve_stdio(policy: ElitePolicy) -> int:
                     "window": policy.window,
                     "kick_threshold": policy.kick_threshold,
                     "kick_thresholds_by_role": {
-                        ROLE_NAMES: policy.kick_thresholds_by_role.get(role_id)
-                        for ROLE_NAMES, role_id in ROLE_IDS.items()
+                        role_name: policy.kick_thresholds_by_role.get(role_id)
+                        for role_name, role_id in ROLE_IDS.items()
                         if role_id in policy.kick_thresholds_by_role
                     },
                     "kick_max_distance": policy.kick_max_distance,
