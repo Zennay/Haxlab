@@ -65,6 +65,7 @@ jobs:
           node --check tools/elite_sandbox_benchmark.js
           node --check tools/elite_model_duel.js
           node tests/test_elite_mirror.js
+          node tests/test_elite_feature_order.js
 
       - name: Test
         shell: bash
