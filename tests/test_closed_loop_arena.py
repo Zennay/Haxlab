@@ -1,4 +1,3 @@
-
 from haxlab.evaluation.closed_loop_arena import (
     ClosedLoopArenaPolicy,
     decide_closed_loop_arena,
