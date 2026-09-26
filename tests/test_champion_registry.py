@@ -68,6 +68,12 @@ def _sandbox() -> dict:
             "compact": {},
             "press": {},
         },
+        "progression": {"elite_share": 0.55},
+        "policy_activity": {
+            "total_actions": 14_400,
+            "total_kicks": 720,
+            "nonzero_movement_rate": 0.60,
+        },
         "match_results": rows,
     }
 
