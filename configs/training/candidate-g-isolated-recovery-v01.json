@@ -1,0 +1,162 @@
+{
+  "schema": "haxlab-candidate-g-isolated-recovery-contract-v1",
+  "candidate": "G",
+  "frozen_before_training": true,
+  "hypothesis": "isolate learned recovery from the frozen human/base policy so human-BC gradients cannot overwrite recovery learning",
+  "base": {
+    "source_candidate": "E",
+    "code_sha": "475bcaf9a5e4dcf325654cde93c485d2dd56fee2",
+    "model_sha256": "8244759af2854e024462feec8fe39cd76ef4e2f42a4ade867bd52f379261b4b1",
+    "runtime_model_sha256": "7d3c07ec18fc0cd8df09baed89e07f9acbf714a1ac65a11375e633c85934223f",
+    "metrics_sha256": "adfc6f260d386729a6dbcc3db84e076e87b669868681ae122a929274aa3a5fd1",
+    "window": 8,
+    "representation": "h2",
+    "representation_dim": 96,
+    "frozen_parameters": [
+      "mean",
+      "std",
+      "role_weights",
+      "w1",
+      "b1",
+      "w2",
+      "b2",
+      "wd",
+      "bd",
+      "wk",
+      "bk",
+      "wf",
+      "bf"
+    ],
+    "rationale": "Candidate E is the last clean human-policy baseline before Candidate F shared-trunk recovery updates; isolated recovery learnability already passed on the frozen Candidate-E backbone."
+  },
+  "human_indexes": {
+    "train_sha256": "920ca18fdbc3682130307c01f91d61ad745d6642824f19962c6a2c614ffe1923",
+    "validation_sha256": "baaa00830ec3906640e893344262282d931de15b7a1c5c63485df1da44d6ba27",
+    "holdout_sha256": "a80b9789547ba3befd993bfd4c62c84b2c2c999a6d9283d9b2ef3c08451083fe",
+    "holdout_usage": "sealed_until_final_candidate_evaluation; never used for head fitting or development selection"
+  },
+  "recovery_dataset": {
+    "dataset_id": "candidate-e-arena-v2-recovery-v2",
+    "manifest_sha256": "e34e5e5a16004898d4e13c275794dc1d8012a9cedf23718cddb5ef578b439755",
+    "eligible_filter": {
+      "window": 8,
+      "failure_any_of": [
+        "boundary",
+        "role_deviation"
+      ]
+    },
+    "eligible_counts": {
+      "train": 3341,
+      "validation": 543,
+      "evaluation": 457
+    },
+    "train_by_role": {
+      "gk": 712,
+      "dm": 889,
+      "am": 889,
+      "st": 851
+    }
+  },
+  "recovery_direction_head": {
+    "architecture": "affine_96_to_9_plus_softmax",
+    "initialization": "copy Candidate-E base direction wd/bd into separate recovery-only wd/bd",
+    "trainable_parameters": [
+      "recovery_wd",
+      "recovery_bd"
+    ],
+    "target": "auxiliary_targets.role_target direction class",
+    "target_deadzone": 7,
+    "failed_policy_action_is_target": false,
+    "optimizer": "adam",
+    "learning_rate": 0.0008,
+    "batch_size": 256,
+    "epochs": 3,
+    "seed": 1337,
+    "draws_per_epoch": 14336,
+    "updates_per_epoch": 56,
+    "sampling": "epoch-seeded permutation of 3341 eligible train fingerprints, repeated cyclically without replacement within each pass",
+    "epoch_seed": "1337 + epoch_number",
+    "l2": false,
+    "state_jitter": false,
+    "role_or_failure_reweighting": false,
+    "selection": "fixed 3 epochs; no validation-picked epoch",
+    "preregistered_smoke_floor": {
+      "validation_accuracy": 0.7,
+      "evaluation_accuracy": 0.6
+    },
+    "strict_proof_observed": {
+      "validation_accuracy": 0.768,
+      "evaluation_accuracy": 0.6696
+    }
+  },
+  "recovery_activation_head": {
+    "architecture": "affine_96_to_2_plus_softmax",
+    "positive_class": "recovery",
+    "negative_class": "normal_policy",
+    "solver": "deterministic ordinary least squares on one-hot labels via numpy.linalg.lstsq(rcond=None); one fit only",
+    "positive_train_examples": "all 3341 eligible recovery-v2 train examples",
+    "negative_train_examples": {
+      "total": 3341,
+      "role_matched_counts": {
+        "gk": 712,
+        "dm": 889,
+        "am": 889,
+        "st": 851
+      },
+      "source": "human train index only",
+      "selection": "first valid window-8 sequences per role in canonical index/player/frame order",
+      "shuffle": false,
+      "jitter": false
+    },
+    "development_validation_negatives": "role-matched human validation sequences only; frozen human holdout excluded",
+    "threshold": 0.5,
+    "preregistered_smoke_floor": {
+      "validation_recovery_recall": 0.9,
+      "evaluation_recovery_recall": 0.9,
+      "validation_normal_specificity": 0.95,
+      "evaluation_normal_specificity": 0.95
+    },
+    "observed_linear_probe": {
+      "validation_recovery_recall": 0.9429097605893186,
+      "evaluation_recovery_recall": 0.9190371991247265,
+      "validation_normal_specificity": 0.9631675874769797,
+      "evaluation_normal_specificity": 0.9912472647702407
+    }
+  },
+  "routing": {
+    "rule": "if P(recovery) >= 0.50 use recovery direction head; otherwise use exact base direction head",
+    "gate_off_invariant": "base direction probabilities must be exactly unchanged (max_abs_delta=0.0)",
+    "kick_head": "always frozen Candidate-E base kick head",
+    "future_direction_head": "always frozen Candidate-E base future head",
+    "external_guard_or_role_leash_allowed_as_skill": false,
+    "raw_policy_recovery_path": true
+  },
+  "implementation_smoke": {
+    "required_before_full_candidate_training": true,
+    "development_only": true,
+    "combined_observed": {
+      "recovery_head_validation_accuracy": 0.9226519337016574,
+      "recovery_head_evaluation_accuracy": 0.8730853391684902,
+      "routed_recovery_validation_accuracy": 0.8839779005524862,
+      "routed_recovery_evaluation_accuracy": 0.8140043763676149,
+      "gate_off_base_exact": true
+    }
+  },
+  "full_candidate_rules": {
+    "no_hyperparameter_search": true,
+    "no_candidate_f_retune": true,
+    "no_human_base_training": true,
+    "no_holdout_tuning": true,
+    "promotion_v5_required_before_full_training": true,
+    "promotion_v4_consumed": true,
+    "promotion_threshold_changes": false,
+    "production_pointer_writes": false,
+    "private_canary_before_all_automated_gates": false
+  },
+  "final_evaluation": {
+    "frozen_human_holdout": "run exactly once after the assembled Candidate-G policy is trained; existing human gate semantics unchanged",
+    "promotion_suite": "fresh promotion-v2-frozen-suite-v5 only",
+    "arena_policy": "closed-loop-arena-v2-frozen-1 unchanged",
+    "decision_rule": "any blocking automated gate failure rejects Candidate G; do not retune this contract from Candidate-G outcomes"
+  }
+}
