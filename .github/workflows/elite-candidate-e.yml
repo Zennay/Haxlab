@@ -83,7 +83,7 @@ jobs:
           }, indent=2))
           PY
 
-          sha256sum             /var/lib/haxlab/derived/champions/elite-player/current.json             /var/lib/haxlab/derived/champions/elite-player/live.json             > /tmp/candidate-e-production-pointers.before
+          sudo -u haxlab sha256sum             /var/lib/haxlab/derived/champions/elite-player/current.json             /var/lib/haxlab/derived/champions/elite-player/live.json             > /tmp/candidate-e-production-pointers.before
 
       - name: Clear stale Candidate E evidence
         shell: bash
@@ -120,6 +120,12 @@ jobs:
               "future_loss_weight": abs(
                   float(train.get("future_loss_weight") or -1.0) - 0.50
               ) < 1e-12,
+              "state_jitter_std": abs(
+                  float((train.get("state_jitter") or {}).get("std_normalized") or -1.0) - 0.05
+              ) < 1e-12,
+              "state_jitter_roles": (
+                  (train.get("state_jitter") or {}).get("roles") == ["am", "st"]
+              ),
               "holdout_samples": int(
                   (metrics.get("final_holdout") or {}).get("samples") or 0
               ) > 0,
@@ -234,7 +240,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sha256sum -c /tmp/candidate-e-production-pointers.before
+          sudo -u haxlab sha256sum -c /tmp/candidate-e-production-pointers.before
 
           sudo -u haxlab /opt/haxlab/.venv/bin/python - <<'PY'
           import json
