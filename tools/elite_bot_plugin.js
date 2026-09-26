@@ -61,6 +61,35 @@ module.exports = function(API) {
     description: "Team for the four AI players (1 red, 2 blue).",
   });
   this.defineVariable({
+    name: "enableRecovery",
+    type: VariableType.Boolean,
+    value: process.env.HAXLAB_ELITE_RECOVERY === "1",
+    description:
+      "Enable the closed-loop anti-stall recovery guard. Off by default until benchmark promotion.",
+  });
+  this.defineVariable({
+    name: "recoveryMinDistance",
+    type: VariableType.Integer,
+    value: 240,
+    range: { min: 60, max: 800, step: 10 },
+    description: "Minimum ball distance before stalled movement can trigger recovery.",
+  });
+  this.defineVariable({
+    name: "recoveryStallDecisions",
+    type: VariableType.Integer,
+    value: 6,
+    range: { min: 2, max: 20, step: 1 },
+    description: "Consecutive stationary decisions required before recovery.",
+  });
+  this.defineVariable({
+    name: "recoveryTicks",
+    type: VariableType.Integer,
+    value: 2,
+    range: { min: 1, max: 12, step: 1 },
+    description: "Policy decision steps to keep a recovery trajectory active.",
+  });
+
+  this.defineVariable({
     name: "autoSpawn",
     type: VariableType.Boolean,
     value: process.env.HAXLAB_ELITE_AUTOSPAWN === "1",
@@ -219,19 +248,25 @@ module.exports = function(API) {
             : 0;
 
         if (
+          that.enableRecovery &&
           bot.recoveryTicks <= 0 &&
           shouldRecoverFromStall(
             { dirX: action.dir_x, dirY: action.dir_y },
             ballDistance,
             bot.stallStreak,
+            {
+              minimumBallDistance: Number(that.recoveryMinDistance) || 240,
+              minimumStallDecisions:
+                Number(that.recoveryStallDecisions) || 6,
+            },
           )
         ) {
-          bot.recoveryTicks = 5;
+          bot.recoveryTicks = Number(that.recoveryTicks) || 2;
           bot.recoveryOverrides += 1;
           bot.stallStreak = 0;
         }
 
-        if (bot.recoveryTicks > 0) {
+        if (that.enableRecovery && bot.recoveryTicks > 0) {
           const teamId = teamIdForPlayer(player);
           const recovery = recoveryAction(
             bot.role,
