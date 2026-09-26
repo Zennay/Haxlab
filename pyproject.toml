@@ -43,6 +43,7 @@ haxlab-sandbox-gate = "haxlab.evaluation.sandbox_gate:main"
 haxlab-scenario-source = "haxlab.evaluation.scenario_source:main"
 haxlab-replay-audit = "haxlab.evaluation.replay_population_audit:main"
 haxlab-replay-seeded-duel = "haxlab.evaluation.replay_duel:main"
+haxlab-compare-closed-loop-arena = "haxlab.evaluation.closed_loop_arena:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
