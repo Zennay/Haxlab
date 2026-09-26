@@ -150,34 +150,40 @@ jobs:
             --disable-recovery \
             --output /tmp/haxlab-future-plain.json
 
-      - name: Benchmark future challenger with learned assist
+      - name: Benchmark learned future assist sweep
         shell: bash
         run: |
           set -euo pipefail
-          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
-            "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js" \
-            --model /var/lib/haxlab/derived/training/elite-player-future-challenger/model/runtime-model.json \
-            --stadium /tmp/haxlab-future-stadium.hbs \
-            --scenarios /tmp/haxlab-future-scenarios.json \
-            --max-scenarios 8 \
-            --seconds 30 \
-            --sample-every 6 \
-            --disable-recovery \
-            --future-assist \
-            --future-assist-confidence 0.45 \
-            --future-assist-min-distance 80 \
-            --output /tmp/haxlab-future-assisted.json
+          MODEL=/var/lib/haxlab/derived/training/elite-player-future-challenger/model/runtime-model.json
+          for CONF in 0.45 0.60 0.75; do
+            LABEL="$(printf '%s' "$CONF" | tr '.' '_')"
+            sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+              "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js" \
+              --model "$MODEL" \
+              --stadium /tmp/haxlab-future-stadium.hbs \
+              --scenarios /tmp/haxlab-future-scenarios.json \
+              --max-scenarios 8 \
+              --seconds 30 \
+              --sample-every 6 \
+              --disable-recovery \
+              --future-assist \
+              --future-assist-confidence "$CONF" \
+              --future-assist-min-distance 80 \
+              --output "/tmp/haxlab-future-assisted-${LABEL}.json"
+          done
 
-      - name: Evaluate challenger promotion
+      - name: Select future-assist promotion
         shell: bash
         run: |
           set -euo pipefail
-          node "$GITHUB_WORKSPACE/tools/compare_future_challenger.js" \
+          node "$GITHUB_WORKSPACE/tools/select_future_assist.js" \
             /tmp/haxlab-future-champion-offline.json \
             /tmp/haxlab-future-challenger-offline.json \
             /tmp/haxlab-future-champion.json \
             /tmp/haxlab-future-plain.json \
-            /tmp/haxlab-future-assisted.json \
+            conf_0_45 /tmp/haxlab-future-assisted-0_45.json \
+            conf_0_60 /tmp/haxlab-future-assisted-0_60.json \
+            conf_0_75 /tmp/haxlab-future-assisted-0_75.json \
             /tmp/haxlab-future-promotion.json
 
       - name: Publish evidence
@@ -189,7 +195,9 @@ jobs:
           cp /tmp/haxlab-future-challenger-offline.json future-challenger-offline.json
           cp /tmp/haxlab-future-champion.json future-champion.json
           cp /tmp/haxlab-future-plain.json future-plain.json
-          cp /tmp/haxlab-future-assisted.json future-assisted.json
+          cp /tmp/haxlab-future-assisted-0_45.json future-assisted-0_45.json
+          cp /tmp/haxlab-future-assisted-0_60.json future-assisted-0_60.json
+          cp /tmp/haxlab-future-assisted-0_75.json future-assisted-0_75.json
           cp /tmp/haxlab-future-promotion.json future-promotion.json
 
           echo '## HaxLab Future Motion Challenger' >> "$GITHUB_STEP_SUMMARY"
@@ -204,6 +212,8 @@ jobs:
             future-challenger-offline.json
             future-champion.json
             future-plain.json
-            future-assisted.json
+            future-assisted-0_45.json
+            future-assisted-0_60.json
+            future-assisted-0_75.json
             future-promotion.json
           retention-days: 30
