@@ -73,6 +73,11 @@ class ElitePolicyRuntime {
     this.roleIds = { ...ROLE_IDS, ...(model.role_ids || {}) };
     this.directionClasses = model.direction_classes.slice();
     this.kickThreshold = Number(model.kick_threshold);
+    this.kickThresholdsByRole = Object.fromEntries(
+      Object.entries(model.kick_thresholds_by_role || {}).map(
+        ([role, value]) => [role, Number(value)],
+      ),
+    );
     this.kickMaxDistance = Number(model.kick_max_distance ?? 31.0);
     this.weights = model.weights;
     this.history = new Map();
@@ -203,11 +208,17 @@ class ElitePolicyRuntime {
       false,
     )[0];
     const kickProbability = sigmoid(kickLogit);
+    const roleKey = Object.entries(this.roleIds).find(
+      ([, value]) => Number(value) === roleId,
+    )?.[0];
+    const roleKickThreshold = Number(
+      this.kickThresholdsByRole[roleKey] ?? this.kickThreshold,
+    );
     const ballDx = Number(features.ball_dx || 0);
     const ballDy = Number(features.ball_dy || 0);
     const ballDistance = Math.hypot(ballDx, ballDy);
     const kickInRange = ballDistance <= this.kickMaxDistance;
-    const kickRequested = kickProbability >= this.kickThreshold;
+    const kickRequested = kickProbability >= roleKickThreshold;
     const direction = this.directionClasses[directionClass];
     if (!direction) {
       throw new Error(`direction class ${directionClass} missing from model`);
@@ -221,7 +232,8 @@ class ElitePolicyRuntime {
       dir_y: Number(direction.dir_y),
       kick: kickRequested && kickInRange,
       kick_probability: kickProbability,
-      kick_threshold: this.kickThreshold,
+      kick_threshold: roleKickThreshold,
+      global_kick_threshold: this.kickThreshold,
       kick_requested: kickRequested,
       kick_in_range: kickInRange,
       kick_max_distance: this.kickMaxDistance,
@@ -239,6 +251,7 @@ class ElitePolicyRuntime {
       source_model_schema: this.model.source_model_schema,
       window: this.window,
       kick_threshold: this.kickThreshold,
+      kick_thresholds_by_role: { ...this.kickThresholdsByRole },
       kick_max_distance: this.kickMaxDistance,
       input_columns: this.inputColumns.slice(),
     };
