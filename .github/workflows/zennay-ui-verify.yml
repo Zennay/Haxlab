@@ -32,8 +32,12 @@ jobs:
             sed -n '285,390p' /home/ubuntu/zennay-cloud/server.py
             echo "=== ALERT ENGINE ==="
             grep -n -A180 -B20 "def evaluate_alerts" /home/ubuntu/zennay-cloud/enhancements.py || true
-            echo "=== CSS REFS ==="
-            grep -n -E "resource|priority|quality|milestone-progress" /home/ubuntu/zennay-cloud/public/style.css | tail -100 || true
+            echo "=== WEAR MODELS ==="
+            cat /home/ubuntu/zennay-cloud/wear-os/app/src/main/java/com/zennay/cloud/watch/data/Models.kt
+            echo "=== WEAR REPOSITORY ==="
+            sed -n '1,240p' /home/ubuntu/zennay-cloud/wear-os/app/src/main/java/com/zennay/cloud/watch/data/ZennayCloudRepository.kt
+            echo "=== WEAR DETAIL ==="
+            sed -n '155,285p' /home/ubuntu/zennay-cloud/wear-os/app/src/main/java/com/zennay/cloud/watch/ui/ZennayWearApp.kt
           } > "$OUT"
       - name: Publish
         shell: bash
