@@ -1,4 +1,3 @@
-
 # Closed-Loop Evaluation Arena v2
 
 ## Goal
