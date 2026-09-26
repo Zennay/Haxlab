@@ -114,6 +114,8 @@ def test_batch_builder_records_provenance(tmp_path) -> None:
 
     assert manifest["scanned"] == 2
     assert manifest["succeeded"] == 1
+    assert manifest["built"] == 1
+    assert manifest["reused"] == 0
     assert manifest["failed"] == 1
     assert manifest["entries"][0]["replay_sha256"] == "a" * 64
     assert manifest["entries"][0]["analysis_sha256"] == hashlib.sha256(rendered).hexdigest()
@@ -143,8 +145,14 @@ def test_batch_builder_is_deterministic(tmp_path) -> None:
     first = build_analytics_batch(source_root, output_root)
     second = build_analytics_batch(source_root, output_root)
 
-    assert first == second
-    assert [item["replay_sha256"] for item in first["entries"]] == [
-        "0" * 64,
-        "f" * 64,
+    expected_order = ["0" * 64, "f" * 64]
+    assert [item["replay_sha256"] for item in first["entries"]] == expected_order
+    assert [item["replay_sha256"] for item in second["entries"]] == expected_order
+    assert first["built"] == 2
+    assert first["reused"] == 0
+    assert second["built"] == 0
+    assert second["reused"] == 2
+    assert [item["analysis_sha256"] for item in first["entries"]] == [
+        item["analysis_sha256"] for item in second["entries"]
     ]
+    assert all(item["status"] == "reused" for item in second["entries"])
