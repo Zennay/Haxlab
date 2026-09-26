@@ -9,8 +9,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: haxlab-elite-future-motion-challenger-${{ contains(github.event.head_commit.message, '[future]') }}
-  cancel-in-progress: true
+  # All branches write the same VPS model/evaluation paths. Serialize the
+  # complete workflow across branches; never cancel an in-flight training run.
+  group: haxlab-elite-future-motion-shared-vps
+  cancel-in-progress: false
 
 jobs:
   challenger:
@@ -38,13 +40,6 @@ jobs:
           set -euo pipefail
           ROOT=/var/lib/haxlab/derived/training/elite-player-champion-candidate
           OUT=/var/lib/haxlab/derived/training/elite-player-future-challenger/model
-
-          # Acquire the lock before touching the shared output directory.
-          exec 9>/tmp/haxlab-future-challenger.lock
-          if ! flock -n 9; then
-            echo "Another future-motion challenger is already running; skipping duplicate."
-            exit 0
-          fi
 
           sudo -u haxlab rm -rf "$OUT"
           sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
