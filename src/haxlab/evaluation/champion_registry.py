@@ -222,12 +222,159 @@ def promote_champion(
     }
 
 
+VALIDATION_STAGE_ORDER = {
+    "promotion": 0,
+    "multi_replay": 10,
+    "canary": 20,
+    "live": 30,
+}
+
+
+def _validation_summary(evidence: dict[str, Any]) -> dict[str, Any]:
+    aggregate = evidence.get("aggregate")
+    if not isinstance(aggregate, dict):
+        return {}
+    keep = (
+        "replay_count",
+        "mean_movement_delta",
+        "median_movement_delta",
+        "worst_movement_delta",
+        "movement_nonnegative_replays",
+        "mean_progression_delta",
+        "worst_progression_delta",
+        "mean_territory_delta",
+        "worst_territory_delta",
+        "mean_near_ball_delta",
+        "total_runtime_errors",
+        "max_assist_rate",
+        "max_side_gap",
+    )
+    return {key: aggregate[key] for key in keep if key in aggregate}
+
+
+def record_champion_validation(
+    *,
+    registry_root: Path,
+    validation_evidence_path: Path,
+    stage: str,
+) -> dict[str, Any]:
+    registry_root = registry_root.resolve()
+    validation_evidence_path = validation_evidence_path.resolve()
+    stage = str(stage).strip().lower()
+
+    if stage not in VALIDATION_STAGE_ORDER:
+        raise ValueError(f"unknown champion validation stage: {stage}")
+    if stage == "promotion":
+        raise ValueError("promotion is recorded by promote_champion, not validation")
+    if not validation_evidence_path.is_file():
+        raise FileNotFoundError(validation_evidence_path)
+
+    current_path = registry_root / "current.json"
+    if not current_path.is_file():
+        raise FileNotFoundError(current_path)
+
+    pointer = json.loads(current_path.read_text(encoding="utf-8"))
+    if pointer.get("schema") != "haxlab-champion-pointer-v1":
+        raise ValueError("unsupported champion pointer schema")
+
+    version_id = str(pointer.get("version_id") or "")
+    if not version_id:
+        raise ValueError("champion pointer missing version_id")
+
+    evidence = json.loads(
+        validation_evidence_path.read_text(encoding="utf-8")
+    )
+    if evidence.get("validated") is not True:
+        raise ValueError("validation evidence does not pass its gate")
+
+    candidate = evidence.get("candidate")
+    if isinstance(candidate, dict):
+        evidence_version = str(candidate.get("version_id") or "")
+        if evidence_version and evidence_version != version_id:
+            raise ValueError(
+                "validation evidence version mismatch: "
+                f"{evidence_version} != {version_id}"
+            )
+
+    evidence_sha = _sha256(validation_evidence_path)
+    destination_dir = registry_root / "validations" / version_id / stage
+    destination = destination_dir / f"{evidence_sha}.json"
+    destination_dir.mkdir(parents=True, exist_ok=True)
+
+    if destination.exists():
+        if _sha256(destination) != evidence_sha:
+            raise ValueError("validation evidence hash collision")
+    else:
+        shutil.copy2(validation_evidence_path, destination)
+        if _sha256(destination) != evidence_sha:
+            destination.unlink(missing_ok=True)
+            raise ValueError("validation evidence copy checksum mismatch")
+
+    previous_stage = str(pointer.get("validation_stage") or "promotion")
+    previous_rank = VALIDATION_STAGE_ORDER.get(previous_stage, -1)
+    current_rank = VALIDATION_STAGE_ORDER[stage]
+    if previous_rank > current_rank:
+        raise ValueError(
+            f"refusing champion validation stage downgrade: "
+            f"{previous_stage} -> {stage}"
+        )
+
+    validated_at = datetime.now(timezone.utc).isoformat()
+    record = {
+        "schema": "haxlab-champion-validation-record-v1",
+        "version_id": version_id,
+        "stage": stage,
+        "validated_at": validated_at,
+        "evidence_path": str(destination),
+        "evidence_sha256": evidence_sha,
+        "summary": _validation_summary(evidence),
+    }
+    _atomic_json(
+        registry_root / "validations" / version_id / "current.json",
+        record,
+    )
+
+    updated_pointer = {
+        **pointer,
+        "validation_stage": stage,
+        "validation_evidence_path": str(destination),
+        "validation_evidence_sha256": evidence_sha,
+        "validation_summary": record["summary"],
+        "validation_updated_at": validated_at,
+        "updated_at": validated_at,
+    }
+    _atomic_json(current_path, updated_pointer)
+
+    return {
+        "recorded": True,
+        "version_id": version_id,
+        "stage": stage,
+        "evidence_path": str(destination),
+        "evidence_sha256": evidence_sha,
+        "current_path": str(current_path),
+        "summary": record["summary"],
+    }
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(prog="haxlab-promote-champion")
-    parser.add_argument("--model-dir", type=Path, required=True)
-    parser.add_argument("--promotion-evidence", type=Path, required=True)
+    parser = argparse.ArgumentParser(prog="haxlab-champion-registry")
+    parser.add_argument(
+        "--record-validation",
+        type=Path,
+        default=None,
+        help="Record passing validation evidence for the current champion.",
+    )
+    parser.add_argument(
+        "--validation-stage",
+        default=None,
+        choices=sorted(
+            stage for stage in VALIDATION_STAGE_ORDER if stage != "promotion"
+        ),
+    )
+    parser.add_argument("--model-dir", type=Path, default=None)
+    parser.add_argument("--promotion-evidence", type=Path, default=None)
     parser.add_argument("--registry-root", type=Path, required=True)
-    parser.add_argument("--candidate-name", required=True)
+    parser.add_argument("--candidate-name", default=None)
     parser.add_argument(
         "--code-commit",
         default=os.environ.get("GITHUB_SHA"),
@@ -235,13 +382,28 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
 
-    result = promote_champion(
-        model_dir=args.model_dir,
-        promotion_evidence_path=args.promotion_evidence,
-        registry_root=args.registry_root,
-        candidate_name=args.candidate_name,
-        code_commit=args.code_commit,
-    )
+    if args.record_validation is not None:
+        if not args.validation_stage:
+            parser.error("--validation-stage is required with --record-validation")
+        result = record_champion_validation(
+            registry_root=args.registry_root,
+            validation_evidence_path=args.record_validation,
+            stage=args.validation_stage,
+        )
+    else:
+        if args.model_dir is None:
+            parser.error("--model-dir is required for promotion")
+        if args.promotion_evidence is None:
+            parser.error("--promotion-evidence is required for promotion")
+        if not args.candidate_name:
+            parser.error("--candidate-name is required for promotion")
+        result = promote_champion(
+            model_dir=args.model_dir,
+            promotion_evidence_path=args.promotion_evidence,
+            registry_root=args.registry_root,
+            candidate_name=args.candidate_name,
+            code_commit=args.code_commit,
+        )
     rendered = json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True)
     print(rendered)
     if args.output is not None:
