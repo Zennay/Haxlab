@@ -24,10 +24,10 @@ jobs:
           OUT="$GITHUB_WORKSPACE/zennay-ui-verify-result.txt"
           {
             echo "generated_at=$(date -Is)"
-            echo "=== APP RESOURCE / QUALITY / MILESTONE REFS ==="
-            grep -n -E "resource|priority|quality|milestone-progress|current_milestone_progress" /home/ubuntu/zennay-cloud/public/app.js | head -220 || true
-            echo "=== APP FUNCTIONS AROUND RESOURCE ==="
-            grep -n -A35 -B15 "resource" /home/ubuntu/zennay-cloud/public/app.js | head -300 || true
+            echo "=== APP SOURCE ==="
+            sed -n '1,95p' /home/ubuntu/zennay-cloud/public/app.js
+            echo "=== RESOURCE IMPLEMENTATION ==="
+            grep -n -A120 -B20 "def set_priority" /home/ubuntu/zennay-cloud/enhancements.py || true
             echo "=== SERVER RESOURCE ENDPOINT ==="
             sed -n '360,410p' /home/ubuntu/zennay-cloud/server.py
             echo "=== CSS REFS ==="
