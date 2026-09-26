@@ -207,6 +207,9 @@ function runMatch({
     roleBallDistanceSum: { gk: 0, dm: 0, am: 0, st: 0 },
     roleBallDistanceSamples: { gk: 0, dm: 0, am: 0, st: 0 },
     roleNearBallSamples: { gk: 0, dm: 0, am: 0, st: 0 },
+    eliteBallProgressTotal: 0,
+    baselineBallProgressTotal: 0,
+    previousEliteAxisX: null,
   };
 
   for (let tick = 0; tick < totalTicks; tick += 1) {
@@ -294,6 +297,12 @@ function runMatch({
         }
 
         const eliteAxisX = (eliteTeamId === 1 ? 1 : -1) * num(ball.pos.x);
+        if (metrics.previousEliteAxisX != null) {
+          const delta = eliteAxisX - metrics.previousEliteAxisX;
+          if (delta > 0) metrics.eliteBallProgressTotal += delta;
+          else if (delta < 0) metrics.baselineBallProgressTotal += -delta;
+        }
+        metrics.previousEliteAxisX = eliteAxisX;
         metrics.sampledTicks += 1;
         if (eliteAxisX > 10) metrics.eliteBallHalfTicks += 1;
         else if (eliteAxisX < -10) metrics.baselineBallHalfTicks += 1;
@@ -339,6 +348,16 @@ function runMatch({
       neutral_rate: metrics.neutralBallTicks / sampled,
       elite_attack_third_rate: metrics.eliteAttackThirdTicks / sampled,
       baseline_attack_third_rate: metrics.baselineAttackThirdTicks / sampled,
+    },
+    progression: {
+      elite_positive_x: metrics.eliteBallProgressTotal,
+      baseline_positive_x: metrics.baselineBallProgressTotal,
+      elite_share:
+        metrics.eliteBallProgressTotal /
+        Math.max(
+          1e-9,
+          metrics.eliteBallProgressTotal + metrics.baselineBallProgressTotal,
+        ),
     },
     policy: {
       runtime_errors: runtimeErrors,
@@ -467,6 +486,11 @@ function summarize(matches, stadium, modelPath) {
       baseline_attack_third_rate: avg(
         (match) => match.territory.baseline_attack_third_rate,
       ),
+    },
+    progression: {
+      elite_share: avg((match) => match.progression.elite_share),
+      elite_positive_x: avg((match) => match.progression.elite_positive_x),
+      baseline_positive_x: avg((match) => match.progression.baseline_positive_x),
     },
     runtime_errors: runtimeErrors,
     by_elite_side: bySide,
