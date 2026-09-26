@@ -25,8 +25,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          rm -rf .multi-replay-venv
+          python3 -m venv .multi-replay-venv
+          .multi-replay-venv/bin/pip install --upgrade pip
+          .multi-replay-venv/bin/pip install -e '.[dev]'
           PYTHONPATH="$GITHUB_WORKSPACE/src" \
-            /opt/haxlab/.venv/bin/python -m pytest -q \
+            .multi-replay-venv/bin/python -m pytest -q \
             "$GITHUB_WORKSPACE/tests/test_scenario_source.py"
           node --check "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js"
           node --check "$GITHUB_WORKSPACE/tools/validate_multi_replay_champion.js"
@@ -181,15 +185,30 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sudo cat /tmp/haxlab-multi-sources.json > multi-replay-sources.json
-          sudo cat /tmp/haxlab-multi-manifest.json > multi-replay-manifest.json
-          sudo cat /tmp/haxlab-multi-validation.json > multi-replay-validation.json
+
+          copy_if_present() {
+            local src="$1"
+            local dst="$2"
+            if sudo test -f "$src"; then
+              sudo cat "$src" > "$dst"
+            fi
+          }
+
+          copy_if_present /tmp/haxlab-multi-sources.json multi-replay-sources.json
+          copy_if_present /tmp/haxlab-multi-manifest.json multi-replay-manifest.json
+          copy_if_present /tmp/haxlab-multi-validation.json multi-replay-validation.json
+
+          shopt -s nullglob
           for FILE in /tmp/haxlab-multi-*-champion.json /tmp/haxlab-multi-*-candidate.json; do
             sudo cat "$FILE" > "$(basename "$FILE")"
           done
 
           echo '## HaxLab Multi-Replay Champion Validation' >> "$GITHUB_STEP_SUMMARY"
-          cat multi-replay-validation.json >> "$GITHUB_STEP_SUMMARY"
+          if test -f multi-replay-validation.json; then
+            cat multi-replay-validation.json >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Validation did not reach the aggregate gate.' >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - uses: actions/upload-artifact@v4
         if: always()
