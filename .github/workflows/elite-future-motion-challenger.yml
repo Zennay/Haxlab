@@ -58,6 +58,27 @@ jobs:
             --seed 1337 \
             | tee /tmp/haxlab-future-challenger-training.log
 
+      - name: Re-evaluate champion and challenger on identical frozen holdout
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=/var/lib/haxlab/derived/training/elite-player-champion-candidate
+          HOLDOUT="$ROOT/shards/holdout/_index.json"
+
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m haxlab.evaluation.elite_model_eval \
+            --model-dir "$ROOT/model" \
+            --index "$HOLDOUT" \
+            --future-horizon-steps 5 \
+            --output /tmp/haxlab-future-champion-offline.json
+
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m haxlab.evaluation.elite_model_eval \
+            --model-dir /var/lib/haxlab/derived/training/elite-player-future-challenger/model \
+            --index "$HOLDOUT" \
+            --future-horizon-steps 5 \
+            --output /tmp/haxlab-future-challenger-offline.json
+
       - name: Select healthy 4v4 replay
         shell: bash
         run: |
@@ -152,8 +173,8 @@ jobs:
         run: |
           set -euo pipefail
           node "$GITHUB_WORKSPACE/tools/compare_future_challenger.js" \
-            /var/lib/haxlab/derived/training/elite-player-champion-candidate/model/metrics.json \
-            /var/lib/haxlab/derived/training/elite-player-future-challenger/model/metrics.json \
+            /tmp/haxlab-future-champion-offline.json \
+            /tmp/haxlab-future-challenger-offline.json \
             /tmp/haxlab-future-champion.json \
             /tmp/haxlab-future-plain.json \
             /tmp/haxlab-future-assisted.json \
@@ -164,6 +185,8 @@ jobs:
         run: |
           set -euo pipefail
           sudo cat /var/lib/haxlab/derived/training/elite-player-future-challenger/model/metrics.json > future-metrics.json
+          cp /tmp/haxlab-future-champion-offline.json future-champion-offline.json
+          cp /tmp/haxlab-future-challenger-offline.json future-challenger-offline.json
           cp /tmp/haxlab-future-champion.json future-champion.json
           cp /tmp/haxlab-future-plain.json future-plain.json
           cp /tmp/haxlab-future-assisted.json future-assisted.json
@@ -177,6 +200,8 @@ jobs:
           name: elite-future-motion-challenger
           path: |
             future-metrics.json
+            future-champion-offline.json
+            future-challenger-offline.json
             future-champion.json
             future-plain.json
             future-assisted.json
