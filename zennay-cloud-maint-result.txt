@@ -1,6 +1,395 @@
 WHOAMI=ubuntu
 SUDO_OK=1
 === watch metric pill ===
+package com.zennay.cloud.watch.ui
+
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.wear.compose.material.MaterialTheme
+import androidx.wear.compose.material.Text
+import com.zennay.cloud.watch.data.ProjectDetail
+import com.zennay.cloud.watch.data.ProjectSummary
+import com.zennay.cloud.watch.data.ProgressPoint
+import com.zennay.cloud.watch.data.ServiceState
+import com.zennay.cloud.watch.data.WatchSnapshot
+import com.zennay.cloud.watch.data.ZennayCloudRepository
+import java.time.Duration
+import java.time.Instant
+import kotlinx.coroutines.launch
+
+private val Bg = Color(0xFF05070A)
+private val Surface = Color(0xFF0D1219)
+private val Surface2 = Color(0xFF141B24)
+private val TextMain = Color(0xFFF3F7FB)
+private val TextMuted = Color(0xFF8D9AAA)
+private val Accent = Color(0xFF71E8C2)
+private val Blue = Color(0xFF7AB7FF)
+private val Warning = Color(0xFFFFC66D)
+private val Danger = Color(0xFFFF7D86)
+private val Track = Color(0xFF202A35)
+
+@Composable
+fun ZennayWearApp(repository: ZennayCloudRepository = remember { ZennayCloudRepository() }) {
+    var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
+    MaterialTheme {
+        Box(Modifier.fillMaxSize().background(Bg)) {
+            if (selectedId == null) {
+                HomeScreen(repository = repository, onProject = { selectedId = it })
+            } else {
+                BackHandler { selectedId = null }
+                DetailScreen(
+                    projectId = selectedId!!,
+                    repository = repository,
+                    onBack = { selectedId = null }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeScreen(
+    repository: ZennayCloudRepository,
+    onProject: (String) -> Unit
+) {
+    var data by remember { mutableStateOf<WatchSnapshot?>(null) }
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    suspend fun reload() {
+        loading = true
+        runCatching { repository.loadHome() }
+            .onSuccess { data = it; error = null }
+            .onFailure { error = it.message ?: "Cloud offline" }
+        loading = false
+    }
+    LaunchedEffect(Unit) { reload() }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 26.dp, end = 26.dp, top = 18.dp, bottom = 34.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            HeaderRow(
+                title = "Zennay Cloud",
+                subtitle = if (loading) "SYNCING" else "LIVE",
+                onRefresh = { scope.launch { reload() } }
+            )
+        }
+        if (error != null && data == null) {
+            item { ErrorCard(error ?: "Cloud offline", onRetry = { scope.launch { reload() } }) }
+        }
+        data?.let { snapshot ->
+            item {
+                OverviewHero(
+                    progress = snapshot.overallProgress,
+                    active = snapshot.activeProjects,
+                    cpu = snapshot.host.cpu,
+                    ram = snapshot.host.memoryPercent
+                )
+            }
+            if (snapshot.warnings.isNotEmpty()) {
+                item {
+                    SurfaceCard {
+                        Label("WARNING", Warning)
+                        Text(
+                            snapshot.warnings.first().message,
+                            color = TextMain,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth(),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+            item { SectionLabel("PROJECTS") }
+            items(snapshot.projects, key = { it.id }) { project ->
+                ProjectCard(project = project, onClick = { onProject(project.id) })
+            }
+            item {
+                Text(
+                    if (snapshot.stale) "Data stale" else "Live · ${shortAge(snapshot.generatedAt)}",
+                    color = if (snapshot.stale) Warning else TextMuted,
+                    fontSize = 9.sp,
+                    modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DetailScreen(
+    projectId: String,
+    repository: ZennayCloudRepository,
+    onBack: () -> Unit
+) {
+    var detail by remember(projectId) { mutableStateOf<ProjectDetail?>(null) }
+    var loading by remember(projectId) { mutableStateOf(true) }
+    var error by remember(projectId) { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    suspend fun reload() {
+        loading = true
+        runCatching { repository.loadProject(projectId) }
+            .onSuccess { detail = it; error = null }
+            .onFailure { error = it.message ?: "Cloud offline" }
+        loading = false
+    }
+    LaunchedEffect(projectId) { reload() }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 26.dp, end = 26.dp, top = 18.dp, bottom = 34.dp),
+        verticalArrangement = Arrangement.spacedBy(11.dp)
+    ) {
+        item {
+            HeaderRow(
+                title = detail?.name?.uppercase() ?: projectId.uppercase(),
+                subtitle = if (loading) "syncing" else "project",
+                leading = "‹",
+                onLeading = onBack,
+                onRefresh = { scope.launch { reload() } }
+            )
+        }
+        if (error != null && detail == null) {
+            item { ErrorCard(error ?: "Cloud offline", onRetry = { scope.launch { reload() } }) }
+        }
+        detail?.let { p ->
+            item { ProjectHero(p) }
+            item {
+                SurfaceCard {
+                    Label("CURRENT", Blue)
+                    Text(
+                        p.currentMilestone,
+                        color = TextMain,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(5.dp))
+                    AiLine(p.lastAiRun?.time, p.lastAiRun?.estimated == true)
+                }
+            }
+            item {
+                SurfaceCard {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Label("PROGRESS", Accent)
+                        Text("${p.progress}%", color = TextMuted, fontSize = 10.sp)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Sparkline(p.progressHistory)
+                }
+            }
+            if (p.services.isNotEmpty()) {
+                item {
+                    SurfaceCard {
+                        Label("SERVICES", Blue)
+                        Spacer(Modifier.height(4.dp))
+                        p.services.forEach { ServiceLine(it) }
+                    }
+                }
+            }
+            item {
+                SurfaceCard {
+                    Label("NEXT", Accent)
+                    Text(
+                        p.nextStep,
+                        color = TextMain,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            if (p.recentActivity.isNotEmpty()) {
+                item { SectionLabel("RECENT") }
+                items(p.recentActivity.take(4)) { event ->
+                    SurfaceCard {
+                        Text(
+                            event.title,
+                            color = TextMain,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(shortAge(event.time), color = TextMuted, fontSize = 9.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HeaderRow(
+    title: String,
+    subtitle: String,
+    onRefresh: () -> Unit,
+    leading: String? = null,
+    onLeading: (() -> Unit)? = null
+) {
+    Box(
+        modifier = Modifier.fillMaxWidth().height(48.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        if (leading != null && onLeading != null) {
+            Box(modifier = Modifier.align(Alignment.CenterStart)) {
+                RoundAction(leading, onLeading)
+            }
+        }
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                title,
+                color = TextMain,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(0.62f)
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                subtitle.uppercase(),
+                color = if (subtitle.equals("live", true)) Accent else TextMuted,
+                fontSize = 7.sp,
+                letterSpacing = 1.1.sp,
+                textAlign = TextAlign.Center
+            )
+        }
+        Box(modifier = Modifier.align(Alignment.CenterEnd)) {
+            RoundAction(if (subtitle.equals("syncing", true)) "…" else "↻", onRefresh)
+        }
+    }
+}
+
+@Composable
+private fun RoundAction(label: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(42.dp)
+            .background(Surface2, CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(label, color = TextMain, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun OverviewHero(progress: Int, active: Int, cpu: Double?, ram: Int) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        ProgressRing(progress, 108.dp)
+        Spacer(Modifier.height(12.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            MetricPill("ACTIVE", "$active")
+            MetricPill("CPU", cpu?.let { "${it.toInt()}%" } ?: "—")
+            MetricPill("RAM", "$ram%")
+        }
+    }
+}
+@Composable
+private fun ProjectHero(p: ProjectDetail) {
+    SurfaceCard {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            ProgressRing(p.progress, 70.dp)
+            Column(horizontalAlignment = Alignment.End) {
+                StatusDot(p.health)
+                Spacer(Modifier.height(7.dp))
+                Text(p.status.uppercase(), color = TextMuted, fontSize = 9.sp, letterSpacing = 0.8.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProjectCard(project: ProjectSummary, onClick: () -> Unit) {
+    SurfaceCard(modifier = Modifier.clickable(onClick = onClick)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            MiniRing(project.progress)
+            Spacer(Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(project.name, color = TextMain, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text("${project.progress}%", color = Accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    project.milestone,
+                    color = TextMuted,
+                    fontSize = 9.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -82,6 +471,551 @@ private fun ServiceLine(service: ServiceState) {
 }
 
 @Composable
+=== gradle ===
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
+}
+val apiBase = System.getenv("ZENNAY_API_BASE") ?: "http://198.244.191.182:8765"
+val apiToken = System.getenv("ZENNAY_WATCH_TOKEN") ?: ""
+fun quoted(value: String) = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
+android {
+    namespace = "com.zennay.cloud.watch"
+    compileSdk = 36
+
+    defaultConfig {
+        applicationId = "com.zennay.cloud.watch"
+        minSdk = 30
+        targetSdk = 35
+        versionCode = 2
+        versionName = "0.2.0"
+        buildConfigField("String", "API_BASE", quoted(apiBase))
+        buildConfigField("String", "API_TOKEN", quoted(apiToken))
+    }
+
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = "17" }
+}
+
+dependencies {
+    implementation("androidx.compose.ui:ui:1.11.0")
+    implementation("androidx.compose.ui:ui-graphics:1.11.0")
+    implementation("androidx.compose.foundation:foundation:1.11.0")
+    implementation("androidx.activity:activity-compose:1.13.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
+    implementation("androidx.wear.compose:compose-foundation:1.6.1")
+    implementation("androidx.wear.compose:compose-material:1.6.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+}
+=== models ===
+package com.zennay.cloud.watch.data
+
+data class ActivityItem(
+    val time: String,
+    val kind: String,
+    val title: String,
+    val detail: String?
+)
+
+data class AiRun(
+    val time: String,
+    val label: String,
+    val estimated: Boolean
+)
+
+data class ProjectSummary(
+    val id: String,
+    val name: String,
+    val progress: Int,
+    val status: String,
+    val health: String,
+    val milestone: String,
+    val nextStep: String,
+    val lastActivity: ActivityItem?,
+    val lastAiRun: AiRun?
+)
+
+data class HostSummary(
+    val cpu: Double?,
+    val memoryPercent: Int,
+    val load: Double
+)
+
+data class WarningItem(
+    val level: String,
+    val project: String?,
+    val message: String
+)
+
+data class WatchSnapshot(
+    val generatedAt: String,
+    val stale: Boolean,
+    val overallProgress: Int,
+    val activeProjects: Int,
+    val host: HostSummary,
+    val warnings: List<WarningItem>,
+    val projects: List<ProjectSummary>
+)
+
+data class ServiceState(
+    val name: String,
+    val state: String,
+    val result: String?
+)
+
+data class ProgressPoint(
+    val time: String,
+    val progress: Float
+)
+
+data class ProjectDetail(
+    val id: String,
+    val name: String,
+    val progress: Int,
+    val health: String,
+    val status: String,
+    val currentMilestone: String,
+    val nextStep: String,
+    val lastAiRun: AiRun?,
+    val recentActivity: List<ActivityItem>,
+    val progressHistory: List<ProgressPoint>,
+    val services: List<ServiceState>
+)
+=== repo ===
+package com.zennay.cloud.watch.data
+
+import com.zennay.cloud.watch.BuildConfig
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+
+class ZennayCloudRepository(
+    private val baseUrl: String = BuildConfig.API_BASE.trimEnd('/'),
+    private val token: String = BuildConfig.API_TOKEN
+) {
+    suspend fun loadHome(): WatchSnapshot = withContext(Dispatchers.IO) {
+        parseHome(request("/api/v1/watch"))
+    }
+
+    suspend fun loadProject(id: String): ProjectDetail = withContext(Dispatchers.IO) {
+        val encoded = URLEncoder.encode(id, Charsets.UTF_8.name())
+        parseProject(request("/api/v1/watch/project?project=$encoded").getJSONObject("project"))
+    }
+
+    private fun request(path: String): JSONObject {
+        val connection = (URL(baseUrl + path).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 5_000
+            readTimeout = 5_000
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("Authorization", "Bearer $token")
+            setRequestProperty("User-Agent", "ZennayCloudWear/0.1")
+        }
+        try {
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            if (code !in 200..299) throw IllegalStateException("Cloud HTTP $code")
+            return JSONObject(body)
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun parseHome(root: JSONObject): WatchSnapshot {
+        val host = root.getJSONObject("host")
+        return WatchSnapshot(
+
+            generatedAt = root.getString("time"),
+            stale = root.optBoolean("stale", false),
+            overallProgress = root.getInt("overall_progress"),
+            activeProjects = root.getInt("active_projects"),
+            host = HostSummary(
+                cpu = if (host.isNull("cpu")) null else host.getDouble("cpu"),
+                memoryPercent = host.getInt("memory_percent"),
+                load = host.optDouble("load", 0.0)
+            ),
+            warnings = root.getJSONArray("warnings").mapObjects(::parseWarning),
+            projects = root.getJSONArray("projects").mapObjects(::parseSummary)
+        )
+    }
+
+    private fun parseSummary(o: JSONObject) = ProjectSummary(
+        id = o.getString("id"),
+        name = o.getString("name"),
+        progress = o.getInt("progress"),
+        status = o.getString("status"),
+        health = o.getString("health"),
+        milestone = o.optString("milestone"),
+        nextStep = o.optString("next_step"),
+        lastActivity = o.optJSONObject("last_activity")?.let(::parseActivity),
+        lastAiRun = o.optJSONObject("last_chatgpt_run")?.let(::parseAiRun)
+    )
+
+    private fun parseProject(o: JSONObject) = ProjectDetail(
+        id = o.getString("id"),
+        name = o.getString("name"),
+        progress = o.getInt("progress"),
+        health = o.getString("health"),
+        status = o.getString("status"),
+        currentMilestone = o.optString("current_milestone"),
+        nextStep = o.optString("next_step"),
+        lastAiRun = o.optJSONObject("last_chatgpt_run")?.let(::parseAiRun),
+        recentActivity = o.getJSONArray("recent_activity").mapObjects(::parseActivity),
+        progressHistory = o.getJSONArray("progress_history").mapObjects {
+            ProgressPoint(it.getString("date"), it.getDouble("progress").toFloat())
+        },
+        services = o.getJSONArray("services").mapObjects {
+            ServiceState(it.getString("name"), it.getString("state"), it.optNullableString("result"))
+        }
+    )
+
+    private fun parseActivity(o: JSONObject) = ActivityItem(
+        time = o.getString("ts"),
+        kind = o.optString("kind"),
+        title = o.optString("title"),
+        detail = o.optNullableString("detail")
+    )
+
+    private fun parseAiRun(o: JSONObject) = AiRun(
+        time = o.getString("time"),
+        label = o.optString("label"),
+        estimated = o.optBoolean("estimated", false)
+    )
+
+    private fun parseWarning(o: JSONObject) = WarningItem(
+        level = o.optString("level"),
+        project = o.optNullableString("project"),
+        message = o.optString("message")
+    )
+}
+
+private fun JSONObject.optNullableString(key: String): String? =
+    if (isNull(key) || !has(key)) null else optString(key).takeIf { it.isNotBlank() }
+
+private inline fun <T> JSONArray.mapObjects(mapper: (JSONObject) -> T): List<T> =
+    (0 until length()).map { mapper(getJSONObject(it)) }
+=== server core ===
+    d = shutil.disk_usage('/')
+    return {'cpu':cpu, 'cores':os.cpu_count(), 'load':round(os.getloadavg()[0],2), 'uptime':int(float(Path('/proc/uptime').read_text().split()[0])), 'memory':{'total':m['MemTotal'],'used':m['MemTotal']-m['MemAvailable']}, 'disk':{'total':d.total,'used':d.used,'free':d.free}}
+
+def service_states():
+    out = cmd(['systemctl','show',*SERVICES,'--property=Id,ActiveState,SubState,Result,ExecMainExitTimestamp,LastTriggerUSec'])
+    return {b['Id']:b for b in [dict(l.split('=',1) for l in block.splitlines() if '=' in l) for block in out.split('\n\n')] if 'Id' in b}
+
+def replay_metrics():
+    # Read-only connection, bounded query, no trainer commands and no state changes.
+    with sqlite3.connect('file:/var/lib/haxlab/state/haxlab.sqlite3?mode=ro',uri=True,timeout=1) as c:
+        deadline=time.monotonic()+1
+        c.set_progress_handler(lambda: int(time.monotonic()>deadline),1000)
+        counts=dict(c.execute('SELECT status,COUNT(*) FROM replay_analysis GROUP BY status'))
+        r=c.execute("SELECT SUM(duration_seconds) FROM replay_processing WHERE status='ok'").fetchone()
+    return {'analyzed':counts.get('ok',0),'failed':counts.get('failed',0),'pending':counts.get('pending',0),'hours':round((r[0] or 0)/3600,1),'available':True}
+
+def collect():
+    projects = json.loads((ROOT/'projects.json').read_text())
+    errors=[]
+    try: states=service_states()
+    except Exception: states={}; errors.append('Servicestatus tijdelijk niet beschikbaar')
+    events=[]
+    for p in projects:
+        p['progress']=round(sum(m['done'] for m in p['milestones'])/len(p['milestones'])*100)
+        p['completed']=sum(m['done'] for m in p['milestones'])
+        p['next']=next((m['title'] for m in p['milestones'] if not m['done']), 'Alle milestones afgerond')
+        p['source_status']='ok'; p['commits']=None; p['commit']=''; p['updated']=None; p['message']='Nog geen Git-bron'; p['shallow']=False
+        path=p.pop('repo',None)
+        repo_ref=p.pop('repo_ref','HEAD')
+        if path:
+            try:
+                git(path,'rev-parse','--git-dir')
+                active_ref=None
+                for candidate in (repo_ref,'HEAD'):
+                    try:
+                        git(path,'rev-parse','--verify',candidate+'^{commit}')
+                        active_ref=candidate
+                        break
+                    except Exception:
+                        pass
+                if active_ref is None:
+                    p['source_status']='empty'; p['commits']=0; p['message']='Repo gekoppeld · nog geen commits'
+                else:
+                    logs=git(path,'log','-30',active_ref,'--format=%H%x1f%cI%x1f%s').splitlines()
+                    for line in logs:
+                        sha,ts,title=line.split('\x1f',2)
+                        events.append((p['id']+':git:'+sha, datetime.fromisoformat(ts).astimezone(timezone.utc).isoformat(),p['id'],'commit',title,sha[:7]))
+                    p['commit'],p['updated'],p['message']=logs[0].split('\x1f',2)
+                    p['commit']=p['commit'][:7]
+                    p['commits']=int(git(path,'rev-list','--count',active_ref))
+                    p['shallow']=git(path,'rev-parse','--is-shallow-repository')=='true'
+            except Exception:
+                p['source_status']='unavailable'; p['message']='Git-bron tijdelijk niet beschikbaar'
+        p['services']=[]
+        if p['id']=='haxlab':
+            names=['haxlab-analyzer.service','haxlab-ingest.service','haxlab-worker.service',RUNNERS['haxlab']]
+            try:p['metrics']=replay_metrics()
+            except Exception:p['metrics']={'available':False}
+        elif p['id']=='ftmo': names=['ftmo-autonomous.timer','ftmo-autonomous.service',RUNNERS['ftmo']]
+        elif p['id']=='supa': names=[SUPA_SYNC]
+        else: names=[]
+        for name in names:
+            s=states.get(name,{})
+            state=s.get('ActiveState','unknown')
+            label=name.removesuffix('.service').removesuffix('.timer').replace('haxlab-','').replace('ftmo-autonomous','Research').split('.')[-1]
+            if name in RUNNERS.values():label='GitHub runner'
+            if name.endswith('.timer'):label='Research timer'
+            if name==SUPA_SYNC:label='Repo sync'
+            if name=='ftmo-autonomous.service' and state=='inactive' and s.get('Result')=='success':state='waiting'
+            p['services'].append({'name':label,'state':state,'result':s.get('Result'), 'last_run':s.get('ExecMainExitTimestamp') or None})
+        p['health']='healthy' if not names or all(s['state'] in ('active','activating','waiting') for s in p['services']) else 'attention'
+        p['last_chatgpt_run']=watch_last_run(p['id'])
+    with connect() as c:
+        c.executemany('INSERT OR IGNORE INTO events VALUES(?,?,?,?,?,?)',events)
+    return {'version':2,'time':now(),'host':host_metrics(),'projects':projects,'errors':errors,'sampling':{'host_seconds':15,'projects_seconds':60,'history_seconds':300},'timezone':'Europe/Amsterdam'}
+
+def persist(data):
+    with connect() as c:
+        for p in data['projects']:
+            c.execute('INSERT OR IGNORE INTO project_samples VALUES(?,?,?,?,?,?)',(data['time'],p['id'],p['progress'],p['commits'],p['commit'],p['message']))
+            eid=f"milestone:{p['id']}:{p['milestone_revision']}"
+            c.execute('INSERT OR IGNORE INTO events VALUES(?,?,?,?,?,?)',(eid,data['time'],p['id'],'milestone',f"Milestoneplan: {p['completed']} van {len(p['milestones'])} afgerond",'Planninginschatting · geen kwaliteitsscore'))
+        h=data['host']
+        c.execute('INSERT OR IGNORE INTO host_samples VALUES(?,?,?,?,?)',(data['time'],h['cpu'],h['memory']['used']/h['memory']['total']*100,h['disk']['used']/h['disk']['total']*100,h['load']))
+        # About 106k small records per year. Retain one year of host samples.
+        cutoff=datetime.fromtimestamp(time.time()-366*86400,timezone.utc).isoformat()
+        c.execute('DELETE FROM host_samples WHERE ts < ?', (cutoff,))
+
+def sampler():
+    global CACHE
+    tick=0
+    while True:
+        try:
+            if tick%4==0 or CACHE is None: data=collect()
+            else:
+                with LOCK:data={**CACHE}
+                data['time']=now();data['host']=host_metrics()
+            data['stale']=False
+            if tick%20==0:persist(data)
+            with LOCK:CACHE=data
+        except Exception:
+            logging.exception('Monitor sampling failed')
+            with LOCK:
+                if CACHE:CACHE={**CACHE,'stale':True}
+        tick+=1
+        time.sleep(15)
+
+def history(pid, days):
+    cutoff=datetime.fromtimestamp(time.time()-days*86400,timezone.utc).isoformat() if days else ''
+    with connect() as c:
+        rows=c.execute('SELECT ts AS date,progress,commits,hash,message FROM project_samples WHERE project=? AND ts>=? ORDER BY ts',(pid,cutoff)).fetchall()
+    # Preserve endpoints while keeping responses small on mobile.
+    if len(rows)>1200:rows=rows[::max(1,len(rows)//1000)]+[rows[-1]]
+    return [dict(r) for r in rows]
+
+def watch_activity(pid, limit=8):
+    with connect() as c:
+        rows=c.execute('SELECT ts,kind,title,detail FROM events WHERE project=? ORDER BY ts DESC LIMIT ?',(pid,limit)).fetchall()
+    return [dict(r) for r in rows]
+
+def compact_history(pid, limit=24):
+    with connect() as c:
+        rows=c.execute('SELECT ts AS date,progress FROM project_samples WHERE project=? ORDER BY ts',(pid,)).fetchall()
+    if not rows:
+        return []
+    step=max(1,len(rows)//limit)
+    out=[dict(r) for r in rows[::step]]
+    if out[-1]['date'] != rows[-1]['date']:
+        out.append(dict(rows[-1]))
+    return out[-limit:]
+
+def runner_record(payload):
+    event=str(payload.get('event') or 'unknown')[:64]
+    raw_ts=str(payload.get('at') or now())
+    try: ts=datetime.fromisoformat(raw_ts.replace('Z','+00:00')).astimezone(timezone.utc).isoformat()
+    except Exception: ts=now()
+    target=str(payload.get('target') or payload.get('targetConversation') or '')[:500]
+    title=str(payload.get('title') or '')[:250]
+    reason=str(payload.get('reason') or '')[:250]
+    error=str(payload.get('error') or '')[:500]
+    tab_id=payload.get('tabId')
+    with connect() as c:
+        c.execute('INSERT INTO runner_events(ts,event,target,title,generating,sending,reason,tab_id,error) VALUES(?,?,?,?,?,?,?,?,?)',
+                  (ts,event,target,title,int(bool(payload.get('generating'))),int(bool(payload.get('sending'))),reason,tab_id,error))
+        cutoff=datetime.fromtimestamp(time.time()-14*86400,timezone.utc).isoformat()
+        c.execute('DELETE FROM runner_events WHERE ts < ?', (cutoff,))
+
+def runner_status():
+    with connect() as c:
+        latest=c.execute('SELECT * FROM runner_events ORDER BY id DESC LIMIT 1').fetchone()
+        if not latest:
+            return {'state':'offline','age_seconds':None,'last_event':None,'last_heartbeat':None,'last_prompt_sent':None,'last_generation_started':None,'last_generation_finished':None}
+        heartbeat=c.execute("SELECT * FROM runner_events WHERE event='heartbeat' ORDER BY id DESC LIMIT 1").fetchone()
+        prompt=c.execute("SELECT * FROM runner_events WHERE event='prompt-sent' ORDER BY id DESC LIMIT 1").fetchone()
+        started=c.execute("SELECT * FROM runner_events WHERE event='generation-started' ORDER BY id DESC LIMIT 1").fetchone()
+        finished=c.execute("SELECT * FROM runner_events WHERE event='generation-finished' ORDER BY id DESC LIMIT 1").fetchone()
+        meta=c.execute("SELECT * FROM runner_events WHERE title<>'' OR target<>'' ORDER BY id DESC LIMIT 1").fetchone()
+    def info(r):
+        if not r:return None
+        return {'time':r['ts'],'event':r['event'],'reason':r['reason'] or None,'error':r['error'] or None}
+    try: age=max(0,int((datetime.now(timezone.utc)-datetime.fromisoformat(latest['ts'])).total_seconds()))
+    except Exception: age=999999
+    state='live' if age<=90 else 'stale' if age<=300 else 'offline'
+    return {
+        'state':state,'age_seconds':age,'event':latest['event'],
+        'generating':bool(latest['generating']),'sending':bool(latest['sending']),
+        'title':(meta['title'] if meta else '') or None,'target':(meta['target'] if meta else '') or None,
+        'tab_id':latest['tab_id'],'error':latest['error'] or None,
+        'last_event':info(latest),'last_heartbeat':info(heartbeat),'last_prompt_sent':info(prompt),
+        'last_generation_started':info(started),'last_generation_finished':info(finished)
+    }
+
+def watch_last_run(pid):
+    aliases={'haxlab':['haxlab'],'ftmo':['ftmo'],'cloud':['zennay cloud','zennay-cloud'],'supa':['supa']}.get(pid,[pid])
+    with connect() as c:
+        row=None
+        for alias in aliases:
+            row=c.execute("SELECT ts,title,event FROM runner_events WHERE event IN ('generation-started','prompt-sent') AND lower(title) LIKE ? ORDER BY id DESC LIMIT 1",('%'+alias.lower()+'%',)).fetchone()
+            if row: break
+        if row:
+            return {'time':row['ts'],'label':row['title'] or 'ChatGPT run','source':'runner_telemetry','estimated':False}
+        if pid=='supa':
+            return None
+        row=c.execute('SELECT ts,title FROM events WHERE project=? ORDER BY ts DESC LIMIT 1',(pid,)).fetchone()
+    if not row:
+        return None
+    return {'time':row['ts'],'label':row['title'],'source':'project_activity','estimated':True}
+
+def watch_warnings(data):
+    warnings=[]
+    h=data['host']
+    mem=round(h['memory']['used']/h['memory']['total']*100)
+    if data.get('stale'): warnings.append({'level':'warning','message':'Monitoringdata is stale'})
+    if h.get('cpu') is not None and h['cpu'] >= 85: warnings.append({'level':'warning','message':f"CPU {h['cpu']}%"})
+    if mem >= 85: warnings.append({'level':'warning','message':f'RAM {mem}%'})
+    visible, _, _ = project_views(data)
+    for p in visible:
+        if p.get('health') != 'healthy':
+            warnings.append({'level':'warning','project':p['id'],'message':f"{p['name']} needs attention"})
+    return warnings
+
+def watch_summary(data):
+    projects=[]
+    runner=runner_status()
+    warnings=watch_warnings(data)
+    if runner.get('state') != 'live': warnings.append({'level':'warning','message':'ChatGPT runner '+runner.get('state','offline')})
+    visible, _, _ = project_views(data)
+    for p in visible:
+        activity=watch_activity(p['id'],1)
+        projects.append({
+            'id':p['id'],'name':p['name'],'progress':p['progress'],
+            'status':p.get('status') or ('active' if p['progress'] < 100 else 'complete'),
+            'health':p['health'],'phase':p.get('phase') or p['next'],
+            'milestone':p.get('phase') or p['next'],'next_step':p.get('next_step') or p['next'],
+            'last_activity':activity[0] if activity else None,
+            'last_chatgpt_run':p.get('last_chatgpt_run')
+        })
+    return {
+        'version':2,'time':data['time'],'stale':data.get('stale',False),
+        'overall_progress':round(sum(p['progress'] for p in visible)/max(1,len(visible))),
+        'active_projects':sum(1 for p in visible if p['progress'] < 100),
+        'host':{
+            'cpu':data['host']['cpu'],
+            'memory_percent':round(data['host']['memory']['used']/data['host']['memory']['total']*100),
+            'load':data['host']['load']
+        },
+        'warnings':warnings,
+        'chatgpt_runner':runner,
+        'projects':projects
+    }
+
+def watch_project(data,pid):
+    p=next((x for x in data['projects'] if x['id']==pid),None)
+    if not p:return None
+    return {
+        'version':2,'time':data['time'],
+        'project':{
+            'id':p['id'],'name':p['name'],'progress':p['progress'],'health':p['health'],
+            'status':p.get('status') or ('active' if p['progress'] < 100 else 'complete'),
+            'phase':p.get('phase') or p['next'],
+            'current_milestone':p.get('phase') or p['next'],'next_step':p.get('next_step') or p['next'],
+            'last_chatgpt_run':p.get('last_chatgpt_run'),
+            'recent_activity':watch_activity(pid,8),
+            'progress_history':compact_history(pid,24),
+            'services':p.get('services',[])
+        }
+    }
+
+
+class Handler(BaseHTTPRequestHandler):
+    def reply(self,body,status=200,kind='application/json; charset=utf-8'):
+=== app functions ===
+'use strict';
+const ICONS={grid:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',cloud:'<path d="M7 18a5 5 0 1 1 .8-9.9A7 7 0 0 1 21 11a3.5 3.5 0 0 1-1.5 7Z"/>',game:'<path d="M7 7h10c3 0 4 4 4 9 0 3-3 4-5 0H8c-2 4-5 3-5 0 0-5 1-9 4-9Z"/><path d="M7 10v4m-2-2h4m7-1h.01m2 3h.01"/>',chart:'<path d="M4 4v16h16M7 14l4-4 4 2 5-7"/>',pulse:'<path d="M2 12h4l3-8 5 16 3-8h5"/>',server:'<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M15 6.5h3m-3 11h3"/>',refresh:'<path d="M20 8A8 8 0 0 0 6 5L3 8m0-5v5h5m-4 8a8 8 0 0 0 14 3l3-3m0 5v-5h-5"/>',watch:'<rect x="5" y="6" width="14" height="12" rx="4"/><path d="M8 6l1-4h6l1 4M8 18l1 4h6l1-4m-4-9v3l2 1"/>',arrow:'<path d="M5 12h14m-5-5 5 5-5 5"/>',back:'<path d="M19 12H5m5-5-5 5 5 5"/>',calendar:'<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4m10-4v4M3 11h18"/>',check:'<path d="m5 12 4 4L19 6"/>',commit:'<circle cx="12" cy="12" r="4"/><path d="M3 12h5m8 0h5"/>',target:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',cpu:'<rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M9 2v3m6-3v3M9 19v3m6-3v3M2 9h3m-3 6h3m14-6h3m-3 6h3"/>',clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',layers:'<path d="m12 3 10 5-10 5L2 8Zm-9 9 9 5 9-5M3 16l9 5 9-5"/>',disk:'<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 14h18m-5 3h2"/>'};
+const icon=n=>`<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n]||ICONS.layers}</svg>`;
+const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const $=id=>document.getElementById(id),num=n=>new Intl.NumberFormat('nl-NL',{maximumFractionDigits:1}).format(n),gb=n=>num(n/1073741824)+' GB';
+const date=(x,full=false)=>new Intl.DateTimeFormat('nl-NL',{timeZone:'Europe/Amsterdam',day:'numeric',month:'short',...(full?{year:'numeric',hour:'2-digit',minute:'2-digit'}:{})}).format(new Date(x));
+const clock=x=>new Intl.DateTimeFormat('nl-NL',{timeZone:'Europe/Amsterdam',hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(new Date(x));
+const rel=x=>{const m=Math.floor((Date.now()-Date.parse(x))/60000);return m<1?'zojuist':m<60?m+' min geleden':m<1440?Math.floor(m/60)+' u geleden':date(x)};
+let DATA=null,ACTIVITY=[],HOST=[],HISTORY={},route='',range='7d',filter='',busy=false,routeVersion=0;
+function hydrate(){document.querySelectorAll('[data-icon]').forEach(el=>{el.innerHTML=icon(el.dataset.icon);el.removeAttribute('data-icon')})}
+async function api(path){const r=await fetch(path,{cache:'no-store',signal:AbortSignal.timeout(10000)});if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}
+async function post(path,body){const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(10000)});if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}
+async function saveProjectLayout(order,archived){await post('/api/project-layout',{order,archived});await refresh(true)}
+function syncNav(){document.querySelectorAll('[data-nav]').forEach(a=>a.classList.toggle('active',a.dataset.nav===route));$('projectCount').textContent=DATA.projects.length;$('projectNav').innerHTML=DATA.projects.map(p=>`<a href="#project/${esc(p.id)}" class="${route==='project/'+p.id?'active':''}"><span class="project-dot" style="--accent:${p.accent}"></span>${esc(p.name)}</a>`).join('')}
+function stat(label,value,note,ico,emphasis=false){return `<div class="stat"><div class="stat-label">${label}${icon(ico)}</div><div class="stat-value">${value}</div><div class="stat-note ${emphasis?'emphasis':''}">${note}</div></div>`}
+function heading(eyebrow,title,sub,right=''){return `<div class="page-heading"><div><div class="eyebrow">${eyebrow}</div><h1>${title}</h1><p>${sub}</p></div>${right}</div>`}
+function badge(p){return `<span class="badge ${p.health==='healthy'?'':'warn'}">${p.health==='healthy'?'Operationeel':'Aandacht nodig'}</span>`}
+function projectCard(p){return `<article class="project-card" style="--accent:${p.accent}" draggable="true" data-project-id="${esc(p.id)}"><div class="project-card-top"><span class="project-icon">${icon(p.icon)}</span><div class="project-card-actions"><span class="drag-handle" title="Sleep om te verplaatsen" aria-hidden="true">⋮⋮</span><button class="archive-button" data-archive="${esc(p.id)}" type="button">Archiveer</button></div></div><a class="project-card-link" href="#project/${p.id}" aria-label="Bekijk ${p.name}: ${num(p.progress)} procent milestones"><div class="card-badge-row">${badge(p)}</div><div class="eyebrow">${p.eyebrow}</div><h3>${p.name}</h3><p>${p.goal}</p><div class="progress-row"><span>${p.completed} / ${p.milestones.length} milestones</span><strong>${num(p.progress)}<small>%</small></strong></div><div class="progress-track"><span style="width:${p.progress}%"></span></div><div class="project-bottom">${icon('target')}<span>${p.phase?'Fase: '+esc(p.phase):'Volgende: '+esc(p.next)}</span><span class="arrow">${icon('arrow')}</span></div></a></article>`}
+function archivedPanel(){const list=DATA.archived_projects||[];if(!list.length)return '';return `<div class="archived-panel"><div><strong>Gearchiveerd</strong><span>Verborgen op dashboard en Watch</span></div><div class="archived-list">${list.map(p=>`<button type="button" data-restore="${esc(p.id)}"><span style="--accent:${p.accent}" class="project-dot"></span>${esc(p.name)}<b>Herstel</b></button>`).join('')}</div></div>`}
+function activityItem(a){const p=DATA.projects.find(p=>p.id===a.project);return `<div class="activity-item" style="--accent:${p?.accent||'#aab5c4'}"><span class="activity-symbol">${icon(a.kind==='commit'?'commit':'check')}</span><div class="activity-copy"><p>${esc(a.title)}</p><div class="activity-meta"><strong>${esc(p?.name||a.project)}</strong><span>·</span><time datetime="${esc(a.ts)}" title="${date(a.ts,true)}">${rel(a.ts)}</time><span title="${esc(a.detail)}">${a.kind==='commit'?esc(a.detail):'Milestoneplan'}</span></div></div></div>`}
+function activityPanel(pid='',limit=4){const visible=new Set(DATA.projects.map(p=>p.id));const list=ACTIVITY.filter(a=>pid?a.project===pid:visible.has(a.project)).slice(0,limit);return `<div class="panel"><div class="panel-header"><div><h2>Recente activiteit</h2><div class="panel-subtitle">Commits & milestone-updates</div></div>${icon('pulse')}</div><div class="activity-list">${list.map(activityItem).join('')||'<div class="empty">Nog geen activiteit vastgelegd.</div>'}</div><div class="panel-footer"><a href="#activity${pid?'?project='+pid:''}" class="text-link">Volledige historie ${icon('arrow')}</a></div></div>`}
+function ranges(){return `<div class="range-control" role="group" aria-label="Grafiekperiode">${[['24h','24u'],['7d','7d'],['30d','30d'],['all','Alles']].map(([id,title])=>`<button data-range="${id}" class="${range===id?'active':''}" aria-pressed="${range===id}">${title}</button>`).join('')}</div>`}
+function graphPanel(projects){return `<div class="panel"><div class="panel-header"><div><h2>Progressie over tijd</h2><div class="panel-subtitle">Milestones · Amsterdamse tijd</div></div>${ranges()}</div><div class="legend">${projects.map(p=>`<span style="--accent:${p.accent}"><i class="legend-dot"></i>${p.name}</span>`).join('')}</div><div id="progressChart" class="chart-wrap"></div><div class="chart-detail" id="chartDetail">Selecteer een meetpunt voor datum en progressie.</div></div>`}
+function infraStrip(){const h=DATA.host,mem=h.memory.used/h.memory.total*100,disk=h.disk.used/h.disk.total*100;return `<div class="infra-strip"><div class="server-icon">${icon('server')}</div><div class="infra-title"><strong>VPS · OVHcloud</strong><small>${h.cores} vCPU · ${gb(h.memory.total)} RAM</small></div><div class="infra-item">CPU<strong>${h.cpu==null?'Eerste meting…':num(h.cpu)+'%'}</strong><div class="microbar"><span style="width:${h.cpu||0}%"></span></div></div><div class="infra-item">Geheugen<strong>${num(mem)}%</strong><div class="microbar"><span style="width:${mem}%"></span></div></div><div class="infra-item">Opslag vrij<strong>${gb(h.disk.free)}</strong><div class="microbar"><span style="width:${disk}%"></span></div></div><a href="#infrastructure" class="text-link" aria-label="Bekijk infrastructuur">Bekijk VPS ${icon('arrow')}</a></div>`}
+function runnerPanel(){const r=DATA.chatgpt_runner||{state:'offline'},live=r.state==='live',labels={live:'Live',stale:'Verouderd',offline:'Offline'},last=r.last_heartbeat?.time||r.last_event?.time,run=r.last_generation_started?.time||r.last_prompt_sent?.time,title=(r.title||'ChatGPT Project Runner').replace(' — Mozilla Firefox','');return `<div class="panel"><div class="panel-header"><div><h2>ChatGPT Runner</h2><div class="panel-subtitle">${esc(title)}</div></div><span class="service-state ${live?'':'warn'}">${labels[r.state]||esc(r.state||'offline')}</span></div><div class="service-list"><div class="service-row"><div>Heartbeat<div class="service-sub">${last?rel(last):'Nog geen telemetrie'}</div></div><span>${r.age_seconds==null?'—':r.age_seconds+'s'}</span></div><div class="service-row"><div>Laatste echte run<div class="service-sub">${run?date(run,true):'Nog niet gemeten'}</div></div><span class="service-state">${r.generating?'Bezig':'Wacht'}</span></div><div class="service-row"><div>Laatste event<div class="service-sub">${esc(r.event||'—')}</div></div><span>tab ${r.tab_id??'—'}</span></div></div>${r.error?`<div class="detail-note">Fout: ${esc(r.error)}</div>`:''}</div>`}
+function overview(){const p=DATA.projects,done=p.reduce((n,p)=>n+p.completed,0),total=p.reduce((n,p)=>n+p.milestones.length,0),active=p.filter(p=>p.health==='healthy').length,recent=ACTIVITY.filter(a=>a.kind==='commit'&&Date.parse(a.ts)>Date.now()-86400000).length;return heading('PERSONAL WORKSPACE','Alles in beweging.','Je projecten, hun voortgang en wat er nu op je VPS gebeurt.',`<span class="date-label">${icon('calendar')}${new Intl.DateTimeFormat('nl-NL',{timeZone:'Europe/Amsterdam',weekday:'short',day:'numeric',month:'long',year:'numeric'}).format(new Date())}</span>`)+`<div class="stat-grid">${stat('Actieve projecten',active+'<span>/ '+p.length+'</span>',active===p.length?'Alle monitors operationeel':'Controleer de servicestatus','layers',active===p.length)}${stat('Milestones afgerond',done+'<span>/ '+total+'</span>','Volgens de projectplannen','target')}${stat('Recente commits',recent,'Vastgelegd in de laatste 24 uur','commit')}${stat('VPS uptime',Math.floor(DATA.host.uptime/86400)+'<span>d '+Math.floor(DATA.host.uptime%86400/3600)+'u</span>',DATA.host.cores+' vCPU · load '+num(DATA.host.load),'server')}</div><div class="section-title"><h2>Je projecten <span class="count">${p.length}</span></h2><span class="reduced">Sleep om te ordenen · wordt gesynct naar Watch</span></div><div class="project-grid" id="projectGrid">${p.map(projectCard).join('')}</div>${archivedPanel()}<div class="dashboard-grid">${graphPanel(p)}${activityPanel()}</div>${infraStrip()}${runnerPanel()}`}
+function aiRunPanel(p){const r=p.last_chatgpt_run;return `<div class="panel"><div class="panel-header"><div><h2>Laatste ChatGPT-run</h2><div class="panel-subtitle">${r?(r.estimated?'Benadering op basis van projectactiviteit':'Runner-telemetrie'):'Nog geen projectrun gemeten'}</div></div>${icon('clock')}</div><div class="detail-note">${r?`${esc(r.label)}<br><br>${date(r.time,true)} · ${rel(r.time)}`:'Er is nog geen ChatGPT-run aan dit project gekoppeld.'}</div></div>`}
+function codePanel(p){if(p.updated)return `<div class="panel"><div class="panel-header"><h2>Laatste code-update</h2>${icon('commit')}</div><div class="detail-note">${esc(p.message)}<br><br>${esc(p.commit)} · ${date(p.updated,true)}${p.shallow?'<br>De runner gebruikt een beperkte Git-checkout; het aantal commits is geen totaal van het project.':''}</div></div>`;if(p.source_status==='empty')return `<div class="panel"><div class="panel-header"><h2>Laatste code-update</h2>${icon('commit')}</div><div class="detail-note">Repo gekoppeld · nog geen commits. Nieuwe commits worden automatisch door Zennay Cloud opgehaald.</div></div>`;return ''}
+function services(p){const labels={active:'Actief',activating:'Start op',waiting:'Wacht op volgende run',inactive:'Inactief',failed:'Mislukt',unknown:'Onbekend'};return `<div class="panel"><div class="panel-header"><div><h2>Services</h2><div class="panel-subtitle">Live status · alleen uitlezen</div></div>${badge(p)}</div><div class="service-list">${p.services.length?p.services.map(s=>`<div class="service-row"><div>${esc(s.name)}${s.name==='Research'&&s.last_run?`<div class="service-sub">Laatste run: ${Number.isFinite(Date.parse(s.last_run))?date(s.last_run,true):esc(s.last_run)}</div>`:''}</div><span class="service-state ${['active','activating','waiting'].includes(s.state)?'':'warn'}">${labels[s.state]||esc(s.state)}</span></div>`).join(''):'<div class="service-row"><span>Dashboard API</span><span class="service-state">Actief</span></div>'}</div>${p.id==='ftmo'?'<div class="detail-note">De researchtaak draait elke vijf minuten. Tussen runs is wachten normaal.</div>':''}</div>`}
+function detail(p){let mini='';if(p.metrics?.available)mini=`<div class="metrics-mini"><div><strong>${num(p.metrics.analyzed)}</strong><span>Replays geanalyseerd</span></div><div><strong>${num(p.metrics.hours)}</strong><span>Uur replaydata</span></div><div><strong>${num(p.metrics.failed)}</strong><span>Analysefouten</span></div></div>`;else if(p.id==='haxlab')mini='<p class="muted">Replaymetingen tijdelijk niet beschikbaar.</p>';return `<a class="back" href="#overview">${icon('back')}Alle projecten</a><div class="page-heading"><div class="detail-heading" style="--accent:${p.accent}"><span class="project-icon">${icon(p.icon)}</span><div><div class="eyebrow">${p.eyebrow}</div><h1>${p.name}</h1></div></div>${badge(p)}</div><div class="detail-summary" style="--accent:${p.accent}"><div class="detail-progress">${num(p.progress)}<small>%</small></div><div class="detail-summary-copy"><strong>${p.goal}</strong>${p.phase?`<p><b>Fase:</b> ${esc(p.phase)} · <b>Status:</b> ${esc(p.status||'active')}</p>`:''}<p>${p.progress_basis}</p><div class="progress-track"><span style="width:${p.progress}%"></span></div>${mini}</div></div><div class="detail-columns"><div class="detail-primary">${graphPanel([p])}${activityPanel(p.id,6)}${codePanel(p)}${aiRunPanel(p)}</div><div class="detail-primary"><div class="panel" style="--accent:${p.accent}"><div class="panel-header"><h2>Milestones</h2><span class="count">${p.completed} / ${p.milestones.length}</span></div><div class="milestones">${p.milestones.map((m,i)=>`<div class="milestone ${m.done?'done':m.title===p.next?'next':''}"><span class="milestone-check">${m.done?'✓':String(i+1).padStart(2,'0')}</span><span>${m.title}</span><em>${m.done?'Afgerond':m.title===p.next?'VOLGENDE':''}</em></div>`).join('')}</div><div class="detail-note">Dit is voortgang van het plan. Live resultaten en modelkwaliteit worden hiermee niet beoordeeld.</div></div>${services(p)}${p.id==='cloud'?'<div class="panel"><div class="panel-header"><h2>Klaar voor je pols</h2>'+icon('watch')+'</div><div class="detail-note">Een compacte, versievaste API voor een toekomstige Wear OS-app. De horloge-app zelf is nog niet gebouwd.</div></div>':''}</div></div>`}
+function activityPage(){const visible=new Set(DATA.projects.map(p=>p.id));const list=ACTIVITY.filter(a=>visible.has(a.project)&&(!filter||a.project===filter));return `<div class="activity-page">${heading('WORKSPACE / LOGBOEK','Elke stap telt.','De vastgelegde codewijzigingen en milestoneplannen.',`<select class="filter-select" id="activityFilter" aria-label="Filter activiteit op project"><option value="">Alle projecten</option>${DATA.projects.map(p=>`<option value="${p.id}" ${filter===p.id?'selected':''}>${p.name}</option>`).join('')}</select>`)}<div class="panel"><div class="activity-list">${list.map(activityItem).join('')||'<div class="empty">Nog geen activiteit voor dit project.</div>'}</div><div class="detail-note">Maximaal 80 vastgelegde events. Gearchiveerde projecten zijn verborgen. Commitdatums komen uit Git; milestoneplannen krijgen de datum waarop de monitor ze voor het eerst zag.</div></div></div>`}
+function infrastructure(){const h=DATA.host,mem=h.memory.used/h.memory.total*100,disk=h.disk.used/h.disk.total*100;return heading('WORKSPACE / INFRASTRUCTUUR','Je VPS, van dichtbij.','Actuele belasting en trends, zonder je projecten te onderbreken.')+`<div class="stat-grid">${stat('CPU-belasting',h.cpu==null?'—':num(h.cpu)+'<span>%</span>',h.cores+' vCPU · load '+num(h.load),'cpu')}${stat('Geheugen',num(mem)+'<span>%</span>',gb(h.memory.used)+' van '+gb(h.memory.total),'server')}${stat('Opslag',num(disk)+'<span>%</span>',gb(h.disk.free)+' vrij op '+gb(h.disk.total),'disk')}${stat('Uptime',Math.floor(h.uptime/86400)+'<span>dagen</span>',Math.floor(h.uptime%86400/3600)+' uur sinds de laatste volle dag','clock')}</div><p class="infra-info">Live metingen elke 15 seconden. Historie elke vijf minuten, tot 24 uur in deze grafiek.</p><div class="infra-grid"><div class="panel full-width"><div class="panel-header"><div><h2>Resourcegebruik</h2><div class="panel-subtitle">Percentage · Amsterdamse tijd</div></div><span class="tiny-tag">24 UUR</span></div><div class="legend"><span style="--accent:#c2f970"><i class="legend-dot"></i>CPU</span><span style="--accent:#82b8ff"><i class="legend-dot"></i>Geheugen</span><span style="--accent:#a899ff"><i class="legend-dot"></i>Opslag</span></div><div class="chart-wrap" id="hostChart"></div><div class="chart-detail" id="chartDetail">Selecteer een meetpunt voor de exacte meting.</div></div>${DATA.projects.filter(p=>p.services.length).map(services).join('')}</div>`}
+function chart(target,series){const el=$(target);if(!el)return;let points=series.flatMap(s=>s.data).filter(p=>p.value!=null&&Number.isFinite(Date.parse(p.date)));if(!points.length){el.innerHTML='<div class="empty">Nog geen metingen in deze periode.<br>Nieuwe historie wordt elke vijf minuten vastgelegd.</div>';return}const w=660,h=215,left=44,right=15,top=12,bottom=33,plotw=w-left-right,ploth=h-top-bottom;let lo=Math.min(...points.map(p=>Date.parse(p.date))),hi=Math.max(...points.map(p=>Date.parse(p.date)));const single=lo===hi;if(single){lo-=150000;hi+=150000}const x=t=>left+(Date.parse(t)-lo)/(hi-lo)*plotw,y=v=>top+(100-v)/100*ploth;let svg=`<svg class="chart-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet" role="group" aria-label="Tijdgrafiek met percentages. Selecteer een meetpunt voor de datum.">`;
+for(const v of [0,25,50,75,100])svg+=`<line x1="${left}" x2="${w-right}" y1="${y(v)}" y2="${y(v)}" stroke="#2a303b" stroke-dasharray="3 5"/><text x="${left-10}" y="${y(v)+4}" text-anchor="end">${v}%</text>`;
+const count=single?1:4;for(let i=0;i<count;i++){const t=single?(lo+hi)/2:lo+(hi-lo)*i/(count-1),xx=single?left+plotw/2:left+plotw*i/(count-1);const label=(hi-lo)<86400000?new Intl.DateTimeFormat('nl-NL',{timeZone:'Europe/Amsterdam',hour:'2-digit',minute:'2-digit'}).format(t):date(t);svg+=`<text x="${xx}" y="${h-7}" text-anchor="${!single&&i===0?'start':!single&&i===count-1?'end':'middle'}">${label}</text>`}
+for(const s of series){const data=s.data.filter(p=>p.value!=null&&Number.isFinite(Date.parse(p.date)));if(!data.length)continue;const path=data.map((p,i)=>`${i?'L':'M'}${x(p.date).toFixed(2)},${y(p.value).toFixed(2)}`).join(' ');if(data.length>1)svg+=`<path d="${path} L${x(data.at(-1).date)},${y(0)} L${x(data[0].date)},${y(0)} Z" fill="${s.color}" opacity=".035"/><path d="${path}" fill="none" stroke="${s.color}" stroke-width="2.3" stroke-linejoin="round"/>`;const stride=Math.max(1,Math.ceil(data.length/35));data.forEach((p,i)=>{if(i%stride&&i!==data.length-1)return;const label=s.name+' · '+date(p.date,true)+' · '+num(p.value)+'%';svg+=`<circle class="point" cx="${x(p.date)}" cy="${y(p.value)}" r="${data.length<3?5:3.5}" fill="${s.color}" stroke="#14171e" stroke-width="2" tabindex="0" role="button" aria-label="${esc(label)}" data-point="${esc(label)}"><title>${esc(label)}</title></circle>`})}
+svg+='</svg>';el.innerHTML=svg;const countTimes=new Set(points.map(p=>p.date)).size;$('chartDetail').textContent=countTimes===1?'Eerste meetpunt · '+date(points[0].date,true)+' · Historie groeit vanaf nu.':date(Math.min(...points.map(p=>Date.parse(p.date))),true)+' — '+date(Math.max(...points.map(p=>Date.parse(p.date))),true)+' · Selecteer een meetpunt.';
+}
+function paintCharts(){if(route==='overview')chart('progressChart',DATA.projects.map(p=>({name:p.name,color:p.accent,data:(HISTORY[p.id]||[]).map(r=>({date:r.date,value:r.progress}))})));else if(route.startsWith('project/')){const p=DATA.projects.find(p=>route==='project/'+p.id);if(p)chart('progressChart',[{name:p.name,color:p.accent,data:(HISTORY[p.id]||[]).map(r=>({date:r.date,value:r.progress}))}])}else if(route==='infrastructure')chart('hostChart',[['cpu','CPU','#c2f970'],['memory','Geheugen','#82b8ff'],['disk','Opslag','#a899ff']].map(([key,name,color])=>({name,color,data:HOST.map(r=>({date:r.ts,value:r[key]}))}))) }
+function render(){if(!DATA)return;const focused=document.activeElement;const restore=focused?.dataset.range?'[data-range="'+focused.dataset.range+'"]':focused?.id==='activityFilter'?'#activityFilter':null;syncNav();let title='Overzicht',html;if(route==='activity'){html=activityPage();title='Activiteit'}else if(route==='infrastructure'){html=infrastructure();title='Infrastructuur'}else if(route.startsWith('project/')){const p=DATA.projects.find(p=>route==='project/'+p.id);if(p){html=detail(p);title=p.name}else{html='<div class="empty">Dit project is niet gevonden. <a href="#overview">Terug naar overzicht</a></div>';title='Onbekend project'}}else html=overview();$('crumb').textContent=title;document.title='Zennay Cloud — '+title;$('view').innerHTML=html;paintCharts();hydrate();if(restore)document.querySelector(restore)?.focus({preventScroll:true})}
+async function loadExtras(){const version=++routeVersion;const results=await Promise.allSettled([api('/api/activity'),api('/api/host-history'),...DATA.projects.map(p=>api('/api/history?project='+p.id+'&range='+range))]);if(version!==routeVersion)return;const fails=results.filter(r=>r.status==='rejected').length;if(results[0].status==='fulfilled')ACTIVITY=results[0].value;if(results[1].status==='fulfilled')HOST=results[1].value;DATA.projects.forEach((p,i)=>{if(results[i+2].status==='fulfilled')HISTORY[p.id]=results[i+2].value;else HISTORY[p.id]=[]});if(fails){$('notice').hidden=false;$('notice').textContent='Een deel van de historie is tijdelijk niet beschikbaar. Live metingen blijven zichtbaar.'}render()}
+function setConnection(ok){$('connection').classList.toggle('offline',!ok);$('connection').innerHTML='<span class="status-dot"></span>'+(ok?'Live verbonden':'Verbinding verloren')}
+async function refresh(initial=false){if(busy)return;busy=true;$('refresh').disabled=true;try{DATA=await api('/api/status');const stale=DATA.stale||Date.now()-Date.parse(DATA.time)>90000;setConnection(!stale);$('notice').hidden=!stale&&!DATA.errors.length;$('notice').textContent=stale?'De laatste meting is verouderd. Je ziet de laatst beschikbare gegevens.':DATA.errors.join(' · ');$('syncTime').textContent='Laatste meting '+clock(DATA.time)+' · elke 15 sec';if(initial||!$('view').children.length)render();await loadExtras()}catch(e){setConnection(false);$('notice').hidden=false;$('notice').textContent=DATA?'Verbinding verloren. De laatst geladen gegevens blijven staan; we proberen het automatisch opnieuw.':'De VPS is tijdelijk niet bereikbaar. Probeer opnieuw of wacht op de volgende verversing.';if(!DATA)$('view').innerHTML='<div class="loading">Nog geen verbinding met Zennay Cloud.<button class="error-action" data-retry>Opnieuw proberen</button></div>'}finally{busy=false;$('refresh').disabled=false}}
+function navigate(){const hash=location.hash.slice(1)||'overview';const [path,query]=hash.split('?');route=path;filter=new URLSearchParams(query||'').get('project')||'';routeVersion++;if(DATA){render();loadExtras()}window.scrollTo({top:0,behavior:'instant'})}
+let draggedProject=null;
+document.addEventListener('dragstart',e=>{const card=e.target.closest('[data-project-id]');if(!card)return;draggedProject=card.dataset.projectId;card.classList.add('dragging');e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',draggedProject)});
+document.addEventListener('dragover',e=>{const card=e.target.closest('[data-project-id]');if(!card||!draggedProject||card.dataset.projectId===draggedProject)return;e.preventDefault();card.classList.add('drag-over')});
+document.addEventListener('dragleave',e=>{e.target.closest('[data-project-id]')?.classList.remove('drag-over')});
+document.addEventListener('drop',async e=>{const target=e.target.closest('[data-project-id]');if(!target||!draggedProject)return;e.preventDefault();const ids=DATA.projects.map(p=>p.id).filter(id=>id!==draggedProject);const targetIndex=ids.indexOf(target.dataset.projectId);const rect=target.getBoundingClientRect();const after=e.clientY>rect.top+rect.height/2;ids.splice(targetIndex+(after?1:0),0,draggedProject);const archived=(DATA.archived_projects||[]).map(p=>p.id);const tail=(DATA.project_layout?.order||[]).filter(id=>archived.includes(id));await saveProjectLayout([...ids,...tail],archived);draggedProject=null});
+document.addEventListener('dragend',()=>{document.querySelectorAll('.dragging,.drag-over').forEach(el=>el.classList.remove('dragging','drag-over'));draggedProject=null});
+document.addEventListener('click',async e=>{const archive=e.target.closest('[data-archive]');if(archive){e.preventDefault();e.stopPropagation();const id=archive.dataset.archive;const archived=[...(DATA.archived_projects||[]).map(p=>p.id),id];await saveProjectLayout(DATA.project_layout?.order||DATA.projects.map(p=>p.id),[...new Set(archived)]);return}const restore=e.target.closest('[data-restore]');if(restore){e.preventDefault();const id=restore.dataset.restore;const archived=(DATA.archived_projects||[]).map(p=>p.id).filter(x=>x!==id);await saveProjectLayout(DATA.project_layout?.order||DATA.projects.map(p=>p.id),archived);return}const b=e.target.closest('[data-range]');if(b){range=b.dataset.range;HISTORY={};render();loadExtras()}const point=e.target.closest('[data-point]');if(point&&$('chartDetail'))$('chartDetail').textContent=point.dataset.point;const svg=e.target.closest('.chart-svg');if(svg&&!point&&$('chartDetail')){const near=[...svg.querySelectorAll('[data-point]')].map(el=>{const r=el.getBoundingClientRect();return {el,d:(r.x+r.width/2-e.clientX)**2+(r.y+r.height/2-e.clientY)**2}}).sort((a,b)=>a.d-b.d)[0];if(near)$('chartDetail').textContent=near.el.dataset.point}if(e.target.closest('[data-retry]'))refresh(true)});
+document.addEventListener('focusin',e=>{if(e.target.dataset.point&&$('chartDetail'))$('chartDetail').textContent=e.target.dataset.point});
+document.addEventListener('keydown',e=>{if(e.target.dataset.point&&['Enter',' '].includes(e.key)){e.preventDefault();$('chartDetail').textContent=e.target.dataset.point}});
+document.addEventListener('change',e=>{if(e.target.id==='activityFilter'){filter=e.target.value;history.replaceState(null,'','#activity'+(filter?'?project='+filter:''));render()}});
+$('refresh').addEventListener('click',()=>refresh(true));window.addEventListener('hashchange',navigate);hydrate();navigate();refresh(true);setInterval(()=>{if(!document.hidden)refresh()},15000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()});
 === manifest ===
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -124,10 +1058,10 @@ private fun ServiceLine(service: ServiceState) {
 350:    def do_POST(self):
 370:    def route(self):
 === service pids/resources ===
-haxlab-analyzer.service active running 889202 40808448 [not set] 
+haxlab-analyzer.service active running 889202 40804352 [not set] 
 haxlab-ingest.service active running 889200 24416256 [not set] 
 haxlab-worker.service active running 889201 10604544 [not set] 
 ftmo-autonomous.timer active waiting 
-actions.runner.Zennay-Haxlab.vps-bb300bba-haxlab.service active running 411098 514576384 [not set] 
-actions.runner.Zennay-Ftmo.vps-bb300bba-ftmo.service active running 61158 1501995008 [not set] 
-zennay-cloud.service active running 1290532 102121472 [not set] 
+actions.runner.Zennay-Haxlab.vps-bb300bba-haxlab.service active running 411098 513363968 [not set] 
+actions.runner.Zennay-Ftmo.vps-bb300bba-ftmo.service active running 61158 1681833984 [not set] 
+zennay-cloud.service active running 1290532 102223872 [not set] 
