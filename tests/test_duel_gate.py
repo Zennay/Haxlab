@@ -66,3 +66,11 @@ def test_duel_kick_spam_blocks_replacement() -> None:
         reason.startswith("challenger_kick_action_rate")
         for reason in decision.reasons
     )
+
+def test_replay_seeded_schema_uses_same_promotion_policy() -> None:
+    duel = _good_duel()
+    duel["schema"] = "haxlab-elite-replay-seeded-duel-v1"
+    duel["evaluation_mode"] = "replay_seeded_proxy_v1"
+    decision = decide_duel_gate(duel)
+    assert decision.eligible_to_replace_champion
+    assert decision.checks["evaluation_mode"] == "replay_seeded_proxy_v1"
