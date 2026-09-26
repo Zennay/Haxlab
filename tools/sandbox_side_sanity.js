@@ -132,6 +132,8 @@ function main() {
     rows.reduce((sum, row) => sum + Number(row[key] || 0), 0) /
     Math.max(1, rows.length);
 
+  const averageRedHalfRate = avg("red_half_rate");
+  const averageBlueHalfRate = avg("blue_half_rate");
   const result = {
     schema: "haxlab-sandbox-side-sanity-v1",
     stadium: {
@@ -140,9 +142,12 @@ function main() {
       height: stadium.height ?? null,
     },
     matches: rows.length,
-    average_red_half_rate: avg("red_half_rate"),
-    average_blue_half_rate: avg("blue_half_rate"),
-    average_side_bias_abs: avg("side_bias_abs"),
+    average_red_half_rate: averageRedHalfRate,
+    average_blue_half_rate: averageBlueHalfRate,
+    aggregate_side_bias_abs: Math.abs(
+      averageRedHalfRate - averageBlueHalfRate,
+    ),
+    average_match_side_extremity: avg("side_bias_abs"),
     average_red_attack_third_rate: avg("red_attack_third_rate"),
     average_blue_attack_third_rate: avg("blue_attack_third_rate"),
     match_results: rows,
