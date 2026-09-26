@@ -225,6 +225,8 @@ def test_existing_champion_can_use_precomputed_duel_evidence(
     duel = _duel()
     duel["schema"] = "haxlab-elite-replay-seeded-duel-v1"
     duel["evaluation_mode"] = "replay_seeded_proxy_v1"
+    duel["challenger_progression_share"] = 0.53
+    duel["challenger_nonzero_movement_rate"] = 0.27
     duel["challenger_model"] = str(candidate_b_model / "runtime-model.json")
     duel["champion_model"] = str(
         Path(current["model_dir"]) / "runtime-model.json"
