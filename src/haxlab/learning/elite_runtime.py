@@ -29,6 +29,14 @@ class ElitePolicy:
             key: arrays[key].astype(np.float32)
             for key in ("w1", "b1", "w2", "b2", "wd", "bd", "wk", "bk")
         }
+        if "wf" in arrays.files and "bf" in arrays.files:
+            self.params["wf"] = arrays["wf"].astype(np.float32)
+            self.params["bf"] = arrays["bf"].astype(np.float32)
+            self.future_head_available = True
+        else:
+            self.params["wf"] = self.params["wd"].copy()
+            self.params["bf"] = self.params["bd"].copy()
+            self.future_head_available = False
         self.input_columns = list(self.metadata["base_input_columns"])
         self.window = int(self.metadata["architecture"]["window"])
         self.kick_threshold = float(
@@ -98,9 +106,13 @@ class ElitePolicy:
         role_one_hot[0, role_id] = 1.0
         model_x = np.concatenate([flat, role_one_hot], axis=1)
 
-        _, _, dir_prob, kick_prob = _forward(model_x, self.params)
+        _, _, dir_prob, kick_prob, future_prob = _forward(model_x, self.params)
         direction_class = int(dir_prob[0].argmax())
         dir_x, dir_y = direction_from_class(direction_class)
+        future_direction_class = int(future_prob[0].argmax())
+        future_dir_x, future_dir_y = direction_from_class(
+            future_direction_class
+        )
         kick_probability = float(kick_prob[0])
         ball_distance = math.hypot(
             float(features.get("ball_dx", 0.0)),
@@ -125,6 +137,13 @@ class ElitePolicy:
             "ball_distance": ball_distance,
             "direction_class": direction_class,
             "direction_probability": float(dir_prob[0, direction_class]),
+            "future_head_available": bool(self.future_head_available),
+            "future_direction_class": future_direction_class,
+            "future_dir_x": int(future_dir_x),
+            "future_dir_y": int(future_dir_y),
+            "future_direction_probability": float(
+                future_prob[0, future_direction_class]
+            ),
             "history_frames": len(history),
             "window": self.window,
             "ood_mean_abs_z": ood_mean_abs,
