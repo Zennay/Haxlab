@@ -32,6 +32,7 @@ if (os.endianness() !== "LE") {
 }
 
 const ROLE_IDS = { gk: 0, dm: 1, am: 2, st: 3, unknown: -1 };
+const KICK_MAX_DISTANCE = 31.0;
 
 function normalizeSpec(value) {
   if (typeof value === "string") {
@@ -201,6 +202,10 @@ function writeSample(player, statePlayers, ballDisc) {
 
   const role = spec.role in ROLE_IDS ? spec.role : "unknown";
   const scoreDiff = num(teamGoals[teamId]) - num(teamGoals[3 - teamId]);
+  const ballWorldDx = num(ballDisc.pos.x) - num(ownDisc.pos.x);
+  const ballWorldDy = num(ballDisc.pos.y) - num(ownDisc.pos.y);
+  const effectiveKick = Boolean(action?.kick) &&
+    Math.hypot(ballWorldDx, ballWorldDy) <= KICK_MAX_DISTANCE;
 
   const sample = [
     Number(reader.getCurrentFrameNo()),
@@ -221,7 +226,7 @@ function writeSample(player, statePlayers, ballDisc) {
     scoreDiff,
     sign * num(action?.dirX),
     num(action?.dirY),
-    action?.kick ? 1 : 0,
+    effectiveKick ? 1 : 0,
   ];
 
   const values = new Float32Array(sample);
@@ -325,8 +330,10 @@ function closeOutput() {
     process.stdout.write(
       JSON.stringify({
         schema: "haxlab-elite-imitation-extract-summary-v1",
-        shardSchema: "haxlab-elite-imitation-shard-v2",
+        shardSchema: "haxlab-elite-imitation-shard-v3",
         featureOrdering: "team-line-order-v1",
+        kickLabelPolicy: "effective-within-31px-v1",
+        kickMaxDistance: KICK_MAX_DISTANCE,
         format: "float32-le-gzip",
         dtype: "float32-le",
         rowWidth: columns.length,
