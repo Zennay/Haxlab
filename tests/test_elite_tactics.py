@@ -132,3 +132,60 @@ console.log(JSON.stringify(
     action = json.loads(completed.stdout)
     assert action["kick"] is True
     assert action["kick_in_range"] is True
+
+
+def test_stall_guard_requires_distance_and_consecutive_stationary_decisions() -> None:
+    repo = Path(__file__).parents[1]
+    script = f"""
+const tactics = require({json.dumps(str(repo / "tools" / "elite_tactics.js"))});
+console.log(JSON.stringify({{
+  early: tactics.shouldRecoverFromStall({{dirX:0,dirY:0}}, 300, 2),
+  ready: tactics.shouldRecoverFromStall({{dirX:0,dirY:0}}, 300, 3),
+  near: tactics.shouldRecoverFromStall({{dirX:0,dirY:0}}, 50, 10),
+  moving: tactics.shouldRecoverFromStall({{dirX:1,dirY:0}}, 300, 10),
+}}));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+    result = json.loads(completed.stdout)
+    assert result == {
+        "early": False,
+        "ready": True,
+        "near": False,
+        "moving": False,
+    }
+
+
+def test_recovery_targets_preserve_gk_dm_am_st_spine() -> None:
+    repo = Path(__file__).parents[1]
+    script = f"""
+const tactics = require({json.dumps(str(repo / "tools" / "elite_tactics.js"))});
+const roles = ["gk","dm","am","st"];
+const gameState = {{
+  physicsState: {{
+    discs: [{{pos: {{x: 80, y: 40}}, speed: {{x:0,y:0}}}}],
+  }},
+}};
+const rows = roles.map((role) => {{
+  const player = {{disc: {{pos: {{x:-100,y:0}}, speed: {{x:0,y:0}}}}}};
+  return tactics.recoveryAction(role, player, gameState, 1, {{stadiumWidth:800}});
+}});
+console.log(JSON.stringify(rows));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+    rows = json.loads(completed.stdout)
+    xs = [row["target_canonical_x"] for row in rows]
+    assert xs == sorted(xs)
+    assert rows[0]["source"] == "closed_loop_recovery"
+    assert rows[-1]["target_canonical_x"] > rows[1]["target_canonical_x"]
