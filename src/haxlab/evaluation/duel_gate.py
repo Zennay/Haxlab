@@ -38,7 +38,13 @@ def decide_duel_gate(
     checks: dict[str, Any] = {}
 
     schema = str(duel.get("schema") or "")
-    if schema != "haxlab-elite-model-duel-v1":
+    supported_schemas = {
+        "haxlab-elite-model-duel-v1",
+        "haxlab-elite-replay-seeded-duel-v1",
+    }
+    checks["evaluation_schema"] = schema
+    checks["evaluation_mode"] = duel.get("evaluation_mode")
+    if schema not in supported_schemas:
         failures.append(f"unsupported_duel_schema:{schema or 'missing'}")
 
     matches = int(duel.get("matches") or 0)
