@@ -4,7 +4,8 @@ on:
   push:
     branches: [zennay-cloud-maint]
     paths:
-      - ".github/workflows/zennay-cloud-maint.yml"\n      - "maintenance/apply_zennay_cloud.py"
+      - ".github/workflows/zennay-cloud-maint.yml"
+      - "maintenance/apply_zennay_cloud.py"
 
 permissions:
   contents: write
