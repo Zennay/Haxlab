@@ -234,10 +234,11 @@ def _ftmo_quality():
         stage = "generation %s candidate" % gen
     if rel:
         gen, release, released, holdout = rel
+        hres = holdout.get("result") or holdout
         items.extend([
-            {"label": "Validated holdout PnL", "value": _pips(holdout.get("total_pnl")), "unit": " pips"},
-            {"label": "Validated 1.5× cost", "value": _pips(holdout.get("cost_1_5x_pnl")), "unit": " pips"},
-            {"label": "Validated win rate", "value": round(float(holdout.get("win_rate")) * 100, 1) if holdout.get("win_rate") is not None else None, "unit": "%"},
+            {"label": "Validated holdout PnL", "value": _pips(hres.get("total_pnl")), "unit": " pips"},
+            {"label": "Validated 1.5× cost", "value": _pips(hres.get("cost_1_5x_pnl")), "unit": " pips"},
+            {"label": "Validated win rate", "value": round(float(hres.get("win_rate")) * 100, 1) if hres.get("win_rate") is not None else None, "unit": "%"},
         ])
         meta["release_hash"] = release.get("paper_release_hash")
         meta["release_generation"] = gen
@@ -264,6 +265,7 @@ def init_db(c):
     c.execute("CREATE INDEX IF NOT EXISTS alerts_ts ON alerts(ts)")
 
 def _emit(c, project, kind, severity, title, detail, fingerprint, cooldown=0):
+    effective_fingerprint = fingerprint
     if cooldown:
         row = c.execute("SELECT ts FROM alerts WHERE project=? AND kind=? ORDER BY ts DESC LIMIT 1", (project, kind)).fetchone()
         if row:
@@ -273,11 +275,12 @@ def _emit(c, project, kind, severity, title, detail, fingerprint, cooldown=0):
                     return False
             except Exception:
                 pass
-    if c.execute("SELECT 1 FROM alerts WHERE fingerprint=?", (fingerprint,)).fetchone():
+        effective_fingerprint = fingerprint + ":" + str(int(time.time() // cooldown))
+    if c.execute("SELECT 1 FROM alerts WHERE fingerprint=?", (effective_fingerprint,)).fetchone():
         return False
     ts = _now()
-    aid = hashlib.sha256((fingerprint + "|" + ts).encode()).hexdigest()[:20]
-    c.execute("INSERT INTO alerts VALUES(?,?,?,?,?,?,?,?,?)", (aid, ts, project, kind, severity, title, detail, 1, fingerprint))
+    aid = hashlib.sha256((effective_fingerprint + "|" + ts).encode()).hexdigest()[:20]
+    c.execute("INSERT INTO alerts VALUES(?,?,?,?,?,?,?,?,?)", (aid, ts, project, kind, severity, title, detail, 1, effective_fingerprint))
     return True
 
 def list_alerts(db_path, limit=20, important_only=False):
