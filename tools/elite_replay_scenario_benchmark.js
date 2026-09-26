@@ -35,7 +35,8 @@ function usage() {
   console.error(
     "Usage: node tools/elite_replay_scenario_benchmark.js " +
       "--model runtime-model.json --stadium stadium.hbs --scenarios scenarios.json " +
-      "[--seconds 25] [--max-scenarios 8] [--sample-every 6] [--output result.json]",
+      "[--seconds 25] [--max-scenarios 8] [--sample-every 6] " +
+      "[--disable-recovery] [--output result.json]",
   );
   process.exit(2);
 }
@@ -46,6 +47,7 @@ function parseArgs(argv) {
     maxScenarios: 8,
     sampleEvery: 6,
     output: null,
+    recoveryEnabled: true,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const key = argv[i];
@@ -57,6 +59,7 @@ function parseArgs(argv) {
     else if (key === "--max-scenarios") { args.maxScenarios = Number(value); i += 1; }
     else if (key === "--sample-every") { args.sampleEvery = Number(value); i += 1; }
     else if (key === "--output") { args.output = value; i += 1; }
+    else if (key === "--disable-recovery") { args.recoveryEnabled = false; }
     else if (key === "--help" || key === "-h") usage();
     else throw new Error("Unknown argument: " + key);
   }
@@ -81,6 +84,7 @@ function runScenarioMatch({
   baselineProfile,
   seconds,
   sampleEvery,
+  recoveryEnabled,
 }) {
   const policy = new ElitePolicyRuntime(runtimeModel);
   const baselineTeamId = eliteTeamId === 1 ? 2 : 1;
@@ -194,6 +198,7 @@ function runScenarioMatch({
                 : 0;
 
             if (
+              recoveryEnabled &&
               bot.recoveryTicks <= 0 &&
               shouldRecoverFromStall(
                 action,
@@ -206,7 +211,7 @@ function runScenarioMatch({
               bot.stallStreak = 0;
             }
 
-            if (bot.recoveryTicks > 0) {
+            if (recoveryEnabled && bot.recoveryTicks > 0) {
               const recovery = recoveryAction(
                 bot.role,
                 player,
@@ -317,6 +322,7 @@ function runScenarioMatch({
     source_frame: scenario.frame,
     elite_team_id: eliteTeamId,
     baseline_profile: baselineProfile,
+    recovery_enabled: Boolean(recoveryEnabled),
     seconds,
     goals: { elite: eliteGoals, baseline: baselineGoals },
     result:
@@ -423,6 +429,9 @@ function summarize(matches, modelPath, scenarioPath, stadium) {
     schema: "haxlab-elite-replay-scenario-benchmark-v1",
     model_path: modelPath,
     scenario_path: scenarioPath,
+    recovery_enabled: matches.length
+      ? Boolean(matches[0].recovery_enabled)
+      : null,
     stadium: {
       name: stadium.name || null,
       width: stadium.width ?? null,
@@ -515,6 +524,7 @@ function main() {
         baselineProfile: profile,
         seconds: args.seconds,
         sampleEvery: args.sampleEvery,
+        recoveryEnabled: args.recoveryEnabled,
       });
       matches.push(result);
       console.error(
