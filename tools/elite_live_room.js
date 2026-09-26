@@ -121,6 +121,9 @@ function summarizeStatus(plugin) {
     schema: "haxlab-live-room-status-v1",
     at: new Date().toISOString(),
     policy: status.policy || null,
+    future_motion: status.future_motion || null,
+    feature_imputation: status.feature_imputation || null,
+    live_guard: status.live_guard || null,
     runtime_errors: Number(status.runtime_errors || 0),
     bots: Array.isArray(status.bots) ? status.bots : [],
   };
@@ -138,6 +141,8 @@ function createLiveRoom(options, env = process.env) {
   plugin.championPointer = options.pointerPath;
   plugin.modelDir = options.modelDir;
   plugin.minimumChampionValidationStage = "live";
+  plugin.imputeMissingPlayers = true;
+  plugin.enableLiveGuard = true;
 
   let statusTimer = null;
   let openedRoom = null;
@@ -204,7 +209,10 @@ function createLiveRoom(options, env = process.env) {
       };
 
       statusTimer = setInterval(() => {
-        console.log("HAXLAB_LIVE_STATUS", JSON.stringify(summarizeStatus(plugin)));
+        console.log(
+          "HAXLAB_LIVE_STATUS",
+          JSON.stringify(summarizeStatus(plugin)),
+        );
       }, 5000);
     },
 
