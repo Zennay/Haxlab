@@ -63,7 +63,7 @@ jobs:
             "$RAW_REPLAY" \
             /tmp/haxlab-replay-scenario-stadium.hbs
 
-          NODE_PATH=/opt/haxlab/node_modules node \
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
             "$GITHUB_WORKSPACE/tools/extract_replay_scenarios.js" \
             "$RAW_REPLAY" \
             "$ANALYSIS" \
