@@ -189,3 +189,71 @@ console.log(JSON.stringify(rows));
     assert xs == sorted(xs)
     assert rows[0]["source"] == "closed_loop_recovery"
     assert rows[-1]["target_canonical_x"] > rows[1]["target_canonical_x"]
+
+
+def test_future_motion_assist_only_breaks_confident_far_stall() -> None:
+    repo = Path(__file__).parents[1]
+    script = f"""
+const tactics = require({json.dumps(str(repo / "tools" / "elite_tactics.js"))});
+const base = {{
+  dir_x: 0,
+  dir_y: 0,
+  kick: false,
+  future_head_available: true,
+  future_dir_x: 1,
+  future_dir_y: -1,
+  future_direction_probability: 0.72,
+}};
+console.log(JSON.stringify({{
+  apply: tactics.futureMotionAssist(base, 200),
+  near: tactics.futureMotionAssist(base, 30),
+  lowConfidence: tactics.futureMotionAssist(
+    {{...base, future_direction_probability:0.2}},
+    200,
+  ),
+  moving: tactics.futureMotionAssist({{...base, dir_x:1}}, 200),
+}}));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+    result = json.loads(completed.stdout)
+    assert result["apply"]["dir_x"] == 1
+    assert result["apply"]["dir_y"] == -1
+    assert result["apply"]["future_assist_applied"] is True
+    assert result["apply"]["source"] == "learned_future_motion"
+    assert result["near"]["dir_x"] == 0
+    assert result["lowConfidence"]["dir_x"] == 0
+    assert result["moving"]["dir_x"] == 1
+    assert "future_assist_applied" not in result["moving"]
+
+
+def test_future_motion_assist_ignores_legacy_model_actions() -> None:
+    repo = Path(__file__).parents[1]
+    script = f"""
+const tactics = require({json.dumps(str(repo / "tools" / "elite_tactics.js"))});
+const action = {{
+  dir_x: 0,
+  dir_y: 0,
+  kick: false,
+  future_head_available: false,
+  future_dir_x: 1,
+  future_dir_y: 0,
+  future_direction_probability: 0.99,
+}};
+console.log(JSON.stringify(tactics.futureMotionAssist(action, 300)));
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+    result = json.loads(completed.stdout)
+    assert result["dir_x"] == 0
+    assert "future_assist_applied" not in result
