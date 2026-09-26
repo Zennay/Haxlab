@@ -9,7 +9,8 @@ function read(path) {
 
 function main() {
   const args = process.argv.slice(2);
-  if (args.length < 8 || args.length % 2 !== 0) {
+  // Shape: 4 fixed inputs + N(label,path) pairs + 1 output = 5 + 2N.
+  if (args.length < 7 || (args.length - 5) % 2 !== 0) {
     console.error(
       "Usage: node tools/select_future_assist.js " +
       "champion-offline.json challenger-offline.json champion-loop.json plain-loop.json " +
