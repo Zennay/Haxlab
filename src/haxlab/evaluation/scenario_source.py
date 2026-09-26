@@ -179,13 +179,29 @@ def main() -> int:
         default=[],
         help="Replay SHA-256 to exclude. Repeatable.",
     )
+    parser.add_argument(
+        "--exclude-sha256-file",
+        type=Path,
+        default=None,
+        help="Optional newline-delimited replay SHA-256 exclusion file.",
+    )
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
+
+    excluded = set(args.exclude_sha256)
+    if args.exclude_sha256_file is not None:
+        excluded.update(
+            line.strip()
+            for line in args.exclude_sha256_file.read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.strip()
+        )
 
     result = select_scenario_source(
         args.state_db,
         max_candidates=max(1, args.max_candidates),
-        exclude_sha256=set(args.exclude_sha256),
+        exclude_sha256=excluded,
     )
     rendered = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
     if args.output is not None:
