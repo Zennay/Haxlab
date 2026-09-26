@@ -19,3 +19,17 @@ layer on both:
 
 Recovery override count/rate is reported so reliance on the fallback remains
 observable.
+
+
+## A/B protocol
+
+Replay-seeded evaluation runs the same existing champion, stadium, scenarios,
+sides and scripted opponents twice:
+
+1. recovery disabled;
+2. recovery enabled.
+
+The comparator reports movement, near-ball rate, progression, territory,
+side-gap and recovery override rate. Runtime recovery is only considered for
+promotion when it improves at least one closed-loop metric without meaningful
+regression elsewhere.
