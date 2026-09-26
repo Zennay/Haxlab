@@ -6,6 +6,7 @@ const initAPI = require("node-haxball");
 
 const API = initAPI();
 const { Replay } = API;
+const { sanitizeReplayPlayerDiscs } = require("./stadium_sanitize");
 
 function usage() {
   console.error(
@@ -30,7 +31,14 @@ function capture() {
   try {
     const exported = reader.state.exportStadium();
     if (!exported) return;
-    stadium = exported;
+    const sanitized = sanitizeReplayPlayerDiscs(exported);
+    stadium = sanitized.stadium;
+    if (sanitized.removed > 0) {
+      console.error(
+        "HAXLAB_STADIUM_SANITIZED",
+        JSON.stringify({ removed_replay_player_discs: sanitized.removed }),
+      );
+    }
     frameCaptured = Number(reader.getCurrentFrameNo?.() || 0);
   } catch (_) {}
 }
