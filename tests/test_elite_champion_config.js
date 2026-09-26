@@ -91,6 +91,41 @@ try {
     source: "plugin_variables",
   });
 
+  const legacyVersionDir = path.join(root, "registry", "versions", "legacy");
+  fs.mkdirSync(legacyVersionDir, { recursive: true });
+  const legacyRuntimePath = path.join(legacyVersionDir, "runtime-model.json");
+  fs.writeFileSync(
+    legacyRuntimePath,
+    JSON.stringify({ schema: "haxlab-elite-js-runtime-v1" }),
+  );
+  const legacyManifestPath = path.join(legacyVersionDir, "manifest.json");
+  fs.writeFileSync(
+    legacyManifestPath,
+    JSON.stringify({
+      schema: "haxlab-champion-registry-v1",
+      version_id: "legacy",
+    }),
+  );
+  const legacyPointerPath = path.join(root, "registry", "legacy-current.json");
+  fs.writeFileSync(
+    legacyPointerPath,
+    JSON.stringify({
+      schema: "haxlab-champion-pointer-v1",
+      version_id: "legacy",
+      manifest_path: legacyManifestPath,
+      runtime_config: {
+        minimum_confidence: 0.68,
+        minimum_ball_distance: 80,
+      },
+    }),
+  );
+  const legacyResolved = resolveEliteChampionConfig({
+    pointerPath: legacyPointerPath,
+    fallbackModelDir: fallbackDir,
+  });
+  assert.strictEqual(legacyResolved.runtime_model_path, legacyRuntimePath);
+  assert.strictEqual(legacyResolved.version_id, "legacy");
+
   const invalidPointer = path.join(root, "invalid.json");
   fs.writeFileSync(
     invalidPointer,
