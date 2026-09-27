@@ -7,7 +7,7 @@ on:
       - '.github/workflows/_zcloud-self-heal-emergency.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: zcloud-self-heal-emergency
@@ -19,6 +19,9 @@ jobs:
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 5
     steps:
+      - name: Checkout proof workspace
+        uses: actions/checkout@v4
+
       - name: Install and verify zCloud self-heal
         shell: bash
         run: |
@@ -165,3 +168,23 @@ jobs:
           curl -fsS --max-time 5 "${URL}" >/dev/null
 
           echo "ZCLOUD_SELF_HEAL_GREEN"
+
+      - name: Record verified recovery proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .ops
+          {
+            echo "ZCLOUD_SELF_HEAL_GREEN"
+            echo "verified_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "service=zennay-cloud.service"
+            echo "restart_policy=always"
+            echo "health_timer=zcloud-self-heal.timer"
+            echo "health_interval=60s"
+            echo "source_commit=${GITHUB_SHA}"
+          } > .ops/zcloud-self-heal-green.txt
+          git config user.name "zCloud recovery bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add .ops/zcloud-self-heal-green.txt
+          git commit -m "ops: record verified zCloud self-heal recovery" || exit 0
+          git push origin HEAD:main
