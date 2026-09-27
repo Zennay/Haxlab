@@ -1,0 +1,103 @@
+{
+  "schema": "haxlab-candidate-i-touch-progression-dataset-v1",
+  "frozen_before_candidate_i_training": true,
+  "source": {
+    "analysis_version": "state-pass-v4",
+    "touch_feature_version": "touch-chain-v1",
+    "elite_shards": "candidate-b frozen human split shards",
+    "join_key": [
+      "replay_sha256",
+      "selected_replay_player_id",
+      "frame"
+    ],
+    "canonical_attack_direction": "+x"
+  },
+  "rules": {
+    "temporal_window_frames": 8,
+    "sampled_state_must_end_before_touch": true,
+    "pre_touch_min_ticks": 6,
+    "pre_touch_max_ticks": 11,
+    "max_contiguous_sample_gap_ticks": 18,
+    "allowed_touch_outcome_codes": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "progression_required": true,
+    "target": "positive_progression = 1 iff sparseEvents.touches.progression > 0 else 0",
+    "class_reweighting": false,
+    "role_reweighting": false,
+    "state_jitter": false
+  },
+  "source_index_sha256": {
+    "train": "920ca18fdbc3682130307c01f91d61ad745d6642824f19962c6a2c614ffe1923",
+    "validation": "baaa00830ec3906640e893344262282d931de15b7a1c5c63485df1da44d6ba27",
+    "holdout_exclusion": "a80b9789547ba3befd993bfd4c62c84b2c2c999a6d9283d9b2ef3c08451083fe"
+  },
+  "split_overlap_replays": {
+    "train_validation": 0,
+    "train_holdout": 0,
+    "validation_holdout": 0
+  },
+  "train": {
+    "replays": 800,
+    "rows": 119184,
+    "positive": 71071,
+    "negative": 48113,
+    "positive_rate": 0.5963132635253054,
+    "by_role": {
+      "gk": 21388,
+      "dm": 39094,
+      "am": 35209,
+      "st": 23493
+    },
+    "touch_outcomes": {
+      "self_retouch": 52471,
+      "teammate": 29870,
+      "opponent": 36843,
+      "goal": 0
+    },
+    "missing_state_replays": 0,
+    "row_fingerprint_digest_sha256": "5185f3ca0f8c909c1732ea2f02b6a0d1c1bf346ae9072dc134d35d586df0fd1b"
+  },
+  "validation": {
+    "replays": 200,
+    "rows": 31031,
+    "positive": 18555,
+    "negative": 12476,
+    "positive_rate": 0.597950436660114,
+    "by_role": {
+      "gk": 5648,
+      "dm": 10510,
+      "am": 8736,
+      "st": 6137
+    },
+    "touch_outcomes": {
+      "self_retouch": 13255,
+      "teammate": 7925,
+      "opponent": 9851,
+      "goal": 0
+    },
+    "missing_state_replays": 0,
+    "row_fingerprint_digest_sha256": "f5035a58f8416d47ece97145d8add3338ebfef47a6f6b84fd0cec7bbb437ebd2"
+  },
+  "development_feasibility": {
+    "representation": "Candidate-E h2",
+    "representation_dim": 96,
+    "head": "ordinary least squares binary linear probe",
+    "full_train_rows": 119184,
+    "full_validation_rows": 31031,
+    "validation_majority_accuracy": 0.5979504585266113,
+    "validation_accuracy": 0.7191518159260095,
+    "validation_auc": 0.7778308580445352,
+    "by_role_auc": {
+      "gk": 0.7762825608709214,
+      "dm": 0.7756835208010774,
+      "am": 0.7715510748570261,
+      "st": 0.7896665127776903
+    },
+    "sealed_holdout_used": false,
+    "promotion_v5_used": false
+  }
+}
