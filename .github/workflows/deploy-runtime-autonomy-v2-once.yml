@@ -21,6 +21,7 @@ jobs:
     env:
       ZCLOUD_SHA: cc0bbc1806521921706a328bf3e5a86f7f21dfc6
       ZSSH_SHA: 355b1729b2f30422825e17b25dc09fa1d390a751
+      FTMO_MAIN_SHA: 90359a8150fcd974141160d2d2af7d505f1afa53
     steps:
       - name: Deploy zCloud runtime heal and canonical zSSH
         shell: bash
@@ -73,6 +74,27 @@ jobs:
           sudo systemctl enable --now ftmo-autonomous.timer
           sudo systemctl restart ftmo-autonomous.timer
           grep -F "OnUnitActiveSec=3min" /etc/systemd/system/ftmo-autonomous.timer
+
+          ftmo_src="/opt/ftmo-runner/_work/Ftmo/Ftmo"
+          ftmo_root="/opt/ftmo-autonomous"
+          test "$(git -C "$ftmo_src" rev-parse HEAD)" = "$FTMO_MAIN_SHA"
+          git -C "$ftmo_src" diff --quiet --             configs/autonomous_runtime.json             src/prop_trading_ai/ops/autonomous_runtime.py             src/prop_trading_ai/cli/v1_autonomous_tick.py             deploy/systemd/ftmo-autonomous.service.in             deploy/systemd/ftmo-autonomous.timer
+          ftmo_owner="$(stat -c %U "$ftmo_root")"
+          ftmo_group="$(stat -c %G "$ftmo_root")"
+          for rel in             configs/autonomous_runtime.json             src/prop_trading_ai/ops/autonomous_runtime.py             src/prop_trading_ai/cli/v1_autonomous_tick.py
+          do
+            sudo install -o "$ftmo_owner" -g "$ftmo_group" -m 0644               "$ftmo_src/$rel" "$ftmo_root/$rel"
+          done
+          rendered_service="$(mktemp)"
+          sed             -e "s|__REPO_ROOT__|$ftmo_root|g"             -e "s|__RUN_USER__|$ftmo_owner|g"             "$ftmo_src/deploy/systemd/ftmo-autonomous.service.in" > "$rendered_service"
+          sudo install -m 0644 "$rendered_service" /etc/systemd/system/ftmo-autonomous.service
+          sudo systemctl daemon-reload
+          sudo -u "$ftmo_owner" "$ftmo_root/.venv/bin/python"             -m prop_trading_ai.cli.v1_autonomous_tick             --root "$ftmo_root"             --config "$ftmo_root/configs/autonomous_runtime.json"
+          sudo systemctl restart ftmo-autonomous.timer
+          cmp "$ftmo_src/configs/autonomous_runtime.json" "$ftmo_root/configs/autonomous_runtime.json"
+          cmp "$ftmo_src/src/prop_trading_ai/ops/autonomous_runtime.py" "$ftmo_root/src/prop_trading_ai/ops/autonomous_runtime.py"
+          cmp "$ftmo_src/src/prop_trading_ai/cli/v1_autonomous_tick.py" "$ftmo_root/src/prop_trading_ai/cli/v1_autonomous_tick.py"
+
           sudo systemctl start zcloud-self-heal.service
           sudo systemctl is-enabled --quiet zcloud-self-heal.timer
           sudo systemctl is-active --quiet zcloud-self-heal.timer
