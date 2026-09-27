@@ -1,0 +1,141 @@
+{
+  "schema": "haxlab-candidate-i-touch-progression-multitask-contract-v1",
+  "candidate": "I",
+  "frozen_before_training": true,
+  "hypothesis": "A sparse outcome-aware next-touch progression auxiliary objective can improve Candidate-E's shared temporal representation toward useful trajectory quality while preserving human imitation behavior. Candidate I is not a recovery router and is not a Candidate-H retry.",
+  "code_base": {
+    "human_trainer_source_ref": "475bcaf9a5e4dcf325654cde93c485d2dd56fee2",
+    "required_preflight_main_ref": "660f1e9de5f93074f3b482ff9ff52c5da551e22c",
+    "required_preflight_module": "haxlab.evaluation.elite_gate_preflight"
+  },
+  "base_artifacts": {
+    "candidate": "E",
+    "model_sha256": "8244759af2854e024462feec8fe39cd76ef4e2f42a4ade867bd52f379261b4b1",
+    "runtime_model_sha256": "7d3c07ec18fc0cd8df09baed89e07f9acbf714a1ac65a11375e633c85934223f",
+    "metrics_sha256": "adfc6f260d386729a6dbcc3db84e076e87b669868681ae122a929274aa3a5fd1"
+  },
+  "human_indexes": {
+    "train_sha256": "920ca18fdbc3682130307c01f91d61ad745d6642824f19962c6a2c614ffe1923",
+    "validation_sha256": "baaa00830ec3906640e893344262282d931de15b7a1c5c63485df1da44d6ba27",
+    "holdout_sha256": "a80b9789547ba3befd993bfd4c62c84b2c2c999a6d9283d9b2ef3c08451083fe",
+    "holdout_policy": "hash may be verified before training; holdout samples may not be evaluated until every development smoke and evidence-preflight check passes"
+  },
+  "progression_dataset": {
+    "descriptor_path": "configs/datasets/candidate-i-touch-progression-v01.json",
+    "descriptor_git_blob_sha1": "f9b1affa4bfa81ec6729a40fdb6547ea5cc865f1",
+    "train_rows": 119184,
+    "validation_rows": 31031,
+    "train_row_digest_sha256": "5185f3ca0f8c909c1732ea2f02b6a0d1c1bf346ae9072dc134d35d586df0fd1b",
+    "validation_row_digest_sha256": "f5035a58f8416d47ece97145d8add3338ebfef47a6f6b84fd0cec7bbb437ebd2",
+    "train_validation_replay_overlap": 0,
+    "train_holdout_replay_overlap": 0,
+    "validation_holdout_replay_overlap": 0
+  },
+  "unchanged_human_training": {
+    "seed": 1337,
+    "epochs": 3,
+    "batch_size": 2048,
+    "learning_rate": 0.0008,
+    "l2": 0.00001,
+    "future_loss_weight": 0.5,
+    "future_horizon_steps": 5,
+    "state_jitter": {
+      "std_normalized": 0.05,
+      "roles": [
+        "am",
+        "st"
+      ],
+      "mode": "sequence_consistent_physical_features_v1",
+      "applied_to": "human_train_only"
+    },
+    "kick_threshold_source": "validation_only",
+    "frozen_holdout_used_for_selection": false
+  },
+  "progression_auxiliary": {
+    "representation": "h2",
+    "representation_dim": 96,
+    "head": "affine_96_to_2_plus_softmax",
+    "runtime_role": "training_only; omit progression head from runtime-model.json; no action-routing change",
+    "initialization": "independent numpy.default_rng(1337); normal weight scale sqrt(2/96), shape 96x2; zero bias; must not consume the human-model RNG stream",
+    "target": "positive_progression",
+    "optimizer": "separate Adam moments and separate auxiliary step counter",
+    "learning_rate": 0.0008,
+    "l2": false,
+    "batch_size": 256,
+    "updates_per_epoch": 56,
+    "draws_per_epoch": 14336,
+    "epochs": 3,
+    "sampling": "epoch N uses deterministic permutation of all 119184 train fingerprints with seed 1337 + N; consume first 14336 without replacement",
+    "schedule": "one auxiliary update after each 100 completed human optimizer updates; Candidate-E has 5675 human batches/epoch, therefore exactly 56 auxiliary updates/epoch; fail closed if that cardinality is not reproduced",
+    "auxiliary_step_trainable_parameters": [
+      "w1",
+      "b1",
+      "w2",
+      "b2",
+      "progression_w",
+      "progression_b"
+    ],
+    "auxiliary_step_frozen_parameters": [
+      "wd",
+      "bd",
+      "wk",
+      "bk",
+      "wf",
+      "bf"
+    ],
+    "class_reweighting": false,
+    "role_reweighting": false,
+    "state_jitter": false
+  },
+  "candidate_e_validation_baseline": {
+    "direction_accuracy": 0.7508108203033655,
+    "joint_accuracy": 0.7451856822397773,
+    "kick_f1": 0.24776187489308318,
+    "future_direction_accuracy": 0.664125834504852,
+    "by_role_direction_accuracy": {
+      "gk": 0.7575905285163513,
+      "dm": 0.7536000124932654,
+      "am": 0.7476643947597511,
+      "st": 0.7441054407807726
+    }
+  },
+  "development_smoke": {
+    "progression_dataset_exact_counts_required": true,
+    "progression_dataset_exact_digests_required": true,
+    "split_overlap_must_be_zero": true,
+    "frozen_h2_probe_min_accuracy": 0.7,
+    "frozen_h2_probe_min_auc": 0.75,
+    "post_training_progression_validation_min_accuracy": 0.7,
+    "post_training_progression_validation_min_auc": 0.75,
+    "human_validation_floors": {
+      "direction_accuracy": 0.7458108203033655,
+      "joint_accuracy": 0.7401856822397773,
+      "kick_f1": 0.24276187489308318,
+      "future_direction_accuracy": 0.659125834504852,
+      "by_role_direction_accuracy": {
+        "gk": 0.7475905285163513,
+        "dm": 0.7436000124932653,
+        "am": 0.7376643947597511,
+        "st": 0.7341054407807726
+      }
+    },
+    "elite_gate_evidence_preflight_required": true,
+    "failure_rule": "any development smoke or evidence-preflight failure rejects Candidate I before sealed holdout and before Promotion-v5; no retry or post-outcome tuning under this contract"
+  },
+  "final_evaluation": {
+    "sealed_human_holdout": "evaluate exactly once only after every development smoke/preflight gate passes",
+    "promotion_suite": "promotion-v2-frozen-suite-v5",
+    "promotion_suite_manifest_sha256": "cc65f79300c7e93f06efb2838a690b5fa98cb9f399c463366b1c69cbbd90d0d3",
+    "arena_policy": "closed-loop-arena-v2-frozen-1 unchanged",
+    "production_pointer_writes": false,
+    "decision_rule": "any blocking gate failure rejects Candidate I; production pointers remain unchanged unless the complete existing promotion sequence later authorizes promotion"
+  },
+  "prohibitions": [
+    "no Candidate-H retry or reuse of Candidate-H outcome to tune this contract",
+    "no change to Promotion-v5 sources, thresholds or policy",
+    "no sealed-holdout tuning",
+    "no class/role reweighting or outcome jitter",
+    "no runtime progression router or hand-coded progression controller",
+    "no hyperparameter search after Candidate-I outcomes"
+  ]
+}
