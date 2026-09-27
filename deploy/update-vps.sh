@@ -8,7 +8,7 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
-systemctl stop haxlab-analyzer.service haxlab-worker.service haxlab-ingest.service 2>/dev/null || true
+systemctl stop haxlab-autonomy.timer haxlab-autonomy.service haxlab-analyzer.service haxlab-worker.service haxlab-ingest.service 2>/dev/null || true
 
 apt-get install -y nodejs npm
 
@@ -24,6 +24,9 @@ node -e 'const api=require("node-haxball")(); if (!api.Replay) process.exit(1)'
 install -m 0644 "${APP_DIR}/deploy/haxlab-ingest.service" /etc/systemd/system/haxlab-ingest.service
 install -m 0644 "${APP_DIR}/deploy/haxlab-worker.service" /etc/systemd/system/haxlab-worker.service
 install -m 0644 "${APP_DIR}/deploy/haxlab-analyzer.service" /etc/systemd/system/haxlab-analyzer.service
+install -m 0644 "${APP_DIR}/deploy/haxlab-autonomy.service" /etc/systemd/system/haxlab-autonomy.service
+install -m 0644 "${APP_DIR}/deploy/haxlab-autonomy.timer" /etc/systemd/system/haxlab-autonomy.timer
+chmod 0755 "${APP_DIR}/deploy/haxlab-autonomy-tick.sh"
 
 ln -sf "${APP_DIR}/.venv/bin/haxlab" /usr/local/bin/haxlab
 ln -sf "${APP_DIR}/.venv/bin/haxlab-status" /usr/local/bin/haxlab-status
@@ -38,11 +41,12 @@ ln -sf "${APP_DIR}/.venv/bin/haxlab-train-bc" /usr/local/bin/haxlab-train-bc
 install -o root -g root -m 0755 "${APP_DIR}/deploy/haxlab-actions-control.sh" /usr/local/sbin/haxlab-actions-control
 
 systemctl daemon-reload
-systemctl enable haxlab-ingest.service haxlab-worker.service haxlab-analyzer.service
-systemctl start haxlab-ingest.service haxlab-worker.service haxlab-analyzer.service
+systemctl enable haxlab-ingest.service haxlab-worker.service haxlab-analyzer.service haxlab-autonomy.timer
+systemctl start haxlab-ingest.service haxlab-worker.service haxlab-analyzer.service haxlab-autonomy.timer
 
 systemctl is-active --quiet haxlab-ingest.service
 systemctl is-active --quiet haxlab-worker.service
 systemctl is-active --quiet haxlab-analyzer.service
+systemctl is-active --quiet haxlab-autonomy.timer
 
 haxlab-status

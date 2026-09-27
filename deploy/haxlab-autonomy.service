@@ -1,0 +1,20 @@
+[Unit]
+Description=HaxLab autonomous research reconciler
+After=network-online.target haxlab-analyzer.service
+Wants=network-online.target haxlab-analyzer.service
+
+[Service]
+Type=oneshot
+User=haxlab
+Group=haxlab
+WorkingDirectory=/opt/haxlab
+ExecStart=/opt/haxlab/deploy/haxlab-autonomy-tick.sh
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/var/lib/haxlab

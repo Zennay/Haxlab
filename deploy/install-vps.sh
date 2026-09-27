@@ -91,6 +91,9 @@ fi
 install -m 0644 "${APP_DIR}/deploy/haxlab-ingest.service" /etc/systemd/system/haxlab-ingest.service
 install -m 0644 "${APP_DIR}/deploy/haxlab-worker.service" /etc/systemd/system/haxlab-worker.service
 install -m 0644 "${APP_DIR}/deploy/haxlab-analyzer.service" /etc/systemd/system/haxlab-analyzer.service
+install -m 0644 "${APP_DIR}/deploy/haxlab-autonomy.service" /etc/systemd/system/haxlab-autonomy.service
+install -m 0644 "${APP_DIR}/deploy/haxlab-autonomy.timer" /etc/systemd/system/haxlab-autonomy.timer
+chmod 0755 "${APP_DIR}/deploy/haxlab-autonomy-tick.sh"
 
 ln -sf "${APP_DIR}/.venv/bin/haxlab" /usr/local/bin/haxlab
 ln -sf "${APP_DIR}/.venv/bin/haxlab-status" /usr/local/bin/haxlab-status
@@ -108,10 +111,12 @@ systemctl daemon-reload
 systemctl enable --now haxlab-ingest.service
 systemctl enable --now haxlab-worker.service
 systemctl enable --now haxlab-analyzer.service
+systemctl enable --now haxlab-autonomy.timer
 
 systemctl is-active --quiet haxlab-ingest.service
 systemctl is-active --quiet haxlab-worker.service
 systemctl is-active --quiet haxlab-analyzer.service
+systemctl is-active --quiet haxlab-autonomy.timer
 
 haxlab-status >/dev/null
 
