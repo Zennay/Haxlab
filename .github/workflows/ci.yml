@@ -46,6 +46,14 @@ jobs:
           curl -sS -o /dev/null -w 'localhost_http=%{http_code}\n' --max-time 3 http://127.0.0.1:8765/api/status || true
           echo "[exception_classes]"
           grep -E '^[A-Za-z_][A-Za-z0-9_.]*(Error|Exception):' "$J" | sed -E 's/:.*$//' | sort | uniq -c | sort -nr | head -20 || true
+          echo "[oserror_errno]"
+          grep -E '^OSError:' "$J" | sed -nE 's/.*\\[Errno ([0-9]+)\\].*/Errno \\1/p' | sort | uniq -c | sort -nr | head -20 || true
+          echo "[current_fd_state]"
+          PID="$(systemctl show zennay-cloud.service -p MainPID --value 2>/dev/null || true)"
+          if [[ "$PID" =~ ^[0-9]+$ ]] && [[ "$PID" != 0 ]] && [[ -d "/proc/$PID/fd" ]]; then
+            printf 'fd_count='; find "/proc/$PID/fd" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l
+            grep -E '^Max open files' "/proc/$PID/limits" || true
+          fi
           echo "[zcloud_frames]"
           grep -E 'File "/home/ubuntu/zennay-cloud/(server.py|enhancements.py)", line [0-9]+, in ' "$J" | sed -E 's#.*File "([^"]+)", line ([0-9]+), in ([^ ]+).*#\1:\2:\3#' | sort | uniq -c | sort -nr | head -30 || true
           echo "[recent_restart_markers]"
