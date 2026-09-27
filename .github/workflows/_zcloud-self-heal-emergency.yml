@@ -1,0 +1,167 @@
+name: Emergency zCloud self-heal hardening
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/_zcloud-self-heal-emergency.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zcloud-self-heal-emergency
+  cancel-in-progress: false
+
+jobs:
+  harden:
+    name: Harden zCloud recovery on VPS
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 5
+    steps:
+      - name: Install and verify zCloud self-heal
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SERVICE="zennay-cloud.service"
+          URL="http://127.0.0.1:8765/api/status"
+          ROOT="/home/ubuntu/zennay-cloud"
+          DROPIN_DIR="/etc/systemd/system/${SERVICE}.d"
+          DROPIN="${DROPIN_DIR}/90-zcloud-self-heal.conf"
+          HEAL_BIN="/usr/local/sbin/zcloud-self-heal"
+          HEAL_SERVICE="/etc/systemd/system/zcloud-self-heal.service"
+          HEAL_TIMER="/etc/systemd/system/zcloud-self-heal.timer"
+
+          echo "=== privilege check ==="
+          sudo -n true
+
+          echo "=== baseline ==="
+          systemctl show "${SERVICE}" -p ActiveState -p SubState -p MainPID -p Restart -p RestartUSec || true
+          curl -fsS --max-time 5 "${URL}" >/dev/null && echo "baseline API: healthy" || echo "baseline API: unavailable"
+
+          stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+          backup="/var/backups/zcloud-self-heal/${stamp}"
+          sudo mkdir -p "${backup}" "${DROPIN_DIR}"
+          for f in "${DROPIN}" "${HEAL_BIN}" "${HEAL_SERVICE}" "${HEAL_TIMER}"; do
+            if sudo test -e "${f}"; then
+              sudo cp -a "${f}" "${backup}/$(basename "${f}")"
+            fi
+          done
+
+          cat > /tmp/90-zcloud-self-heal.conf <<'EOF'
+          [Unit]
+          StartLimitIntervalSec=0
+
+          [Service]
+          Restart=always
+          RestartSec=5s
+          TimeoutStopSec=20s
+          EOF
+          sudo install -o root -g root -m 0644 /tmp/90-zcloud-self-heal.conf "${DROPIN}"
+
+          cat > /tmp/zcloud-self-heal <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          SERVICE="${ZCLOUD_SERVICE:-zennay-cloud.service}"
+          URL="${ZCLOUD_HEALTH_URL:-http://127.0.0.1:8765/api/status}"
+          DISABLE_FILE="/home/ubuntu/zennay-cloud/.disable-self-heal"
+          LOCK_FILE="/run/zcloud-self-heal.lock"
+
+          [[ -e "${DISABLE_FILE}" ]] && exit 0
+
+          exec 9>"${LOCK_FILE}"
+          flock -n 9 || exit 0
+
+          if systemctl is-active --quiet "${SERVICE}" && curl -fsS --max-time 5 "${URL}" >/dev/null; then
+            exit 0
+          fi
+
+          logger -t zcloud-self-heal "health failed; restarting ${SERVICE}"
+          systemctl restart "${SERVICE}"
+
+          for _ in {1..20}; do
+            if systemctl is-active --quiet "${SERVICE}" && curl -fsS --max-time 3 "${URL}" >/dev/null; then
+              logger -t zcloud-self-heal "recovery succeeded"
+              exit 0
+            fi
+            sleep 1
+          done
+
+          logger -t zcloud-self-heal "recovery failed after restart"
+          exit 1
+          EOF
+          sudo install -o root -g root -m 0755 /tmp/zcloud-self-heal "${HEAL_BIN}"
+
+          cat > /tmp/zcloud-self-heal.service <<'EOF'
+          [Unit]
+          Description=zCloud API self-heal probe
+          After=network-online.target zennay-cloud.service
+          Wants=network-online.target
+          ConditionPathExists=!/home/ubuntu/zennay-cloud/.disable-self-heal
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/sbin/zcloud-self-heal
+          EOF
+          sudo install -o root -g root -m 0644 /tmp/zcloud-self-heal.service "${HEAL_SERVICE}"
+
+          cat > /tmp/zcloud-self-heal.timer <<'EOF'
+          [Unit]
+          Description=Check zCloud health every minute
+
+          [Timer]
+          OnBootSec=45s
+          OnUnitActiveSec=60s
+          AccuracySec=5s
+          Unit=zcloud-self-heal.service
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+          EOF
+          sudo install -o root -g root -m 0644 /tmp/zcloud-self-heal.timer "${HEAL_TIMER}"
+
+          sudo systemctl daemon-reload
+          sudo systemctl restart "${SERVICE}"
+          sudo systemctl enable --now zcloud-self-heal.timer
+
+          echo "=== wait for API ==="
+          for _ in {1..20}; do
+            if systemctl is-active --quiet "${SERVICE}" && curl -fsS --max-time 3 "${URL}" >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          systemctl is-active --quiet "${SERVICE}"
+          curl -fsS --max-time 5 "${URL}" >/dev/null
+
+          echo "=== verify crash restart ==="
+          before_pid="$(systemctl show "${SERVICE}" -p MainPID --value)"
+          test -n "${before_pid}"
+          test "${before_pid}" != "0"
+          sudo systemctl kill --kill-who=main --signal=SIGKILL "${SERVICE}"
+
+          recovered=0
+          for _ in {1..25}; do
+            after_pid="$(systemctl show "${SERVICE}" -p MainPID --value)"
+            if [[ "${after_pid}" != "0" && "${after_pid}" != "${before_pid}" ]] \
+              && systemctl is-active --quiet "${SERVICE}" \
+              && curl -fsS --max-time 3 "${URL}" >/dev/null; then
+              recovered=1
+              break
+            fi
+            sleep 1
+          done
+          test "${recovered}" = "1"
+
+          echo "=== final state ==="
+          systemctl show "${SERVICE}" -p ActiveState -p SubState -p MainPID -p Restart -p RestartUSec -p StartLimitBurst
+          systemctl is-enabled zcloud-self-heal.timer
+          systemctl is-active zcloud-self-heal.timer
+          systemctl list-timers zcloud-self-heal.timer --no-pager
+          sudo systemctl start zcloud-self-heal.service
+          curl -fsS --max-time 5 "${URL}" >/dev/null
+
+          echo "ZCLOUD_SELF_HEAL_GREEN"
