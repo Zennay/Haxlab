@@ -30,8 +30,41 @@ git -C "$CANDIDATE" checkout --detach "$ZSSH_CANONICAL_SHA"
 test "$(git -C "$CANDIDATE" rev-parse HEAD)" = "$ZSSH_CANONICAL_SHA"
 echo "::endgroup::"
 
-echo "::group::Require clean prechange"
-python3 "$CANDIDATE/scripts/zcloud_prechange_guard.py"   --root "$LIVE_ROOT"   --state "$STATE_DIR"
+echo "::group::Require or safely refresh prechange"
+PRE_JSON="$(mktemp /tmp/zssh-prechange.XXXXXX.json)"
+LIVE_CONFIG_JSON="$(mktemp /tmp/zssh-live-config.XXXXXX.json)"
+trap 'rm -rf "$CANDIDATE" "$POST_CAPTURE" "$POST_WRAPPER" "$PRE_JSON" "$LIVE_CONFIG_JSON"' EXIT
+
+if python3 "$CANDIDATE/scripts/zcloud_prechange_guard.py" --root "$LIVE_ROOT" --state "$STATE_DIR" --json >"$PRE_JSON"; then
+  echo "PRECHANGE_ALREADY_GREEN"
+else
+  cat "$PRE_JSON"
+  python3 - "$PRE_JSON" <<'PY'
+import json, sys
+payload=json.load(open(sys.argv[1]))
+unexpected=set(payload.get("unexpected_changes") or [])
+assert unexpected == {"resource-policy.json"}, f"unexpected live drift: {sorted(unexpected)}"
+checks={x.get("name"):x for x in payload.get("checks") or []}
+for name in ("lkg_integrity","firefox_source_runtime_match","zcloud_service","firefox_service","zcloud_http"):
+    assert checks.get(name,{}).get("ok") is True, f"prechange safety check failed: {name}"
+print("RESOURCE_POLICY_ONLY_DRIFT_VERIFIED")
+PY
+
+  python3 "$CANDIDATE/scripts/zcloud_config_validate.py" --projects "$LIVE_ROOT/projects.json" --layout "$LIVE_ROOT/project-layout.json" --resource-policy "$LIVE_ROOT/resource-policy.json" --server "$LIVE_ROOT/server.py" --enhancements "$LIVE_ROOT/enhancements.py" --db "$LIVE_ROOT/history.db" --json >"$LIVE_CONFIG_JSON"
+
+  python3 - "$LIVE_CONFIG_JSON" <<'PY'
+import json, sys
+payload=json.load(open(sys.argv[1]))
+assert payload.get("ok") is True, payload
+print("LIVE_CONFIG_SCHEMA_GREEN")
+PY
+
+  python3 "$CANDIDATE/scripts/zcloud_postdeploy_canary.py" --root "$LIVE_ROOT" --db "$LIVE_ROOT/history.db" --require-incidents
+
+  python3 "$CANDIDATE/scripts/zcloud_recovery.py" --root "$LIVE_ROOT" --state-dir "$STATE_DIR" capture --evidence "GitHub zSSH registration preflight: only mutable resource-policy drift; live config and postdeploy canary green"
+
+  python3 "$CANDIDATE/scripts/zcloud_prechange_guard.py" --root "$LIVE_ROOT" --state "$STATE_DIR"
+fi
 echo "::endgroup::"
 
 cat > "$POST_WRAPPER" <<EOF
