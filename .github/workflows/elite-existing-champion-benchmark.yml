@@ -1,0 +1,113 @@
+name: Elite Existing Champion Benchmark
+
+on:
+  push:
+    branches:
+      - feature/elite-4v4-player-v01
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-elite-existing-champion-benchmark
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    if: contains(github.event.head_commit.message, '[benchmark]')
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify existing champion artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f /var/lib/haxlab/derived/training/elite-player-champion-candidate/model/runtime-model.json
+          test -f /var/lib/haxlab/derived/training/elite-player-champion-candidate/pipeline-summary.json
+
+      - name: Extract BFF Big v4 stadium
+        shell: bash
+        run: |
+          set -euo pipefail
+          RAW_REPLAY="$(
+            /opt/haxlab/.venv/bin/python - <<'PY'
+          import sqlite3
+          db = sqlite3.connect("/var/lib/haxlab/state/haxlab.sqlite3")
+          row = db.execute("""
+          SELECT r.archive_path
+          FROM source_files s
+          JOIN raw_replays r ON r.sha256 = s.sha256
+          WHERE lower(s.source_path) LIKE '%kjambvsado%'
+          ORDER BY s.last_seen_at DESC
+          LIMIT 1
+          """).fetchone()
+          if row:
+              print(row[0])
+          PY
+          )"
+          test -n "$RAW_REPLAY"
+          test -f "$RAW_REPLAY"
+          NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/extract_stadium_from_replay.js" \
+            "$RAW_REPLAY" \
+            /tmp/haxlab-existing-champion-stadium.hbs
+
+      - name: Model-free side sanity
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/sandbox_side_sanity.js" \
+            --stadium /tmp/haxlab-existing-champion-stadium.hbs \
+            --matches 6 \
+            --minutes 1.0 \
+            --sample-every 6 \
+            --output /tmp/haxlab-side-sanity.json
+
+      - name: Benchmark existing champion
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/elite_sandbox_benchmark.js" \
+            --model /var/lib/haxlab/derived/training/elite-player-champion-candidate/model/runtime-model.json \
+            --stadium /tmp/haxlab-existing-champion-stadium.hbs \
+            --matches 12 \
+            --minutes 1.5 \
+            --sample-every 6 \
+            --output /tmp/haxlab-existing-champion-benchmark.json
+
+      - name: Evaluate sandbox gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m haxlab.evaluation.sandbox_gate \
+            --benchmark /tmp/haxlab-existing-champion-benchmark.json \
+            --side-sanity /tmp/haxlab-side-sanity.json \
+            --output /tmp/haxlab-sandbox-gate.json || true
+
+          cp /tmp/haxlab-side-sanity.json side-sanity.json
+          cp /tmp/haxlab-existing-champion-benchmark.json champion-benchmark.json
+          cp /tmp/haxlab-sandbox-gate.json sandbox-gate.json
+
+          echo '## Existing Champion Neutral-Start Benchmark' >> "$GITHUB_STEP_SUMMARY"
+          echo >> "$GITHUB_STEP_SUMMARY"
+          echo '### Side sanity' >> "$GITHUB_STEP_SUMMARY"
+          cat side-sanity.json >> "$GITHUB_STEP_SUMMARY"
+          echo '### Champion benchmark' >> "$GITHUB_STEP_SUMMARY"
+          cat champion-benchmark.json >> "$GITHUB_STEP_SUMMARY"
+          echo '### Gate' >> "$GITHUB_STEP_SUMMARY"
+          cat sandbox-gate.json >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: existing-champion-neutral-benchmark
+          path: |
+            side-sanity.json
+            champion-benchmark.json
+            sandbox-gate.json
+          retention-days: 30

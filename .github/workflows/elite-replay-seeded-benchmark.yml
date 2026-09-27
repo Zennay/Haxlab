@@ -1,0 +1,181 @@
+name: Elite Replay-Seeded Benchmark
+
+on:
+  push:
+    branches:
+      - feature/elite-4v4-player-v01
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-elite-replay-seeded-benchmark
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    if: contains(github.event.head_commit.message, '[scenario]')
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify existing champion
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f /var/lib/haxlab/derived/training/elite-player-champion-candidate/model/runtime-model.json
+
+      - name: Select healthy 4v4 replay
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m haxlab.evaluation.scenario_source \
+            --state-db /var/lib/haxlab/state/haxlab.sqlite3 \
+            --max-candidates 1500 \
+            --output /tmp/haxlab-scenario-source.json
+          cat /tmp/haxlab-scenario-source.json
+
+      - name: Export source stadium and real match scenarios
+        shell: bash
+        run: |
+          set -euo pipefail
+          RAW_REPLAY="$(
+            /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          print(json.load(open("/tmp/haxlab-scenario-source.json"))["raw_path"])
+          PY
+          )"
+          ANALYSIS="$(
+            /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          print(json.load(open("/tmp/haxlab-scenario-source.json"))["analysis_path"])
+          PY
+          )"
+
+          test -f "$RAW_REPLAY"
+          test -f "$ANALYSIS"
+
+          NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/extract_stadium_from_replay.js" \
+            "$RAW_REPLAY" \
+            /tmp/haxlab-replay-scenario-stadium.hbs
+
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/extract_replay_scenarios.js" \
+            "$RAW_REPLAY" \
+            "$ANALYSIS" \
+            /tmp/haxlab-replay-scenarios.json \
+            16 \
+            8 \
+            6
+
+      - name: Benchmark champion with recovery disabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js" \
+            --model /var/lib/haxlab/derived/training/elite-player-champion-candidate/model/runtime-model.json \
+            --stadium /tmp/haxlab-replay-scenario-stadium.hbs \
+            --scenarios /tmp/haxlab-replay-scenarios.json \
+            --max-scenarios 8 \
+            --seconds 30 \
+            --sample-every 6 \
+            --disable-recovery \
+            --output /tmp/haxlab-recovery-baseline.json
+
+      - name: Benchmark conservative recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js" \
+            --model /var/lib/haxlab/derived/training/elite-player-champion-candidate/model/runtime-model.json \
+            --stadium /tmp/haxlab-replay-scenario-stadium.hbs \
+            --scenarios /tmp/haxlab-replay-scenarios.json \
+            --max-scenarios 8 \
+            --seconds 30 \
+            --sample-every 6 \
+            --recovery-min-distance 240 \
+            --recovery-stall-decisions 6 \
+            --recovery-ticks 2 \
+            --output /tmp/haxlab-recovery-conservative.json
+
+      - name: Benchmark medium recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js" \
+            --model /var/lib/haxlab/derived/training/elite-player-champion-candidate/model/runtime-model.json \
+            --stadium /tmp/haxlab-replay-scenario-stadium.hbs \
+            --scenarios /tmp/haxlab-replay-scenarios.json \
+            --max-scenarios 8 \
+            --seconds 30 \
+            --sample-every 6 \
+            --recovery-min-distance 180 \
+            --recovery-stall-decisions 5 \
+            --recovery-ticks 3 \
+            --output /tmp/haxlab-recovery-medium.json
+
+      - name: Benchmark aggressive recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/elite_replay_scenario_benchmark.js" \
+            --model /var/lib/haxlab/derived/training/elite-player-champion-candidate/model/runtime-model.json \
+            --stadium /tmp/haxlab-replay-scenario-stadium.hbs \
+            --scenarios /tmp/haxlab-replay-scenarios.json \
+            --max-scenarios 8 \
+            --seconds 30 \
+            --sample-every 6 \
+            --recovery-min-distance 120 \
+            --recovery-stall-decisions 3 \
+            --recovery-ticks 5 \
+            --output /tmp/haxlab-recovery-aggressive.json
+
+      - name: Select recovery configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          node "$GITHUB_WORKSPACE/tools/select_recovery_config.js" \
+            /tmp/haxlab-recovery-baseline.json \
+            conservative /tmp/haxlab-recovery-conservative.json \
+            medium /tmp/haxlab-recovery-medium.json \
+            aggressive /tmp/haxlab-recovery-aggressive.json \
+            /tmp/haxlab-recovery-grid.json
+
+      - name: Publish evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp /tmp/haxlab-scenario-source.json scenario-source.json
+          cp /tmp/haxlab-replay-scenarios.json replay-scenarios.json
+          cp /tmp/haxlab-recovery-baseline.json recovery-baseline.json
+          cp /tmp/haxlab-recovery-conservative.json recovery-conservative.json
+          cp /tmp/haxlab-recovery-medium.json recovery-medium.json
+          cp /tmp/haxlab-recovery-aggressive.json recovery-aggressive.json
+          cp /tmp/haxlab-recovery-grid.json recovery-grid.json
+
+          echo '## HaxLab Replay-Seeded Closed-Loop Benchmark' >> "$GITHUB_STEP_SUMMARY"
+          echo '### Source' >> "$GITHUB_STEP_SUMMARY"
+          cat scenario-source.json >> "$GITHUB_STEP_SUMMARY"
+          echo '### Recovery grid' >> "$GITHUB_STEP_SUMMARY"
+          cat recovery-grid.json >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: elite-replay-seeded-benchmark
+          path: |
+            scenario-source.json
+            replay-scenarios.json
+            recovery-baseline.json
+            recovery-conservative.json
+            recovery-medium.json
+            recovery-aggressive.json
+            recovery-grid.json
+          retention-days: 30

@@ -9,6 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 from statistics import mean, median, pstdev
 
+from haxlab.analysis.roles import infer_roles_4v4, role_map_4v4
 from haxlab.skill.estimator import estimate_player_skill_v0
 from haxlab.skill.models import PerformanceVector, SkillObservation
 
@@ -32,11 +33,42 @@ def _name_key(name: str | None) -> str | None:
     return cleaned.casefold() or None
 
 
-def _identity_key(player: dict) -> str | None:
+def _load_aliases(path: Path | None) -> dict[str, str]:
+    if path is None or not path.exists():
+        return {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    aliases = payload.get("aliases") if isinstance(payload, dict) else None
+    if aliases is None and isinstance(payload, dict):
+        aliases = payload
+    result: dict[str, str] = {}
+    for source, target in (aliases or {}).items():
+        source_key = _name_key(str(source))
+        target_key = _name_key(str(target))
+        if source_key and target_key:
+            result[source_key] = target_key
+    return result
+
+
+def _identity_key(
+    player: dict,
+    aliases: dict[str, str] | None = None,
+) -> str | None:
+    aliases = aliases or {}
+    name = _name_key(player.get("name"))
+
+    # Explicit human-confirmed aliases override replay auth identity. This is
+    # intentional: an alias is used precisely when HaxLab has already split one
+    # real player into multiple profiles.
+    if name:
+        target = aliases.get(name)
+        if target:
+            return f"alias:{target}"
+        if name in set(aliases.values()):
+            return f"alias:{name}"
+
     auth_hash = player.get("authHash")
     if auth_hash:
         return f"auth:{auth_hash}"
-    name = _name_key(player.get("name"))
     return f"name:{name}" if name else None
 
 
@@ -56,36 +88,8 @@ def _player_minutes(player: dict, payload: dict) -> float:
 
 
 def _role_map(players: list[dict]) -> dict[int, str]:
-    by_team: dict[int, list[tuple[int, float]]] = defaultdict(list)
-    for player in players:
-        team_id = int(player.get("teamId") or 0)
-        if team_id not in (1, 2):
-            continue
-        if int(player.get("samples") or 0) <= 0:
-            continue
-        average_x = player.get("averageX")
-        if average_x is None:
-            continue
-        attack_x = float(average_x) if team_id == 1 else -float(average_x)
-        by_team[team_id].append((int(player["id"]), attack_x))
-
-    result: dict[int, str] = {}
-    for team_players in by_team.values():
-        team_players.sort(key=lambda item: item[1])
-        n = len(team_players)
-        for index, (player_id, _) in enumerate(team_players):
-            if n < 3:
-                role = "unknown"
-            else:
-                percentile = index / max(1, n - 1)
-                if percentile <= 0.33:
-                    role = "defender"
-                elif percentile >= 0.67:
-                    role = "forward"
-                else:
-                    role = "midfield"
-            result[player_id] = role
-    return result
+    """Compatibility wrapper for the fixed 4v4 GK/DM/AM/ST role model."""
+    return role_map_4v4(players)
 
 
 def _raw_metrics(
@@ -152,8 +156,33 @@ def _raw_metrics(
     }
 
 
-def load_match_evidence(root: Path) -> list[dict]:
+def _true_4v4_average_sizes(payload: dict) -> dict[int, float] | None:
+    simulation = payload.get("simulation") or {}
+    sampled_state_count = int(simulation.get("sampledStateCount") or 0)
+    if sampled_state_count <= 0:
+        return None
+
+    players = list(payload.get("players") or [])
+    result: dict[int, float] = {}
+    for team_id in (1, 2):
+        team_sample_total = sum(
+            int(player.get("samples") or 0)
+            for player in players
+            if int(player.get("teamId") or 0) == team_id
+        )
+        result[team_id] = team_sample_total / sampled_state_count
+
+    if all(3.5 <= result[team_id] <= 4.5 for team_id in (1, 2)):
+        return result
+    return None
+
+
+def load_match_evidence(
+    root: Path,
+    aliases: dict[str, str] | None = None,
+) -> list[dict]:
     evidence: list[dict] = []
+    aliases = aliases or {}
 
     for path in root.rglob("*.json"):
         try:
@@ -163,14 +192,17 @@ def load_match_evidence(root: Path) -> list[dict]:
         schema_version = int(payload.get("schemaVersion") or 0)
         if schema_version not in (3, 4):
             continue
+        if _true_4v4_average_sizes(payload) is None:
+            continue
 
         players = list(payload.get("players") or [])
-        roles = _role_map(players)
+        role_evidence = infer_roles_4v4(players)
+        roles = {player_id: row["role"] for player_id, row in role_evidence.items()}
         total_frames = int(payload.get("totalFrames") or 0)
         match_minutes = total_frames / 3600.0
 
         for player in players:
-            key = _identity_key(player)
+            key = _identity_key(player, aliases)
             if key is None:
                 continue
             minutes = _player_minutes(player, payload)
@@ -183,6 +215,11 @@ def load_match_evidence(root: Path) -> list[dict]:
                     "team_id": int(player.get("teamId") or 0),
                     "name": " ".join(str(player.get("name")).strip().split()),
                     "role": roles.get(int(player.get("id") or -1), "unknown"),
+                    "role_confidence": float(
+                        role_evidence.get(int(player.get("id") or -1), {}).get(
+                            "confidence", 0.0
+                        )
+                    ),
                     "minutes": minutes,
                     "match_minutes": match_minutes,
                     "schema_version": schema_version,
@@ -322,8 +359,11 @@ def _bounded_match_contexts(
     return result
 
 
-def build_leaderboard(root: Path) -> list[dict]:
-    evidence = load_match_evidence(root)
+def build_leaderboard(
+    root: Path,
+    aliases: dict[str, str] | None = None,
+) -> list[dict]:
+    evidence = load_match_evidence(root, aliases)
     normalizers = _normalizers(evidence)
 
     normalized_rows: list[dict] = []
@@ -467,6 +507,12 @@ def main() -> int:
     parser.add_argument("--min-matches", type=int, default=20)
     parser.add_argument("--min-minutes", type=float, default=60.0)
     parser.add_argument(
+        "--aliases",
+        type=Path,
+        default=Path("/opt/haxlab/configs/player_aliases.json"),
+        help="Optional JSON file of confirmed display-name aliases.",
+    )
+    parser.add_argument(
         "--format",
         choices=["table", "json"],
         default="table",
@@ -479,9 +525,10 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    aliases = _load_aliases(args.aliases if args.aliases.exists() else None)
     rows = [
         row
-        for row in build_leaderboard(args.root)
+        for row in build_leaderboard(args.root, aliases)
         if row["matches"] >= max(1, args.min_matches)
         and row["minutes"] >= max(0.0, args.min_minutes)
     ][: max(1, args.top)]
@@ -490,6 +537,8 @@ def main() -> int:
         "schema": "haxlab-skill-leaderboard-v1",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source_root": str(args.root),
+        "aliases_path": str(args.aliases) if args.aliases.exists() else None,
+        "alias_count": len(aliases),
         "min_matches": max(1, args.min_matches),
         "min_minutes": max(0.0, args.min_minutes),
         "rows": rows,
