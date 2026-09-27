@@ -46,6 +46,12 @@ jobs:
 
           ZSSH_EXPECTED_SHA="$ZSSH_SHA" bash "$zs/deploy/install-live.sh" "$zs"
 
+          test -f /opt/haxlab/deploy/haxlab-autonomy.service
+          test -f /opt/haxlab/deploy/haxlab-autonomy.timer
+          test -f /opt/haxlab/deploy/haxlab-autonomy-tick.sh
+          sudo install -m 0644 /opt/haxlab/deploy/haxlab-autonomy.service /etc/systemd/system/haxlab-autonomy.service
+          sudo install -m 0644 /opt/haxlab/deploy/haxlab-autonomy.timer /etc/systemd/system/haxlab-autonomy.timer
+          sudo chmod 0755 /opt/haxlab/deploy/haxlab-autonomy-tick.sh
           sudo systemctl daemon-reload
           sudo systemctl enable --now haxlab-autonomy.timer
           sudo systemctl enable --now ftmo-autonomous.timer
