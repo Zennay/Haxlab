@@ -1,4 +1,4 @@
-name: zSSH live diagnosis
+name: zSSH one-time runtime promotion
 
 on:
   push:
@@ -6,6 +6,8 @@ on:
       - "ops/zssh-github-runtime-promote"
     paths:
       - ".github/workflows/zssh-runtime-promote-once.yml"
+      - ".github/scripts/zssh-runtime-promote.sh"
+      - ".github/scripts/zssh-diagnose.sh"
 
 permissions:
   contents: read
@@ -16,56 +18,20 @@ concurrency:
 
 jobs:
   diagnose:
-    name: Diagnose zSSH and zCloud drift
+    name: Diagnose zSSH runtime blockers
     runs-on:
       - self-hosted
       - haxlab
     timeout-minutes: 10
 
     steps:
-      - name: Read-only live diagnosis
+      - name: Checkout transport branch
+        uses: actions/checkout@v4
+
+      - name: Validate diagnostic script syntax
         shell: bash
-        env:
-          ZSSH_CANONICAL_SHA: 0b65d3ba9144f5556851c8cd3456621364e03dac
-        run: |
-          set -Eeuo pipefail
-          test "$(id -un)" = "ubuntu"
+        run: bash -n .github/scripts/zssh-diagnose.sh
 
-          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
-          LIVE_ROOT="/home/ubuntu/zennay-cloud"
-          STATE_DIR="/home/ubuntu/.local/state/zcloud/recovery"
-          CANDIDATE="$(mktemp -d /tmp/zssh-diag.XXXXXX)"
-          trap 'rm -rf "$CANDIDATE"' EXIT
-
-          echo "::group::zSSH service state"
-          systemctl --user status zssh.service --no-pager || true
-          echo "--- journal ---"
-          journalctl --user -u zssh.service -n 120 --no-pager || true
-          echo "--- runtime ---"
-          node --version || true
-          npm --version || true
-          readlink -f /home/ubuntu/.local/share/zssh/current || true
-          ls -la /home/ubuntu/.local/share/zssh/current 2>/dev/null || true
-          sed -E 's#^(EnvironmentFile=).*#\1[configured]#' /home/ubuntu/.config/systemd/user/zssh.service 2>/dev/null || true
-          echo "::endgroup::"
-
-          echo "::group::Canonical comparison"
-          git clone --filter=blob:none --no-checkout https://github.com/Zennay/zCloud.git "$CANDIDATE"
-          git -C "$CANDIDATE" fetch --depth 1 origin "$ZSSH_CANONICAL_SHA"
-          git -C "$CANDIDATE" checkout --detach "$ZSSH_CANONICAL_SHA"
-          test "$(git -C "$CANDIDATE" rev-parse HEAD)" = "$ZSSH_CANONICAL_SHA"
-
-          for rel in enhancements.py resource-policy.json; do
-            echo "--- $rel hashes ---"
-            sha256sum "$LIVE_ROOT/$rel" "$CANDIDATE/$rel" || true
-            echo "--- $rel diff (canonical -> live) ---"
-            diff -u "$CANDIDATE/$rel" "$LIVE_ROOT/$rel" | head -n 240 || true
-          done
-          echo "::endgroup::"
-
-          echo "::group::Prechange detail"
-          python3 "$CANDIDATE/scripts/zcloud_prechange_guard.py"             --root "$LIVE_ROOT"             --state "$STATE_DIR"             --json || true
-          echo "::endgroup::"
-
-          echo "ZSSH_DIAG_COMPLETE"
+      - name: Diagnose current VPS state
+        shell: bash
+        run: bash .github/scripts/zssh-diagnose.sh
