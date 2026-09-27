@@ -26,58 +26,80 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  zcloud-emergency-diagnostic:
-    name: zCloud emergency diagnostic
+  zcloud-live-fd-fix:
+    name: zCloud live FD leak fix
     if: github.event_name == 'pull_request' && github.head_ref == 'ops/zcloud-recovery-pr-20260927'
     runs-on: [self-hosted, haxlab]
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
-      - name: Inspect recovered zCloud
+      - name: Patch and validate live zCloud
         shell: bash
         run: |
           set -euo pipefail
-          J="$RUNNER_TEMP/zcloud-journal.txt"
-          journalctl -u zennay-cloud.service --since "6 hours ago" --no-pager -o cat > "$J" 2>/dev/null || true
-          echo "[service]"
-          systemctl show zennay-cloud.service -p ActiveState -p SubState -p Result -p MainPID -p Restart -p RestartUSec -p NRestarts -p ExecMainCode -p ExecMainStatus
-          echo "[socket]"
-          ss -ltnp 2>/dev/null | grep -E '(:8765[[:space:]])|(:8765$)' || true
-          echo "[health]"
-          curl -sS -o /dev/null -w 'localhost_http=%{http_code}\n' --max-time 3 http://127.0.0.1:8765/api/status || true
-          echo "[exception_classes]"
-          grep -E '^[A-Za-z_][A-Za-z0-9_.]*(Error|Exception):' "$J" | sed -E 's/:.*$//' | sort | uniq -c | sort -nr | head -20 || true
-          echo "[oserror_errno]"
-          grep -E '^OSError:' "$J" | sed -nE 's/.*\\[Errno ([0-9]+)\\].*/Errno \\1/p' | sort | uniq -c | sort -nr | head -20 || true
-          echo "[current_fd_state]"
-          PID="$(systemctl show zennay-cloud.service -p MainPID --value 2>/dev/null || true)"
-          if [[ "$PID" =~ ^[0-9]+$ ]] && [[ "$PID" != 0 ]] && [[ -d "/proc/$PID/fd" ]]; then
-            printf 'fd_count='; find "/proc/$PID/fd" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l
-            grep -E '^Max open files' "/proc/$PID/limits" || true
+          ROOT=/home/ubuntu/zennay-cloud
+          LIVE="$ROOT/enhancements.py"
+          BACKUP=/tmp/zcloud-enhancements-pre-fd-fix.py
+          HEALTH=http://127.0.0.1:8765/api/status
+          cp -p "$LIVE" "$BACKUP"
+          
+          python3 - <<'PY'
+          from pathlib import Path
+          import os, stat
+          p=Path("/home/ubuntu/zennay-cloud/enhancements.py")
+          text=p.read_text(encoding="utf-8")
+          old="        with sqlite3.connect(db_path) as c:\n"
+          new="        with _db_connect(db_path) as c:\n"
+          count=text.count(old)
+          if count != 1:
+              raise SystemExit(f"expected exactly one vulnerable sqlite context, found {count}")
+          tmp=p.with_suffix(".py.fd-fix.tmp")
+          tmp.write_text(text.replace(old,new),encoding="utf-8")
+          os.chmod(tmp, stat.S_IMODE(p.stat().st_mode))
+          os.replace(tmp,p)
+          print("patched_live_source=1")
+          PY
+          
+          if ! python3 -m py_compile "$LIVE"; then
+            cp -p "$BACKUP" "$LIVE"
+            echo "compile_failed_restored=1"
+            exit 1
           fi
-          echo "[fd_targets]"
-          if [[ "$PID" =~ ^[0-9]+$ ]] && [[ "$PID" != 0 ]] && [[ -d "/proc/$PID/fd" ]]; then
-            for fd in /proc/"$PID"/fd/*; do
-              target="$(readlink "$fd" 2>/dev/null || echo unreadable)"
-              case "$target" in
-                socket:*) echo socket ;;
-                pipe:*) echo pipe ;;
-                anon_inode:*) echo anon_inode ;;
-                *history.db*) echo history_db ;;
-                /dev/null) echo dev_null ;;
-                /proc/*) echo proc_file ;;
-                *) echo other ;;
-              esac
-            done | sort | uniq -c | sort -nr
+          if ! (cd "$ROOT" && python3 -m unittest -v tests.test_incident_center); then
+            cp -p "$BACKUP" "$LIVE"
+            echo "tests_failed_restored=1"
+            exit 1
           fi
-          echo "[too_many_open_files_count]"
-          grep -Eci 'Too many open files|Errno 24' "$J" || true
-          echo "[zcloud_frames]"
-          grep -E 'File "/home/ubuntu/zennay-cloud/(server.py|enhancements.py)", line [0-9]+, in ' "$J" | sed -E 's#.*File "([^"]+)", line ([0-9]+), in ([^ ]+).*#\1:\2:\3#' | sort | uniq -c | sort -nr | head -30 || true
-          echo "[recent_restart_markers]"
-          grep -E 'Started .*zCloud|Stopped .*zCloud|Main process exited|Failed with result|Scheduled restart job|Deactivated successfully' "$J" | tail -30 || true
-          echo "[watchdog]"
-          systemctl --user show zcloud-watchdog.timer -p ActiveState -p SubState -p NextElapseUSecRealtime || true
-          tail -20 "$HOME/.local/state/zcloud/watchdog/watchdog.log" 2>/dev/null || true
+          
+          sudo -n systemctl restart zennay-cloud.service
+          for _ in $(seq 1 30); do
+            if curl -fsS --max-time 2 "$HEALTH" >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          curl -fsS --max-time 3 "$HEALTH" >/dev/null
+          
+          PID="$(systemctl show zennay-cloud.service -p MainPID --value)"
+          sleep 2
+          before="$(find "/proc/$PID/fd" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)"
+          echo "fd_before_stress=$before"
+          fail=0
+          for _ in $(seq 1 150); do
+            curl -fsS --max-time 3 "$HEALTH" >/dev/null 2>&1 || fail=$((fail+1))
+          done
+          sleep 3
+          after="$(find "/proc/$PID/fd" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)"
+          history="$(for fd in /proc/"$PID"/fd/*; do readlink "$fd" 2>/dev/null || true; done | grep -c 'history.db' || true)"
+          echo "fd_after_stress=$after"
+          echo "history_db_fds_after=$history"
+          echo "health_failures=$fail"
+          if (( fail > 0 || after > before + 20 || history > 20 )); then
+            echo "fd_fix_validation_failed=1"
+            cp -p "$BACKUP" "$LIVE"
+            sudo -n systemctl restart zennay-cloud.service
+            exit 1
+          fi
+          echo "fd_fix_validation=green"
+          systemctl show zennay-cloud.service -p ActiveState -p SubState -p MainPID -p Restart -p RestartUSec
+          sqlite3 -noheader "$ROOT/history.db" "SELECT 'active_chat_targets='||COUNT(*) FROM runner_targets WHERE active=1;"
 
   test:
     if: github.event_name != 'pull_request' || github.head_ref != 'ops/zcloud-recovery-pr-20260927'
