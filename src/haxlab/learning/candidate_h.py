@@ -14,6 +14,7 @@ from haxlab.learning import elite
 CONTRACT_SCHEMA = "haxlab-candidate-h-h1-gated-recovery-contract-v1"
 RUNTIME_ROUTING_SCHEMA = "haxlab-learned-recovery-routing-v1"
 MODEL_SCHEMA = "haxlab-candidate-h-h1-gated-recovery-v1"
+CANDIDATE = "H"
 ROLE_IDS = {name: role_id for role_id, name in elite.ROLE_NAMES.items()}
 
 
@@ -52,7 +53,7 @@ def _load_contract(path: Path, expected_git_blob: str) -> dict[str, Any]:
     contract = json.loads(path.read_text(encoding="utf-8"))
     if contract.get("schema") != CONTRACT_SCHEMA:
         raise ValueError("unsupported Candidate-H contract schema")
-    if contract.get("candidate") != "H" or not contract.get("frozen_before_training"):
+    if contract.get("candidate") != CANDIDATE or not contract.get("frozen_before_training"):
         raise ValueError("Candidate-H contract is not frozen")
     return contract
 
@@ -504,7 +505,7 @@ def _runtime_payload(
     weights["recovery_activation_b"] = activation_bias.astype(float).tolist()
     payload["recovery_routing"] = {
         "schema": RUNTIME_ROUTING_SCHEMA,
-        "candidate": "H",
+        "candidate": CANDIDATE,
         "activation_representation": "h1",
         "recovery_direction_representation": "h2",
         "activation_threshold": float(threshold),
@@ -836,7 +837,7 @@ def train_candidate_h(args: argparse.Namespace) -> dict[str, Any]:
 
     metadata = {
         "schema": MODEL_SCHEMA,
-        "candidate": "G",
+        "candidate": CANDIDATE,
         "contract_path": str(args.contract),
         "contract_git_blob": args.contract_git_blob,
         "promotion_v5_manifest": str(args.promotion_manifest),

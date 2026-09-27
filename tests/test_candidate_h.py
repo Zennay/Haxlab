@@ -5,6 +5,7 @@ import unittest
 import numpy as np
 
 from haxlab.learning.candidate_h import (
+    CANDIDATE,
     _activation_metrics,
     _fit_activation_head,
     _hidden1,
@@ -15,6 +16,9 @@ from haxlab.learning.candidate_h import (
 
 
 class CandidateHTests(unittest.TestCase):
+    def test_candidate_identity_is_h(self) -> None:
+        self.assertEqual(CANDIDATE, "H")
+
     def test_recovery_sampling_is_deterministic_and_without_replacement_per_pass(self) -> None:
         first = _recovery_draw_indices(5, 12, seed=1338)
         second = _recovery_draw_indices(5, 12, seed=1338)
