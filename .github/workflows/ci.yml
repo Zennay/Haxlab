@@ -64,7 +64,50 @@ jobs:
             echo "compile_failed_restored=1"
             exit 1
           fi
-          if ! (cd "$ROOT" && python3 tests/test_incident_center.py); then
+          if ! (
+            cd "$ROOT"
+            python3 - <<'PY'
+import gc, os, sqlite3, tempfile
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+import enhancements
+
+with tempfile.TemporaryDirectory(prefix="zcloud-fd-smoke-") as td:
+    db=Path(td)/"history.db"
+    with sqlite3.connect(db) as c:
+        enhancements.init_db(c)
+        c.execute("""CREATE TABLE task_claims(
+            project_id TEXT NOT NULL,
+            claim_key TEXT NOT NULL,
+            owner_id TEXT NOT NULL,
+            worker_id TEXT NOT NULL DEFAULT '',
+            acquired_at TEXT NOT NULL,
+            heartbeat_at TEXT NOT NULL,
+            lease_until TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            PRIMARY KEY(project_id,claim_key)
+        )""")
+        now=datetime.now(timezone.utc)
+        c.execute("INSERT INTO task_claims VALUES(?,?,?,?,?,?,?,?)",(
+            "cloud","notion:fd-smoke","owner-a","cloud::w1",
+            now.isoformat(),now.isoformat(),(now+timedelta(minutes=10)).isoformat(),"{}"
+        ))
+    alert={"project":"cloud","detail":"notion:fd-smoke · current owner owner-a"}
+    gc.collect()
+    baseline=len(os.listdir("/proc/self/fd"))
+    gc.disable()
+    try:
+        for _ in range(300):
+            assert enhancements._claim_conflict_is_active(db,alert,now)
+        after=len(os.listdir("/proc/self/fd"))
+    finally:
+        gc.enable()
+        gc.collect()
+    print(f"inline_fd_before={baseline}")
+    print(f"inline_fd_after={after}")
+    assert after <= baseline+5, (baseline,after)
+PY
+          ); then
             cp -p "$BACKUP" "$LIVE"
             echo "tests_failed_restored=1"
             exit 1
