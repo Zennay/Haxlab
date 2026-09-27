@@ -64,7 +64,7 @@ jobs:
             echo "compile_failed_restored=1"
             exit 1
           fi
-          if ! (cd "$ROOT" && python3 -m unittest -v tests.test_incident_center); then
+          if ! (cd "$ROOT" && python3 tests/test_incident_center.py); then
             cp -p "$BACKUP" "$LIVE"
             echo "tests_failed_restored=1"
             exit 1
