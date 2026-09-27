@@ -54,6 +54,23 @@ jobs:
             printf 'fd_count='; find "/proc/$PID/fd" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l
             grep -E '^Max open files' "/proc/$PID/limits" || true
           fi
+          echo "[fd_targets]"
+          if [[ "$PID" =~ ^[0-9]+$ ]] && [[ "$PID" != 0 ]] && [[ -d "/proc/$PID/fd" ]]; then
+            for fd in /proc/"$PID"/fd/*; do
+              target="$(readlink "$fd" 2>/dev/null || echo unreadable)"
+              case "$target" in
+                socket:*) echo socket ;;
+                pipe:*) echo pipe ;;
+                anon_inode:*) echo anon_inode ;;
+                *history.db*) echo history_db ;;
+                /dev/null) echo dev_null ;;
+                /proc/*) echo proc_file ;;
+                *) echo other ;;
+              esac
+            done | sort | uniq -c | sort -nr
+          fi
+          echo "[too_many_open_files_count]"
+          grep -Eci 'Too many open files|Errno 24' "$J" || true
           echo "[zcloud_frames]"
           grep -E 'File "/home/ubuntu/zennay-cloud/(server.py|enhancements.py)", line [0-9]+, in ' "$J" | sed -E 's#.*File "([^"]+)", line ([0-9]+), in ([^ ]+).*#\1:\2:\3#' | sort | uniq -c | sort -nr | head -30 || true
           echo "[recent_restart_markers]"
