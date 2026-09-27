@@ -85,6 +85,46 @@ class ElitePolicyRuntime {
     this.weights = model.weights;
     this.futureHeadAvailable =
       Array.isArray(this.weights.wf) && Array.isArray(this.weights.bf);
+    this.recoveryRouting = model.recovery_routing || null;
+    this.recoveryHeadAvailable = Boolean(
+      this.recoveryRouting &&
+      Array.isArray(this.weights.recovery_wd) &&
+      Array.isArray(this.weights.recovery_bd) &&
+      Array.isArray(this.weights.recovery_activation_w) &&
+      Array.isArray(this.weights.recovery_activation_b)
+    );
+    this.recoveryActivationThreshold = Number(
+      this.recoveryRouting?.activation_threshold ?? 0.5,
+    );
+    this.recoveryActivationRepresentation = String(
+      this.recoveryRouting?.activation_representation ||
+      this.recoveryRouting?.representation ||
+      "h2",
+    ).toLowerCase();
+    if (this.recoveryRouting && !this.recoveryHeadAvailable) {
+      throw new Error("recovery routing configured without complete learned heads");
+    }
+    if (
+      this.recoveryHeadAvailable &&
+      !["h1", "h2"].includes(this.recoveryActivationRepresentation)
+    ) {
+      throw new Error(
+        "invalid recovery activation representation: " +
+        this.recoveryActivationRepresentation,
+      );
+    }
+    if (
+      this.recoveryHeadAvailable &&
+      (
+        !Number.isFinite(this.recoveryActivationThreshold) ||
+        this.recoveryActivationThreshold < 0 ||
+        this.recoveryActivationThreshold > 1
+      )
+    ) {
+      throw new Error(
+        `invalid recovery activation threshold: ${this.recoveryActivationThreshold}`,
+      );
+    }
     this.history = new Map();
 
     if (!Number.isInteger(this.window) || this.window < 1) {
@@ -204,11 +244,60 @@ class ElitePolicyRuntime {
       this.weights.bd,
       false,
     );
-    const directionProbabilities = softmax(directionLogits);
+    const baseDirectionProbabilities = softmax(directionLogits);
+    let directionProbabilities = baseDirectionProbabilities;
+    let recoveryDirectionProbabilities = null;
+    let recoveryActivationProbability = null;
+    let recoveryActive = false;
+    if (this.recoveryHeadAvailable) {
+      const recoveryLogits = dense(
+        h2,
+        this.weights.recovery_wd,
+        this.weights.recovery_bd,
+        false,
+      );
+      recoveryDirectionProbabilities = softmax(recoveryLogits);
+      const activationFeatures =
+        this.recoveryActivationRepresentation === "h1" ? h1 : h2;
+      const activationLogits = dense(
+        activationFeatures,
+        this.weights.recovery_activation_w,
+        this.weights.recovery_activation_b,
+        false,
+      );
+      const activationProbabilities = softmax(activationLogits);
+      recoveryActivationProbability = Number(activationProbabilities[1]);
+      recoveryActive =
+        recoveryActivationProbability >= this.recoveryActivationThreshold;
+      if (recoveryActive) {
+        directionProbabilities = recoveryDirectionProbabilities;
+      }
+    }
     const futureLogits = this.futureHeadAvailable
       ? dense(h2, this.weights.wf, this.weights.bf, false)
       : directionLogits.slice();
     const futureProbabilities = softmax(futureLogits);
+    let baseDirectionClass = 0;
+    for (let i = 1; i < baseDirectionProbabilities.length; i += 1) {
+      if (
+        baseDirectionProbabilities[i] >
+        baseDirectionProbabilities[baseDirectionClass]
+      ) {
+        baseDirectionClass = i;
+      }
+    }
+    let recoveryDirectionClass = null;
+    if (recoveryDirectionProbabilities) {
+      recoveryDirectionClass = 0;
+      for (let i = 1; i < recoveryDirectionProbabilities.length; i += 1) {
+        if (
+          recoveryDirectionProbabilities[i] >
+          recoveryDirectionProbabilities[recoveryDirectionClass]
+        ) {
+          recoveryDirectionClass = i;
+        }
+      }
+    }
     let directionClass = 0;
     for (let i = 1; i < directionProbabilities.length; i += 1) {
       if (
@@ -269,6 +358,22 @@ class ElitePolicyRuntime {
       ball_distance: ballDistance,
       direction_class: directionClass,
       direction_probability: directionProbabilities[directionClass],
+      base_direction_class: baseDirectionClass,
+      base_direction_probability: baseDirectionProbabilities[baseDirectionClass],
+      recovery_head_available: this.recoveryHeadAvailable,
+      recovery_activation_probability: recoveryActivationProbability,
+      recovery_activation_threshold: this.recoveryHeadAvailable
+        ? this.recoveryActivationThreshold
+        : null,
+      recovery_activation_representation: this.recoveryHeadAvailable
+        ? this.recoveryActivationRepresentation
+        : null,
+      recovery_active: recoveryActive,
+      recovery_direction_class: recoveryDirectionClass,
+      recovery_direction_probability:
+        recoveryDirectionClass == null
+          ? null
+          : recoveryDirectionProbabilities[recoveryDirectionClass],
       future_head_available: this.futureHeadAvailable,
       future_direction_class: futureDirectionClass,
       future_dir_x: Number(futureDirection.dir_x),
@@ -292,6 +397,13 @@ class ElitePolicyRuntime {
       kick_thresholds_by_role: { ...this.kickThresholdsByRole },
       kick_max_distance: this.kickMaxDistance,
       input_columns: this.inputColumns.slice(),
+      recovery_head_available: this.recoveryHeadAvailable,
+      recovery_activation_threshold: this.recoveryHeadAvailable
+        ? this.recoveryActivationThreshold
+        : null,
+      recovery_activation_representation: this.recoveryHeadAvailable
+        ? this.recoveryActivationRepresentation
+        : null,
     };
   }
 }
