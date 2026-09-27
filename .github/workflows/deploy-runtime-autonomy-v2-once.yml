@@ -54,7 +54,26 @@ jobs:
           sudo chmod 0755 /opt/haxlab/deploy/haxlab-autonomy-tick.sh
           sudo systemctl daemon-reload
           sudo systemctl enable --now haxlab-autonomy.timer
+
+          ftmo_timer="$(mktemp)"
+          cat > "$ftmo_timer" <<'EOF'
+[Unit]
+Description=Run FTMO autonomous VPS tick every three minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=3min
+AccuracySec=30s
+Unit=ftmo-autonomous.service
+
+[Install]
+WantedBy=timers.target
+EOF
+          sudo install -m 0644 "$ftmo_timer" /etc/systemd/system/ftmo-autonomous.timer
+          sudo systemctl daemon-reload
           sudo systemctl enable --now ftmo-autonomous.timer
+          sudo systemctl restart ftmo-autonomous.timer
+          grep -F "OnUnitActiveSec=3min" /etc/systemd/system/ftmo-autonomous.timer
           sudo systemctl start zcloud-self-heal.service
           sudo systemctl is-enabled --quiet zcloud-self-heal.timer
           sudo systemctl is-active --quiet zcloud-self-heal.timer
