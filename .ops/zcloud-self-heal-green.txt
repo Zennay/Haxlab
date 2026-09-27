@@ -1,7 +1,0 @@
-ZCLOUD_SELF_HEAL_GREEN
-verified_at=2026-09-27T22:17:40Z
-service=zennay-cloud.service
-restart_policy=always
-health_timer=zcloud-self-heal.timer
-health_interval=60s
-source_commit=2a16b4446fcd48ce5801512175294552389009b4
