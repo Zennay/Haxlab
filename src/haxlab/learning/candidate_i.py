@@ -22,6 +22,7 @@ CONTRACT_SCHEMA = "haxlab-candidate-i-touch-progression-multitask-contract-v1"
 MODEL_SCHEMA = "haxlab-elite-temporal-policy-v1"
 CANDIDATE = "I"
 EXPECTED_HUMAN_BATCHES_PER_EPOCH = 5675
+EXPECTED_HUMAN_SEQUENCE_SAMPLES_PER_EPOCH = 8_313_339
 ROLE_NAMES = {0: "gk", 1: "dm", 2: "am", 3: "st"}
 
 
@@ -390,6 +391,25 @@ def _human_floor_issues(
     return issues
 
 
+def _assert_human_epoch_cardinality(
+    *,
+    epoch: int,
+    batches: int,
+    sequence_samples: int,
+) -> None:
+    if int(batches) != EXPECTED_HUMAN_BATCHES_PER_EPOCH:
+        raise ValueError(
+            "Candidate-I human batch count mismatch in epoch "
+            f"{epoch}: {batches} != {EXPECTED_HUMAN_BATCHES_PER_EPOCH}"
+        )
+    if int(sequence_samples) != EXPECTED_HUMAN_SEQUENCE_SAMPLES_PER_EPOCH:
+        raise ValueError(
+            "Candidate-I human sequence count mismatch in epoch "
+            f"{epoch}: {sequence_samples} != "
+            f"{EXPECTED_HUMAN_SEQUENCE_SAMPLES_PER_EPOCH}"
+        )
+
+
 def _runtime_payload(
     *,
     params: dict[str, np.ndarray],
@@ -676,11 +696,11 @@ def run_candidate_i(
                 aux_updates += 1
                 aux_losses.append(aux_loss)
 
-        if human_batches != EXPECTED_HUMAN_BATCHES_PER_EPOCH:
-            raise ValueError(
-                f"Candidate-I expected {EXPECTED_HUMAN_BATCHES_PER_EPOCH} human "
-                f"batches in epoch {epoch}, got {human_batches}"
-            )
+        _assert_human_epoch_cardinality(
+            epoch=epoch,
+            batches=human_batches,
+            sequence_samples=human_samples,
+        )
         if aux_updates != frozen_aux_updates:
             raise ValueError(
                 f"Candidate-I expected {frozen_aux_updates} auxiliary updates "

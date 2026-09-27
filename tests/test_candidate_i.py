@@ -6,6 +6,9 @@ import unittest
 import numpy as np
 
 from haxlab.learning.candidate_i import (
+    EXPECTED_HUMAN_BATCHES_PER_EPOCH,
+    EXPECTED_HUMAN_SEQUENCE_SAMPLES_PER_EPOCH,
+    _assert_human_epoch_cardinality,
     _binary_auc,
     _human_floor_issues,
     _init_progression_head,
@@ -39,6 +42,25 @@ class CandidateITrainingContractTests(unittest.TestCase):
         self.assertEqual(len(np.unique(first)), len(first))
         np.testing.assert_array_equal(first, second)
         self.assertFalse(np.array_equal(first, other_epoch))
+
+    def test_human_epoch_cardinality_matches_frozen_candidate_e(self) -> None:
+        _assert_human_epoch_cardinality(
+            epoch=1,
+            batches=EXPECTED_HUMAN_BATCHES_PER_EPOCH,
+            sequence_samples=EXPECTED_HUMAN_SEQUENCE_SAMPLES_PER_EPOCH,
+        )
+        with self.assertRaisesRegex(ValueError, "human batch count mismatch"):
+            _assert_human_epoch_cardinality(
+                epoch=1,
+                batches=EXPECTED_HUMAN_BATCHES_PER_EPOCH - 1,
+                sequence_samples=EXPECTED_HUMAN_SEQUENCE_SAMPLES_PER_EPOCH,
+            )
+        with self.assertRaisesRegex(ValueError, "human sequence count mismatch"):
+            _assert_human_epoch_cardinality(
+                epoch=1,
+                batches=EXPECTED_HUMAN_BATCHES_PER_EPOCH,
+                sequence_samples=EXPECTED_HUMAN_SEQUENCE_SAMPLES_PER_EPOCH - 1,
+            )
 
     def test_aux_gradients_only_cover_shared_backbone_and_progression_head(self) -> None:
         rng = np.random.default_rng(5)
