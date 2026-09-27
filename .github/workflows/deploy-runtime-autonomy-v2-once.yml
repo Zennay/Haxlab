@@ -56,19 +56,18 @@ jobs:
           sudo systemctl enable --now haxlab-autonomy.timer
 
           ftmo_timer="$(mktemp)"
-          cat > "$ftmo_timer" <<'EOF'
-[Unit]
-Description=Run FTMO autonomous VPS tick every three minutes
-
-[Timer]
-OnBootSec=1min
-OnUnitActiveSec=3min
-AccuracySec=30s
-Unit=ftmo-autonomous.service
-
-[Install]
-WantedBy=timers.target
-EOF
+          printf '%s\n' \
+            '[Unit]' \
+            'Description=Run FTMO autonomous VPS tick every three minutes' \
+            '' \
+            '[Timer]' \
+            'OnBootSec=1min' \
+            'OnUnitActiveSec=3min' \
+            'AccuracySec=30s' \
+            'Unit=ftmo-autonomous.service' \
+            '' \
+            '[Install]' \
+            'WantedBy=timers.target' > "$ftmo_timer"
           sudo install -m 0644 "$ftmo_timer" /etc/systemd/system/ftmo-autonomous.timer
           sudo systemctl daemon-reload
           sudo systemctl enable --now ftmo-autonomous.timer
