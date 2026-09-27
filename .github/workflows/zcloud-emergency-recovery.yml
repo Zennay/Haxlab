@@ -1,0 +1,232 @@
+name: zCloud emergency recovery
+
+on:
+  push:
+    branches:
+      - ops/zcloud-emergency-recovery-20260927
+    paths:
+      - .github/workflows/zcloud-emergency-recovery.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: zcloud-emergency-recovery
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    name: Recover zCloud on VPS
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 8
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Diagnose, recover, pause chats, and install watchdog
+        shell: bash
+        run: |
+          set -u
+          ROOT=/home/ubuntu/zennay-cloud
+          DB="$ROOT/history.db"
+          HEALTH=http://127.0.0.1:8765/api/status
+          REPORT="$RUNNER_TEMP/zcloud-emergency-report.txt"
+          JOURNAL="$RUNNER_TEMP/zcloud-service-journal.txt"
+          KERNEL="$RUNNER_TEMP/zcloud-kernel-journal.txt"
+          USER_HOME=/home/ubuntu
+          export XDG_RUNTIME_DIR=/run/user/1000
+          export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+
+          kv() { printf '%s=%s\n' "$1" "$2" >> "$REPORT"; }
+          section() { printf '\n[%s]\n' "$1" >> "$REPORT"; }
+
+          : > "$REPORT"
+          kv timestamp_utc "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          kv hostname "$(hostname)"
+          kv runner_user "$(id -un)"
+          kv uptime_seconds "$(cut -d. -f1 /proc/uptime)"
+
+          section before
+          systemctl show zennay-cloud.service             -p ActiveState -p SubState -p Result -p MainPID -p ExecMainStatus             -p ExecMainCode -p NRestarts -p Restart -p RestartUSec             -p ActiveEnterTimestamp -p InactiveEnterTimestamp             -p FragmentPath -p WorkingDirectory             >> "$REPORT" 2>&1 || true
+
+          journalctl -u zennay-cloud.service --since "4 hours ago" --no-pager -o short-iso             > "$JOURNAL" 2>/dev/null || true
+          journalctl -k --since "4 hours ago" --no-pager -o short-iso             > "$KERNEL" 2>/dev/null || true
+
+          cause_hint=unknown
+          if grep -Eqi 'out of memory|oom-kill|killed process' "$KERNEL" "$JOURNAL"; then
+            cause_hint=oom_or_memory_kill
+          elif grep -Eqi 'address already in use|Errno 98' "$JOURNAL"; then
+            cause_hint=port_bind_conflict
+          elif grep -Eqi 'segmentation fault|segfault' "$JOURNAL" "$KERNEL"; then
+            cause_hint=segfault
+          elif grep -Eqi 'Traceback \(most recent call last\)|uncaught exception|fatal python error' "$JOURNAL"; then
+            cause_hint=python_exception
+          elif grep -Eqi 'code=killed|status=[0-9]+/KILL|status=[0-9]+/SEGV' "$JOURNAL"; then
+            cause_hint=process_killed_or_signaled
+          elif systemctl show zennay-cloud.service -p Result --value 2>/dev/null | grep -Eqi 'exit-code|signal|core-dump|watchdog|oom-kill'; then
+            cause_hint=systemd_process_failure
+          elif [[ "$(systemctl show zennay-cloud.service -p ActiveState --value 2>/dev/null)" != "active" ]]             && [[ "$(systemctl show zennay-cloud.service -p Restart --value 2>/dev/null)" == "no" ]]; then
+            cause_hint=service_stopped_without_restart_policy
+          fi
+          kv cause_hint "$cause_hint"
+          kv journal_traceback_count "$(grep -Eci 'Traceback \(most recent call last\)|uncaught exception|fatal python error' "$JOURNAL" || true)"
+          kv journal_port_conflict_count "$(grep -Eci 'address already in use|Errno 98' "$JOURNAL" || true)"
+          kv journal_killed_count "$(grep -Eci 'code=killed|status=[0-9]+/KILL|status=[0-9]+/SEGV' "$JOURNAL" || true)"
+          kv kernel_oom_count "$(grep -Eci 'out of memory|oom-kill|killed process' "$KERNEL" || true)"
+
+          if [[ -f "$DB" ]] && command -v sqlite3 >/dev/null 2>&1; then
+            section runner_state_before
+            sqlite3 -noheader "$DB"               "SELECT project_id||'|active='||active||'|workers='||worker_count FROM runner_targets ORDER BY project_id;"               >> "$REPORT" 2>&1 || true
+          fi
+
+          section recovery
+          restart_result=failed
+          if sudo -n systemctl restart zennay-cloud.service >> "$REPORT" 2>&1; then
+            for _ in $(seq 1 30); do
+              if curl -fsS --max-time 2 "$HEALTH" >/dev/null 2>&1; then
+                restart_result=healthy
+                break
+              fi
+              sleep 1
+            done
+          fi
+          kv recovery_result "$restart_result"
+
+          if [[ "$restart_result" == "healthy" ]]; then
+            section pause_all_chats
+            if [[ -f "$DB" ]] && command -v sqlite3 >/dev/null 2>&1; then
+              while IFS= read -r project_id; do
+                [[ -n "$project_id" ]] || continue
+                PROJECT_ID="$project_id" python3 - <<'PY' >> "$REPORT" 2>&1 || true
+import json, os, urllib.request
+pid=os.environ["PROJECT_ID"]
+req=urllib.request.Request(
+    "http://127.0.0.1:8765/api/runner-control",
+    data=json.dumps({"project_id":pid,"action":"pause"}).encode(),
+    headers={"Content-Type":"application/json"},
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(req, timeout=5) as r:
+        payload=json.loads(r.read().decode())
+        print("pause", pid, r.status, bool(payload.get("ok", True)))
+except Exception as exc:
+    print("pause", pid, "ERROR", type(exc).__name__, str(exc)[:160])
+PY
+              done < <(sqlite3 -noheader "$DB" "SELECT project_id FROM runner_targets WHERE active=1 ORDER BY project_id;" 2>/dev/null)
+            fi
+            sleep 5
+          fi
+
+          section watchdog_install
+          mkdir -p "$USER_HOME/.local/bin" "$USER_HOME/.config/systemd/user" "$USER_HOME/.local/state/zcloud/watchdog"
+          cat > "$USER_HOME/.local/bin/zcloud-watchdog.sh" <<'SH'
+#!/usr/bin/env bash
+set -u
+HEALTH=http://127.0.0.1:8765/api/status
+STATE="$HOME/.local/state/zcloud/watchdog"
+COUNT="$STATE/consecutive-health-failures"
+LOG="$STATE/watchdog.log"
+mkdir -p "$STATE"
+now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+log() { printf '%s %s\n' "$(now)" "$*" >> "$LOG"; }
+healthy() { curl -fsS --max-time 3 "$HEALTH" >/dev/null 2>&1; }
+
+if ! systemctl is-active --quiet zennay-cloud.service; then
+  log "service_inactive restart"
+  if sudo -n systemctl restart zennay-cloud.service && sleep 2 && healthy; then
+    printf '0\n' > "$COUNT"
+    log "restart_ok reason=inactive"
+    exit 0
+  fi
+  log "restart_failed reason=inactive"
+  exit 1
+fi
+
+if healthy; then
+  printf '0\n' > "$COUNT"
+  exit 0
+fi
+
+n=0
+[[ -f "$COUNT" ]] && read -r n < "$COUNT" || true
+[[ "$n" =~ ^[0-9]+$ ]] || n=0
+n=$((n+1))
+printf '%s\n' "$n" > "$COUNT"
+log "health_failed count=$n"
+if (( n < 2 )); then
+  exit 0
+fi
+
+if sudo -n systemctl restart zennay-cloud.service && sleep 2 && healthy; then
+  printf '0\n' > "$COUNT"
+  log "restart_ok reason=health_failed"
+  exit 0
+fi
+log "restart_failed reason=health_failed"
+exit 1
+SH
+          chmod 0755 "$USER_HOME/.local/bin/zcloud-watchdog.sh"
+
+          cat > "$USER_HOME/.config/systemd/user/zcloud-watchdog.service" <<'UNIT'
+[Unit]
+Description=zCloud local health watchdog
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/zcloud-watchdog.sh
+UNIT
+
+          cat > "$USER_HOME/.config/systemd/user/zcloud-watchdog.timer" <<'UNIT'
+[Unit]
+Description=Check zCloud health every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=15s
+Persistent=true
+Unit=zcloud-watchdog.service
+
+[Install]
+WantedBy=timers.target
+UNIT
+
+          chmod 0644 "$USER_HOME/.config/systemd/user/zcloud-watchdog.service" "$USER_HOME/.config/systemd/user/zcloud-watchdog.timer"
+          if systemctl --user daemon-reload >> "$REPORT" 2>&1             && systemctl --user enable --now zcloud-watchdog.timer >> "$REPORT" 2>&1; then
+            kv watchdog_install enabled
+          else
+            kv watchdog_install failed
+          fi
+
+          section after
+          systemctl show zennay-cloud.service             -p ActiveState -p SubState -p Result -p MainPID -p ExecMainStatus             -p ExecMainCode -p NRestarts -p Restart -p RestartUSec             >> "$REPORT" 2>&1 || true
+          if curl -fsS --max-time 3 "$HEALTH" >/dev/null 2>&1; then
+            kv local_health http_200
+          else
+            kv local_health failed
+          fi
+          if [[ -f "$DB" ]] && command -v sqlite3 >/dev/null 2>&1; then
+            kv active_chat_targets "$(sqlite3 -noheader "$DB" "SELECT COUNT(*) FROM runner_targets WHERE active=1;" 2>/dev/null || echo unknown)"
+            section runner_state_after
+            sqlite3 -noheader "$DB"               "SELECT project_id||'|active='||active||'|workers='||worker_count FROM runner_targets ORDER BY project_id;"               >> "$REPORT" 2>&1 || true
+          fi
+          systemctl --user show zcloud-watchdog.timer -p ActiveState -p SubState -p NextElapseUSecRealtime             >> "$REPORT" 2>&1 || true
+
+          mkdir -p ops
+          cp "$REPORT" ops/zcloud-emergency-report.txt
+
+      - name: Publish sanitized recovery report
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "zCloud emergency recovery"
+          git config user.email "actions@users.noreply.github.com"
+          git add ops/zcloud-emergency-report.txt
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Record zCloud emergency recovery result"
+          git push origin "HEAD:ops/zcloud-emergency-recovery-20260927"
