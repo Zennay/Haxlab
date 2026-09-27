@@ -2,7 +2,7 @@ name: zSSH one-time runtime promotion
 
 on:
   push:
-    branches: [main]
+    branches: ["ops/zssh-github-runtime-promote"]
     paths:
       - ".github/workflows/zssh-runtime-promote-once.yml"
 
