@@ -46,6 +46,9 @@ jobs:
 
           ZSSH_EXPECTED_SHA="$ZSSH_SHA" bash "$zs/deploy/install-live.sh" "$zs"
 
+          sudo systemctl daemon-reload
+          sudo systemctl enable --now haxlab-autonomy.timer
+          sudo systemctl enable --now ftmo-autonomous.timer
           sudo systemctl start zcloud-self-heal.service
           sudo systemctl is-enabled --quiet zcloud-self-heal.timer
           sudo systemctl is-active --quiet zcloud-self-heal.timer
@@ -56,7 +59,9 @@ jobs:
           systemctl is-active haxlab-ingest.service
           systemctl is-active haxlab-worker.service
           systemctl is-active haxlab-analyzer.service
+          systemctl is-enabled haxlab-autonomy.timer
           systemctl is-active haxlab-autonomy.timer
+          systemctl is-enabled ftmo-autonomous.timer
           systemctl is-active ftmo-autonomous.timer
           systemctl --user is-enabled zssh.service
           systemctl --user is-active zssh.service
