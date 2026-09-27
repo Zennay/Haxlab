@@ -1,0 +1,67 @@
+name: Deploy portfolio runtime autonomy v2 once
+
+on:
+  push:
+    branches:
+      - ops/deploy-runtime-autonomy-v2-20260928
+    paths:
+      - ".github/workflows/deploy-runtime-autonomy-v2-once.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portfolio-runtime-autonomy-live-v2
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    env:
+      ZCLOUD_SHA: cc0bbc1806521921706a328bf3e5a86f7f21dfc6
+      ZSSH_SHA: 355b1729b2f30422825e17b25dc09fa1d390a751
+    steps:
+      - name: Deploy zCloud runtime heal and canonical zSSH
+        shell: bash
+        run: |
+          set -euo pipefail
+          zc="$(mktemp -d /tmp/zcloud-runtime-v2.XXXXXX)"
+          zs="$(mktemp -d /tmp/zssh-runtime-v2.XXXXXX)"
+          trap 'rm -rf "$zc" "$zs"' EXIT
+
+          git clone --filter=blob:none --no-checkout https://github.com/Zennay/zCloud.git "$zc"
+          git -C "$zc" fetch --depth 1 origin "$ZCLOUD_SHA"
+          git -C "$zc" checkout --detach "$ZCLOUD_SHA"
+          test "$(git -C "$zc" rev-parse HEAD)" = "$ZCLOUD_SHA"
+          bash -n "$zc/scripts/zcloud-self-heal.sh"
+          python3 "$zc/tests/test_self_heal_assets.py"
+
+          sudo install -o root -g root -m 0755             "$zc/scripts/zcloud-self-heal.sh"             /usr/local/sbin/zcloud-self-heal
+
+          git clone --filter=blob:none --no-checkout https://github.com/Zennay/zSSH.git "$zs"
+          git -C "$zs" fetch --depth 1 origin "$ZSSH_SHA"
+          git -C "$zs" checkout --detach "$ZSSH_SHA"
+          test "$(git -C "$zs" rev-parse HEAD)" = "$ZSSH_SHA"
+
+          ZSSH_EXPECTED_SHA="$ZSSH_SHA" bash "$zs/deploy/install-live.sh" "$zs"
+
+          sudo systemctl start zcloud-self-heal.service
+          sudo systemctl is-enabled --quiet zcloud-self-heal.timer
+          sudo systemctl is-active --quiet zcloud-self-heal.timer
+
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+
+          systemctl is-active haxlab-ingest.service
+          systemctl is-active haxlab-worker.service
+          systemctl is-active haxlab-analyzer.service
+          systemctl is-active haxlab-autonomy.timer
+          systemctl is-active ftmo-autonomous.timer
+          systemctl --user is-enabled zssh.service
+          systemctl --user is-active zssh.service
+          systemctl --user is-enabled raise-gateway.service
+          systemctl --user is-active raise-gateway.service
+
+          curl -fsS --max-time 5 http://127.0.0.1:8765/api/status >/dev/null
+          echo "PORTFOLIO_RUNTIME_AUTONOMY_LIVE_GREEN"
