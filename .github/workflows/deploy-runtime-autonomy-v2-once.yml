@@ -77,8 +77,8 @@ jobs:
 
           ftmo_src="/opt/ftmo-runner/_work/Ftmo/Ftmo"
           ftmo_root="/opt/ftmo-autonomous"
-          test "$(git -C "$ftmo_src" rev-parse HEAD)" = "$FTMO_MAIN_SHA"
-          git -C "$ftmo_src" diff --quiet --             configs/autonomous_runtime.json             src/prop_trading_ai/ops/autonomous_runtime.py             src/prop_trading_ai/cli/v1_autonomous_tick.py             deploy/systemd/ftmo-autonomous.service.in             deploy/systemd/ftmo-autonomous.timer
+          test "$(sudo -u ftmo-runner git -C "$ftmo_src" rev-parse HEAD)" = "$FTMO_MAIN_SHA"
+          sudo -u ftmo-runner git -C "$ftmo_src" diff --quiet --             configs/autonomous_runtime.json             src/prop_trading_ai/ops/autonomous_runtime.py             src/prop_trading_ai/cli/v1_autonomous_tick.py             deploy/systemd/ftmo-autonomous.service.in             deploy/systemd/ftmo-autonomous.timer
           ftmo_owner="$(stat -c %U "$ftmo_root")"
           ftmo_group="$(stat -c %G "$ftmo_root")"
           for rel in             configs/autonomous_runtime.json             src/prop_trading_ai/ops/autonomous_runtime.py             src/prop_trading_ai/cli/v1_autonomous_tick.py
