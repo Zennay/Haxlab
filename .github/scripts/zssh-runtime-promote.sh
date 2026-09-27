@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-: "${ZSSH_CANONICAL_SHA:=5ec481c92c7368dbd96e68b4aec3bcf0e4e39dac}"
+: "${ZSSH_CANONICAL_SHA:=b1363aee962d5d67f38352c4169166b7c52c2bca}"
 test "$(id -un)" = "ubuntu"
 
 LIVE_ROOT="/home/ubuntu/zennay-cloud"
