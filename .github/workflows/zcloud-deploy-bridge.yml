@@ -91,7 +91,7 @@ jobs:
               for row in target_rows:
                   conn.execute(
                       "INSERT INTO config_audit(ts,actor,config_key,target,old_value_json,new_value_json,result,detail) "
-                      "VALUES(?,?,?,?,?,?,?,?,?)",
+                      "VALUES(?,?,?,?,?,?,?,?)",
                       (ts, "haxlab-runner-zcloud-bridge", "runner.worker_count", row["project_id"],
                        json.dumps(row["worker_count"]), json.dumps(2), "succeeded",
                        "one-time migration to GLOBAL_CHATGPT_WORKER_LIMIT=2"),
@@ -99,7 +99,7 @@ jobs:
               for row in legacy:
                   conn.execute(
                       "INSERT INTO config_audit(ts,actor,config_key,target,old_value_json,new_value_json,result,detail) "
-                      "VALUES(?,?,?,?,?,?,?,?,?)",
+                      "VALUES(?,?,?,?,?,?,?,?)",
                       (ts, "haxlab-runner-zcloud-bridge", "runner.legacy_worker_slot",
                        f"{row['project_id']}::w{row['worker_slot']}", json.dumps(row), json.dumps(None),
                        "succeeded", "removed legacy worker slot above global hard limit"),
