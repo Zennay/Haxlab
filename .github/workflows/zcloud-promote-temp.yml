@@ -1,4 +1,4 @@
-name: Temporary zCloud prechange diagnostic
+name: Temporary zCloud guarded autonomy rollout
 
 on:
   push:
@@ -14,20 +14,91 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  diagnose:
+  rollout:
     runs-on: [self-hosted, haxlab]
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
-      - name: zCloud health
+      - name: Check out exact green zCloud revision
+        uses: actions/checkout@v4
+        with:
+          repository: Zennay/zCloud
+          ref: bd8902449fb0ef787eff99bab2b26820dac64379
+          path: zcloud-candidate
+          persist-credentials: false
+
+      - name: Validate current live config
         shell: bash
         run: |
           set -euo pipefail
-          /home/ubuntu/.local/bin/zcloud-healthcheck || true
-      - name: Exact pre-change guard evidence
+          python3 "$GITHUB_WORKSPACE/zcloud-candidate/scripts/zcloud_config_validate.py" \
+            --projects /home/ubuntu/zennay-cloud/projects.json \
+            --layout /home/ubuntu/zennay-cloud/project-layout.json \
+            --resource-policy /home/ubuntu/zennay-cloud/resource-policy.json \
+            --server /home/ubuntu/zennay-cloud/server.py \
+            --enhancements /home/ubuntu/zennay-cloud/enhancements.py \
+            --db /home/ubuntu/zennay-cloud/history.db \
+            --json
+
+      - name: Verify only audited resource policy drift exists
         shell: bash
         run: |
-          set -uo pipefail
+          set -euo pipefail
+          OUT="$(/home/ubuntu/.local/bin/zcloud-prechange-guard --allow-change resource-policy.json --json)"
+          echo "$OUT"
+          python3 -c 'import json,sys; p=json.load(sys.stdin); assert p.get("ok") is True; assert p.get("unexpected_changes")==[]' <<<"$OUT"
+          python3 - <<'PY'
+          import sqlite3
+          db="/home/ubuntu/zennay-cloud/history.db"
+          with sqlite3.connect(db) as c:
+              rows=c.execute("""
+                SELECT ts,actor,config_key,target,result
+                FROM config_audit
+                WHERE config_key='resource.priority'
+                ORDER BY id DESC LIMIT 10
+              """).fetchall()
+          if not rows:
+              raise SystemExit("no resource.priority audit evidence; refusing LKG rebaseline")
+          print("RESOURCE_PRIORITY_AUDIT", rows)
+          PY
+
+      - name: Refresh LKG around verified resource policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 /home/ubuntu/zennay-cloud/scripts/zcloud_recovery.py \
+            --root /home/ubuntu/zennay-cloud \
+            --state-dir /home/ubuntu/.local/state/zcloud/recovery \
+            capture \
+            --evidence "Verified audited resource-policy drift before VPS-led AI dispatch rollout"
           /home/ubuntu/.local/bin/zcloud-prechange-guard --json
-          code=$?
-          echo "PRECHANGE_EXIT=$code"
-          exit 0
+
+      - name: Promote Firefox runner guarded
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$GITHUB_WORKSPACE/zcloud-candidate/scripts/zcloud_transactional_promote.py" \
+            --candidate "$GITHUB_WORKSPACE/zcloud-candidate" \
+            --path firefox-extension/background.js \
+            --actor "haxlab-runner-zcloud-transport" \
+            --json
+
+      - name: Promote backend and autonomy policy guarded
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$GITHUB_WORKSPACE/zcloud-candidate/scripts/zcloud_transactional_promote.py" \
+            --candidate "$GITHUB_WORKSPACE/zcloud-candidate" \
+            --path server.py \
+            --path autonomy-policy.json \
+            --actor "haxlab-runner-zcloud-transport" \
+            --json
+
+      - name: Final zCloud live proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          /home/ubuntu/.local/bin/zcloud-healthcheck
+          curl -fsS http://127.0.0.1:8765/api/status >/tmp/zcloud-live-status.json
+          grep -q '"vps_dispatch_only"' /tmp/zcloud-live-status.json
+          grep -q '"ai_dispatch_interval_seconds"' /tmp/zcloud-live-status.json
+          echo "ZCLOUD_VPS_AI_DISPATCH_LIVE_GREEN"
