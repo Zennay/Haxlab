@@ -35,7 +35,6 @@ jobs:
             echo "uid=$(id -u)"
             ls -ld /home/ubuntu /home/ubuntu/zennay-cloud || true
             for path in \
-              /home/ubuntu/zennay-cloud/scripts/zcloud_transactional_promote.py \
               /home/ubuntu/.local/bin/zcloud-prechange-guard \
               /home/ubuntu/.local/bin/zcloud-postdeploy-canary \
               /home/ubuntu/.local/bin/zcloud-reload-extension.mjs
@@ -43,7 +42,6 @@ jobs:
               ls -l "$path" || true
             done
             test "$(id -un)" = "ubuntu"
-            test -f /home/ubuntu/zennay-cloud/scripts/zcloud_transactional_promote.py
             test -x /home/ubuntu/.local/bin/zcloud-prechange-guard
             test -x /home/ubuntu/.local/bin/zcloud-postdeploy-canary
             test -f /home/ubuntu/.local/bin/zcloud-reload-extension.mjs
@@ -78,7 +76,7 @@ jobs:
           set -o pipefail
           {
             set -euo pipefail
-            python3 /home/ubuntu/zennay-cloud/scripts/zcloud_transactional_promote.py \
+            python3 "$RUNNER_TEMP/zcloud-autonomy-candidate/scripts/zcloud_transactional_promote.py" \
               --candidate "$RUNNER_TEMP/zcloud-autonomy-candidate" \
               --path firefox-extension/background.js \
               --actor github-runner:zcloud-autonomy \
@@ -94,7 +92,7 @@ jobs:
           set -o pipefail
           {
             set -euo pipefail
-            python3 /home/ubuntu/zennay-cloud/scripts/zcloud_transactional_promote.py \
+            python3 "$RUNNER_TEMP/zcloud-autonomy-candidate/scripts/zcloud_transactional_promote.py" \
               --candidate "$RUNNER_TEMP/zcloud-autonomy-candidate" \
               --path server.py \
               --actor github-runner:zcloud-autonomy \
