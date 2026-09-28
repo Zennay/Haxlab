@@ -114,6 +114,13 @@ jobs:
               assert "Portfolio Work Queue" in prompt, w.get("project_id")
               assert "Done is alleen toegestaan" in prompt, w.get("project_id")
               assert "Claim vóór inhoudelijk werk" in prompt, w.get("project_id")
+              assert "NO-OP/GIVE-UP GUARD" in prompt, w.get("project_id")
+              assert "ZCLOUD_WAIT_EVIDENCE" in prompt, w.get("project_id")
+              assert "queue=no-eligible" in prompt, w.get("project_id")
+          browser_source=open("/home/ubuntu/zennay-cloud/firefox-extension/background.js",encoding="utf-8").read()
+          assert "invalid-wait-vps-without-run-evidence" in browser_source
+          assert "invalid-wait-human-without-gate-evidence" in browser_source
+          assert 'syncStatus("autonomy-continue"' in browser_source
           print(json.dumps({
               "ok":True,
               "limit":a.get("limit"),
