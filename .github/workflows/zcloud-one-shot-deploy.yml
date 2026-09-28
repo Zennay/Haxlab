@@ -1,4 +1,5 @@
 name: One-shot zCloud deploy bridge
+# retry: zCloud autonomy-policy bootstrap is now allowed
 
 on:
   push:
