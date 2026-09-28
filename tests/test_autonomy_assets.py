@@ -14,9 +14,20 @@ def test_autonomy_tick_preserves_research_gates():
     text = (ROOT / "deploy/haxlab-autonomy-tick.sh").read_text()
     assert "refresh_skill" in text
     assert "build_dataset_manifest" in text
+    assert "train_baseline_challenger" in text
+    assert "haxlab-build-shards" in text
+    assert "haxlab-train-bc" in text
+    assert "autonomy-bc-baseline-v1" in text
     assert "NEEDS_AI" in text
     assert "elite_closed_loop_arena_v2.js" in text
-    assert "autonomous challenger mutation remains fail-closed" in text
+    assert "promotion remains fail-closed" in text
+
+
+def test_pipeline_failures_do_not_block_usable_evidence():
+    text = (ROOT / "deploy/haxlab-autonomy-tick.sh").read_text()
+    assert "ANALYSIS_OK == 0" in text
+    assert "Failed/corrupt source replays must not prevent safe deterministic work" in text
+    assert "analysis_failed=" in text
 
 
 def test_vps_update_enables_autonomy_timer():
