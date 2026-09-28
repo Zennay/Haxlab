@@ -1,34 +1,64 @@
 {
-  "live_autonomy": {
+  "autonomy": {
     "cloud": {
       "allow_ai": true,
       "mode": "zcloud_stopgate",
       "reason": "zcloud_improvement_running",
-      "runtime": null
+      "runtime": {
+        "initialized_at": "2026-09-28T00:20:43.338307+00:00",
+        "last_dispatch_at": "2026-09-28T00:20:43.340412+00:00",
+        "last_reason": "zcloud_improvement_running",
+        "manual_pause": 0,
+        "project_id": "cloud"
+      }
     },
     "ftmo": {
       "allow_ai": true,
       "mode": "ftmo_status",
       "reason": "ftmo_stage_next_generation_design",
-      "runtime": null
+      "runtime": {
+        "initialized_at": "2026-09-28T00:20:43.336233+00:00",
+        "last_dispatch_at": null,
+        "last_reason": "autonomy_initialized",
+        "manual_pause": 0,
+        "project_id": "ftmo"
+      }
     },
     "haxlab": {
       "allow_ai": true,
       "mode": "haxlab_status",
       "reason": "haxlab_needs_ai",
-      "runtime": null
+      "runtime": {
+        "initialized_at": "2026-09-28T00:20:43.329833+00:00",
+        "last_dispatch_at": "2026-09-28T00:20:43.333789+00:00",
+        "last_reason": "haxlab_needs_ai",
+        "manual_pause": 0,
+        "project_id": "haxlab"
+      }
     },
     "raiseai": {
       "allow_ai": true,
       "mode": "ai_worker",
       "reason": "bounded_ai_worker",
-      "runtime": null
+      "runtime": {
+        "initialized_at": "2026-09-28T00:20:43.346859+00:00",
+        "last_dispatch_at": "2026-09-28T00:20:43.348971+00:00",
+        "last_reason": "bounded_ai_worker",
+        "manual_pause": 0,
+        "project_id": "raiseai"
+      }
     },
     "supa": {
       "allow_ai": true,
       "mode": "ai_worker",
       "reason": "bounded_ai_worker",
-      "runtime": null
+      "runtime": {
+        "initialized_at": "2026-09-28T00:20:43.342650+00:00",
+        "last_dispatch_at": "2026-09-28T00:20:43.344716+00:00",
+        "last_reason": "bounded_ai_worker",
+        "manual_pause": 0,
+        "project_id": "supa"
+      }
     },
     "ulab": {
       "allow_ai": false,
@@ -40,24 +70,85 @@
       "allow_ai": true,
       "mode": "ai_worker",
       "reason": "bounded_ai_worker",
-      "runtime": null
+      "runtime": {
+        "initialized_at": "2026-09-28T00:20:43.351202+00:00",
+        "last_dispatch_at": "2026-09-28T00:20:43.353176+00:00",
+        "last_reason": "bounded_ai_worker",
+        "manual_pause": 0,
+        "project_id": "zssh"
+      }
     }
   },
-  "logs": {
-    "browser": "{\n  \"ok\": true,\n  \"transaction_id\": \"20260928T002032Z-3010339\",\n  \"paths\": [\n    \"firefox-extension/background.js\"\n  ],\n  \"deployed_hashes\": {\n    \"firefox-extension/background.js\": \"1ac72904bbe4f2615b0bb9bd3b25dc7f72d7fe13e3975fe672ecd7f1fe84b090\"\n  },\n  \"mapping_sha256\": \"8e4510071a2e8b54b1c0c0ab0481f2259db5c2711ff37030db344433a97d7a93\",\n  \"feature_gate\": {\n    \"blast_radius\": {\n      \"high\": false,\n      \"planes\": [\n        \"browser\"\n      ],\n      \"paths\": [\n        \"firefox-extension/background.js\"\n      ],\n      \"reasons\": []\n    },\n    \"feature_flag\": {\n      \"name\": \"high_blast_radius_promotion\",\n      \"enabled\": false,\n      \"effective\": false,\n      \"reason\": \"not_required\"\n    }\n  },\n  \"postdeploy\": {\n    \"ok\": true,\n    \"checks\": [\n      {\n        \"name\": \"zcloud_service\",\n        \"ok\": true,\n        \"detail\": true\n      },\n      {\n        \"name\": \"firefox_service\",\n        \"ok\": true,\n        \"detail\": true\n      },\n      {\n        \"name\": \"static_assets\",\n        \"ok\": true,\n        \"detail\": \"app.js + enhancements.js + enhancements.css\"\n      },\n      {\n        \"name\": \"status_errors_empty\",\n        \"ok\": true,\n        \"detail\": []\n      },\n      {\n        \"name\": \"firefox_runtime_active\",\n        \"ok\": true,\n        \"detail\": {\n          \"state\": \"active\",\n          \"active\": true,\n          \"main_pid\": 2961347,\n          \"active_since\": \"Sun 2026-09-27 23:06:37 UTC\",\n          \"restarts\": 0,\n          \"auto_restart\": \"always\"\n        }\n      },\n      {\n        \"name\": \"runner_targets_available\",\n        \"ok\": true,\n        \"detail\": {\n          \"project_count\": 8,\n          \"max_workers\": 8\n        }\n      },\n      {\n        \"name\": \"mapping_available\",\n        \"ok\": true,\n        \"detail\": {\n          \"available\": true,\n          \"sha256\": \"8e4510071a2e8b54b1c0c0ab0481f2259db5c2711ff37030db344433a97d7a93\",\n          \"targets\": 8,\n          \"workers\": 11\n        }\n      },\n      {\n        \"name\": \"mapping_unchanged\",\n        \"ok\": true,\n        \"detail\": {\n          \"expected\": \"8e4510071a2e8b54b1c0c0ab0481f2259db5c2711ff37030db344433a97d7a93\",\n          \"actual\": \"8e4510071a2e8b54b1c0c0ab0481f2259db5c2711ff37030db344433a97d7a93\"\n        }\n      },\n      {\n        \"name\": \"firefox_source_runtime_match\",\n        \"ok\": true,\n        \"detail\": true\n      }\n    ],\n    \"mapping\": {\n      \"available\": true,\n      \"sha256\": \"8e4510071a2e8b54b1c0c0ab0481f2259db5c2711ff37030db344433a97d7a93\",\n      \"targets\": 8,\n      \"workers\": 11\n    },\n    \"firefox_runtime_parity\": {\n      \"ok\": true,\n      \"checked\": [\n        \"background.js\",\n        \"manifest.json\",\n        \"recovery.js\"\n      ],\n      \"mismatches\": []\n    }\n  },\n  \"new_lkg\": \"20260928T002033Z-2ca3bd88\"\n}\n",
-    "fetch": "Cloning into '/opt/actions-runner-haxlab/_work/_temp/zcloud-autonomy-candidate'...\nFrom https://github.com/Zennay/zCloud\n * branch            2a93899cfc96232543028b4ba7e18a45a33d0976 -> FETCH_HEAD\nHEAD is now at 2a93899 Make project workers VPS-first autonomous\n",
-    "preflight": "user=ubuntu\nuid=1000\ndrwxr-x--- 77 ubuntu ubuntu 4096 Sep 27 22:36 /home/ubuntu\ndrwxrwxr-x 14 ubuntu ubuntu 4096 Sep 28 00:20 /home/ubuntu/zennay-cloud\n-rwxr-xr-x 1 ubuntu ubuntu 7228 Sep 26 22:37 /home/ubuntu/.local/bin/zcloud-prechange-guard\n-rwxr-xr-x 1 ubuntu ubuntu 9503 Sep 26 23:27 /home/ubuntu/.local/bin/zcloud-postdeploy-canary\n-rwxr-xr-x 1 ubuntu ubuntu 1691 Sep 26 22:57 /home/ubuntu/.local/bin/zcloud-reload-extension.mjs\n",
-    "server": "{\n  \"ok\": true,\n  \"transaction_id\": \"20260928T002035Z-3010424\",\n  \"paths\": [\n    \"server.py\"\n  ],\n  \"deployed_hashes\": {\n    \"server.py\": \"ef198b8b65817d5e391a445e5b4894bc6aa73977d0065d5410540b974e45ec1e\"\n  },\n  \"mapping_sha256\": \"8e4510071a2e8b54b1c0c0ab0481f2259db5c2711ff37030db344433a97d7a93\",\n  \"feature_gate\": {\n    \"blast_radius\": {\n      \"high\": false,\n      \"planes\": [\n        \"service\"\n      ],\n      \"paths\": [\n        \"server.py\"\n      ],\n      \"reasons\": []\n    },\n    \"feature_flag\": {\n      \"name\": \"high_blast_radius_promotion\",\n      \"enabled\": false,\n      \"effective\": false,\n      \"reason\": \"not_required\"\n    }\n  },\n  \"postdeploy\": {\n    \"ok\": true,\n    \"checks\": [\n      {\n        \"name\": \"zcloud_service\",\n        \"ok\": true,\n        \"detail\": true\n      },\n      {\n        \"name\": \"firefox_service\",\n        \"ok\": true,\n        \"detail\": true\n      },\n      {\n        \"name\": \"static_assets\",\n        \"ok\": true,\n        \"detail\": \"app.js + enhancements.js + enhancements.css\"\n      },\n      {\n        \"name\": \"status_errors_empty\",\n        \"ok\": true,\n        \"detail\": []\n      },\n      {\n        \"name\": \"firefox_runtime_active\",\n        \"ok\": true,\n        \"detail\": {\n          \"state\": \"active\",\n          \"active\": true,\n          \"main_pid\": 2961347,\n          \"active_since\": \"Sun 2026-09-27 23:06:37 UTC\",\n          \"restarts\": 0,\n          \"auto_restart\": \"always\"\n        }\n      },\n      {\n        \"name\": \"runner_targets_available\",\n        \"ok\": true,\n        \"detail\": {\n          \"project_count\": 8,\n          \"max_workers\": 8\n        }\n      },\n      {\n        \"name\": \"mapping_available\",\n        \"ok\": true,\n        \"detail\": {\n          \"available\": true,\n          \"sha256\": \"8e4510071a2e8b54b1c0c0ab0481f2259db5c2711ff37030db344433a97d7a93\",\n          \"targets\": 8,\n          \"workers\": 11\n        }\n      },\n      {\n        \"name\": \"mapping_unchanged\",\n        \"ok\": true,\n        \"detail\": {\n          \"expected\": \"8e4510071a2e8b54b1c0c0ab0481f2259db5c2711ff37030db344433a97d7a93\",\n          \"actual\": \"8e4510071a2e8b54b1c0c0ab0481f2259db5c2711ff37030db344433a97d7a93\"\n        }\n      },\n      {\n        \"name\": \"firefox_source_runtime_match\",\n        \"ok\": true,\n        \"detail\": true\n      }\n    ],\n    \"mapping\": {\n      \"available\": true,\n      \"sha256\": \"8e4510071a2e8b54b1c0c0ab0481f2259db5c2711ff37030db344433a97d7a93\",\n      \"targets\": 8,\n      \"workers\": 11\n    },\n    \"firefox_runtime_parity\": {\n      \"ok\": true,\n      \"checked\": [\n        \"background.js\",\n        \"manifest.json\",\n        \"recovery.js\"\n      ],\n      \"mismatches\": []\n    }\n  },\n  \"new_lkg\": \"20260928T002038Z-2ca3bd88\"\n}\n",
-    "verify": null
+  "firefox": {
+    "active": true,
+    "state": "active"
   },
-  "observed_at": "2026-09-28T00:20:38.637382+00:00",
-  "outcomes": {
-    "browser": "success",
-    "fetch": "success",
-    "preflight": "success",
-    "server": "success",
-    "verify": "failure"
+  "verified_at": "2026-09-28T00:22:29.112150+00:00",
+  "workers": {
+    "cloud::w1": {
+      "active": true,
+      "auto_continue": true,
+      "base_project_id": "cloud",
+      "delay": 300,
+      "desired_state": "running",
+      "worker_slot": 1
+    },
+    "ftmo::w1": {
+      "active": true,
+      "auto_continue": true,
+      "base_project_id": "ftmo",
+      "delay": 600,
+      "desired_state": "running",
+      "worker_slot": 1
+    },
+    "haxlab::w1": {
+      "active": true,
+      "auto_continue": true,
+      "base_project_id": "haxlab",
+      "delay": 600,
+      "desired_state": "running",
+      "worker_slot": 1
+    },
+    "portfolio-review::w1": {
+      "active": false,
+      "auto_continue": true,
+      "base_project_id": "portfolio-review",
+      "delay": 300,
+      "desired_state": "paused",
+      "worker_slot": 1
+    },
+    "raiseai::w1": {
+      "active": true,
+      "auto_continue": true,
+      "base_project_id": "raiseai",
+      "delay": 600,
+      "desired_state": "running",
+      "worker_slot": 1
+    },
+    "supa::w1": {
+      "active": true,
+      "auto_continue": true,
+      "base_project_id": "supa",
+      "delay": 300,
+      "desired_state": "running",
+      "worker_slot": 1
+    },
+    "ulab::w1": {
+      "active": false,
+      "auto_continue": false,
+      "base_project_id": "ulab",
+      "delay": 3600,
+      "desired_state": "paused",
+      "worker_slot": 1
+    },
+    "zssh::w1": {
+      "active": true,
+      "auto_continue": true,
+      "base_project_id": "zssh",
+      "delay": 300,
+      "desired_state": "running",
+      "worker_slot": 1
+    }
   },
-  "runner_user": "ubuntu",
   "zcloud_sha": "2a93899cfc96232543028b4ba7e18a45a33d0976"
-}
+}\n
