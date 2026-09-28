@@ -31,7 +31,7 @@ jobs:
           test -f /home/ubuntu/zennay-cloud/scripts/zcloud_transactional_promote.py
           test -x /home/ubuntu/.local/bin/zcloud-prechange-guard
           test -x /home/ubuntu/.local/bin/zcloud-postdeploy-canary
-          test -x /home/ubuntu/.local/bin/zcloud-reload-extension.mjs
+          test -f /home/ubuntu/.local/bin/zcloud-reload-extension.mjs
           curl -fsS http://127.0.0.1:8765/api/status >/dev/null
 
       - name: Fetch exact green zCloud revision
