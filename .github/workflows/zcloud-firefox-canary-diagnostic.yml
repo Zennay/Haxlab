@@ -1,0 +1,168 @@
+name: Temporary zCloud Firefox canary diagnostic
+
+on:
+  push:
+    branches: [zcloud-diagnose-20260929]
+    paths:
+      - .github/workflows/zcloud-firefox-canary-diagnostic.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: temporary-zcloud-firefox-diagnostic
+  cancel-in-progress: true
+
+jobs:
+  inspect:
+    name: Safely reproduce Firefox canary
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 8
+    steps:
+      - name: Wait for both global slots to be idle, test, and restore
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=/home/ubuntu/zennay-cloud
+          EXPECTED=22646e674a705e9266cb887f72fcefd828b9f5a8
+          RUNTIME="$HOME/snap/firefox/common/chatgpt-project-extension/background.js"
+          RELOAD="$HOME/.local/bin/zcloud-reload-extension.mjs"
+          TMP="$(mktemp -d /tmp/zcloud-firefox-diag.XXXXXX)"
+          CANDIDATE="$TMP/candidate"
+          SOURCE="$ROOT/firefox-extension/background.js"
+          SOURCE_BAK="$TMP/background.source.bak"
+          RUNTIME_BAK="$TMP/background.runtime.bak"
+          MUTATED=0
+
+          cleanup() {
+            set +e
+            if [ "$MUTATED" = "1" ]; then
+              cp "$SOURCE_BAK" "$SOURCE"
+              cp "$RUNTIME_BAK" "$RUNTIME"
+              node "$RELOAD" >/tmp/zcloud-firefox-diag-restore.log 2>&1 || true
+            fi
+            git -C "$ROOT" worktree remove --force "$CANDIDATE" >/dev/null 2>&1 || true
+            rm -rf "$TMP"
+          }
+          trap cleanup EXIT
+
+          git -C "$ROOT" fetch --prune origin main
+          git -C "$ROOT" cat-file -e "$EXPECTED^{commit}"
+          git -C "$ROOT" worktree add --detach "$CANDIDATE" "$EXPECTED"
+          test "$(git -C "$CANDIDATE" rev-parse HEAD)" = "$EXPECTED"
+
+          echo "Waiting for a safe idle window..."
+          python3 - <<'PY'
+          import sqlite3,time,sys
+          from pathlib import Path
+          db=Path("/home/ubuntu/zennay-cloud/history.db")
+          deadline=time.time()+180
+          stable_since=None
+          last=None
+          while time.time()<deadline:
+              conn=sqlite3.connect(f"file:{db}?mode=ro",uri=True,timeout=3)
+              conn.row_factory=sqlite3.Row
+              slots=[dict(r) for r in conn.execute(
+                  "SELECT slot,project_id,worker_slot FROM ai_global_slots ORDER BY slot"
+              )]
+              states=[]
+              for slot in slots:
+                  p,s=slot["project_id"],slot["worker_slot"]
+                  latest=conn.execute(
+                      "SELECT id,event,generating,sending FROM runner_events "
+                      "WHERE project_id=? AND worker_slot=? ORDER BY id DESC LIMIT 1",(p,s)
+                  ).fetchone()
+                  last_start=conn.execute(
+                      "SELECT MAX(id) FROM runner_events WHERE project_id=? AND worker_slot=? AND event='generation-started'",(p,s)
+                  ).fetchone()[0] or 0
+                  last_finish=conn.execute(
+                      "SELECT MAX(id) FROM runner_events WHERE project_id=? AND worker_slot=? AND event='generation-finished'",(p,s)
+                  ).fetchone()[0] or 0
+                  busy=(not latest) or bool(latest["generating"]) or bool(latest["sending"]) or last_start>last_finish
+                  states.append((p,s,busy,latest["event"] if latest else None))
+              conn.close()
+              if len(slots)<=2 and slots and all(not x[2] for x in states):
+                  stable_since=stable_since or time.time()
+                  if time.time()-stable_since>=6:
+                      print({"safe_idle":True,"slots":[f"{x[0]}::w{x[1]}" for x in states]})
+                      sys.exit(0)
+              else:
+                  stable_since=None
+              last=states
+              time.sleep(2)
+          print({"safe_idle":False,"last":last})
+          sys.exit(75)
+          PY
+
+          python3 - <<'PY' > "$TMP/before.json"
+          import json,sqlite3,hashlib
+          db="/home/ubuntu/zennay-cloud/history.db"
+          conn=sqlite3.connect(f"file:{db}?mode=ro",uri=True); conn.row_factory=sqlite3.Row
+          targets=[dict(r) for r in conn.execute("SELECT project_id,active,worker_count,conversation_id FROM runner_targets ORDER BY project_id")]
+          workers=[dict(r) for r in conn.execute("SELECT project_id,worker_slot,conversation_id FROM runner_workers ORDER BY project_id,worker_slot")]
+          conn.close()
+          def fp(data):
+              return hashlib.sha256(json.dumps(data,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+          print(json.dumps({"fingerprint":fp({"targets":targets,"workers":workers}),"targets":targets,"workers":workers}))
+          PY
+
+          cp "$SOURCE" "$SOURCE_BAK"
+          cp "$RUNTIME" "$RUNTIME_BAK"
+          cp "$CANDIDATE/firefox-extension/background.js" "$SOURCE"
+          cp "$CANDIDATE/firefox-extension/background.js" "$RUNTIME"
+          MUTATED=1
+          node "$RELOAD"
+
+          sleep 8
+          echo "Canary without strict mapping equality:"
+          python3 "$CANDIDATE/scripts/zcloud_postdeploy_canary.py"             --root "$ROOT"             --db "$ROOT/history.db"             --json | tee "$TMP/canary.json" || true
+
+          python3 - <<'PY' > "$TMP/after.json"
+          import json,sqlite3,hashlib
+          db="/home/ubuntu/zennay-cloud/history.db"
+          conn=sqlite3.connect(f"file:{db}?mode=ro",uri=True); conn.row_factory=sqlite3.Row
+          targets=[dict(r) for r in conn.execute("SELECT project_id,active,worker_count,conversation_id FROM runner_targets ORDER BY project_id")]
+          workers=[dict(r) for r in conn.execute("SELECT project_id,worker_slot,conversation_id FROM runner_workers ORDER BY project_id,worker_slot")]
+          conn.close()
+          def fp(data):
+              return hashlib.sha256(json.dumps(data,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+          print(json.dumps({"fingerprint":fp({"targets":targets,"workers":workers}),"targets":targets,"workers":workers}))
+          PY
+
+          BEFORE="$TMP/before.json" AFTER="$TMP/after.json" python3 - <<'PY'
+          import json,os
+          b=json.load(open(os.environ["BEFORE"])); a=json.load(open(os.environ["AFTER"]))
+          bt={x["project_id"]:x for x in b["targets"]}; at={x["project_id"]:x for x in a["targets"]}
+          bw={(x["project_id"],x["worker_slot"]):x for x in b["workers"]}
+          aw={(x["project_id"],x["worker_slot"]):x for x in a["workers"]}
+          active_changes=[]
+          target_mapping=[]
+          worker_mapping=[]
+          for k in sorted(set(bt)|set(at)):
+              x,y=bt.get(k),at.get(k)
+              if x and y and x["active"]!=y["active"]:
+                  active_changes.append({"project":k,"before":x["active"],"after":y["active"]})
+              xv=(x or {}).get("conversation_id") or ""; yv=(y or {}).get("conversation_id") or ""
+              if xv!=yv:
+                  target_mapping.append({"project":k,"kind":"empty_to_nonempty" if not xv and yv else "nonempty_changed"})
+          for k in sorted(set(bw)|set(aw)):
+              x,y=bw.get(k),aw.get(k)
+              xv=(x or {}).get("conversation_id") or ""; yv=(y or {}).get("conversation_id") or ""
+              if xv!=yv:
+                  worker_mapping.append({"worker":f"{k[0]}::w{k[1]}","kind":"empty_to_nonempty" if not xv and yv else "nonempty_changed"})
+          print(json.dumps({
+              "mapping_fingerprint_changed":b["fingerprint"]!=a["fingerprint"],
+              "active_changes":active_changes,
+              "target_mapping_changes":target_mapping,
+              "worker_mapping_changes":worker_mapping,
+          },indent=2))
+          PY
+
+          # Explicitly restore before the step exits; trap is a second safety net.
+          cp "$SOURCE_BAK" "$SOURCE"
+          cp "$RUNTIME_BAK" "$RUNTIME"
+          node "$RELOAD"
+          MUTATED=0
+          sleep 4
+
+          python3 "$CANDIDATE/scripts/zcloud_postdeploy_canary.py"             --root "$ROOT" --db "$ROOT/history.db" --json
