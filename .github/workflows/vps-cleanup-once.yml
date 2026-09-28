@@ -1,9 +1,10 @@
 name: VPS cleanup once
 
 on:
-  push:
+  pull_request:
     branches:
-      - ops/vps-cleanup-20260929
+      - main
+    types: [opened]
     paths:
       - .github/workflows/vps-cleanup-once.yml
 
@@ -49,18 +50,14 @@ jobs:
           echo "Purging old Python package download caches for known service users..."
           for home in /home/ubuntu /home/haxlab; do
             [ -d "$home" ] || continue
-            if [ -d "$home/.cache/pip" ]; then
-              sudo rm -rf -- "$home/.cache/pip"
-            fi
-            if [ -d "$home/.cache/uv" ]; then
-              sudo rm -rf -- "$home/.cache/uv"
-            fi
+            [ ! -d "$home/.cache/pip" ] || sudo rm -rf -- "$home/.cache/pip"
+            [ ! -d "$home/.cache/uv" ] || sudo rm -rf -- "$home/.cache/uv"
           done
 
           echo "Removing stale Python bytecode only from project code trees..."
           for root in /opt/haxlab /opt/zcloud /opt/ftmo /opt/raise-ai /opt/raiseai; do
             [ -d "$root" ] || continue
-            sudo find "$root" -xdev -type d -name __pycache__ -prune -mtime +2 -exec rm -rf -- {} + 2>/dev/null || true
+            sudo find "$root" -xdev -type d -name __pycache__ -mtime +2 -prune -exec rm -rf -- {} + 2>/dev/null || true
             sudo find "$root" -xdev -type f -name '*.pyc' -mtime +2 -delete 2>/dev/null || true
           done
 
