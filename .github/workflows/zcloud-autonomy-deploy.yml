@@ -7,7 +7,7 @@ on:
       - '.github/workflows/zcloud-autonomy-deploy.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: one-shot-zcloud-autonomy-deploy
@@ -18,6 +18,11 @@ jobs:
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 15
     steps:
+      - name: Checkout bridge repository for deployment proof
+        uses: actions/checkout@v4
+        with:
+          path: control
+
       - name: Verify local zCloud deployment tooling
         shell: bash
         run: |
@@ -106,3 +111,51 @@ jobs:
               "firefox": status["chatgpt_firefox"]["state"],
           }, indent=2))
           PY
+
+      - name: Publish temporary deployment proof
+        if: always()
+        shell: bash
+        env:
+          JOB_STATUS: ${{ job.status }}
+          ZCLOUD_SHA: 2a93899cfc96232543028b4ba7e18a45a33d0976
+        run: |
+          set -u
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          payload = {
+              "observed_at": datetime.now(timezone.utc).isoformat(),
+              "job_status": os.environ.get("JOB_STATUS"),
+              "zcloud_sha": os.environ.get("ZCLOUD_SHA"),
+          }
+          try:
+              with urllib.request.urlopen("http://127.0.0.1:8765/api/autonomy", timeout=5) as response:
+                  live = json.load(response)
+              payload["live_autonomy"] = {
+                  key: {
+                      "mode": value.get("mode"),
+                      "allow_ai": value.get("allow_ai"),
+                      "reason": value.get("reason"),
+                      "runtime": value.get("runtime"),
+                  }
+                  for key, value in (live.get("projects") or {}).items()
+              }
+          except Exception as exc:
+              payload["live_error"] = str(exc)
+          Path("control/zcloud-autonomy-deploy-result.json").write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          git -C control config user.name "zCloud deployment bridge"
+          git -C control config user.email "actions@users.noreply.github.com"
+          git -C control add zcloud-autonomy-deploy-result.json
+          if git -C control diff --cached --quiet; then
+            exit 0
+          fi
+          git -C control commit -m "Record zCloud autonomy live deployment"
+          git -C control push origin HEAD:main
