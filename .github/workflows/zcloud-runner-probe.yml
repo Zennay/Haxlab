@@ -1,0 +1,37 @@
+name: Temporary zCloud runner registration probe
+
+on:
+  push:
+    branches: [zcloud-diagnose-20260929]
+    paths:
+      - .github/workflows/zcloud-runner-probe.yml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Probe reusable VPS GitHub auth
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 5
+    steps:
+      - name: Report safe runner-registration capabilities
+        shell: bash
+        env:
+          GH_TOKEN: ""
+        run: |
+          set -euo pipefail
+          echo "gh_installed=$([ -x "$(command -v gh 2>/dev/null || true)" ] && echo true || echo false)"
+          if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+            echo "gh_host_auth=true"
+            login="$(gh api user --jq .login 2>/dev/null || true)"
+            [ -n "$login" ] && echo "gh_login=$login"
+            admin="$(gh api repos/Zennay/zCloud --jq '.permissions.admin // false' 2>/dev/null || echo false)"
+            push="$(gh api repos/Zennay/zCloud --jq '.permissions.push // false' 2>/dev/null || echo false)"
+            echo "zcloud_admin=$admin"
+            echo "zcloud_push=$push"
+          else
+            echo "gh_host_auth=false"
+          fi
+          echo "runner_dirs:"
+          find /home/ubuntu -maxdepth 2 -type f -name config.sh -path '*/actions-runner*/*' -printf '%h\n' 2>/dev/null | sed 's#^/home/ubuntu/##' | sort -u || true
