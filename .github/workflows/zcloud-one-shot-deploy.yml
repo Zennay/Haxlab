@@ -28,6 +28,24 @@ jobs:
           clean: true
           fetch-depth: 1
 
+      - name: Compare live resource policy with LKG
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path("/home/ubuntu/zennay-cloud")
+          state=Path("/home/ubuntu/.local/state/zcloud/recovery")
+          ptr=json.loads((state/"last-known-good.json").read_text())
+          snap=state/"snapshots"/ptr["snapshot_id"]/"files"/"resource-policy.json"
+          live=root/"resource-policy.json"
+          print("LIVE_RESOURCE_POLICY")
+          print(live.read_text() if live.exists() else "<missing>")
+          print("LKG_RESOURCE_POLICY")
+          print(snap.read_text() if snap.exists() else "<missing>")
+          PY
+
       - name: Diagnose zCloud pre-change gate
         shell: bash
         run: |
