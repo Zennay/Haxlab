@@ -1,0 +1,108 @@
+name: One-shot deploy zCloud autonomy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/zcloud-autonomy-deploy.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: one-shot-zcloud-autonomy-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    steps:
+      - name: Verify local zCloud deployment tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(id -un)" = "ubuntu"
+          test -f /home/ubuntu/zennay-cloud/scripts/zcloud_transactional_promote.py
+          test -x /home/ubuntu/.local/bin/zcloud-prechange-guard
+          test -x /home/ubuntu/.local/bin/zcloud-postdeploy-canary
+          test -x /home/ubuntu/.local/bin/zcloud-reload-extension.mjs
+          curl -fsS http://127.0.0.1:8765/api/status >/dev/null
+
+      - name: Fetch exact green zCloud revision
+        shell: bash
+        env:
+          ZCLOUD_SHA: 2a93899cfc96232543028b4ba7e18a45a33d0976
+        run: |
+          set -euo pipefail
+          candidate="$RUNNER_TEMP/zcloud-autonomy-candidate"
+          rm -rf "$candidate"
+          git clone --filter=blob:none --no-checkout https://github.com/Zennay/zCloud.git "$candidate"
+          git -C "$candidate" fetch --depth=1 origin "$ZCLOUD_SHA"
+          git -C "$candidate" checkout --detach "$ZCLOUD_SHA"
+          test "$(git -C "$candidate" rev-parse HEAD)" = "$ZCLOUD_SHA"
+
+      - name: Promote browser autonomy gate first
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 /home/ubuntu/zennay-cloud/scripts/zcloud_transactional_promote.py \
+            --candidate "$RUNNER_TEMP/zcloud-autonomy-candidate" \
+            --path firefox-extension/background.js \
+            --actor github-runner:zcloud-autonomy \
+            --json
+
+      - name: Promote zCloud autonomy scheduler
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 /home/ubuntu/zennay-cloud/scripts/zcloud_transactional_promote.py \
+            --candidate "$RUNNER_TEMP/zcloud-autonomy-candidate" \
+            --path server.py \
+            --actor github-runner:zcloud-autonomy \
+            --json
+
+      - name: Verify live autonomy control plane
+        shell: bash
+        run: |
+          set -euo pipefail
+          sleep 12
+          python3 - <<'PY'
+          import json
+          import urllib.request
+
+          def get(path):
+              with urllib.request.urlopen("http://127.0.0.1:8765" + path, timeout=5) as response:
+                  assert response.status == 200
+                  return json.load(response)
+
+          autonomy = get("/api/autonomy")["projects"]
+          expected = {
+              "cloud": "zcloud_stopgate",
+              "haxlab": "haxlab_status",
+              "ftmo": "ftmo_status",
+              "ulab": "external_gate",
+              "supa": "ai_worker",
+              "raiseai": "ai_worker",
+              "zssh": "ai_worker",
+          }
+          for project, mode in expected.items():
+              assert project in autonomy, (project, sorted(autonomy))
+              assert autonomy[project]["mode"] == mode, (project, autonomy[project])
+          assert autonomy["ulab"]["allow_ai"] is False
+
+          status = get("/api/status")
+          assert status["chatgpt_firefox"]["active"] is True
+          print(json.dumps({
+              "autonomy": {
+                  key: {
+                      "mode": autonomy[key]["mode"],
+                      "allow_ai": autonomy[key]["allow_ai"],
+                      "reason": autonomy[key]["reason"],
+                      "runtime": autonomy[key].get("runtime"),
+                  }
+                  for key in expected
+              },
+              "firefox": status["chatgpt_firefox"]["state"],
+          }, indent=2))
+          PY
