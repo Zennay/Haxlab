@@ -1,0 +1,60 @@
+name: Temporary zCloud guarded promotion
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/zcloud-promote-temp.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: temporary-zcloud-promotion
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact green zCloud revision
+        uses: actions/checkout@v4
+        with:
+          repository: Zennay/zCloud
+          ref: bd8902449fb0ef787eff99bab2b26820dac64379
+          path: zcloud-candidate
+          persist-credentials: false
+
+      - name: Promote Firefox runner guarded
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$GITHUB_WORKSPACE/zcloud-candidate/scripts/zcloud_transactional_promote.py" \
+            --candidate "$GITHUB_WORKSPACE/zcloud-candidate" \
+            --path firefox-extension/background.js \
+            --actor "haxlab-runner-zcloud-transport" \
+            --json
+
+      - name: Promote backend and autonomy policy guarded
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$GITHUB_WORKSPACE/zcloud-candidate/scripts/zcloud_transactional_promote.py" \
+            --candidate "$GITHUB_WORKSPACE/zcloud-candidate" \
+            --path server.py \
+            --path autonomy-policy.json \
+            --actor "haxlab-runner-zcloud-transport" \
+            --json
+
+      - name: Final zCloud health evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          /home/ubuntu/.local/bin/zcloud-healthcheck
+          curl -fsS http://127.0.0.1:8765/api/status >/tmp/zcloud-status.json
+          grep -q '"vps_dispatch_only"' /tmp/zcloud-status.json || {
+            echo "vps dispatch contract missing from live API" >&2
+            exit 1
+          }
+          echo "ZCLOUD_VPS_AI_DISPATCH_LIVE_GREEN"
