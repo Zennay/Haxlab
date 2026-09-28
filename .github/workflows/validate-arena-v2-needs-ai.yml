@@ -25,7 +25,7 @@ jobs:
           export NODE_PATH=/opt/haxlab/node_modules
           node --check tools/elite_closed_loop_arena_v2.js
           node tests/test_closed_loop_arena_v2.js
-          python3 -m pytest -q tests/test_closed_loop_arena.py
+          /opt/haxlab/.venv/bin/python -m pytest -q tests/test_closed_loop_arena.py
           grep -q 'team proxy match score >= 0.50' docs/closed-loop-arena-v2.md
           grep -q 'context-adaptation rate >= 0.25' docs/closed-loop-arena-v2.md
           echo "ARENA_V2_GATE_CODE_GREEN"
