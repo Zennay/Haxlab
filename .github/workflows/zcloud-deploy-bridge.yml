@@ -38,6 +38,76 @@ jobs:
           git -C "$ROOT" worktree add --detach "$CANDIDATE" "$EXPECTED"
           test "$(git -C "$CANDIDATE" rev-parse HEAD)" = "$EXPECTED"
 
+          # One-time guarded migration from the previous per-project >2 worker model.
+          # Never evict a legacy worker that still owns a live task claim.
+          python3 - <<'PY'
+          import json
+          import sqlite3
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          db = Path("/home/ubuntu/zennay-cloud/history.db")
+          conn = sqlite3.connect(db, timeout=10)
+          conn.row_factory = sqlite3.Row
+          conn.execute("BEGIN IMMEDIATE")
+          legacy = [dict(r) for r in conn.execute(
+              "SELECT project_id,worker_slot,desired_state,conversation_id "
+              "FROM runner_workers WHERE worker_slot>2 ORDER BY project_id,worker_slot"
+          )]
+          blockers = []
+          now = datetime.now(timezone.utc)
+          for row in conn.execute(
+              "SELECT project_id,claim_key,owner_id,worker_id,lease_until "
+              "FROM task_claims WHERE worker_id IS NOT NULL AND worker_id!=''"
+          ):
+              worker_id = str(row["worker_id"])
+              try:
+                  slot = int(worker_id.rsplit("::w", 1)[1])
+              except Exception:
+                  continue
+              if slot <= 2:
+                  continue
+              try:
+                  lease = datetime.fromisoformat(str(row["lease_until"])).astimezone(timezone.utc)
+              except Exception:
+                  lease = now
+              if lease > now:
+                  blockers.append(dict(row))
+          if blockers:
+              conn.rollback()
+              print(json.dumps({"ok": False, "reason": "live_legacy_claims", "blockers": blockers}, default=str))
+              raise SystemExit(3)
+
+          target_rows = [dict(r) for r in conn.execute(
+              "SELECT project_id,worker_count FROM runner_targets WHERE worker_count>2 ORDER BY project_id"
+          )]
+          conn.execute("DELETE FROM task_claims WHERE worker_id LIKE '%::w%' AND lease_until<=?", (now.isoformat(),))
+          conn.execute("DELETE FROM runner_workers WHERE worker_slot>2")
+          conn.execute("UPDATE runner_targets SET worker_count=2 WHERE worker_count>2")
+          if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ai_global_slots'").fetchone():
+              conn.execute("DELETE FROM ai_global_slots WHERE worker_slot>2 OR slot>2")
+          if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='config_audit'").fetchone():
+              ts = now.isoformat()
+              for row in target_rows:
+                  conn.execute(
+                      "INSERT INTO config_audit(ts,actor,config_key,target,old_value_json,new_value_json,result,detail) "
+                      "VALUES(?,?,?,?,?,?,?,?,?)",
+                      (ts, "haxlab-runner-zcloud-bridge", "runner.worker_count", row["project_id"],
+                       json.dumps(row["worker_count"]), json.dumps(2), "succeeded",
+                       "one-time migration to GLOBAL_CHATGPT_WORKER_LIMIT=2"),
+                  )
+              for row in legacy:
+                  conn.execute(
+                      "INSERT INTO config_audit(ts,actor,config_key,target,old_value_json,new_value_json,result,detail) "
+                      "VALUES(?,?,?,?,?,?,?,?,?)",
+                      (ts, "haxlab-runner-zcloud-bridge", "runner.legacy_worker_slot",
+                       f"{row['project_id']}::w{row['worker_slot']}", json.dumps(row), json.dumps(None),
+                       "succeeded", "removed legacy worker slot above global hard limit"),
+                  )
+          conn.commit()
+          print(json.dumps({"ok": True, "legacy_workers_removed": legacy, "targets_clamped": target_rows}, default=str))
+          PY
+
           python3 "$CANDIDATE/scripts/zcloud_transactional_promote.py" \
             --candidate "$CANDIDATE" \
             --root "$ROOT" \
