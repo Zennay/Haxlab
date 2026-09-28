@@ -24,113 +24,178 @@ jobs:
           path: control
 
       - name: Verify local zCloud deployment tooling
+        id: preflight
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
-          test "$(id -un)" = "ubuntu"
-          test -f /home/ubuntu/zennay-cloud/scripts/zcloud_transactional_promote.py
-          test -x /home/ubuntu/.local/bin/zcloud-prechange-guard
-          test -x /home/ubuntu/.local/bin/zcloud-postdeploy-canary
-          test -f /home/ubuntu/.local/bin/zcloud-reload-extension.mjs
-          curl -fsS http://127.0.0.1:8765/api/status >/dev/null
+          set -o pipefail
+          {
+            set -euo pipefail
+            echo "user=$(id -un)"
+            echo "uid=$(id -u)"
+            ls -ld /home/ubuntu /home/ubuntu/zennay-cloud || true
+            for path in \
+              /home/ubuntu/zennay-cloud/scripts/zcloud_transactional_promote.py \
+              /home/ubuntu/.local/bin/zcloud-prechange-guard \
+              /home/ubuntu/.local/bin/zcloud-postdeploy-canary \
+              /home/ubuntu/.local/bin/zcloud-reload-extension.mjs
+            do
+              ls -l "$path" || true
+            done
+            test "$(id -un)" = "ubuntu"
+            test -f /home/ubuntu/zennay-cloud/scripts/zcloud_transactional_promote.py
+            test -x /home/ubuntu/.local/bin/zcloud-prechange-guard
+            test -x /home/ubuntu/.local/bin/zcloud-postdeploy-canary
+            test -f /home/ubuntu/.local/bin/zcloud-reload-extension.mjs
+            curl -fsS http://127.0.0.1:8765/api/status >/dev/null
+          } 2>&1 | tee /tmp/zcloud-autonomy-preflight.log
 
       - name: Fetch exact green zCloud revision
+        id: fetch
+        if: steps.preflight.outcome == 'success'
+        continue-on-error: true
         shell: bash
         env:
           ZCLOUD_SHA: 2a93899cfc96232543028b4ba7e18a45a33d0976
         run: |
-          set -euo pipefail
-          candidate="$RUNNER_TEMP/zcloud-autonomy-candidate"
-          rm -rf "$candidate"
-          git clone --filter=blob:none --no-checkout https://github.com/Zennay/zCloud.git "$candidate"
-          git -C "$candidate" fetch --depth=1 origin "$ZCLOUD_SHA"
-          git -C "$candidate" checkout --detach "$ZCLOUD_SHA"
-          test "$(git -C "$candidate" rev-parse HEAD)" = "$ZCLOUD_SHA"
+          set -o pipefail
+          {
+            set -euo pipefail
+            candidate="$RUNNER_TEMP/zcloud-autonomy-candidate"
+            rm -rf "$candidate"
+            git clone --filter=blob:none --no-checkout https://github.com/Zennay/zCloud.git "$candidate"
+            git -C "$candidate" fetch --depth=1 origin "$ZCLOUD_SHA"
+            git -C "$candidate" checkout --detach "$ZCLOUD_SHA"
+            test "$(git -C "$candidate" rev-parse HEAD)" = "$ZCLOUD_SHA"
+          } 2>&1 | tee /tmp/zcloud-autonomy-fetch.log
 
       - name: Promote browser autonomy gate first
+        id: browser
+        if: steps.preflight.outcome == 'success' && steps.fetch.outcome == 'success'
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
-          python3 /home/ubuntu/zennay-cloud/scripts/zcloud_transactional_promote.py \
-            --candidate "$RUNNER_TEMP/zcloud-autonomy-candidate" \
-            --path firefox-extension/background.js \
-            --actor github-runner:zcloud-autonomy \
-            --json
+          set -o pipefail
+          {
+            set -euo pipefail
+            python3 /home/ubuntu/zennay-cloud/scripts/zcloud_transactional_promote.py \
+              --candidate "$RUNNER_TEMP/zcloud-autonomy-candidate" \
+              --path firefox-extension/background.js \
+              --actor github-runner:zcloud-autonomy \
+              --json
+          } 2>&1 | tee /tmp/zcloud-autonomy-browser.log
 
       - name: Promote zCloud autonomy scheduler
+        id: server
+        if: steps.browser.outcome == 'success'
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
-          python3 /home/ubuntu/zennay-cloud/scripts/zcloud_transactional_promote.py \
-            --candidate "$RUNNER_TEMP/zcloud-autonomy-candidate" \
-            --path server.py \
-            --actor github-runner:zcloud-autonomy \
-            --json
+          set -o pipefail
+          {
+            set -euo pipefail
+            python3 /home/ubuntu/zennay-cloud/scripts/zcloud_transactional_promote.py \
+              --candidate "$RUNNER_TEMP/zcloud-autonomy-candidate" \
+              --path server.py \
+              --actor github-runner:zcloud-autonomy \
+              --json
+          } 2>&1 | tee /tmp/zcloud-autonomy-server.log
 
       - name: Verify live autonomy control plane
+        id: verify
+        if: steps.server.outcome == 'success'
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
-          sleep 12
-          python3 - <<'PY'
-          import json
-          import urllib.request
+          set -o pipefail
+          {
+            set -euo pipefail
+            sleep 12
+            python3 - <<'PY'
+            import json
+            import urllib.request
 
-          def get(path):
-              with urllib.request.urlopen("http://127.0.0.1:8765" + path, timeout=5) as response:
-                  assert response.status == 200
-                  return json.load(response)
+            def get(path):
+                with urllib.request.urlopen("http://127.0.0.1:8765" + path, timeout=5) as response:
+                    assert response.status == 200
+                    return json.load(response)
 
-          autonomy = get("/api/autonomy")["projects"]
-          expected = {
-              "cloud": "zcloud_stopgate",
-              "haxlab": "haxlab_status",
-              "ftmo": "ftmo_status",
-              "ulab": "external_gate",
-              "supa": "ai_worker",
-              "raiseai": "ai_worker",
-              "zssh": "ai_worker",
-          }
-          for project, mode in expected.items():
-              assert project in autonomy, (project, sorted(autonomy))
-              assert autonomy[project]["mode"] == mode, (project, autonomy[project])
-          assert autonomy["ulab"]["allow_ai"] is False
+            autonomy = get("/api/autonomy")["projects"]
+            expected = {
+                "cloud": "zcloud_stopgate",
+                "haxlab": "haxlab_status",
+                "ftmo": "ftmo_status",
+                "ulab": "external_gate",
+                "supa": "ai_worker",
+                "raiseai": "ai_worker",
+                "zssh": "ai_worker",
+            }
+            for project, mode in expected.items():
+                assert project in autonomy, (project, sorted(autonomy))
+                assert autonomy[project]["mode"] == mode, (project, autonomy[project])
+            assert autonomy["ulab"]["allow_ai"] is False
 
-          status = get("/api/status")
-          assert status["chatgpt_firefox"]["active"] is True
-          print(json.dumps({
-              "autonomy": {
-                  key: {
-                      "mode": autonomy[key]["mode"],
-                      "allow_ai": autonomy[key]["allow_ai"],
-                      "reason": autonomy[key]["reason"],
-                      "runtime": autonomy[key].get("runtime"),
-                  }
-                  for key in expected
-              },
-              "firefox": status["chatgpt_firefox"]["state"],
-          }, indent=2))
-          PY
+            status = get("/api/status")
+            assert status["chatgpt_firefox"]["active"] is True
+            print(json.dumps({
+                "autonomy": {
+                    key: {
+                        "mode": autonomy[key]["mode"],
+                        "allow_ai": autonomy[key]["allow_ai"],
+                        "reason": autonomy[key]["reason"],
+                        "runtime": autonomy[key].get("runtime"),
+                    }
+                    for key in expected
+                },
+                "firefox": status["chatgpt_firefox"]["state"],
+            }, indent=2))
+            PY
+          } 2>&1 | tee /tmp/zcloud-autonomy-verify.log
 
       - name: Publish temporary deployment proof
         if: always()
         shell: bash
         env:
-          JOB_STATUS: ${{ job.status }}
+          PREFLIGHT_OUTCOME: ${{ steps.preflight.outcome }}
+          FETCH_OUTCOME: ${{ steps.fetch.outcome }}
+          BROWSER_OUTCOME: ${{ steps.browser.outcome }}
+          SERVER_OUTCOME: ${{ steps.server.outcome }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
           ZCLOUD_SHA: 2a93899cfc96232543028b4ba7e18a45a33d0976
         run: |
-          set -u
+          set -euo pipefail
           python3 - <<'PY'
           import json
           import os
+          import subprocess
           import urllib.request
           from datetime import datetime, timezone
           from pathlib import Path
 
+          def tail(path, limit=8000):
+              try:
+                  return Path(path).read_text(errors="replace")[-limit:]
+              except Exception:
+                  return None
+
           payload = {
               "observed_at": datetime.now(timezone.utc).isoformat(),
-              "job_status": os.environ.get("JOB_STATUS"),
               "zcloud_sha": os.environ.get("ZCLOUD_SHA"),
+              "outcomes": {
+                  "preflight": os.environ.get("PREFLIGHT_OUTCOME"),
+                  "fetch": os.environ.get("FETCH_OUTCOME"),
+                  "browser": os.environ.get("BROWSER_OUTCOME"),
+                  "server": os.environ.get("SERVER_OUTCOME"),
+                  "verify": os.environ.get("VERIFY_OUTCOME"),
+              },
+              "runner_user": subprocess.run(["id", "-un"], text=True, capture_output=True).stdout.strip(),
+              "logs": {
+                  "preflight": tail("/tmp/zcloud-autonomy-preflight.log"),
+                  "fetch": tail("/tmp/zcloud-autonomy-fetch.log"),
+                  "browser": tail("/tmp/zcloud-autonomy-browser.log"),
+                  "server": tail("/tmp/zcloud-autonomy-server.log"),
+                  "verify": tail("/tmp/zcloud-autonomy-verify.log"),
+              },
           }
           try:
               with urllib.request.urlopen("http://127.0.0.1:8765/api/autonomy", timeout=5) as response:
@@ -154,8 +219,22 @@ jobs:
           git -C control config user.name "zCloud deployment bridge"
           git -C control config user.email "actions@users.noreply.github.com"
           git -C control add zcloud-autonomy-deploy-result.json
-          if git -C control diff --cached --quiet; then
-            exit 0
-          fi
-          git -C control commit -m "Record zCloud autonomy live deployment"
+          git -C control commit -m "Record zCloud autonomy live deployment" || true
           git -C control push origin HEAD:main
+
+      - name: Fail if deployment did not verify
+        if: always()
+        shell: bash
+        env:
+          PREFLIGHT_OUTCOME: ${{ steps.preflight.outcome }}
+          FETCH_OUTCOME: ${{ steps.fetch.outcome }}
+          BROWSER_OUTCOME: ${{ steps.browser.outcome }}
+          SERVER_OUTCOME: ${{ steps.server.outcome }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+        run: |
+          set -euo pipefail
+          test "$PREFLIGHT_OUTCOME" = success
+          test "$FETCH_OUTCOME" = success
+          test "$BROWSER_OUTCOME" = success
+          test "$SERVER_OUTCOME" = success
+          test "$VERIFY_OUTCOME" = success
