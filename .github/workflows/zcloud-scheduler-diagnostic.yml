@@ -1,0 +1,74 @@
+name: Temporary zCloud scheduler diagnostic
+
+on:
+  push:
+    branches: [zcloud-diagnose-20260929]
+    paths:
+      - .github/workflows/zcloud-scheduler-diagnostic.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    name: Inspect zCloud global worker state
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 10
+    steps:
+      - name: Read non-sensitive zCloud scheduler state
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import sqlite3
+          from pathlib import Path
+
+          root=Path("/home/ubuntu/zennay-cloud")
+          db=root/"history.db"
+          conn=sqlite3.connect(f"file:{db}?mode=ro",uri=True,timeout=5)
+          conn.row_factory=sqlite3.Row
+          targets=[dict(r) for r in conn.execute(
+              "SELECT project_id,active,worker_count FROM runner_targets ORDER BY project_id"
+          )]
+          workers=[]
+          for r in conn.execute(
+              "SELECT project_id,worker_slot,desired_state,conversation_id FROM runner_workers ORDER BY project_id,worker_slot"
+          ):
+              workers.append({
+                  "project_id":r["project_id"],
+                  "worker_slot":r["worker_slot"],
+                  "desired_state":r["desired_state"],
+                  "has_conversation":bool(r["conversation_id"]),
+              })
+          slots=[]
+          if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ai_global_slots'").fetchone():
+              slots=[dict(r) for r in conn.execute(
+                  "SELECT slot,project_id,worker_slot,assigned_at FROM ai_global_slots ORDER BY slot"
+              )]
+          events=[dict(r) for r in conn.execute(
+              "SELECT id,ts,event,project_id,worker_slot,generating,sending,reason "
+              "FROM runner_events ORDER BY id DESC LIMIT 20"
+          )]
+          conn.close()
+
+          def sha(path):
+              h=hashlib.sha256()
+              with open(path,"rb") as fh:
+                  for chunk in iter(lambda:fh.read(1024*1024),b""):
+                      h.update(chunk)
+              return h.hexdigest()
+
+          runtime=Path.home()/"snap/firefox/common/chatgpt-project-extension/background.js"
+          payload={
+              "targets":targets,
+              "workers":workers,
+              "global_slots":slots,
+              "latest_events":events,
+              "background_source_sha":sha(root/"firefox-extension/background.js"),
+              "background_runtime_sha":sha(runtime) if runtime.exists() else None,
+          }
+          print(json.dumps(payload,indent=2,default=str))
+          PY
+          curl -fsS http://127.0.0.1:8765/api/runner-targets | python3 -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps({"max_workers":d.get("max_workers"),"global_allocation":d.get("global_allocation")}, indent=2))'
