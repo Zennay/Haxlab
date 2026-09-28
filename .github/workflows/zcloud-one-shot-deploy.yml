@@ -1,0 +1,61 @@
+name: One-shot zCloud deploy bridge
+
+on:
+  push:
+    branches: ['ops/zcloud-hax-bridge-20260928']
+    paths:
+      - '.github/workflows/zcloud-one-shot-deploy.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zcloud-one-shot-vps-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy-zcloud:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact zCloud main
+        uses: actions/checkout@v4
+        with:
+          repository: Zennay/zCloud
+          ref: main
+          path: zcloud-candidate
+          clean: true
+          fetch-depth: 1
+
+      - name: Promote backend and autonomy policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$GITHUB_WORKSPACE/zcloud-candidate/scripts/zcloud_transactional_promote.py" \
+            --candidate "$GITHUB_WORKSPACE/zcloud-candidate" \
+            --path server.py \
+            --path autonomy-policy.json \
+            --actor "haxlab-runner-zcloud-bridge" \
+            --json
+
+      - name: Promote Firefox runner without starting chats
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$GITHUB_WORKSPACE/zcloud-candidate/scripts/zcloud_transactional_promote.py" \
+            --candidate "$GITHUB_WORKSPACE/zcloud-candidate" \
+            --path firefox-extension/background.js \
+            --actor "haxlab-runner-zcloud-bridge" \
+            --json
+
+      - name: Promote mobile UI
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$GITHUB_WORKSPACE/zcloud-candidate/scripts/zcloud_transactional_promote.py" \
+            --candidate "$GITHUB_WORKSPACE/zcloud-candidate" \
+            --path public/app.js \
+            --path public/index.html \
+            --path public/style.css \
+            --actor "haxlab-runner-zcloud-bridge" \
+            --json
