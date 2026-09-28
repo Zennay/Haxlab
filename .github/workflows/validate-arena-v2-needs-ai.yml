@@ -1,0 +1,39 @@
+name: Validate Arena v2 NEEDS_AI gate
+
+on:
+  push:
+    branches: [ops/haxlab-needs-ai-arena-v2-20260929]
+    paths: [".github/workflows/validate-arena-v2-needs-ai.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout frozen Arena v2 branch
+        uses: actions/checkout@v4
+        with:
+          ref: experiment/closed-loop-arena-v2
+          fetch-depth: 1
+      - name: Validate implementation and frozen threshold policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          export NODE_PATH=/opt/haxlab/node_modules
+          node --check tools/elite_closed_loop_arena_v2.js
+          node tests/test_closed_loop_arena_v2.js
+          python3 -m pytest -q tests/test_closed_loop_arena.py
+          grep -q 'team proxy match score >= 0.50' docs/closed-loop-arena-v2.md
+          grep -q 'context-adaptation rate >= 0.25' docs/closed-loop-arena-v2.md
+          echo "ARENA_V2_GATE_CODE_GREEN"
+      - name: Verify preserved VPS evidence and baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f /var/lib/haxlab/models/challengers/autonomy-bc-baseline-v1/model/runtime-model.json ||           test -f /var/lib/haxlab/models/challengers/autonomy-bc-baseline-v1/runtime-model.json
+          test -d /var/lib/haxlab/derived/evaluation/closed-loop-arena-v2-calibration-v1
+          find /var/lib/haxlab/derived/evaluation/closed-loop-arena-v2-calibration-v1 -type f -name 'calibration-summary.json' -print -quit | grep -q .
+          echo "ARENA_V2_PRESERVED_EVIDENCE_GREEN"
