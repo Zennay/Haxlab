@@ -1,0 +1,126 @@
+name: Temporary zCloud portfolio queue deploy
+
+on:
+  push:
+    branches: [zcloud-queue-deploy-20260929]
+    paths:
+      - .github/workflows/zcloud-queue-deploy-temp.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: temporary-zcloud-portfolio-queue-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Promote portfolio queue zCloud through HaxLab VPS runner
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    steps:
+      - name: Promote exact green zCloud main and verify live queue contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=/home/ubuntu/zennay-cloud
+          EXPECTED=edd43034071fae439c947c9beeb9ee303694d6f3
+          TMP_BASE="$(mktemp -d /tmp/zcloud-queue-bridge.XXXXXX)"
+          CANDIDATE="$TMP_BASE/candidate"
+          cleanup() {
+            git -C "$ROOT" worktree remove --force "$CANDIDATE" >/dev/null 2>&1 || true
+            rm -rf "$TMP_BASE"
+          }
+          trap cleanup EXIT
+
+          git -C "$ROOT" fetch --prune origin main
+          git -C "$ROOT" cat-file -e "$EXPECTED^{commit}"
+          git -C "$ROOT" worktree add --detach "$CANDIDATE" "$EXPECTED"
+          test "$(git -C "$CANDIDATE" rev-parse HEAD)" = "$EXPECTED"
+
+          python3 "$CANDIDATE/scripts/zcloud_transactional_promote.py" \
+            --candidate "$CANDIDATE" \
+            --root "$ROOT" \
+            --path server.py \
+            --path autonomy-policy.json \
+            --actor "haxlab-runner-zcloud-queue-bridge" \
+            --json
+
+          # Firefox source/runtime must change only in a stable idle window.
+          python3 - <<'PY'
+          import sqlite3,time,sys
+          from pathlib import Path
+          db=Path("/home/ubuntu/zennay-cloud/history.db")
+          deadline=time.time()+240
+          stable_since=None
+          while time.time()<deadline:
+              conn=sqlite3.connect(f"file:{db}?mode=ro",uri=True,timeout=3)
+              conn.row_factory=sqlite3.Row
+              slots=[dict(r) for r in conn.execute(
+                  "SELECT slot,project_id,worker_slot FROM ai_global_slots ORDER BY slot"
+              )]
+              states=[]
+              for slot in slots:
+                  p,s=slot["project_id"],slot["worker_slot"]
+                  latest=conn.execute(
+                      "SELECT id,event,generating,sending FROM runner_events "
+                      "WHERE project_id=? AND worker_slot=? ORDER BY id DESC LIMIT 1",(p,s)
+                  ).fetchone()
+                  last_start=conn.execute(
+                      "SELECT MAX(id) FROM runner_events WHERE project_id=? AND worker_slot=? AND event='generation-started'",(p,s)
+                  ).fetchone()[0] or 0
+                  last_finish=conn.execute(
+                      "SELECT MAX(id) FROM runner_events WHERE project_id=? AND worker_slot=? AND event='generation-finished'",(p,s)
+                  ).fetchone()[0] or 0
+                  busy=(not latest) or bool(latest["generating"]) or bool(latest["sending"]) or last_start>last_finish
+                  states.append((p,s,busy))
+              conn.close()
+              if slots and len(slots)<=2 and all(not x[2] for x in states):
+                  stable_since=stable_since or time.time()
+                  if time.time()-stable_since>=8:
+                      print({"safe_idle":True,"slots":[f"{x[0]}::w{x[1]}" for x in states]})
+                      sys.exit(0)
+              else:
+                  stable_since=None
+              time.sleep(2)
+          print({"safe_idle":False,"reason":"allocated workers did not become idle"})
+          sys.exit(75)
+          PY
+
+          python3 "$CANDIDATE/scripts/zcloud_transactional_promote.py" \
+            --candidate "$CANDIDATE" \
+            --root "$ROOT" \
+            --path firefox-extension/background.js \
+            --actor "haxlab-runner-zcloud-queue-bridge" \
+            --json
+
+          /home/ubuntu/.local/bin/zcloud-healthcheck
+          curl -fsS http://127.0.0.1:8765/api/runner-targets >/tmp/zcloud-queue-targets.json
+          python3 - <<'PY'
+          import json
+          p=json.load(open("/tmp/zcloud-queue-targets.json"))
+          a=p.get("global_allocation") or {}
+          assert int(a.get("limit") or 0)==2, a
+          assert a.get("queue_url")=="https://app.notion.com/p/4162fac179f44fcbbe4072a183d2b440", a
+          assert int(a.get("dispatch_cooldown_seconds") or 0)==120, a
+          active=[w for w in (p.get("projects") or {}).values() if w.get("active")]
+          assert len(active)<=2, active
+          slots=sorted(int(w["global_worker_slot"]) for w in active if w.get("global_worker_slot") is not None)
+          assert len(slots)==len(active), active
+          assert len(slots)==len(set(slots)), slots
+          assert all(s in (1,2) for s in slots), slots
+          for w in active:
+              prompt=str(w.get("prompt") or "")
+              assert "Portfolio Work Queue" in prompt, w.get("project_id")
+              assert "Done is alleen toegestaan" in prompt, w.get("project_id")
+              assert "Claim vóór inhoudelijk werk" in prompt, w.get("project_id")
+          print(json.dumps({
+              "ok":True,
+              "limit":a.get("limit"),
+              "queue_url":a.get("queue_url"),
+              "cooldown":a.get("dispatch_cooldown_seconds"),
+              "active_worker_count":len(active),
+              "slots":slots,
+          },sort_keys=True))
+          print("ZCLOUD_PORTFOLIO_QUEUE_LIVE_GREEN")
+          PY
