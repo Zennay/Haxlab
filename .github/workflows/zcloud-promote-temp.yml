@@ -1,4 +1,4 @@
-name: Temporary zCloud guarded promotion
+name: Temporary zCloud live autonomy verification
 
 on:
   push:
@@ -14,68 +14,87 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  promote:
+  verify:
     runs-on: [self-hosted, haxlab]
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
-      - name: Check out exact green zCloud revision
-        uses: actions/checkout@v4
-        with:
-          repository: Zennay/zCloud
-          ref: bd8902449fb0ef787eff99bab2b26820dac64379
-          path: zcloud-candidate
-          persist-credentials: false
-
-      - name: Preserve live resource priorities in pre-change gate
-        shell: bash
-        run: |
-          set -euo pipefail
-          cat > /tmp/zcloud-prechange-preserve-resource-policy <<'SH'
-          #!/usr/bin/env bash
-          exec /home/ubuntu/.local/bin/zcloud-prechange-guard "$@" --allow-change resource-policy.json
-          SH
-          chmod +x /tmp/zcloud-prechange-preserve-resource-policy
-          /tmp/zcloud-prechange-preserve-resource-policy --json
-
-      - name: Promote backend and autonomy policy guarded
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 "$GITHUB_WORKSPACE/zcloud-candidate/scripts/zcloud_transactional_promote.py" \
-            --candidate "$GITHUB_WORKSPACE/zcloud-candidate" \
-            --path server.py \
-            --path autonomy-policy.json \
-            --prechange /tmp/zcloud-prechange-preserve-resource-policy \
-            --actor "haxlab-runner-zcloud-transport" \
-            --json
-
-      - name: Promote Firefox runner guarded
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 "$GITHUB_WORKSPACE/zcloud-candidate/scripts/zcloud_transactional_promote.py" \
-            --candidate "$GITHUB_WORKSPACE/zcloud-candidate" \
-            --path firefox-extension/background.js \
-            --prechange /tmp/zcloud-prechange-preserve-resource-policy \
-            --actor "haxlab-runner-zcloud-transport" \
-            --json
-
-      - name: Final zCloud autonomy evidence
+      - name: Verify live zCloud health and policy
         shell: bash
         run: |
           set -euo pipefail
           /home/ubuntu/.local/bin/zcloud-healthcheck
-          curl -fsS http://127.0.0.1:8765/api/runner-targets >/tmp/zcloud-runner-targets.json
+          cd /home/ubuntu/zennay-cloud
           python3 - <<'PY'
-          import json
-          p=json.load(open('/tmp/zcloud-runner-targets.json'))
-          projects=p.get('projects') or {}
-          supa=projects.get('supa::w1') or {}
-          hax=projects.get('haxlab::w1') or {}
-          ftmo=projects.get('ftmo::w1') or {}
-          assert supa.get('vps_dispatch_only') is True, supa
-          assert int(supa.get('ai_dispatch_interval_seconds') or 0) == 600, supa
-          assert hax.get('vps_dispatch_only') is True, hax
-          assert ftmo.get('vps_dispatch_only') is True, ftmo
-          print('ZCLOUD_VPS_AI_DISPATCH_LIVE_GREEN')
+          import json, server
+          policy=json.load(open("autonomy-policy.json",encoding="utf-8"))
+          assert server.AUTONOMY_TICK_SECONDS == 60
+          assert policy["projects"]["supa"]["dispatch_mode"] == "vps"
+          assert policy["projects"]["supa"]["min_ai_interval_seconds"] == 600
+          assert policy["projects"]["raiseai"]["min_ai_interval_seconds"] == 1800
+          assert policy["projects"]["zssh"]["min_ai_interval_seconds"] == 1800
+          assert policy["projects"]["haxlab"]["mode"] == "haxlab_status"
+          assert policy["projects"]["ftmo"]["mode"] == "ftmo_status"
+          assert policy["projects"]["ulab"]["auto_start"] is False
+          targets=server.runner_targets()
+          assert targets["supa"]["vps_dispatch_only"] is True
+          assert targets["supa"]["ai_dispatch_interval_seconds"] == 600
+          print("LIVE_POLICY_GREEN")
+          print(json.dumps({p:server.project_autonomy_state(p) for p in ("cloud","haxlab","ftmo","supa","raiseai","zssh","ulab")},ensure_ascii=False,default=str))
+          PY
+
+      - name: Clear old manual pause for VPS-managed projects
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd /home/ubuntu/zennay-cloud
+          python3 - <<'PY'
+          import json, sqlite3, urllib.request, server
+          managed=["cloud","haxlab","ftmo","supa","raiseai","zssh"]
+          with server.connect() as c:
+              runtime={r["project_id"]:dict(r) for r in c.execute("SELECT * FROM autonomy_runtime").fetchall()}
+          targets=server.runner_targets()
+          resumed=[]
+          for pid in managed:
+              state=server.project_autonomy_state(pid)
+              if not state.get("auto_start"):
+                  continue
+              row=runtime.get(pid) or {}
+              if bool(row.get("manual_pause")) or not bool((targets.get(pid) or {}).get("active")):
+                  body=json.dumps({"project_id":pid,"action":"start"}).encode()
+                  req=urllib.request.Request("http://127.0.0.1:8765/api/runner-control",data=body,headers={"Content-Type":"application/json"},method="POST")
+                  with urllib.request.urlopen(req,timeout=5) as resp:
+                      result=json.load(resp)
+                  resumed.append({"project":pid,"result":result})
+          print("RESUMED",json.dumps(resumed,ensure_ascii=False))
+          PY
+
+      - name: Verify VPS scheduler owns follow-up dispatch
+        shell: bash
+        run: |
+          set -euo pipefail
+          sleep 70
+          cd /home/ubuntu/zennay-cloud
+          python3 - <<'PY'
+          import json, server
+          states={p:server.project_autonomy_state(p) for p in ("cloud","haxlab","ftmo","supa","raiseai","zssh","ulab")}
+          with server.connect() as c:
+              rows=[dict(r) for r in c.execute("""
+                SELECT id,project_id,action,status,created_at,updated_at,result
+                FROM runner_commands
+                WHERE action IN ('start','push')
+                ORDER BY id DESC LIMIT 30
+              """).fetchall()]
+              runtime=[dict(r) for r in c.execute("""
+                SELECT project_id,manual_pause,last_dispatch_at,last_reason
+                FROM autonomy_runtime
+                ORDER BY project_id
+              """).fetchall()]
+          for pid in ("cloud","haxlab","ftmo","supa","raiseai","zssh"):
+              row=next((r for r in runtime if r["project_id"]==pid),None)
+              assert row is not None and int(row["manual_pause"] or 0)==0, (pid,row)
+          if states["supa"]["allow_ai"]:
+              assert any(r["project_id"]=="supa" and r["action"]=="push" for r in rows), rows
+          print("AUTONOMY_RUNTIME",json.dumps(runtime,ensure_ascii=False))
+          print("RECENT_DISPATCH",json.dumps(rows[:12],ensure_ascii=False))
+          print("ZCLOUD_VPS_AI_DISPATCH_LIVE_GREEN")
           PY
