@@ -1,0 +1,72 @@
+name: Temporary zCloud zero-debounce deploy
+
+on:
+  push:
+    branches: [zcloud-zero-debounce-deploy-20260929]
+    paths:
+      - .github/workflows/zcloud-zero-debounce-deploy-temp.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: temporary-zcloud-zero-debounce-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Promote zero-debounce zCloud through HaxLab VPS runner
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    steps:
+      - name: Promote exact green zCloud main and verify immediate continuation contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=/home/ubuntu/zennay-cloud
+          EXPECTED=fbbfe2d163eb52b354ec03b21d02a98a86ea9377
+          TMP_BASE="$(mktemp -d /tmp/zcloud-zero-debounce.XXXXXX)"
+          CANDIDATE="$TMP_BASE/candidate"
+          cleanup() {
+            git -C "$ROOT" worktree remove --force "$CANDIDATE" >/dev/null 2>&1 || true
+            rm -rf "$TMP_BASE"
+          }
+          trap cleanup EXIT
+
+          git -C "$ROOT" fetch --prune origin main
+          git -C "$ROOT" cat-file -e "$EXPECTED^{commit}"
+          git -C "$ROOT" worktree add --detach "$CANDIDATE" "$EXPECTED"
+          test "$(git -C "$CANDIDATE" rev-parse HEAD)" = "$EXPECTED"
+
+          python3 "$CANDIDATE/scripts/zcloud_transactional_promote.py" \
+            --candidate "$CANDIDATE" \
+            --root "$ROOT" \
+            --path server.py \
+            --path autonomy-policy.json \
+            --actor "haxlab-runner-zcloud-zero-debounce" \
+            --json
+
+          /home/ubuntu/.local/bin/zcloud-healthcheck
+          curl -fsS http://127.0.0.1:8765/api/runner-targets >/tmp/zcloud-zero-debounce-targets.json
+          python3 - <<'PY'
+          import json
+          p=json.load(open("/tmp/zcloud-zero-debounce-targets.json"))
+          a=p.get("global_allocation") or {}
+          assert int(a.get("limit") or 0)==2, a
+          assert int(a.get("dispatch_cooldown_seconds") or 0)==0, a
+          assert a.get("dispatch_rule")=="wait_until_generation_finished_then_continue", a
+          active=[w for w in (p.get("projects") or {}).values() if w.get("active")]
+          assert len(active)<=2, active
+          for w in active:
+              assert int(w.get("ai_dispatch_interval_seconds") or 0)==0, w
+              assert int(w.get("auto_continue_delay_seconds") or 0)==0, w
+          print(json.dumps({
+              "ok":True,
+              "limit":a.get("limit"),
+              "dispatch_cooldown_seconds":a.get("dispatch_cooldown_seconds"),
+              "dispatch_rule":a.get("dispatch_rule"),
+              "active_worker_count":len(active),
+              "active_workers":[w.get("project_id") for w in active],
+          },sort_keys=True))
+          print("ZCLOUD_ZERO_DEBOUNCE_LIVE_GREEN")
+          PY
