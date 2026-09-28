@@ -116,6 +116,48 @@ jobs:
             --actor "haxlab-runner-zcloud-bridge" \
             --json
 
+          # Browser reloads are safe only between AI cycles. Wait until every
+          # currently allocated global slot is idle for a stable window.
+          python3 - <<'PY'
+          import sqlite3,time,sys
+          from pathlib import Path
+          db=Path("/home/ubuntu/zennay-cloud/history.db")
+          deadline=time.time()+240
+          stable_since=None
+          while time.time()<deadline:
+              conn=sqlite3.connect(f"file:{db}?mode=ro",uri=True,timeout=3)
+              conn.row_factory=sqlite3.Row
+              slots=[dict(r) for r in conn.execute(
+                  "SELECT slot,project_id,worker_slot FROM ai_global_slots ORDER BY slot"
+              )]
+              states=[]
+              for slot in slots:
+                  p,s=slot["project_id"],slot["worker_slot"]
+                  latest=conn.execute(
+                      "SELECT id,event,generating,sending FROM runner_events "
+                      "WHERE project_id=? AND worker_slot=? ORDER BY id DESC LIMIT 1",(p,s)
+                  ).fetchone()
+                  last_start=conn.execute(
+                      "SELECT MAX(id) FROM runner_events WHERE project_id=? AND worker_slot=? AND event='generation-started'",(p,s)
+                  ).fetchone()[0] or 0
+                  last_finish=conn.execute(
+                      "SELECT MAX(id) FROM runner_events WHERE project_id=? AND worker_slot=? AND event='generation-finished'",(p,s)
+                  ).fetchone()[0] or 0
+                  busy=(not latest) or bool(latest["generating"]) or bool(latest["sending"]) or last_start>last_finish
+                  states.append((p,s,busy))
+              conn.close()
+              if slots and len(slots)<=2 and all(not x[2] for x in states):
+                  stable_since=stable_since or time.time()
+                  if time.time()-stable_since>=8:
+                      print({"safe_idle":True,"slots":[f"{x[0]}::w{x[1]}" for x in states]})
+                      sys.exit(0)
+              else:
+                  stable_since=None
+              time.sleep(2)
+          print({"safe_idle":False,"reason":"allocated workers did not become idle"})
+          sys.exit(75)
+          PY
+
           python3 "$CANDIDATE/scripts/zcloud_transactional_promote.py" \
             --candidate "$CANDIDATE" \
             --root "$ROOT" \
