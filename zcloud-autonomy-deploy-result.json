@@ -1,0 +1,6 @@
+{
+  "job_status": "failure",
+  "live_error": "HTTP Error 404: Not Found",
+  "observed_at": "2026-09-28T00:17:11.391451+00:00",
+  "zcloud_sha": "2a93899cfc96232543028b4ba7e18a45a33d0976"
+}
