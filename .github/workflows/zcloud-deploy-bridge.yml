@@ -1,0 +1,54 @@
+name: Temporary zCloud production bridge
+
+on:
+  push:
+    branches: [zcloud-deploy-bridge-20260929]
+    paths:
+      - .github/workflows/zcloud-deploy-bridge.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: temporary-zcloud-deploy-bridge
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Promote zCloud through HaxLab VPS runner
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    steps:
+      - name: Promote exact validated zCloud main
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=/home/ubuntu/zennay-cloud
+          EXPECTED=22646e674a705e9266cb887f72fcefd828b9f5a8
+          TMP_BASE="$(mktemp -d /tmp/zcloud-bridge.XXXXXX)"
+          CANDIDATE="$TMP_BASE/candidate"
+          cleanup() {
+            git -C "$ROOT" worktree remove --force "$CANDIDATE" >/dev/null 2>&1 || true
+            rm -rf "$TMP_BASE"
+          }
+          trap cleanup EXIT
+
+          git -C "$ROOT" fetch --prune origin main
+          git -C "$ROOT" cat-file -e "$EXPECTED^{commit}"
+          git -C "$ROOT" worktree add --detach "$CANDIDATE" "$EXPECTED"
+          test "$(git -C "$CANDIDATE" rev-parse HEAD)" = "$EXPECTED"
+
+          python3 "$CANDIDATE/scripts/zcloud_transactional_promote.py" \
+            --candidate "$CANDIDATE" \
+            --root "$ROOT" \
+            --path server.py \
+            --path autonomy-policy.json \
+            --actor "haxlab-runner-zcloud-bridge" \
+            --json
+
+          python3 "$CANDIDATE/scripts/zcloud_transactional_promote.py" \
+            --candidate "$CANDIDATE" \
+            --root "$ROOT" \
+            --path firefox-extension/background.js \
+            --actor "haxlab-runner-zcloud-bridge" \
+            --json
