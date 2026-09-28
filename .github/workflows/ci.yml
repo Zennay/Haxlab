@@ -26,63 +26,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  vps-cleanup-once:
-    name: One-time safe VPS cleanup
-    if: github.event_name == 'pull_request' && github.head_ref == 'ops/vps-cleanup-20260929'
-    runs-on: [self-hosted, haxlab]
-    timeout-minutes: 10
-
-    steps:
-      - name: Clean safe disposable data and report reclaimed space
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          HOST="$(hostname)"
-          echo "Host: $HOST"
-          if [[ "$HOST" != "vps-bb300bba" ]]; then
-            echo "Refusing cleanup on unexpected host: $HOST" >&2
-            exit 1
-          fi
-
-          BEFORE="$(df -B1 --output=avail / | tail -n 1 | tr -d ' ')"
-          echo "=== BEFORE ==="
-          df -h /
-          sudo journalctl --disk-usage || true
-          sudo du -sh /var/cache/apt/archives 2>/dev/null || true
-          for p in /home/ubuntu/.cache/pip /home/ubuntu/.cache/uv /home/haxlab/.cache/pip /home/haxlab/.cache/uv; do
-            [ -e "$p" ] && sudo du -sh "$p" 2>/dev/null || true
-          done
-
-          echo "=== CLEANUP ==="
-          sudo apt-get clean
-          sudo journalctl --vacuum-time=14d || true
-          sudo systemd-tmpfiles --clean || true
-
-          for p in /home/ubuntu/.cache/pip /home/ubuntu/.cache/uv /home/haxlab/.cache/pip /home/haxlab/.cache/uv; do
-            [ ! -e "$p" ] || sudo rm -rf -- "$p"
-          done
-
-          for root in /opt/haxlab /opt/zcloud /opt/ftmo /opt/raise-ai /opt/raiseai; do
-            [ -d "$root" ] || continue
-            sudo find "$root" -xdev -type d -name __pycache__ -mtime +7 -prune -exec rm -rf -- {} + 2>/dev/null || true
-            sudo find "$root" -xdev -type f -name '*.pyc' -mtime +7 -delete 2>/dev/null || true
-          done
-
-          AFTER="$(df -B1 --output=avail / | tail -n 1 | tr -d ' ')"
-          FREED="$((AFTER - BEFORE))"
-
-          echo "=== AFTER ==="
-          df -h /
-          sudo journalctl --disk-usage || true
-          if command -v numfmt >/dev/null 2>&1; then
-            echo "Reclaimed: $(numfmt --to=iec-i --suffix=B "$FREED")"
-          else
-            echo "Reclaimed bytes: $FREED"
-          fi
-
-          echo "Protected: databases, HaxLab replay/state datasets, Docker images/containers/volumes, Git repositories, runner workspaces, zCloud state, FTMO research state, Raise AI state."
-
   test:
     name: Python tests
     runs-on: [self-hosted, haxlab]
