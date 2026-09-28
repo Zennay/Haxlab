@@ -28,6 +28,16 @@ jobs:
           clean: true
           fetch-depth: 1
 
+      - name: Diagnose zCloud pre-change gate
+        shell: bash
+        run: |
+          set +e
+          /home/ubuntu/.local/bin/zcloud-prechange-guard \
+            --root /home/ubuntu/zennay-cloud \
+            --state /home/ubuntu/.local/state/zcloud/recovery \
+            --json
+          exit 0
+
       - name: Promote backend and autonomy policy
         shell: bash
         run: |
