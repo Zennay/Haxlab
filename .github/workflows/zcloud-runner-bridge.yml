@@ -49,6 +49,10 @@ jobs:
               "status",
               "deploy",
               "champion-info",
+              "champion-runtime",
+              "live-play-probe",
+              "live-play-stop",
+              "live-play-status",
               "restart-analyzer",
               "retry-failed-analysis",
               "feature-smoke",
@@ -235,6 +239,33 @@ jobs:
                       raise SystemExit("lease_seconds must be between 60 and 3600")
                   body["lease_seconds"] = lease_seconds
               result["response"] = request_json("POST", "/api/task-claims", body)
+
+          elif operation == "live-play-start":
+              room_ref = str(payload.get("room_id") or payload.get("room_url") or "").strip()
+              room_id = room_ref
+              if "://" in room_ref or "?" in room_ref:
+                  parsed = urllib.parse.urlparse(room_ref)
+                  values = urllib.parse.parse_qs(parsed.query).get("c") or []
+                  room_id = str(values[0] if values else "").strip()
+              safe_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+              if not (4 <= len(room_id) <= 80) or any(ch not in safe_chars for ch in room_id):
+                  raise SystemExit("payload.room_id/room_url does not contain a safe HaxBall room id")
+              proc = subprocess.run(
+                  ["sudo", "/usr/local/sbin/haxlab-actions-control", "live-play-start", room_id],
+                  text=True,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.STDOUT,
+                  timeout=120,
+                  check=False,
+              )
+              result["room_id"] = room_id
+              result["exit_code"] = proc.returncode
+              result["output"] = proc.stdout[-20000:]
+              if proc.returncode != 0:
+                  print("ZCLOUD_BRIDGE_RESULT_BEGIN")
+                  print(json.dumps(result, indent=2, sort_keys=True))
+                  print("ZCLOUD_BRIDGE_RESULT_END")
+                  raise SystemExit(proc.returncode)
 
           elif operation == "haxlab-action":
               action = str(payload.get("action") or "")
