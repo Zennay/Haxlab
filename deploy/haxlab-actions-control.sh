@@ -224,21 +224,24 @@ PY
 
   live-host-start)
     token_file="/var/lib/haxlab/state/haxball-headless-token"
-    if [[ ! -s "${token_file}" ]]; then
-      echo "headless_token=missing"
-      echo "Create a HaxBall headless token at https://www.haxball.com/headlesstoken and store it securely in ${token_file}."
-      exit 3
-    fi
-    token="$(tr -d '\r\n' <"${token_file}")"
-    if [[ ${#token} -lt 20 || ${#token} -gt 512 ]]; then
-      echo "headless_token=invalid_length" >&2
-      exit 3
+    token=""
+    if [[ -s "${token_file}" ]]; then
+      token="$(tr -d '\r\n' <"${token_file}")"
+      if [[ ${#token} -lt 20 || ${#token} -gt 512 ]]; then
+        echo "headless_token=invalid_length" >&2
+        exit 3
+      fi
+      echo "headless_token=present"
+    else
+      echo "headless_token=missing_trying_without_token"
     fi
     env_file="/var/lib/haxlab/state/live-play.env"
     tmp_file="$(mktemp)"
     {
       printf 'HAXLAB_LIVE_MODE=%s\n' "host"
-      printf 'HAXLAB_HEADLESS_TOKEN=%s\n' "${token}"
+      if [[ -n "${token}" ]]; then
+        printf 'HAXLAB_HEADLESS_TOKEN=%s\n' "${token}"
+      fi
       printf 'HAXLAB_HOST_ROOM_NAME=%s\n' "HaxLab AI Challenge"
       printf 'HAXLAB_HOST_MAX_PLAYERS=%s\n' "4"
       printf 'HAXLAB_HOST_PUBLIC=%s\n' "0"
