@@ -13,27 +13,32 @@ jobs:
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 5
     steps:
-      - name: Measure actual compute and progress
+      - name: Pause HaxLab training for Firefox headroom
         shell: bash
         run: |
           set -uo pipefail
-          echo "=== TIME/LOAD ==="; date -Is; uptime
-          echo "=== CPU TOP ==="; ps -eo pid,ppid,user,%cpu,%mem,etime,stat,comm,args --sort=-%cpu | head -30
-          echo "=== MEMORY ==="; free -h
-          echo "=== DISK ==="; df -h /
-          echo "=== HAXLAB ==="
-          systemctl is-active haxlab-ingest.service haxlab-worker.service haxlab-analyzer.service haxlab-autonomy.timer 2>/dev/null || true
-          systemctl list-timers --all --no-pager | grep -Ei 'haxlab|ftmo' || true
-          sudo -u haxlab haxlab-status 2>&1 || true
-          echo "=== HAXLAB RECENT OUTPUT ==="
-          find /var/lib/haxlab/derived -type f -mmin -120 -printf '%TY-%Tm-%TdT%TH:%TM:%TS %s %p\n' 2>/dev/null | sort | tail -40
-          echo "=== FTMO ==="
-          systemctl is-active ftmo-autonomous.timer 2>/dev/null || true
-          systemctl show ftmo-autonomous.timer -p ActiveState -p SubState -p LastTriggerUSec -p NextElapseUSecRealtime -p Persistent 2>/dev/null || true
-          systemctl show ftmo-autonomous.service -p ActiveState -p SubState -p Result -p ExecMainStatus 2>/dev/null || true
-          cat /opt/ftmo-autonomous/.scratch/autonomy/status.json 2>/dev/null || true
-          echo "=== FTMO RECENT OUTPUT ==="
-          find /opt/ftmo-autonomous/.scratch -type f -mmin -120 -printf '%TY-%Tm-%TdT%TH:%TM:%TS %s %p\n' 2>/dev/null | sort | tail -50
-          echo "=== FAILED ==="; systemctl --failed --no-pager || true
+          echo "=== BEFORE ==="
+          uptime
+          free -h
+          ps -eo pid,ppid,user,%cpu,%mem,etime,stat,comm,args --sort=-%cpu | head -20
 
-# manual probe trigger 2026-09-30
+          echo "=== PAUSE HAXLAB AUTONOMY/TRAINING ==="
+          sudo systemctl stop haxlab-autonomy.timer 2>/dev/null || true
+          sudo systemctl stop haxlab-autonomy.service 2>/dev/null || true
+          sudo pkill -TERM -f '/opt/haxlab/.venv/bin/haxlab-train-bc' 2>/dev/null || true
+          sleep 5
+          if pgrep -af '/opt/haxlab/.venv/bin/haxlab-train-bc' >/dev/null 2>&1; then
+            echo "Trainer still alive after TERM; sending KILL"
+            sudo pkill -KILL -f '/opt/haxlab/.venv/bin/haxlab-train-bc' 2>/dev/null || true
+            sleep 2
+          fi
+
+          echo "=== AFTER ==="
+          systemctl is-active haxlab-autonomy.timer 2>/dev/null || true
+          systemctl is-active haxlab-autonomy.service 2>/dev/null || true
+          pgrep -af '/opt/haxlab/.venv/bin/haxlab-train-bc' || true
+          uptime
+          free -h
+          ps -eo pid,ppid,user,%cpu,%mem,etime,stat,comm,args --sort=-%cpu | head -20
+
+# temporary Firefox headroom action 2026-09-30
