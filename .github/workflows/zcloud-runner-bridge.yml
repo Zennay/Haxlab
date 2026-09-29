@@ -47,6 +47,8 @@ jobs:
           ALLOWED_WORKER = "haxlab::w1"
           ALLOWED_HAXLAB_ACTIONS = {
               "status",
+              "deploy",
+              "champion-info",
               "restart-analyzer",
               "retry-failed-analysis",
               "feature-smoke",
