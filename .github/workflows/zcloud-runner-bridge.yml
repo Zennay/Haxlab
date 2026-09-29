@@ -158,7 +158,7 @@ jobs:
               if isinstance(targets_body, dict):
                   projects = targets_body.get("projects") or {}
                   if isinstance(projects, dict):
-                      project_target = projects.get(project)
+                      project_target = projects.get(worker)
 
               result.update({
                   "zcloud_status": status,
