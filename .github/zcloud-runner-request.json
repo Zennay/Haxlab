@@ -5,7 +5,7 @@
   "worker_id": "haxlab::w1",
   "owner_id": "chatgpt:haxlab:w1",
   "payload": {
-    "action": "live-host-start",
-    "reason": "host a playable HaxLab AI challenge room now"
+    "action": "deploy",
+    "reason": "deploy encrypted live-host token handoff"
   }
 }
