@@ -8,7 +8,7 @@ on:
 
 permissions:
   actions: write
-  contents: read
+  contents: write
 
 concurrency:
   group: temporary-zcloud-runner-registration-probe
@@ -19,6 +19,11 @@ jobs:
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 8
     steps:
+      - name: Check out probe branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
       - name: Acquire exact zCloud deploylane claim
         shell: bash
         run: |
@@ -38,70 +43,96 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "ZCLOUD_NATIVE_RUNNER_DIAGNOSTIC_BEGIN"
-          echo "host=$(hostname)"
-          echo "main_sha=$ZCLOUD_MAIN_SHA"
-
           native_units="$(systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '/actions\.runner\.Zennay-zCloud|actions\.runner\.Zennay-zcloud/ {print $1}' | paste -sd, - || true)"
-          if [[ -n "$native_units" ]]; then
-            echo "native_runner_units=$native_units"
-            while IFS= read -r unit; do
-              [[ -n "$unit" ]] || continue
-              state="$(systemctl is-active "$unit" 2>/dev/null || true)"
-              echo "native_runner_unit_state=$unit:$state"
-            done < <(tr ',' '\n' <<<"$native_units")
-          else
-            echo "native_runner_units=NONE"
-          fi
-
           runner_roots="$(find /home/ubuntu -maxdepth 3 -type f -name .runner -printf '%h\n' 2>/dev/null | sort -u | paste -sd, - || true)"
-          echo "runner_roots=${runner_roots:-NONE}"
+          echo "NATIVE_UNITS=$native_units" >> "$GITHUB_ENV"
+          echo "RUNNER_ROOTS=$runner_roots" >> "$GITHUB_ENV"
 
+          gh_authenticated=no
+          gh_reg_available=no
           if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-            echo "gh_authenticated=yes"
-            if gh api -X POST repos/Zennay/zCloud/actions/runners/registration-token --silent >/tmp/zcloud-native-registration-token.json 2>/tmp/zcloud-native-registration-token.err; then
+            gh_authenticated=yes
+            if gh api -X POST repos/Zennay/zCloud/actions/runners/registration-token --silent >/tmp/zcloud-native-registration-token.json 2>/dev/null; then
               python3 - <<'PY'
 import json
 p=json.load(open("/tmp/zcloud-native-registration-token.json"))
 assert isinstance(p.get("token"), str) and p["token"]
-print("ZCLOUD_NATIVE_REGISTRATION_TOKEN_AVAILABLE")
 PY
-              rm -f /tmp/zcloud-native-registration-token.json
-            else
-              echo "ZCLOUD_NATIVE_REGISTRATION_TOKEN_UNAVAILABLE_VIA_GH"
-              rm -f /tmp/zcloud-native-registration-token.json /tmp/zcloud-native-registration-token.err
+              gh_reg_available=yes
             fi
-          else
-            echo "gh_authenticated=no"
           fi
+          rm -f /tmp/zcloud-native-registration-token.json
+          echo "GH_AUTHENTICATED=$gh_authenticated" >> "$GITHUB_ENV"
+          echo "GH_REG_AVAILABLE=$gh_reg_available" >> "$GITHUB_ENV"
 
-          code="$(curl -sS -o /tmp/zcloud-registration-response.json -w '%{http_code}'             -X POST             -H "Accept: application/vnd.github+json"             -H "Authorization: Bearer ${{ github.token }}"             -H "X-GitHub-Api-Version: 2022-11-28"             https://api.github.com/repos/Zennay/zCloud/actions/runners/registration-token)"
+          code="$(curl -sS -o /tmp/zcloud-registration-response.json -w '%{http_code}'             -X POST             -H "Accept: application/vnd.github+json"             -H "Authorization: Bearer ${{ github.token }}"             -H "X-GitHub-Api-Version: 2022-11-28"             https://api.github.com/repos/Zennay/zCloud/actions/runners/registration-token || true)"
           rm -f /tmp/zcloud-registration-response.json
-          echo "workflow_token_registration_http=$code"
+          echo "WORKFLOW_TOKEN_HTTP=$code" >> "$GITHUB_ENV"
 
-          python3 - <<'PY'
-import json, urllib.request
-url="https://api.github.com/repos/Zennay/zCloud/actions/workflows/zcloud-vps-execution-probe.yml/runs?per_page=5"
-req=urllib.request.Request(url, headers={"Accept":"application/vnd.github+json","User-Agent":"zcloud-runner-probe"})
-with urllib.request.urlopen(req, timeout=15) as r:
-    payload=json.load(r)
-for run in payload.get("workflow_runs", [])[:5]:
-    print("native_probe_run=" + json.dumps({
-        "id": run.get("id"),
-        "status": run.get("status"),
-        "conclusion": run.get("conclusion"),
-        "head_sha": run.get("head_sha"),
-        "event": run.get("event"),
-        "created_at": run.get("created_at"),
-    }, sort_keys=True))
-PY
-          echo "ZCLOUD_NATIVE_RUNNER_DIAGNOSTIC_END"
+          curl -fsS             -H "Accept: application/vnd.github+json"             -H "User-Agent: zcloud-runner-probe"             "https://api.github.com/repos/Zennay/zCloud/actions/workflows/zcloud-vps-execution-probe.yml/runs?per_page=5"             -o /tmp/zcloud-native-runs.json
 
       - name: Verify exact zCloud deploylane claim
         shell: bash
         run: |
           set -euo pipefail
           env -u GITHUB_TOKEN python3 "$ZCLOUD_PROBE_CANDIDATE/scripts/zcloud_vps_deploylane_coordination.py" verify
+
+      - name: Persist sanitized VPS diagnostic receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ops
+          python3 - <<'PY'
+import json, os, subprocess
+from datetime import datetime, timezone
+
+units=[x for x in os.environ.get("NATIVE_UNITS","").split(",") if x]
+unit_states={}
+for unit in units:
+    p=subprocess.run(["systemctl","is-active",unit],text=True,capture_output=True)
+    unit_states[unit]=(p.stdout or p.stderr).strip() or "unknown"
+
+try:
+    runs=json.load(open("/tmp/zcloud-native-runs.json"))
+except Exception:
+    runs={}
+recent=[]
+for run in runs.get("workflow_runs",[])[:5]:
+    recent.append({
+        "id":run.get("id"),
+        "status":run.get("status"),
+        "conclusion":run.get("conclusion"),
+        "head_sha":run.get("head_sha"),
+        "event":run.get("event"),
+        "created_at":run.get("created_at"),
+    })
+
+receipt={
+    "event":"ZCLOUD_NATIVE_RUNNER_DIAGNOSTIC",
+    "recorded_at":datetime.now(timezone.utc).isoformat(),
+    "haxlab_workflow_run_id":os.environ.get("GITHUB_RUN_ID"),
+    "haxlab_commit":os.environ.get("GITHUB_SHA"),
+    "host":subprocess.check_output(["hostname"],text=True).strip(),
+    "zcloud_main_sha":os.environ.get("ZCLOUD_MAIN_SHA"),
+    "claim_key":"cloud-permanent-vps-first-deploylane",
+    "worker_id":"cloud::w1",
+    "claim_verified":True,
+    "native_runner_units":units,
+    "native_runner_unit_states":unit_states,
+    "runner_roots":[x for x in os.environ.get("RUNNER_ROOTS","").split(",") if x],
+    "gh_authenticated":os.environ.get("GH_AUTHENTICATED")=="yes",
+    "gh_registration_token_available":os.environ.get("GH_REG_AVAILABLE")=="yes",
+    "workflow_token_registration_http":os.environ.get("WORKFLOW_TOKEN_HTTP"),
+    "recent_native_probe_runs":recent,
+}
+open("ops/zcloud-runner-registration-probe-receipt.json","w").write(json.dumps(receipt,indent=2,sort_keys=True)+"\n")
+print(json.dumps(receipt,sort_keys=True))
+PY
+          git config user.name "zCloud VPS probe"
+          git config user.email "actions@users.noreply.github.com"
+          git add ops/zcloud-runner-registration-probe-receipt.json
+          git commit -m "Record native zCloud runner diagnostic receipt"
+          git push origin HEAD:ops/zcloud-runner-registration-probe-20260929
 
       - name: Release exact zCloud deploylane claim
         if: always()
