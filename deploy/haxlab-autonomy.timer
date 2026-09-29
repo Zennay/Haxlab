@@ -1,9 +1,9 @@
 [Unit]
-Description=Run HaxLab autonomy reconciliation every ten minutes
+Description=Run HaxLab autonomy reconciliation continuously
 
 [Timer]
 OnBootSec=3min
-OnUnitActiveSec=10min
+OnUnitActiveSec=1min
 AccuracySec=30s
 Persistent=true
 Unit=haxlab-autonomy.service
