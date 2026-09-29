@@ -72,3 +72,5 @@ jobs:
           print(json.dumps(payload,indent=2,default=str))
           PY
           curl -fsS http://127.0.0.1:8765/api/runner-targets | python3 -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps({"max_workers":d.get("max_workers"),"global_allocation":d.get("global_allocation")}, indent=2))'
+
+# haxlab-chat-sqlite-access-check-1
