@@ -107,11 +107,17 @@ if [[ ! -s "${METRICS}" ]]; then
   fi
 fi
 
-# The baseline is allowed to exist autonomously, but promotion remains sealed
-# until a closed-loop evaluator proves rollout stability and guard independence.
-if [[ ! -f "${APP_DIR}/tools/elite_closed_loop_arena_v2.js" ]]; then
-  write_status "NEEDS_AI" "closed_loop_executor_not_on_main" "BC baseline is trained and preserved at ${MODEL_DIR}; merge/audit Arena v2 before autonomous evaluation or promotion. ${FAILURE_NOTE}"
-  exit 0
-fi
-
-write_status "NEEDS_AI" "research_gate_ready" "BC baseline is trained and Arena v2 code is present, but autonomous evaluation/promotion remains fail-closed until the executor is explicitly audited. ${FAILURE_NOTE}"
+# The generation executor owns the rest of the loop. It creates an immutable
+# preregistration, trains one bounded candidate, evaluates the frozen holdout,
+# records promotion/rejection evidence, mines failures, and always rolls over
+# to the next generation. No ChatGPT or external AI call is required.
+write_status "RUNNING" "generation_executor" "Starting autonomous generation rollover; ${FAILURE_NOTE}"
+"${APP_DIR}/.venv/bin/haxlab-generation-loop" \
+  --app-dir "${APP_DIR}" \
+  --state-dir "${STATE_DIR}" \
+  --models-dir "${MODELS_DIR}" \
+  --derived-dir "${DERIVED_DIR}" \
+  --analysis-version "${ANALYSIS_VERSION}" \
+  --manifest "${MANIFEST}" \
+  --shard-root "${SHARD_ROOT}" \
+  --max-generations-per-tick 1
