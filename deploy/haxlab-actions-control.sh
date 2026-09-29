@@ -6,7 +6,7 @@ STATE_DB="${HAXLAB_STATE_DB:-/var/lib/haxlab/state/haxlab.sqlite3}"
 CURRENT_ANALYZER_VERSION="$("${APP_DIR}/.venv/bin/python" -c 'from haxlab.runtime.state import CURRENT_ANALYZER_VERSION; print(CURRENT_ANALYZER_VERSION)')"
 
 usage() {
-  echo "Usage: haxlab-actions-control {status|deploy|champion-info|champion-runtime|live-play-probe|live-play-start ROOM_ID|live-play-stop|live-play-status|restart-analyzer|retry-failed-analysis|feature-smoke|player-stats|skill-leaderboard|training-manifest|analyzer-logs|failed-analysis}" >&2
+  echo "Usage: haxlab-actions-control {status|deploy|champion-info|champion-runtime|live-play-probe|live-play-start ROOM_ID|live-play-stop|live-play-status|live-host-prereq|live-host-start|live-host-status|restart-analyzer|retry-failed-analysis|feature-smoke|player-stats|skill-leaderboard|training-manifest|analyzer-logs|failed-analysis}" >&2
   exit 2
 }
 
@@ -200,6 +200,89 @@ PY
 
   live-play-status)
     systemctl --no-pager --full status haxlab-live-bot.service || true
+    echo
+    if [[ -s /var/lib/haxlab/state/live-room-link ]]; then
+      echo "=== room link ==="
+      cat /var/lib/haxlab/state/live-room-link
+      echo
+    fi
+    journalctl -u haxlab-live-bot.service -n 120 --no-pager || true
+    ;;
+
+  live-host-prereq)
+    token_file="/var/lib/haxlab/state/haxball-headless-token"
+    if [[ -s "${token_file}" ]]; then
+      token_len="$(tr -d '\r\n' <"${token_file}" | wc -c | tr -d ' ')"
+      echo "headless_token=present"
+      echo "headless_token_length=${token_len}"
+    else
+      echo "headless_token=missing"
+      echo "token_url=https://www.haxball.com/headlesstoken"
+      exit 3
+    fi
+    ;;
+
+  live-host-start)
+    token_file="/var/lib/haxlab/state/haxball-headless-token"
+    if [[ ! -s "${token_file}" ]]; then
+      echo "headless_token=missing"
+      echo "Create a HaxBall headless token at https://www.haxball.com/headlesstoken and store it securely in ${token_file}."
+      exit 3
+    fi
+    token="$(tr -d '\r\n' <"${token_file}")"
+    if [[ ${#token} -lt 20 || ${#token} -gt 512 ]]; then
+      echo "headless_token=invalid_length" >&2
+      exit 3
+    fi
+    env_file="/var/lib/haxlab/state/live-play.env"
+    tmp_file="$(mktemp)"
+    {
+      printf 'HAXLAB_LIVE_MODE=%s\n' "host"
+      printf 'HAXLAB_HEADLESS_TOKEN=%s\n' "${token}"
+      printf 'HAXLAB_HOST_ROOM_NAME=%s\n' "HaxLab AI Challenge"
+      printf 'HAXLAB_HOST_MAX_PLAYERS=%s\n' "4"
+      printf 'HAXLAB_HOST_PUBLIC=%s\n' "0"
+      printf 'HAXLAB_ROOM_LINK_FILE=%s\n' "/var/lib/haxlab/state/live-room-link"
+      printf 'HAXLAB_PLAYER_NAME=%s\n' "HaxLab AI"
+      printf 'HAXLAB_PLAYER_AVATAR=%s\n' "AI"
+      printf 'HAXLAB_LIVE_ROLE=%s\n' "st"
+      printf 'HAXLAB_INFER_EVERY_TICKS=%s\n' "2"
+    } >"${tmp_file}"
+    install -o haxlab -g haxlab -m 0600 "${tmp_file}" "${env_file}"
+    rm -f "${tmp_file}"
+    rm -f /var/lib/haxlab/state/live-room-link
+    systemctl restart haxlab-live-bot.service
+    for _ in {1..15}; do
+      if [[ -s /var/lib/haxlab/state/live-room-link ]]; then
+        break
+      fi
+      if ! systemctl is-active --quiet haxlab-live-bot.service; then
+        break
+      fi
+      sleep 1
+    done
+    systemctl --no-pager --full status haxlab-live-bot.service || true
+    echo
+    if [[ -s /var/lib/haxlab/state/live-room-link ]]; then
+      echo "=== room link ==="
+      cat /var/lib/haxlab/state/live-room-link
+    else
+      echo "room_link=pending_or_failed"
+    fi
+    echo
+    journalctl -u haxlab-live-bot.service -n 120 --no-pager || true
+    test -s /var/lib/haxlab/state/live-room-link
+    ;;
+
+  live-host-status)
+    systemctl --no-pager --full status haxlab-live-bot.service || true
+    echo
+    if [[ -s /var/lib/haxlab/state/live-room-link ]]; then
+      echo "=== room link ==="
+      cat /var/lib/haxlab/state/live-room-link
+    else
+      echo "room_link=missing"
+    fi
     echo
     journalctl -u haxlab-live-bot.service -n 120 --no-pager || true
     ;;
