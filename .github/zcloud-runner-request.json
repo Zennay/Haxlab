@@ -5,7 +5,7 @@
   "worker_id": "haxlab::w1",
   "owner_id": "chatgpt:haxlab:w1",
   "payload": {
-    "action": "deploy",
-    "reason": "deploy encrypted live-host token handoff"
+    "action": "live-host-keygen",
+    "reason": "prepare encrypted one-time handoff for the official HaxBall headless token"
   }
 }
