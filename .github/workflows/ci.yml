@@ -20,6 +20,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 concurrency:
   group: haxlab-ci-${{ github.event_name }}-${{ github.ref }}
@@ -98,3 +99,80 @@ jobs:
         run: |
           set -euo pipefail
           sudo /usr/local/sbin/haxlab-actions-control feature-smoke
+
+  zcloud_coordination_probe:
+    name: zCloud coordination probe
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 8
+    steps:
+      - name: Run exact deploylane coordination preflight
+        shell: bash
+        run: |
+          set +e
+          ROOT=/home/ubuntu/zennay-cloud
+          TMP_BASE="$(mktemp -d /tmp/zcloud-claim-probe.XXXXXX)"
+          CANDIDATE="$TMP_BASE/candidate"
+          RECEIPT="$RUNNER_TEMP/zcloud-coordination-receipt.md"
+          FETCH_EXIT=99
+          WORKTREE_EXIT=99
+          ACQUIRE_EXIT=99
+          VERIFY_EXIT=99
+          RELEASE_EXIT=99
+          MAIN_SHA=""
+
+          git -C "$ROOT" fetch --prune origin main >/tmp/zcloud-probe-fetch.log 2>&1
+          FETCH_EXIT=$?
+          if [[ "$FETCH_EXIT" == "0" ]]; then
+            MAIN_SHA="$(git -C "$ROOT" rev-parse origin/main 2>/dev/null)"
+            git -C "$ROOT" worktree add --detach "$CANDIDATE" "$MAIN_SHA" >/tmp/zcloud-probe-worktree.log 2>&1
+            WORKTREE_EXIT=$?
+          fi
+
+          if [[ "$WORKTREE_EXIT" == "0" ]]; then
+            env -u GITHUB_TOKEN python3 "$CANDIDATE/scripts/zcloud_vps_deploylane_coordination.py" acquire >/tmp/zcloud-probe-acquire.log 2>&1
+            ACQUIRE_EXIT=$?
+            if [[ "$ACQUIRE_EXIT" == "0" ]]; then
+              env -u GITHUB_TOKEN python3 "$CANDIDATE/scripts/zcloud_vps_deploylane_coordination.py" verify >/tmp/zcloud-probe-verify.log 2>&1
+              VERIFY_EXIT=$?
+              env -u GITHUB_TOKEN python3 "$CANDIDATE/scripts/zcloud_vps_deploylane_coordination.py" release >/tmp/zcloud-probe-release.log 2>&1
+              RELEASE_EXIT=$?
+            fi
+          fi
+
+          NATIVE_UNITS="$(systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '/actions\.runner\.Zennay-zCloud|actions\.runner\.Zennay-zcloud/ {print $1}' | paste -sd, -)"
+          [[ -n "$NATIVE_UNITS" ]] || NATIVE_UNITS="NONE"
+
+          {
+            echo "### zCloud coordination probe"
+            echo "- workflow_run_id: ${GITHUB_RUN_ID}"
+            echo "- host: $(hostname)"
+            echo "- zcloud_main_sha: ${MAIN_SHA:-unknown}"
+            echo "- claim_key: cloud-permanent-vps-first-deploylane"
+            echo "- worker_id: cloud::w1"
+            echo "- fetch_exit: $FETCH_EXIT"
+            echo "- worktree_exit: $WORKTREE_EXIT"
+            echo "- acquire_exit: $ACQUIRE_EXIT"
+            echo "- verify_exit: $VERIFY_EXIT"
+            echo "- release_exit: $RELEASE_EXIT"
+            echo "- native_zcloud_runner_units: $NATIVE_UNITS"
+          } > "$RECEIPT"
+
+          [[ ! -d "$CANDIDATE" ]] || git -C "$ROOT" worktree remove --force "$CANDIDATE" >/dev/null 2>&1 || true
+          rm -rf "$TMP_BASE"
+
+          cat "$RECEIPT"
+          [[ "$ACQUIRE_EXIT" == "0" && "$VERIFY_EXIT" == "0" && "$RELEASE_EXIT" == "0" ]]
+
+      - name: Post sanitized coordination receipt
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          RECEIPT="$RUNNER_TEMP/zcloud-coordination-receipt.md"
+          [[ -f "$RECEIPT" ]] || printf '### zCloud coordination probe\n- receipt: missing\n' > "$RECEIPT"
+          python3 - <<'PY' > /tmp/zcloud-probe-comment.json
+import json, os
+body=open(os.path.join(os.environ["RUNNER_TEMP"],"zcloud-coordination-receipt.md"),encoding="utf-8").read()
+print(json.dumps({"body":body}))
+PY
+          curl -fsS -X POST             -H "Accept: application/vnd.github+json"             -H "Authorization: Bearer ${{ github.token }}"             -H "X-GitHub-Api-Version: 2022-11-28"             --data-binary @/tmp/zcloud-probe-comment.json             "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments"
