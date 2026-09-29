@@ -27,17 +27,30 @@ jobs:
       - name: Acquire exact zCloud deploylane claim
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
           ROOT=/home/ubuntu/zennay-cloud
           TMP_BASE="$(mktemp -d /tmp/zcloud-runner-probe.XXXXXX)"
           CANDIDATE="$TMP_BASE/candidate"
           echo "ZCLOUD_PROBE_TMP_BASE=$TMP_BASE" >> "$GITHUB_ENV"
           echo "ZCLOUD_PROBE_CANDIDATE=$CANDIDATE" >> "$GITHUB_ENV"
-          git -C "$ROOT" fetch --prune origin main
-          MAIN_SHA="$(git -C "$ROOT" rev-parse origin/main)"
-          echo "ZCLOUD_MAIN_SHA=$MAIN_SHA" >> "$GITHUB_ENV"
-          git -C "$ROOT" worktree add --detach "$CANDIDATE" "$MAIN_SHA"
-          env -u GITHUB_TOKEN python3 "$CANDIDATE/scripts/zcloud_vps_deploylane_coordination.py" acquire
+          claim_exit=99
+          main_sha=""
+          {
+            git -C "$ROOT" fetch --prune origin main &&
+            main_sha="$(git -C "$ROOT" rev-parse origin/main)" &&
+            git -C "$ROOT" worktree add --detach "$CANDIDATE" "$main_sha" &&
+            env -u GITHUB_TOKEN python3 "$CANDIDATE/scripts/zcloud_vps_deploylane_coordination.py" acquire
+          } >/tmp/zcloud-claim-acquire.log 2>&1
+          claim_exit=$?
+          echo "ZCLOUD_MAIN_SHA=$main_sha" >> "$GITHUB_ENV"
+          echo "CLAIM_ACQUIRE_EXIT=$claim_exit" >> "$GITHUB_ENV"
+          if [[ "$claim_exit" == "0" ]]; then
+            echo "CLAIM_ACQUIRED=yes" >> "$GITHUB_ENV"
+          else
+            echo "CLAIM_ACQUIRED=no" >> "$GITHUB_ENV"
+          fi
+          sed -E 's/(token|authorization|secret)[^ ]*/[redacted]/Ig' /tmp/zcloud-claim-acquire.log | tail -n 30
+          exit 0
 
       - name: Diagnose permanent native zCloud runner route
         shell: bash
@@ -74,10 +87,23 @@ PY
       - name: Verify exact zCloud deploylane claim
         shell: bash
         run: |
-          set -euo pipefail
-          env -u GITHUB_TOKEN python3 "$ZCLOUD_PROBE_CANDIDATE/scripts/zcloud_vps_deploylane_coordination.py" verify
+          set +e
+          verify_exit=99
+          if [[ "${CLAIM_ACQUIRED:-no}" == "yes" && -f "$ZCLOUD_PROBE_CANDIDATE/scripts/zcloud_vps_deploylane_coordination.py" ]]; then
+            env -u GITHUB_TOKEN python3 "$ZCLOUD_PROBE_CANDIDATE/scripts/zcloud_vps_deploylane_coordination.py" verify >/tmp/zcloud-claim-verify.log 2>&1
+            verify_exit=$?
+          fi
+          echo "CLAIM_VERIFY_EXIT=$verify_exit" >> "$GITHUB_ENV"
+          if [[ "$verify_exit" == "0" ]]; then
+            echo "CLAIM_VERIFIED=yes" >> "$GITHUB_ENV"
+          else
+            echo "CLAIM_VERIFIED=no" >> "$GITHUB_ENV"
+          fi
+          [[ ! -f /tmp/zcloud-claim-verify.log ]] || tail -n 20 /tmp/zcloud-claim-verify.log
+          exit 0
 
       - name: Persist sanitized VPS diagnostic receipt
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
@@ -116,7 +142,10 @@ receipt={
     "zcloud_main_sha":os.environ.get("ZCLOUD_MAIN_SHA"),
     "claim_key":"cloud-permanent-vps-first-deploylane",
     "worker_id":"cloud::w1",
-    "claim_verified":True,
+    "claim_acquire_exit":os.environ.get("CLAIM_ACQUIRE_EXIT"),
+    "claim_acquired":os.environ.get("CLAIM_ACQUIRED")=="yes",
+    "claim_verify_exit":os.environ.get("CLAIM_VERIFY_EXIT"),
+    "claim_verified":os.environ.get("CLAIM_VERIFIED")=="yes",
     "native_runner_units":units,
     "native_runner_unit_states":unit_states,
     "runner_roots":[x for x in os.environ.get("RUNNER_ROOTS","").split(",") if x],
@@ -145,3 +174,10 @@ PY
             git -C /home/ubuntu/zennay-cloud worktree remove --force "$ZCLOUD_PROBE_CANDIDATE" >/dev/null 2>&1 || true
           fi
           [[ -z "${ZCLOUD_PROBE_TMP_BASE:-}" ]] || rm -rf "$ZCLOUD_PROBE_TMP_BASE"
+
+      - name: Fail probe if coordination was not exact
+        if: always()
+        shell: bash
+        run: |
+          test "${CLAIM_ACQUIRED:-no}" = "yes"
+          test "${CLAIM_VERIFIED:-no}" = "yes"
