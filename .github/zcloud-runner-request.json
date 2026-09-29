@@ -5,7 +5,7 @@
   "worker_id": "haxlab::w1",
   "owner_id": "chatgpt:haxlab:w1",
   "payload": {
-    "action": "live-play-probe",
-    "reason": "validate deployed champion inference and live HaxBall client"
+    "action": "live-play-status",
+    "reason": "verify installed live service before connecting a room"
   }
 }
