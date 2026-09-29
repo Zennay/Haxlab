@@ -211,6 +211,8 @@ jobs:
           print(json.dumps({"claim_verified":True,"phase":"pre-deploy"},sort_keys=True))
           PY
           bash raiseai/gateway/deploy/install-user-gateway.sh
+          systemctl --user restart raise-gateway.service
+          sleep 1
           systemctl --user is-active --quiet raise-gateway.service
           echo "SERVICE_STATE=$(systemctl --user is-active raise-gateway.service)"
           echo "COMMAND_EXITCODE=0"
