@@ -27,10 +27,6 @@ if (!hostMode && !/^[A-Za-z0-9_-]{4,80}$/.test(roomId)) {
   console.error("HAXLAB_ROOM_ID is missing or invalid.");
   process.exit(2);
 }
-if (hostMode && !headlessToken) {
-  console.error("HAXLAB_HEADLESS_TOKEN is required for host mode.");
-  process.exit(3);
-}
 
 function num(value) {
   const parsed = Number(value);
@@ -316,6 +312,12 @@ function commonParams(extraStorage = {}) {
     config: null,
     renderer: null,
     plugins: [],
+    onRequestRecaptcha: () => {
+      console.error("HAXLAB_RECAPTCHA_REQUIRED");
+      if (hostMode && !headlessToken) {
+        setTimeout(() => process.exit(4), 0);
+      }
+    },
     onOpen: roomCallbacks,
     onClose: (message) => {
       console.log("HAXLAB_ROOM_CLOSED " + (message?.toString?.() || String(message || "")));
