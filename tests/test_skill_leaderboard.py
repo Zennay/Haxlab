@@ -144,7 +144,7 @@ def test_skill_leaderboard_builds_conservative_player_estimates(tmp_path: Path) 
     by_name = {row["name"]: row for row in rows}
 
     assert by_name["Alpha"]["matches"] == 35
-    assert by_name["Alpha"]["role"] == "defender"
+    assert by_name["Alpha"]["role"] == "gk"
     assert by_name["Alpha"]["rating"] > by_name["Beta"]["rating"]
     assert by_name["Alpha"]["rating_uncertainty"] > 0
     assert by_name["Alpha"]["dimensions"]["retention"]["effective_weight"] > 0
