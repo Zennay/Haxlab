@@ -98,3 +98,55 @@ jobs:
         run: |
           set -euo pipefail
           sudo /usr/local/sbin/haxlab-actions-control feature-smoke
+
+  zcloud_coordination_probe:
+    name: zCloud coordination probe
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 8
+
+    steps:
+      - name: Acquire, verify and release zCloud deploylane claim
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=/home/ubuntu/zennay-cloud
+          TMP_BASE="$(mktemp -d /tmp/zcloud-ci-probe.XXXXXX)"
+          CANDIDATE="$TMP_BASE/candidate"
+          cleanup() {
+            if [[ -f "$CANDIDATE/scripts/zcloud_vps_deploylane_coordination.py" ]]; then
+              env -u GITHUB_TOKEN python3 "$CANDIDATE/scripts/zcloud_vps_deploylane_coordination.py" release || true
+            fi
+            git -C "$ROOT" worktree remove --force "$CANDIDATE" >/dev/null 2>&1 || true
+            rm -rf "$TMP_BASE"
+          }
+          trap cleanup EXIT
+
+          git -C "$ROOT" fetch --prune origin main
+          MAIN_SHA="$(git -C "$ROOT" rev-parse origin/main)"
+          git -C "$ROOT" worktree add --detach "$CANDIDATE" "$MAIN_SHA"
+
+          env -u GITHUB_TOKEN python3 "$CANDIDATE/scripts/zcloud_vps_deploylane_coordination.py" acquire
+          env -u GITHUB_TOKEN python3 "$CANDIDATE/scripts/zcloud_vps_deploylane_coordination.py" verify
+
+          echo "ZCLOUD_COORDINATION_PROBE_GREEN main_sha=$MAIN_SHA"
+          echo "host=$(hostname)"
+          systemctl list-unit-files --type=service --no-legend 2>/dev/null \
+            | awk '/actions\.runner\.Zennay-zCloud|actions\.runner\.Zennay-zcloud/ {print "native_runner_unit=" $1}' \
+            || true
+
+          python3 - <<'PY'
+import json, urllib.request
+url="https://api.github.com/repos/Zennay/zCloud/actions/workflows/zcloud-vps-execution-probe.yml/runs?per_page=5"
+req=urllib.request.Request(url,headers={"Accept":"application/vnd.github+json","User-Agent":"zcloud-ci-probe"})
+with urllib.request.urlopen(req,timeout=15) as r:
+    payload=json.load(r)
+for run in payload.get("workflow_runs",[])[:5]:
+    print("native_probe_run="+json.dumps({
+        "id":run.get("id"),
+        "status":run.get("status"),
+        "conclusion":run.get("conclusion"),
+        "head_sha":run.get("head_sha"),
+        "event":run.get("event"),
+        "created_at":run.get("created_at"),
+    },sort_keys=True))
+PY
