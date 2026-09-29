@@ -6,7 +6,7 @@ STATE_DB="${HAXLAB_STATE_DB:-/var/lib/haxlab/state/haxlab.sqlite3}"
 CURRENT_ANALYZER_VERSION="$("${APP_DIR}/.venv/bin/python" -c 'from haxlab.runtime.state import CURRENT_ANALYZER_VERSION; print(CURRENT_ANALYZER_VERSION)')"
 
 usage() {
-  echo "Usage: haxlab-actions-control {status|deploy|restart-analyzer|retry-failed-analysis|feature-smoke|player-stats|skill-leaderboard|training-manifest|analyzer-logs|failed-analysis}" >&2
+  echo "Usage: haxlab-actions-control {status|deploy|champion-info|restart-analyzer|retry-failed-analysis|feature-smoke|player-stats|skill-leaderboard|training-manifest|analyzer-logs|failed-analysis}" >&2
   exit 2
 }
 
@@ -48,6 +48,66 @@ case "${action}" in
       ORDER BY count DESC
       LIMIT 15;
     " || true
+    ;;
+
+  champion-info)
+    root="/var/lib/haxlab/derived/champions/elite-player"
+    echo "=== champion root ==="
+    if [[ ! -d "${root}" ]]; then
+      echo "missing: ${root}" >&2
+      exit 1
+    fi
+    ls -la "${root}" || true
+    echo
+    "${APP_DIR}/.venv/bin/python" - "${root}" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+import numpy as np
+
+root = Path(sys.argv[1])
+metrics_files = sorted(
+    root.glob("versions/*/metrics.json"),
+    key=lambda p: p.stat().st_mtime,
+    reverse=True,
+)
+if not metrics_files:
+    raise SystemExit("no champion metrics found")
+
+rows = []
+for metrics_path in metrics_files[:8]:
+    try:
+        metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        rows.append({"path": str(metrics_path), "error": str(exc)})
+        continue
+    version_dir = metrics_path.parent
+    model_candidates = sorted(version_dir.glob("*.npz"))
+    model_info = []
+    for model_path in model_candidates:
+        try:
+            with np.load(model_path, allow_pickle=False) as data:
+                model_info.append({
+                    "path": str(model_path),
+                    "keys": sorted(data.files),
+                    "shapes": {k: list(data[k].shape) for k in data.files},
+                })
+        except Exception as exc:
+            model_info.append({"path": str(model_path), "error": str(exc)})
+    rows.append({
+        "version": version_dir.name,
+        "metrics_path": str(metrics_path),
+        "metrics": metrics,
+        "models": model_info,
+    })
+
+print(json.dumps({
+    "root": str(root),
+    "versions": rows,
+}, indent=2, sort_keys=True))
+PY
     ;;
 
   restart-analyzer)
