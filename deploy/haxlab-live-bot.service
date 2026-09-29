@@ -1,0 +1,27 @@
+[Unit]
+Description=HaxLab live champion HaxBall client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=haxlab
+Group=haxlab
+WorkingDirectory=/opt/haxlab
+EnvironmentFile=/var/lib/haxlab/state/live-play.env
+Environment=HAXLAB_APP_DIR=/opt/haxlab
+Environment=HAXLAB_PYTHON=/opt/haxlab/.venv/bin/python
+ExecStart=/usr/bin/node /opt/haxlab/tools/live_haxball_bot.js
+Restart=no
+TimeoutStopSec=10
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/opt/haxlab /var/lib/haxlab/derived
+ReadWritePaths=/var/lib/haxlab/state
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
