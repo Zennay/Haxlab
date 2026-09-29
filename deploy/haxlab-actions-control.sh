@@ -6,7 +6,7 @@ STATE_DB="${HAXLAB_STATE_DB:-/var/lib/haxlab/state/haxlab.sqlite3}"
 CURRENT_ANALYZER_VERSION="$("${APP_DIR}/.venv/bin/python" -c 'from haxlab.runtime.state import CURRENT_ANALYZER_VERSION; print(CURRENT_ANALYZER_VERSION)')"
 
 usage() {
-  echo "Usage: haxlab-actions-control {status|deploy|champion-info|restart-analyzer|retry-failed-analysis|feature-smoke|player-stats|skill-leaderboard|training-manifest|analyzer-logs|failed-analysis}" >&2
+  echo "Usage: haxlab-actions-control {status|deploy|champion-info|champion-runtime|live-play-probe|live-play-start ROOM_ID|live-play-stop|live-play-status|restart-analyzer|retry-failed-analysis|feature-smoke|player-stats|skill-leaderboard|training-manifest|analyzer-logs|failed-analysis}" >&2
   exit 2
 }
 
@@ -129,6 +129,79 @@ print(json.dumps({
     "runtime_documents": runtime_documents,
 }, indent=2, sort_keys=True))
 PY
+    ;;
+
+  champion-runtime)
+    root="/var/lib/haxlab/derived/champions/elite-player"
+    "${APP_DIR}/.venv/bin/python" - "${root}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+metrics_files = sorted(
+    root.glob("versions/*/metrics.json"),
+    key=lambda p: p.stat().st_mtime,
+    reverse=True,
+)
+if not metrics_files:
+    raise SystemExit("no champion metrics found")
+metrics_path = metrics_files[0]
+metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+runtime_path = Path(str(metrics.get("runtime_model_path") or ""))
+runtime = None
+if runtime_path.is_file():
+    runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
+print(json.dumps({
+    "version": metrics_path.parent.name,
+    "metrics_path": str(metrics_path),
+    "runtime_model_path": str(runtime_path),
+    "architecture": metrics.get("architecture"),
+    "base_input_columns": metrics.get("base_input_columns"),
+    "runtime": metrics.get("runtime"),
+    "training": metrics.get("training"),
+    "runtime_model": runtime,
+}, indent=2, sort_keys=True))
+PY
+    ;;
+
+  live-play-probe)
+    "${APP_DIR}/.venv/bin/python" -m haxlab.live.inference --probe
+    node --check "${APP_DIR}/tools/live_haxball_bot.js"
+    ;;
+
+  live-play-start)
+    room_id="${2:-}"
+    if [[ ! "${room_id}" =~ ^[A-Za-z0-9_-]{4,80}$ ]]; then
+      echo "invalid room id" >&2
+      exit 2
+    fi
+    env_file="/var/lib/haxlab/state/live-play.env"
+    tmp_file="$(mktemp)"
+    {
+      printf 'HAXLAB_ROOM_ID=%s\n' "${room_id}"
+      printf 'HAXLAB_PLAYER_NAME=%s\n' "HaxLab AI"
+      printf 'HAXLAB_PLAYER_AVATAR=%s\n' "AI"
+      printf 'HAXLAB_LIVE_ROLE=%s\n' "st"
+      printf 'HAXLAB_INFER_EVERY_TICKS=%s\n' "2"
+    } >"${tmp_file}"
+    install -o haxlab -g haxlab -m 0600 "${tmp_file}" "${env_file}"
+    rm -f "${tmp_file}"
+    systemctl restart haxlab-live-bot.service
+    sleep 2
+    systemctl --no-pager --full status haxlab-live-bot.service || true
+    journalctl -u haxlab-live-bot.service -n 80 --no-pager
+    ;;
+
+  live-play-stop)
+    systemctl stop haxlab-live-bot.service 2>/dev/null || true
+    echo "stopped"
+    ;;
+
+  live-play-status)
+    systemctl --no-pager --full status haxlab-live-bot.service || true
+    echo
+    journalctl -u haxlab-live-bot.service -n 120 --no-pager || true
     ;;
 
   restart-analyzer)
