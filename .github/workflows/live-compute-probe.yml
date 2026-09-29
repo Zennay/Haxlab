@@ -13,32 +13,21 @@ jobs:
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 5
     steps:
-      - name: Pause HaxLab training for Firefox headroom
+      - name: Keep HaxLab training paused for Firefox
         shell: bash
         run: |
           set -uo pipefail
-          echo "=== BEFORE ==="
-          uptime
-          free -h
-          ps -eo pid,ppid,user,%cpu,%mem,etime,stat,comm,args --sort=-%cpu | head -20
-
-          echo "=== PAUSE HAXLAB AUTONOMY/TRAINING ==="
-          sudo systemctl stop haxlab-autonomy.timer 2>/dev/null || true
+          sudo pkill -TERM -f '[h]axlab-train-bc' 2>/dev/null || true
           sudo systemctl stop haxlab-autonomy.service 2>/dev/null || true
-          sudo pkill -TERM -f '/opt/haxlab/.venv/bin/haxlab-train-bc' 2>/dev/null || true
-          sleep 5
-          if pgrep -af '/opt/haxlab/.venv/bin/haxlab-train-bc' >/dev/null 2>&1; then
-            echo "Trainer still alive after TERM; sending KILL"
-            sudo pkill -KILL -f '/opt/haxlab/.venv/bin/haxlab-train-bc' 2>/dev/null || true
-            sleep 2
-          fi
+          sudo systemctl stop haxlab-autonomy.timer 2>/dev/null || true
+          sleep 2
 
-          echo "=== AFTER ==="
-          systemctl is-active haxlab-autonomy.timer 2>/dev/null || true
-          systemctl is-active haxlab-autonomy.service 2>/dev/null || true
-          pgrep -af '/opt/haxlab/.venv/bin/haxlab-train-bc' || true
+          echo "=== VERIFY ==="
+          echo -n "trainer: "; pgrep -af '[h]axlab-train-bc' || echo "stopped"
+          echo -n "autonomy-service: "; systemctl is-active haxlab-autonomy.service 2>/dev/null || true
+          echo -n "autonomy-timer: "; systemctl is-active haxlab-autonomy.timer 2>/dev/null || true
           uptime
           free -h
-          ps -eo pid,ppid,user,%cpu,%mem,etime,stat,comm,args --sort=-%cpu | head -20
+          ps -eo pid,user,%cpu,%mem,etime,comm,args --sort=-%cpu | head -15
 
-# temporary Firefox headroom action 2026-09-30
+# Firefox headroom verification 2026-09-30
