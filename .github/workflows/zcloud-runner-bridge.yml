@@ -128,6 +128,7 @@ jobs:
 
           if operation == "snapshot":
               status = request_json("GET", "/api/status")
+              targets = request_json("GET", "/api/runner-targets")
               queue = request_json("GET", "/api/portfolio-queue?all=1")
               claims = request_json(
                   "GET",
@@ -152,8 +153,23 @@ jobs:
                   timeout=60,
                   check=False,
               )
+              targets_body = targets.get("body") if isinstance(targets, dict) else {}
+              project_target = None
+              if isinstance(targets_body, dict):
+                  projects = targets_body.get("projects") or {}
+                  if isinstance(projects, dict):
+                      project_target = projects.get(project)
+
               result.update({
                   "zcloud_status": status,
+                  "runner_target": {
+                      "http_status": targets.get("http_status"),
+                      "project": project_target,
+                      "global_allocation": (
+                          targets_body.get("global_allocation")
+                          if isinstance(targets_body, dict) else None
+                      ),
+                  },
                   "portfolio_queue": {
                       "http_status": queue.get("http_status"),
                       "body": queue_body,
