@@ -76,7 +76,8 @@ python3 -m venv "${APP_DIR}/.venv"
 
 cd "${APP_DIR}"
 npm install --omit=dev --no-audit --no-fund
-node -e 'const api=require("node-haxball")(); if (!api.Replay) process.exit(1)'
+node -e 'const api=require("node-haxball")(); if (!api.Replay || !api.Room || !api.Utils) process.exit(1)'
+node --check "${APP_DIR}/tools/live_haxball_bot.js"
 
 chown -R "${SERVICE_USER}:${SERVICE_USER}" "${DATA_DIR}"
 chown -R root:root "${APP_DIR}"
@@ -93,6 +94,7 @@ install -m 0644 "${APP_DIR}/deploy/haxlab-worker.service" /etc/systemd/system/ha
 install -m 0644 "${APP_DIR}/deploy/haxlab-analyzer.service" /etc/systemd/system/haxlab-analyzer.service
 install -m 0644 "${APP_DIR}/deploy/haxlab-autonomy.service" /etc/systemd/system/haxlab-autonomy.service
 install -m 0644 "${APP_DIR}/deploy/haxlab-autonomy.timer" /etc/systemd/system/haxlab-autonomy.timer
+install -m 0644 "${APP_DIR}/deploy/haxlab-live-bot.service" /etc/systemd/system/haxlab-live-bot.service
 chmod 0755 "${APP_DIR}/deploy/haxlab-autonomy-tick.sh"
 
 ln -sf "${APP_DIR}/.venv/bin/haxlab" /usr/local/bin/haxlab
