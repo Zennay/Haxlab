@@ -10,30 +10,26 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Probe zCloud live worker state
+      - name: Probe zCloud canary dispatch
         run: |
           python3 - <<'PY'
-          import json, sqlite3, subprocess, urllib.request
-          from pathlib import Path
+          import json, sqlite3, urllib.request
           db='/home/ubuntu/zennay-cloud/history.db'
           out={}
           with sqlite3.connect(db,timeout=5) as c:
               c.row_factory=sqlite3.Row
-              out['queue']=[dict(r) for r in c.execute("SELECT queue_id,project_id,priority,status,eligible,worker_slot,claimed_at,claim_expires,evidence,blocker FROM portfolio_queue ORDER BY CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,created_at").fetchall()]
-              out['workers']=[dict(r) for r in c.execute("SELECT project_id,worker_slot,conversation_id,desired_state FROM runner_workers ORDER BY project_id,worker_slot").fetchall()]
-              out['targets']=[dict(r) for r in c.execute("SELECT project_id,active,worker_count,conversation_id FROM runner_targets ORDER BY project_id").fetchall()]
+              out['queue']=[dict(r) for r in c.execute("SELECT queue_id,project_id,priority,status,eligible,worker_slot,claimed_at,claim_expires FROM portfolio_queue ORDER BY CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,created_at").fetchall()]
+              out['haxlab_worker']=[dict(r) for r in c.execute("SELECT project_id,worker_slot,conversation_id,desired_state FROM runner_workers WHERE project_id='haxlab'").fetchall()]
+              out['haxlab_target']=[dict(r) for r in c.execute("SELECT project_id,active,worker_count,conversation_id FROM runner_targets WHERE project_id='haxlab'").fetchall()]
               out['slots']=[dict(r) for r in c.execute("SELECT * FROM ai_global_slots ORDER BY slot").fetchall()]
-              out['commands']=[dict(r) for r in c.execute("SELECT id,project_id,action,status,created_at,updated_at,result FROM runner_commands ORDER BY id DESC LIMIT 25").fetchall()]
-              out['events']=[dict(r) for r in c.execute("SELECT id,ts,event,project_id,worker_slot,generating,sending,reason,assistant_chars,target FROM runner_events WHERE project_id='haxlab' ORDER BY id DESC LIMIT 60").fetchall()]
+              out['haxlab_commands']=[dict(r) for r in c.execute("SELECT id,project_id,action,status,created_at,updated_at,result FROM runner_commands WHERE project_id='haxlab' ORDER BY id DESC LIMIT 20").fetchall()]
+              out['haxlab_events']=[dict(r) for r in c.execute("SELECT id,ts,event,worker_slot,generating,sending,reason,assistant_chars FROM runner_events WHERE project_id='haxlab' AND ts>='2026-09-29T11:29:20+00:00' ORDER BY id DESC LIMIT 80").fetchall()]
           try:
               with urllib.request.urlopen('http://127.0.0.1:8765/api/runner-targets',timeout=5) as r:
-                  out['runner_targets_api']=json.loads(r.read().decode())
+                  api=json.loads(r.read().decode())
+              out['api_haxlab']=api.get('projects',{}).get('haxlab::w1')
+              out['allocation']=api.get('global_allocation')
           except Exception as e:
-              out['runner_targets_api_error']=repr(e)
-          try:
-              p=subprocess.run(['systemctl','--user','is-active','chatgpt-firefox.service'],capture_output=True,text=True,timeout=5)
-              out['firefox_service']={'returncode':p.returncode,'stdout':p.stdout.strip(),'stderr':p.stderr.strip()}
-          except Exception as e:
-              out['firefox_service_error']=repr(e)
-          print('ZCLOUD_SOAK_PROBE='+json.dumps(out,ensure_ascii=False,sort_keys=True))
+              out['api_error']=repr(e)
+          print('ZCLOUD_CANARY_PROBE='+json.dumps(out,ensure_ascii=False,sort_keys=True))
           PY
