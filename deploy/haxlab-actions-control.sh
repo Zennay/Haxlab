@@ -6,7 +6,7 @@ STATE_DB="${HAXLAB_STATE_DB:-/var/lib/haxlab/state/haxlab.sqlite3}"
 CURRENT_ANALYZER_VERSION="$("${APP_DIR}/.venv/bin/python" -c 'from haxlab.runtime.state import CURRENT_ANALYZER_VERSION; print(CURRENT_ANALYZER_VERSION)')"
 
 usage() {
-  echo "Usage: haxlab-actions-control {status|deploy|champion-info|champion-runtime|live-play-probe|live-play-start ROOM_ID|live-play-stop|live-play-status|live-host-prereq|live-host-start|live-host-status|restart-analyzer|retry-failed-analysis|feature-smoke|player-stats|skill-leaderboard|training-manifest|analyzer-logs|failed-analysis}" >&2
+  echo "Usage: haxlab-actions-control {status|deploy|champion-info|champion-runtime|live-play-probe|live-play-start ROOM_ID|live-play-stop|live-play-status|live-host-prereq|live-host-keygen|live-host-install-token CIPHERTEXT|live-host-start|live-host-status|restart-analyzer|retry-failed-analysis|feature-smoke|player-stats|skill-leaderboard|training-manifest|analyzer-logs|failed-analysis}" >&2
   exit 2
 }
 
@@ -220,6 +220,50 @@ PY
       echo "token_url=https://www.haxball.com/headlesstoken"
       exit 3
     fi
+    ;;
+
+  live-host-keygen)
+    private_key="/var/lib/haxlab/state/live-host-token-key.pem"
+    public_key="/var/lib/haxlab/state/live-host-token-key.pub.pem"
+    if [[ ! -s "${private_key}" ]]; then
+      openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "${private_key}" >/dev/null 2>&1
+      chown root:root "${private_key}"
+      chmod 0600 "${private_key}"
+    fi
+    openssl pkey -in "${private_key}" -pubout -out "${public_key}" >/dev/null 2>&1
+    chmod 0644 "${public_key}"
+    echo "=== live host token public key ==="
+    cat "${public_key}"
+    ;;
+
+  live-host-install-token)
+    ciphertext="${2:-}"
+    private_key="/var/lib/haxlab/state/live-host-token-key.pem"
+    token_file="/var/lib/haxlab/state/haxball-headless-token"
+    if [[ ! -s "${private_key}" ]]; then
+      echo "missing host-token private key; run live-host-keygen first" >&2
+      exit 3
+    fi
+    if [[ ! "${ciphertext}" =~ ^[A-Za-z0-9+/=]{100,1000}$ ]]; then
+      echo "invalid encrypted token payload" >&2
+      exit 2
+    fi
+    encrypted_tmp="$(mktemp)"
+    token_tmp="$(mktemp)"
+    trap 'rm -f "${encrypted_tmp}" "${token_tmp}"' EXIT
+    printf '%s' "${ciphertext}" | base64 -d >"${encrypted_tmp}"
+    openssl pkeyutl -decrypt       -inkey "${private_key}"       -in "${encrypted_tmp}"       -out "${token_tmp}"       -pkeyopt rsa_padding_mode:oaep       -pkeyopt rsa_oaep_md:sha256
+    token="$(tr -d '\r\n' <"${token_tmp}")"
+    if [[ ${#token} -lt 20 || ${#token} -gt 512 ]]; then
+      echo "decrypted token has invalid length" >&2
+      exit 3
+    fi
+    printf '%s\n' "${token}" >"${token_tmp}"
+    install -o root -g root -m 0600 "${token_tmp}" "${token_file}"
+    echo "headless_token=installed_securely"
+    trap - EXIT
+    rm -f "${encrypted_tmp}" "${token_tmp}"
+    "$0" live-host-start
     ;;
 
   live-host-start)
