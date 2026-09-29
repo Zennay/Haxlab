@@ -1,10 +1,11 @@
 {
   "version": 1,
-  "operation": "snapshot",
+  "operation": "haxlab-action",
   "project_id": "haxlab",
   "worker_id": "haxlab::w1",
   "owner_id": "chatgpt:haxlab:w1",
   "payload": {
-    "probe": "dynamic-worker-prompt"
+    "action": "deploy",
+    "reason": "publish current HaxLab champion for live play setup"
   }
 }
