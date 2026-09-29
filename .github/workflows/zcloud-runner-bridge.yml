@@ -54,6 +54,7 @@ jobs:
               "live-play-stop",
               "live-play-status",
               "live-host-prereq",
+              "live-host-keygen",
               "live-host-start",
               "live-host-status",
               "restart-analyzer",
@@ -262,6 +263,27 @@ jobs:
                   check=False,
               )
               result["room_id"] = room_id
+              result["exit_code"] = proc.returncode
+              result["output"] = proc.stdout[-20000:]
+              if proc.returncode != 0:
+                  print("ZCLOUD_BRIDGE_RESULT_BEGIN")
+                  print(json.dumps(result, indent=2, sort_keys=True))
+                  print("ZCLOUD_BRIDGE_RESULT_END")
+                  raise SystemExit(proc.returncode)
+
+          elif operation == "live-host-install-token":
+              ciphertext = str(payload.get("ciphertext") or "").strip()
+              safe_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/=")
+              if not (100 <= len(ciphertext) <= 1000) or any(ch not in safe_chars for ch in ciphertext):
+                  raise SystemExit("payload.ciphertext is invalid")
+              proc = subprocess.run(
+                  ["sudo", "/usr/local/sbin/haxlab-actions-control", "live-host-install-token", ciphertext],
+                  text=True,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.STDOUT,
+                  timeout=180,
+                  check=False,
+              )
               result["exit_code"] = proc.returncode
               result["output"] = proc.stdout[-20000:]
               if proc.returncode != 0:
