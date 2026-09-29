@@ -5,7 +5,7 @@
   "worker_id": "haxlab::w1",
   "owner_id": "chatgpt:haxlab:w1",
   "payload": {
-    "action": "champion-info",
-    "reason": "inspect current promoted champion for live play bridge"
+    "action": "deploy",
+    "reason": "deploy runtime metadata probe"
   }
 }
