@@ -10,26 +10,27 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Probe zCloud canary dispatch
+      - name: Stop failed canary and leave dynamic workers paused
         run: |
           python3 - <<'PY'
-          import json, sqlite3, urllib.request
+          import sqlite3
+          from datetime import datetime, timezone
           db='/home/ubuntu/zennay-cloud/history.db'
-          out={}
+          ts=datetime.now(timezone.utc).isoformat()
           with sqlite3.connect(db,timeout=5) as c:
-              c.row_factory=sqlite3.Row
-              out['queue']=[dict(r) for r in c.execute("SELECT queue_id,project_id,priority,status,eligible,worker_slot,claimed_at,claim_expires FROM portfolio_queue ORDER BY CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,created_at").fetchall()]
-              out['haxlab_worker']=[dict(r) for r in c.execute("SELECT project_id,worker_slot,conversation_id,desired_state FROM runner_workers WHERE project_id='haxlab'").fetchall()]
-              out['haxlab_target']=[dict(r) for r in c.execute("SELECT project_id,active,worker_count,conversation_id FROM runner_targets WHERE project_id='haxlab'").fetchall()]
-              out['slots']=[dict(r) for r in c.execute("SELECT * FROM ai_global_slots ORDER BY slot").fetchall()]
-              out['haxlab_commands']=[dict(r) for r in c.execute("SELECT id,project_id,action,status,created_at,updated_at,result FROM runner_commands WHERE project_id='haxlab' ORDER BY id DESC LIMIT 20").fetchall()]
-              out['haxlab_events']=[dict(r) for r in c.execute("SELECT id,ts,event,worker_slot,generating,sending,reason,assistant_chars FROM runner_events WHERE project_id='haxlab' AND ts>='2026-09-29T11:29:20+00:00' ORDER BY id DESC LIMIT 80").fetchall()]
-          try:
-              with urllib.request.urlopen('http://127.0.0.1:8765/api/runner-targets',timeout=5) as r:
-                  api=json.loads(r.read().decode())
-              out['api_haxlab']=api.get('projects',{}).get('haxlab::w1')
-              out['allocation']=api.get('global_allocation')
-          except Exception as e:
-              out['api_error']=repr(e)
-          print('ZCLOUD_CANARY_PROBE='+json.dumps(out,ensure_ascii=False,sort_keys=True))
+              c.execute("UPDATE runner_workers SET desired_state='paused'")
+              c.execute("UPDATE runner_targets SET active=0")
+              c.execute("""UPDATE portfolio_queue SET status='blocked',eligible=0,
+                           blocker='soak canary stopped after false-generation detection',
+                           evidence='assistant_chars remained 0; no issue action',
+                           worker_slot=NULL,claimed_at=NULL,claim_expires=NULL,updated_at=?
+                           WHERE queue_id='canary-worker-soak-20260929'""",(ts,))
+              c.execute("""UPDATE portfolio_queue SET status='queued',worker_slot=NULL,claimed_at=NULL,claim_expires=NULL,updated_at=?
+                           WHERE queue_id<>'canary-worker-soak-20260929'
+                             AND status IN ('claimed','running','verifying')""",(ts,))
+              c.execute("""UPDATE runner_commands SET status='failed',updated_at=?,
+                           result='soak cleanup; workers remain paused'
+                           WHERE status='pending'""",(ts,))
+              c.commit()
+          print('ZCLOUD_SOAK_CLEANUP_GREEN')
           PY
