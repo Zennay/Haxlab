@@ -35,3 +35,5 @@ jobs:
           echo "=== FTMO RECENT OUTPUT ==="
           find /opt/ftmo-autonomous/.scratch -type f -mmin -120 -printf '%TY-%Tm-%TdT%TH:%TM:%TS %s %p\n' 2>/dev/null | sort | tail -50
           echo "=== FAILED ==="; systemctl --failed --no-pager || true
+
+# manual probe trigger 2026-09-30
