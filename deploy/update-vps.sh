@@ -8,7 +8,11 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
-systemctl stop haxlab-autonomy.timer haxlab-autonomy.service haxlab-analyzer.service haxlab-worker.service haxlab-ingest.service 2>/dev/null || true
+LIVE_WAS_ACTIVE=0
+if systemctl is-active --quiet haxlab-live-bot.service 2>/dev/null; then
+  LIVE_WAS_ACTIVE=1
+fi
+systemctl stop haxlab-live-bot.service haxlab-autonomy.timer haxlab-autonomy.service haxlab-analyzer.service haxlab-worker.service haxlab-ingest.service 2>/dev/null || true
 
 apt-get install -y nodejs npm
 
@@ -19,13 +23,15 @@ git -C "${APP_DIR}" reset --hard origin/main
 
 cd "${APP_DIR}"
 npm install --omit=dev --no-audit --no-fund
-node -e 'const api=require("node-haxball")(); if (!api.Replay) process.exit(1)'
+node -e 'const api=require("node-haxball")(); if (!api.Replay || !api.Room || !api.Utils) process.exit(1)'
+node --check "${APP_DIR}/tools/live_haxball_bot.js"
 
 install -m 0644 "${APP_DIR}/deploy/haxlab-ingest.service" /etc/systemd/system/haxlab-ingest.service
 install -m 0644 "${APP_DIR}/deploy/haxlab-worker.service" /etc/systemd/system/haxlab-worker.service
 install -m 0644 "${APP_DIR}/deploy/haxlab-analyzer.service" /etc/systemd/system/haxlab-analyzer.service
 install -m 0644 "${APP_DIR}/deploy/haxlab-autonomy.service" /etc/systemd/system/haxlab-autonomy.service
 install -m 0644 "${APP_DIR}/deploy/haxlab-autonomy.timer" /etc/systemd/system/haxlab-autonomy.timer
+install -m 0644 "${APP_DIR}/deploy/haxlab-live-bot.service" /etc/systemd/system/haxlab-live-bot.service
 chmod 0755 "${APP_DIR}/deploy/haxlab-autonomy-tick.sh"
 
 ln -sf "${APP_DIR}/.venv/bin/haxlab" /usr/local/bin/haxlab
@@ -44,6 +50,9 @@ install -o root -g root -m 0755 "${APP_DIR}/deploy/haxlab-actions-control.sh" /u
 systemctl daemon-reload
 systemctl enable haxlab-ingest.service haxlab-worker.service haxlab-analyzer.service haxlab-autonomy.timer
 systemctl start haxlab-ingest.service haxlab-worker.service haxlab-analyzer.service haxlab-autonomy.timer
+if [[ "${LIVE_WAS_ACTIVE}" -eq 1 && -f /var/lib/haxlab/state/live-play.env ]]; then
+  systemctl start haxlab-live-bot.service
+fi
 
 systemctl is-active --quiet haxlab-ingest.service
 systemctl is-active --quiet haxlab-worker.service
