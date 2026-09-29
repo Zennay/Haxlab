@@ -4,5 +4,7 @@
   "project_id": "haxlab",
   "worker_id": "haxlab::w1",
   "owner_id": "chatgpt:haxlab:w1",
-  "payload": {}
+  "payload": {
+    "probe": "dynamic-worker-prompt"
+  }
 }
