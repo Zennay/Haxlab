@@ -2,22 +2,34 @@
 "use strict";
 
 const { spawn } = require("child_process");
+const fs = require("fs");
 const readline = require("readline");
 const initAPI = require("node-haxball");
 const API = initAPI();
 const { Room, Utils } = API;
 
+const liveMode = String(process.env.HAXLAB_LIVE_MODE || "join").trim().toLowerCase();
+const hostMode = liveMode === "host";
 const roomId = String(process.env.HAXLAB_ROOM_ID || "").trim();
 const roomPassword = String(process.env.HAXLAB_ROOM_PASSWORD || "").trim() || null;
+const headlessToken = String(process.env.HAXLAB_HEADLESS_TOKEN || "").trim();
+const hostedRoomName = String(process.env.HAXLAB_HOST_ROOM_NAME || "HaxLab AI Challenge").trim() || "HaxLab AI Challenge";
+const hostedMaxPlayers = Math.max(2, Math.min(16, Number.parseInt(process.env.HAXLAB_HOST_MAX_PLAYERS || "4", 10) || 4));
+const hostedShowInList = String(process.env.HAXLAB_HOST_PUBLIC || "0").trim() === "1";
+const roomLinkFile = String(process.env.HAXLAB_ROOM_LINK_FILE || "/var/lib/haxlab/state/live-room-link").trim();
 const playerName = String(process.env.HAXLAB_PLAYER_NAME || "HaxLab AI");
 const playerAvatar = String(process.env.HAXLAB_PLAYER_AVATAR || "AI").slice(0, 2);
 const role = String(process.env.HAXLAB_LIVE_ROLE || "st");
 const championVersion = String(process.env.HAXLAB_CHAMPION_VERSION || "").trim();
 const inferEveryTicks = Math.max(1, Number.parseInt(process.env.HAXLAB_INFER_EVERY_TICKS || "2", 10) || 2);
 
-if (!/^[A-Za-z0-9_-]{4,80}$/.test(roomId)) {
+if (!hostMode && !/^[A-Za-z0-9_-]{4,80}$/.test(roomId)) {
   console.error("HAXLAB_ROOM_ID is missing or invalid.");
   process.exit(2);
+}
+if (hostMode && !headlessToken) {
+  console.error("HAXLAB_HEADLESS_TOKEN is required for host mode.");
+  process.exit(3);
 }
 
 function num(value) {
@@ -207,7 +219,51 @@ function resetInference() {
 
 function roomCallbacks(joinedRoom) {
   room = joinedRoom;
-  console.log("HAXLAB_ROOM_JOINED id=" + roomId + " name=" + playerName);
+  console.log(
+    hostMode
+      ? "HAXLAB_ROOM_HOST_OPEN name=" + hostedRoomName + " bot=" + playerName
+      : "HAXLAB_ROOM_JOINED id=" + roomId + " name=" + playerName
+  );
+
+  if (hostMode) {
+    try {
+      room.changeTeam(1);
+      room.setScoreLimit(5);
+      room.setTimeLimit(0);
+    } catch (error) {
+      console.error("Failed to initialize hosted room:", error?.stack || String(error));
+    }
+
+    room.onAfterRoomLink = (link) => {
+      const value = String(link || "").trim();
+      if (!value) return;
+      console.log("HAXLAB_ROOM_LINK " + value);
+      try {
+        fs.writeFileSync(roomLinkFile, value + "\n", { encoding: "utf8", mode: 0o600 });
+      } catch (error) {
+        console.error("Failed to persist room link:", error?.message || String(error));
+      }
+    };
+
+    room.onAfterPlayerJoin = (player) => {
+      if (!player || player.id === room.currentPlayer?.id) return;
+      console.log("HAXLAB_HUMAN_JOINED id=" + player.id + " name=" + String(player.name || ""));
+      try {
+        room.setPlayerTeam(player.id, 2);
+        if (!room.gameState) {
+          setTimeout(() => {
+            try {
+              if (!room.gameState) room.startGame();
+            } catch (error) {
+              console.error("Failed to auto-start game:", error?.message || String(error));
+            }
+          }, 500);
+        }
+      } catch (error) {
+        console.error("Failed to place joined player:", error?.stack || String(error));
+      }
+    };
+  }
 
   room.onGameTick = () => {
     tick += 1;
@@ -250,32 +306,56 @@ function roomCallbacks(joinedRoom) {
   };
 }
 
-Utils.generateAuth()
-  .then(([authKey, authObj]) => {
-    Room.join(
-      { id: roomId, password: roomPassword, authObj },
+function commonParams(extraStorage = {}) {
+  return {
+    storage: {
+      player_name: playerName,
+      avatar: playerAvatar,
+      ...extraStorage,
+    },
+    config: null,
+    renderer: null,
+    plugins: [],
+    onOpen: roomCallbacks,
+    onClose: (message) => {
+      console.log("HAXLAB_ROOM_CLOSED " + (message?.toString?.() || String(message || "")));
+      try { inference.kill("SIGTERM"); } catch (_) {}
+      process.exit(0);
+    },
+  };
+}
+
+if (hostMode) {
+  try {
+    try { fs.unlinkSync(roomLinkFile); } catch (_) {}
+    Room.create(
       {
-        storage: {
-          player_name: playerName,
-          avatar: playerAvatar,
-          player_auth_key: authKey,
-        },
-        config: null,
-        renderer: null,
-        plugins: [],
-        onOpen: roomCallbacks,
-        onClose: (message) => {
-          console.log("HAXLAB_ROOM_CLOSED " + (message?.toString?.() || String(message || "")));
-          try { inference.kill("SIGTERM"); } catch (_) {}
-          process.exit(0);
-        },
-      }
+        name: hostedRoomName,
+        password: roomPassword,
+        showInRoomList: hostedShowInList,
+        maxPlayerCount: hostedMaxPlayers,
+        noPlayer: false,
+        token: headlessToken,
+      },
+      commonParams()
     );
-  })
-  .catch((error) => {
-    console.error("Failed to generate auth or join room:", error?.stack || String(error));
+  } catch (error) {
+    console.error("Failed to create hosted room:", error?.stack || String(error));
     process.exit(1);
-  });
+  }
+} else {
+  Utils.generateAuth()
+    .then(([authKey, authObj]) => {
+      Room.join(
+        { id: roomId, password: roomPassword, authObj },
+        commonParams({ player_auth_key: authKey })
+      );
+    })
+    .catch((error) => {
+      console.error("Failed to generate auth or join room:", error?.stack || String(error));
+      process.exit(1);
+    });
+}
 
 function shutdown(signal) {
   console.log("HAXLAB_SHUTDOWN signal=" + signal);
