@@ -103,9 +103,30 @@ for metrics_path in metrics_files[:8]:
         "models": model_info,
     })
 
+runtime_documents = []
+for row in rows[:3]:
+    if not isinstance(row, dict):
+        continue
+    metrics = row.get("metrics") or {}
+    runtime_path = metrics.get("runtime_model_path")
+    if not runtime_path:
+        continue
+    path = Path(str(runtime_path))
+    if not path.is_file():
+        runtime_documents.append({"path": str(path), "error": "missing"})
+        continue
+    try:
+        runtime_documents.append({
+            "path": str(path),
+            "payload": json.loads(path.read_text(encoding="utf-8")),
+        })
+    except Exception as exc:
+        runtime_documents.append({"path": str(path), "error": str(exc)})
+
 print(json.dumps({
     "root": str(root),
     "versions": rows,
+    "runtime_documents": runtime_documents,
 }, indent=2, sort_keys=True))
 PY
     ;;
