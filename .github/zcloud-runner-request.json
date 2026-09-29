@@ -5,7 +5,7 @@
   "worker_id": "haxlab::w1",
   "owner_id": "chatgpt:haxlab:w1",
   "payload": {
-    "action": "champion-info",
-    "reason": "read exact live inference runtime metadata"
+    "action": "deploy",
+    "reason": "deploy live HaxBall champion client and service"
   }
 }
