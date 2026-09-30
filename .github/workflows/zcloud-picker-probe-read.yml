@@ -31,14 +31,10 @@ jobs:
           FROM runner_events
           WHERE event IN (
             'thinking-picker-live-probe',
-            'thinking-picker-live-probe-failed',
-            'send-blocked',
-            'thinking-effort-high-required',
-            'prompt-sent',
-            'generation-started'
+            'thinking-picker-live-probe-failed'
           )
           ORDER BY id DESC
-          LIMIT 50
+          LIMIT 30
           """).fetchall()
           print(json.dumps([dict(r) for r in rows], ensure_ascii=False, indent=2))
           PY
