@@ -1,0 +1,59 @@
+name: Refresh zCloud Firefox and Check VM
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/zcloud-vm-refresh-check.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 7
+    steps:
+      - name: Restart Firefox and inspect Violentmonkey version handshake
+        shell: bash
+        run: |
+          set -euo pipefail
+          export XDG_RUNTIME_DIR=/run/user/1000
+          export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+
+          systemctl --user restart chatgpt-firefox.service
+          for i in {1..30}; do
+            systemctl --user is-active --quiet chatgpt-firefox.service && break
+            sleep 1
+          done
+          systemctl --user --no-pager --full status chatgpt-firefox.service | head -n 40 || true
+
+          for i in {1..20}; do
+            curl -fsS --max-time 3 http://127.0.0.1:8765/api/status >/dev/null && break
+            sleep 1
+          done
+
+          sleep 15
+          echo "=== VM HANDSHAKE EVENTS ==="
+          python3 - <<'PY'
+          import json
+          import sqlite3
+          c=sqlite3.connect("/home/ubuntu/zennay-cloud/history.db")
+          c.row_factory=sqlite3.Row
+          rows=c.execute("""
+          SELECT id,ts,project_id,worker_slot,event,reason,error,tab_id
+          FROM runner_events
+          WHERE event IN (
+            'violentmonkey-binding-ready',
+            'violentmonkey-version-mismatch',
+            'violentmonkey-missing-fallback',
+            'thinking-picker-live-probe',
+            'thinking-effort-high-required',
+            'prompt-sent',
+            'generation-started'
+          )
+          ORDER BY id DESC LIMIT 80
+          """).fetchall()
+          print(json.dumps([dict(r) for r in rows], ensure_ascii=False, indent=2))
+          PY
