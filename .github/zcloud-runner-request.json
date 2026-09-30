@@ -5,6 +5,6 @@
   "worker_id": "haxlab::w1",
   "owner_id": "chatgpt:haxlab:w1",
   "payload": {
-    "reason": "runtime-mask HaxLab autonomy so FTMO keeps compute priority"
+    "reason": "close HaxLab autonomy respawn race and keep FTMO compute priority"
   }
 }
