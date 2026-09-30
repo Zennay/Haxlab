@@ -1,11 +1,10 @@
 {
   "version": 1,
-  "operation": "haxlab-action",
+  "operation": "pause-project-compute",
   "project_id": "haxlab",
   "worker_id": "haxlab::w1",
   "owner_id": "chatgpt:haxlab:w1",
   "payload": {
-    "action": "live-host-prereq",
-    "reason": "check whether a secure HaxBall headless token is already installed before starting the room"
+    "reason": "persistently pause HaxLab autonomous training so FTMO owns compute priority"
   }
 }
