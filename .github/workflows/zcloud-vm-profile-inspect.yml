@@ -1,0 +1,52 @@
+name: Inspect zCloud Violentmonkey Profile
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/zcloud-vm-profile-inspect.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 5
+    steps:
+      - name: Inspect Firefox addon metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROFILE=/home/ubuntu/snap/firefox/common/chatgpt-webext-profile
+          echo "=== EXTENSIONS.JSON ==="
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path("/home/ubuntu/snap/firefox/common/chatgpt-webext-profile/extensions.json")
+          if not p.exists():
+              print("extensions.json missing")
+          else:
+              data=json.loads(p.read_text())
+              out=[]
+              for a in data.get("addons",[]):
+                  name=str(a.get("defaultLocale",{}).get("name") or a.get("name") or "")
+                  aid=str(a.get("id") or "")
+                  if "violent" in (name+" "+aid).lower() or "zcloud" in (name+" "+aid).lower():
+                      out.append({
+                        "id":aid,"name":name,"active":a.get("active"),"userDisabled":a.get("userDisabled"),
+                        "appDisabled":a.get("appDisabled"),"path":a.get("path"),"type":a.get("type"),
+                        "version":a.get("version"),"seen":a.get("seen")
+                      })
+              print(json.dumps(out,indent=2))
+          PY
+
+          echo "=== WEBEXTENSION UUID PREF ==="
+          grep -n 'extensions.webextensions.uuids' "$PROFILE/prefs.js" || true
+
+          echo "=== EXTENSIONS DIR ==="
+          find "$PROFILE/extensions" -maxdepth 2 -type f -printf '%p %s bytes\n' 2>/dev/null | head -n 100 || true
+
+          echo "=== MOZ EXTENSION STORAGE ROOTS ==="
+          find "$PROFILE/storage/default" -maxdepth 1 -type d -name 'moz-extension+++*' -print 2>/dev/null | head -n 100 || true
