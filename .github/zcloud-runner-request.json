@@ -1,10 +1,10 @@
 {
   "version": 1,
-  "operation": "pause-project-compute",
+  "operation": "snapshot",
   "project_id": "haxlab",
   "worker_id": "haxlab::w1",
   "owner_id": "chatgpt:haxlab:w1",
   "payload": {
-    "reason": "persistently pause HaxLab autonomous training so FTMO owns compute priority"
+    "reason": "verify persistent HaxLab pause after compute handoff to FTMO"
   }
 }
