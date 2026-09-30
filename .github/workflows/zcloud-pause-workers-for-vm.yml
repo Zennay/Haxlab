@@ -1,0 +1,49 @@
+name: Pause zCloud Workers For VM Update
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/zcloud-pause-workers-for-vm.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pause:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 6
+    steps:
+      - name: Pause currently allocated dynamic workers
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,time,urllib.request
+          BASE="http://127.0.0.1:8765/api"
+          def call(method,path,body=None):
+              data=None if body is None else json.dumps(body).encode()
+              last=None
+              for n in range(12):
+                  try:
+                      req=urllib.request.Request(BASE+path,data=data,method=method,headers={"Content-Type":"application/json"})
+                      with urllib.request.urlopen(req,timeout=15) as r:
+                          return json.loads(r.read() or b"{}")
+                  except Exception as e:
+                      last=e; time.sleep(min(1+n,5))
+              raise SystemExit(f"API failed {method} {path}: {last}")
+          targets=call("GET","/runner-targets")
+          active=[k for k,v in (targets.get("projects") or {}).items() if v.get("active")]
+          print("ACTIVE_BEFORE="+json.dumps(active))
+          open("/tmp/zcloud-vm-paused-workers.json","w").write(json.dumps(active))
+          for key in active:
+              res=call("POST","/runner-control",{"project_id":key,"action":"pause"})
+              print("PAUSE",key,json.dumps(res,sort_keys=True))
+          time.sleep(6)
+          final=call("GET","/runner-targets")
+          still=[k for k,v in (final.get("projects") or {}).items() if v.get("active")]
+          print("ACTIVE_AFTER="+json.dumps(still))
+          if still:
+              raise SystemExit("workers still active: "+repr(still))
+          PY
