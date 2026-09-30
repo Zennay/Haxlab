@@ -30,4 +30,4 @@ jobs:
           free -h
           ps -eo pid,user,%cpu,%mem,etime,comm,args --sort=-%cpu | head -15
 
-# Firefox headroom verification 2026-09-30
+# Firefox headroom verification 2026-09-30\n# FTMO priority pause 2026-09-30T13:15Z
