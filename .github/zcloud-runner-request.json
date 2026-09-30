@@ -5,7 +5,7 @@
   "worker_id": "haxlab::w1",
   "owner_id": "chatgpt:haxlab:w1",
   "payload": {
-    "action": "live-host-keygen",
-    "reason": "prepare encrypted HaxBall headless token handoff before starting live room"
+    "action": "live-host-prereq",
+    "reason": "check whether a secure HaxBall headless token is already installed before starting the room"
   }
 }
