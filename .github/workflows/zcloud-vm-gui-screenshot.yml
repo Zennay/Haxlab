@@ -15,21 +15,27 @@ jobs:
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 4
     steps:
-      - name: Capture current Firefox window
+      - name: Reopen and capture Violentmonkey installer
         shell: bash
         run: |
           set -euo pipefail
           export DISPLAY=:99
           WIN="$(xdotool search --onlyvisible --class firefox 2>/dev/null | tail -n1 || true)"
           test -n "$WIN"
-          echo "WINDOW=$WIN"
-          xdotool getwindowname "$WIN" || true
-          xdotool getwindowgeometry --shell "$WIN" || true
-          command -v import
-          command -v convert
-          import -window "$WIN" /tmp/vm-installer.png
-          convert /tmp/vm-installer.png -resize '650x650>' -quality 48 /tmp/vm-installer.jpg
-          echo "IMAGE_BEGIN"
-          base64 -w0 /tmp/vm-installer.jpg
-          echo
-          echo "IMAGE_END"
+          xdotool windowactivate --sync "$WIN"
+          xdotool key --window "$WIN" ctrl+l
+          xdotool type --window "$WIN" --delay 1 'http://127.0.0.1:8765/zcloud-worker.user.js'
+          xdotool key --window "$WIN" Return
+          sleep 2
+          echo "TITLE=$(xdotool getwindowname "$WIN" || true)"
+          python3 - <<'PY'
+          import base64, io
+          from PIL import ImageGrab
+          img=ImageGrab.grab()
+          img.thumbnail((650,650))
+          buf=io.BytesIO()
+          img.convert("RGB").save(buf,format="JPEG",quality=45,optimize=True)
+          print("IMAGE_BEGIN")
+          print(base64.b64encode(buf.getvalue()).decode())
+          print("IMAGE_END")
+          PY
