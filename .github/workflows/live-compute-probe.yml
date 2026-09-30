@@ -17,10 +17,13 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          sudo pkill -TERM -f '[h]axlab-train-bc' 2>/dev/null || true
-          sudo systemctl stop haxlab-autonomy.service 2>/dev/null || true
+          curl -fsS -H 'Content-Type: application/json' \
+            -d '{"project_id":"haxlab","action":"pause"}' \
+            http://127.0.0.1:8765/api/runner-control || true
           sudo systemctl stop haxlab-autonomy.timer 2>/dev/null || true
-          sleep 2
+          sudo systemctl stop haxlab-autonomy.service 2>/dev/null || true
+          sudo pkill -TERM -f '[h]axlab-train-bc' 2>/dev/null || true
+          sleep 3
 
           echo "=== VERIFY ==="
           echo -n "trainer: "; pgrep -af '[h]axlab-train-bc' || echo "stopped"
@@ -31,3 +34,5 @@ jobs:
           ps -eo pid,user,%cpu,%mem,etime,comm,args --sort=-%cpu | head -15
 
 # Firefox headroom verification 2026-09-30\n# FTMO priority pause 2026-09-30T13:15Z
+
+# Persistent project pause for FTMO priority 2026-09-30T13:17Z
