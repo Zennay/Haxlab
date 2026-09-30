@@ -1,0 +1,71 @@
+name: Inspect Violentmonkey GUI Update
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/zcloud-vm-gui-update-inspect.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 6
+    steps:
+      - name: Open userscript URL and dump Firefox accessibility controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          export DISPLAY=:99
+          export XDG_RUNTIME_DIR=/run/user/1000
+          export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+
+          echo "=== TOOLS ==="
+          command -v xdotool || true
+          python3 -c 'import pyatspi; print("pyatspi=ok")' || true
+
+          WIN="$(xdotool search --onlyvisible --class firefox 2>/dev/null | tail -n1 || true)"
+          if [[ -z "$WIN" ]]; then
+            WIN="$(xdotool search --name 'Mozilla Firefox' 2>/dev/null | tail -n1 || true)"
+          fi
+          echo "firefox_window=$WIN"
+          test -n "$WIN"
+          xdotool windowactivate --sync "$WIN"
+          xdotool key --window "$WIN" ctrl+t
+          sleep 1
+          xdotool key --window "$WIN" ctrl+l
+          xdotool type --window "$WIN" --delay 1 'http://127.0.0.1:8765/zcloud-worker.user.js'
+          xdotool key --window "$WIN" Return
+          sleep 6
+          echo "=== WINDOW TITLE ==="
+          xdotool getwindowname "$WIN" || true
+
+          echo "=== ACCESSIBILITY ==="
+          python3 - <<'PY'
+          import pyatspi
+          desktop=pyatspi.Registry.getDesktop(0)
+          wanted={"push button","toggle button","link","entry","text","page tab","menu item","check box","radio button","heading","label"}
+          out=[]
+          def walk(node,depth=0):
+              if depth>12 or len(out)>500: return
+              try:
+                  role=node.getRoleName()
+                  name=(node.name or "").strip().replace("\n"," ")[:180]
+                  if role in wanted and name:
+                      out.append((depth,role,name))
+                  for child in node:
+                      walk(child,depth+1)
+              except Exception:
+                  return
+          for app in desktop:
+              try:
+                  if "firefox" in (app.name or "").lower():
+                      walk(app)
+              except Exception:
+                  pass
+          for depth,role,name in out:
+              print("  "*min(depth,8)+f"{role}: {name}")
+          PY
