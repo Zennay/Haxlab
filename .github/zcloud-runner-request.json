@@ -1,10 +1,10 @@
 {
   "version": 1,
-  "operation": "pause-project-compute",
+  "operation": "snapshot",
   "project_id": "haxlab",
   "worker_id": "haxlab::w1",
   "owner_id": "chatgpt:haxlab:w1",
   "payload": {
-    "reason": "atomically persist HaxLab pause in zCloud SQLite so FTMO keeps compute priority"
+    "reason": "verify atomic FTMO-priority pause persisted in zCloud source-of-truth"
   }
 }
