@@ -35,6 +35,7 @@ jobs:
           import json
           import os
           import subprocess
+          import sqlite3
           import sys
           import urllib.error
           import urllib.parse
@@ -250,6 +251,22 @@ jobs:
                   "/api/runner-control",
                   {"project_id": project, "action": "pause"},
               )
+              db = sqlite3.connect("/home/ubuntu/zennay-cloud/history.db", timeout=10)
+              try:
+                  db.execute("BEGIN IMMEDIATE")
+                  db.execute(
+                      "INSERT OR IGNORE INTO autonomy_runtime(project_id, initialized_at, manual_pause, last_reason) VALUES(?, datetime('now'), 1, ?)",
+                      (project, "manual_pause_ftmo_priority"),
+                  )
+                  db.execute(
+                      "UPDATE autonomy_runtime SET manual_pause=1, last_reason=? WHERE project_id=?",
+                      ("manual_pause_ftmo_priority", project),
+                  )
+                  db.execute("UPDATE runner_targets SET active=0 WHERE project_id=?", (project,))
+                  db.execute("UPDATE runner_workers SET desired_state='paused' WHERE project_id=?", (project,))
+                  db.commit()
+              finally:
+                  db.close()
               commands = [
                   ["sudo", "pkill", "-TERM", "-f", "[h]axlab-train-bc"],
                   ["sudo", "systemctl", "stop", "haxlab-autonomy.service"],
