@@ -1,11 +1,10 @@
 {
   "version": 1,
-  "operation": "haxlab-action",
+  "operation": "snapshot",
   "project_id": "haxlab",
   "worker_id": "haxlab::w1",
   "owner_id": "chatgpt:haxlab:w1",
   "payload": {
-    "action": "live-host-keygen",
-    "reason": "prepare encrypted one-time handoff for the official HaxBall headless token"
+    "reason": "inspect live VPS CPU/services before pausing HaxLab and starting FTMO autonomous generation"
   }
 }
