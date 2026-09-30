@@ -271,6 +271,7 @@ jobs:
                   ["sudo", "pkill", "-TERM", "-f", "[h]axlab-train-bc"],
                   ["sudo", "systemctl", "stop", "haxlab-autonomy.service"],
                   ["sudo", "systemctl", "stop", "haxlab-autonomy.timer"],
+                  ["sudo", "systemctl", "mask", "--runtime", "haxlab-autonomy.service", "haxlab-autonomy.timer"],
               ]
               command_results = []
               for command in commands:
@@ -288,7 +289,7 @@ jobs:
                       "output": proc.stdout[-4000:],
                   })
               verify = subprocess.run(
-                  ["bash", "-lc", "printf 'trainer='; pgrep -af '[h]axlab-train-bc' || true; printf 'service='; systemctl is-active haxlab-autonomy.service 2>/dev/null || true; printf 'timer='; systemctl is-active haxlab-autonomy.timer 2>/dev/null || true"],
+                  ["bash", "-lc", "printf 'trainer='; pgrep -af '[h]axlab-train-bc' || true; printf 'service='; systemctl is-active haxlab-autonomy.service 2>/dev/null || true; printf 'timer='; systemctl is-active haxlab-autonomy.timer 2>/dev/null || true; printf 'service_mask='; systemctl is-enabled haxlab-autonomy.service 2>/dev/null || true; printf 'timer_mask='; systemctl is-enabled haxlab-autonomy.timer 2>/dev/null || true"],
                   text=True,
                   stdout=subprocess.PIPE,
                   stderr=subprocess.STDOUT,
