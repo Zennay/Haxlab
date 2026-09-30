@@ -1,0 +1,55 @@
+name: Targeted zCloud Browser Fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/zcloud-targeted-browser-fix.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fix:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 8
+    steps:
+      - name: Publish userscript source and locate Violentmonkey cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZCLOUD_SHA=d495ccd3da75375d4d4384f47226972c39984816
+          SRC=/tmp/zcloud-worker.user.js
+          RUNTIME=/home/ubuntu/zennay-cloud/public/zcloud-worker.user.js
+          PROFILE=/home/ubuntu/snap/firefox/common/chatgpt-webext-profile
+
+          sudo -n systemctl restart zennay-cloud.service || true
+          for i in {1..20}; do
+            curl -fsS --max-time 3 http://127.0.0.1:8765/api/status >/dev/null && break
+            sleep 1
+          done
+
+          curl -fsSL "https://raw.githubusercontent.com/Zennay/zCloud/$ZCLOUD_SHA/public/zcloud-worker.user.js" -o "$SRC"
+          grep -q '@version      1.1.4' "$SRC"
+          grep -q 'thinkingEffortPicker' "$SRC"
+          grep -q 'High selector' "$SRC"
+
+          cp -a "$RUNTIME" "$RUNTIME.pre-effort-selector.bak" || true
+          install -m 0644 "$SRC" "$RUNTIME"
+
+          echo "=== SERVED USERSCRIPT ==="
+          curl -fsS http://127.0.0.1:8765/zcloud-worker.user.js | grep -E '@version|SCRIPT_VERSION|thinkingEffortPicker|High selector' | head -n 20
+
+          echo "=== PROFILE MATCHES: zCloud worker ==="
+          find "$PROFILE" -type f -size -20M -print0 2>/dev/null |
+            xargs -0 -r grep -Il -m1 'zCloud Dynamic Worker' 2>/dev/null |
+            head -n 30 || true
+
+          echo "=== PROFILE MATCHES: SCRIPT_VERSION 1.1.3 ==="
+          find "$PROFILE" -type f -size -20M -print0 2>/dev/null |
+            xargs -0 -r grep -Il -m1 'SCRIPT_VERSION = "1.1.3"' 2>/dev/null |
+            head -n 30 || true
+
+          echo "=== VIOLENTMONKEY EXTENSION STORAGE DIRS ==="
+          find "$PROFILE" -maxdepth 5 -type d \( -iname '*violent*' -o -iname '*extension*storage*' -o -iname 'storage' \) -print 2>/dev/null | head -n 80 || true
