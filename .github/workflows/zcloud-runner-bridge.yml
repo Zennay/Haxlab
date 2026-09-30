@@ -268,10 +268,13 @@ jobs:
               finally:
                   db.close()
               commands = [
-                  ["sudo", "pkill", "-TERM", "-f", "[h]axlab-train-bc"],
-                  ["sudo", "systemctl", "stop", "haxlab-autonomy.service"],
                   ["sudo", "systemctl", "stop", "haxlab-autonomy.timer"],
                   ["sudo", "systemctl", "mask", "--runtime", "haxlab-autonomy.service", "haxlab-autonomy.timer"],
+                  ["sudo", "systemctl", "daemon-reload"],
+                  ["sudo", "systemctl", "stop", "haxlab-autonomy.service"],
+                  ["sudo", "systemctl", "kill", "--kill-who=all", "--signal=TERM", "haxlab-autonomy.service"],
+                  ["sudo", "pkill", "-TERM", "-f", "[h]axlab-train-bc"],
+                  ["sudo", "pkill", "-KILL", "-f", "[h]axlab-train-bc"],
               ]
               command_results = []
               for command in commands:
