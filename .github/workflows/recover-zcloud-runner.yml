@@ -25,11 +25,7 @@ jobs:
           systemctl is-active zennay-cloud.service
           for i in {1..20}; do
             if curl -fsS --max-time 3 http://127.0.0.1:8765/api/status >/tmp/zcloud-status.json; then
-              python3 - <<'PY'
-import json
-s=json.load(open("/tmp/zcloud-status.json"))
-print(json.dumps({"time":s.get("time"),"errors":s.get("errors"),"dynamic_workers":s.get("dynamic_workers"),"firefox":s.get("chatgpt_firefox")}, indent=2))
-PY
+              python3 -c 'import json; s=json.load(open("/tmp/zcloud-status.json")); print(json.dumps({"time":s.get("time"),"errors":s.get("errors"),"dynamic_workers":s.get("dynamic_workers"),"firefox":s.get("chatgpt_firefox")}, indent=2))'
               exit 0
             fi
             sleep 1
