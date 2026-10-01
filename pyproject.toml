@@ -43,6 +43,7 @@ haxlab-elite-status = "haxlab.learning.elite_status:main"
 haxlab-sandbox-gate = "haxlab.evaluation.sandbox_gate:main"
 haxlab-scenario-source = "haxlab.evaluation.scenario_source:main"
 haxlab-replay-audit = "haxlab.evaluation.replay_population_audit:main"
+haxlab-freeze-multisource-suite = "haxlab.evaluation.multisource_suite:main"
 haxlab-replay-seeded-duel = "haxlab.evaluation.replay_duel:main"
 
 [tool.setuptools]
