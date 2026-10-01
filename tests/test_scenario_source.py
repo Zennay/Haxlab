@@ -70,3 +70,45 @@ def test_select_scenario_source_skips_excluded_sha(
 
     assert result["sha256"] == "b" * 64
     assert result["excluded_sha256_count"] == 1
+
+
+def test_select_scenario_sources_returns_deterministic_disjoint_set(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "state.sqlite3"
+    _db(db_path)
+
+    def fake_healthy_candidate(**kwargs):
+        return {
+            "schema": "haxlab-replay-scenario-source-v1",
+            "sha256": kwargs["sha256"],
+            "raw_path": kwargs["raw_path"],
+            "analysis_path": kwargs["analysis_path"],
+        }
+
+    monkeypatch.setattr(
+        scenario_source,
+        "_healthy_candidate",
+        fake_healthy_candidate,
+    )
+
+    result = scenario_source.select_scenario_sources(
+        db_path,
+        count=2,
+    )
+
+    assert result["schema"] == "haxlab-replay-scenario-source-set-v2"
+    assert result["selection_algorithm"] == (
+        "state-pass-v4-sampled-states-desc-sha256-asc"
+    )
+    assert result["source_count"] == 2
+    assert [source["sha256"] for source in result["sources"]] == [
+        "a" * 64,
+        "b" * 64,
+    ]
+    assert len({source["sha256"] for source in result["sources"]}) == 2
+    assert all(
+        "excluded_sha256_count" not in source
+        for source in result["sources"]
+    )
