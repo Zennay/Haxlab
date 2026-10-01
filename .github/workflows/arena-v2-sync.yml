@@ -1,0 +1,57 @@
+name: Sync Arena v2 branch with main
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/arena-v2-sync.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    steps:
+      - name: Fetch current branches
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: experiment/closed-loop-arena-v2
+
+      - name: Merge current main fail-safe
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "zCloud HaxLab worker"
+          git config user.email "actions@users.noreply.github.com"
+          git fetch origin main experiment/closed-loop-arena-v2
+
+          before="$(git rev-parse HEAD)"
+          main="$(git rev-parse origin/main)"
+          echo "ARENA_BRANCH_BEFORE=$before"
+          echo "MAIN_HEAD=$main"
+
+          set +e
+          git merge --no-commit --no-ff origin/main
+          rc=$?
+          set -e
+
+          if [ "$rc" -ne 0 ]; then
+            echo "ARENA_SYNC_CONFLICTS_BEGIN"
+            git diff --name-only --diff-filter=U | sort
+            echo "ARENA_SYNC_CONFLICTS_END"
+            git merge --abort || true
+            exit 2
+          fi
+
+          if git diff --cached --quiet && git diff --quiet; then
+            echo "ARENA_SYNC_ALREADY_CURRENT"
+            exit 0
+          fi
+
+          git commit -m "Sync Closed-Loop Arena v2 with current main"
+          git push origin HEAD:experiment/closed-loop-arena-v2
+          echo "ARENA_BRANCH_AFTER=$(git rev-parse HEAD)"
