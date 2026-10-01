@@ -1,10 +1,10 @@
 {
   "version": 1,
-  "operation": "haxlab-action",
+  "operation": "pause-project-compute",
   "project_id": "haxlab",
   "worker_id": "haxlab::w1",
-  "owner_id": "chatgpt:haxlab:w1",
+  "owner_id": "chatgpt:ftmo-useful-compute:w1",
   "payload": {
-    "action": "live-play-probe"
+    "reason": "FTMO P0 useful-compute attribution and throughput proof"
   }
 }
