@@ -40,9 +40,24 @@ jobs:
           set -e
 
           if [ "$rc" -ne 0 ]; then
+            mapfile -t conflicts < <(git diff --name-only --diff-filter=U | sort)
             echo "ARENA_SYNC_CONFLICTS_BEGIN"
-            git diff --name-only --diff-filter=U | sort
+            printf '%s\n' "${conflicts[@]}"
             echo "ARENA_SYNC_CONFLICTS_END"
+
+            if [ "${#conflicts[@]}" -eq 1 ] && [ "${conflicts[0]}" = "pyproject.toml" ]; then
+              # The Arena branch pyproject is deliberately maintained as the
+              # union of the Arena CLI entries plus current-main scripts. Keep
+              # that validated superset for this one known textual conflict.
+              git checkout --ours -- pyproject.toml
+              git add pyproject.toml
+              git commit -m "Merge current main into Closed-Loop Arena v2"
+              git push origin HEAD:experiment/closed-loop-arena-v2
+              echo "ARENA_SYNC_RESOLVED=pyproject-union"
+              echo "ARENA_BRANCH_AFTER=$(git rev-parse HEAD)"
+              exit 0
+            fi
+
             git merge --abort || true
             exit 2
           fi
