@@ -5,6 +5,6 @@
   "worker_id": "haxlab::w1",
   "owner_id": "chatgpt:haxlab:w1",
   "payload": {
-    "action": "champion-info"
+    "action": "champion-runtime"
   }
 }
