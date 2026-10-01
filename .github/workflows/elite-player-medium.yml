@@ -1,0 +1,132 @@
+name: Elite Player Medium Candidate
+
+on:
+  push:
+    branches:
+      - feature/elite-4v4-player-v01
+    paths:
+      - ".github/workflows/elite-player-medium.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  medium:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 240
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build alias-aware leaderboard
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab mkdir -p /var/lib/haxlab/derived/leaderboards
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m haxlab.skill.leaderboard \
+            --root /var/lib/haxlab/derived/state-pass-v4 \
+            --top 10000 \
+            --min-matches 1 \
+            --min-minutes 0 \
+            --aliases "$GITHUB_WORKSPACE/configs/player_aliases.json" \
+            --format json \
+            --output /var/lib/haxlab/derived/leaderboards/elite-medium.json \
+            >/tmp/haxlab-elite-medium-leaderboard.json
+
+      - name: Train medium candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=/var/lib/haxlab/derived/training/elite-player-medium
+          sudo -u haxlab rm -rf "$ROOT"
+          sudo -u haxlab env \
+            PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            NODE_PATH=/opt/haxlab/node_modules \
+            /opt/haxlab/.venv/bin/python -m haxlab.learning.elite_pipeline \
+            --analysis-root /var/lib/haxlab/derived/state-pass-v4 \
+            --leaderboard /var/lib/haxlab/derived/leaderboards/elite-medium.json \
+            --raw-root /var/lib/haxlab/raw/replays \
+            --work-root "$ROOT" \
+            --node-script "$GITHUB_WORKSPACE/tools/extract_elite_imitation.js" \
+            --aliases "$GITHUB_WORKSPACE/configs/player_aliases.json" \
+            --replay-limit 200 \
+            --epochs 3 \
+            --window 8 \
+            --sequence-stride 1 \
+            --hidden-dim 128 \
+            --hidden-dim-2 96 \
+            --batch-size 2048 \
+            --shard-workers 3 \
+            | tee /tmp/haxlab-elite-medium.log
+
+      - name: Check offline gate
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m haxlab.evaluation.elite_gate \
+            /var/lib/haxlab/derived/training/elite-player-medium/model/metrics.json \
+            --output /var/lib/haxlab/derived/training/elite-player-medium/offline-gate.json
+
+      - name: Extract BFF Big v4 stadium
+        shell: bash
+        run: |
+          set -euo pipefail
+          RAW_REPLAY="$(
+            /opt/haxlab/.venv/bin/python - <<'PY'
+          import sqlite3
+          db = sqlite3.connect("/var/lib/haxlab/state/haxlab.sqlite3")
+          row = db.execute("""
+          SELECT r.archive_path
+          FROM source_files s
+          JOIN raw_replays r ON r.sha256 = s.sha256
+          WHERE lower(s.source_path) LIKE '%kjambvsado%'
+          ORDER BY s.last_seen_at DESC
+          LIMIT 1
+          """).fetchone()
+          if row:
+              print(row[0])
+          PY
+          )"
+          test -n "$RAW_REPLAY"
+          NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/extract_stadium_from_replay.js" \
+            "$RAW_REPLAY" /tmp/haxlab-medium-stadium.hbs
+
+      - name: Run medium 4v4 arena
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node \
+            "$GITHUB_WORKSPACE/tools/elite_sandbox_benchmark.js" \
+            --model /var/lib/haxlab/derived/training/elite-player-medium/model/runtime-model.json \
+            --stadium /tmp/haxlab-medium-stadium.hbs \
+            --matches 12 \
+            --minutes 1 \
+            --sample-every 6 \
+            --output /var/lib/haxlab/derived/training/elite-player-medium/sandbox-benchmark.json
+
+      - name: Collect medium candidate evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT=elite-medium-evidence
+          mkdir -p "$OUT"
+          sudo cp /var/lib/haxlab/derived/training/elite-player-medium/pipeline-summary.json "$OUT/pipeline-summary.json"
+          sudo cp /var/lib/haxlab/derived/training/elite-player-medium/model/metrics.json "$OUT/model-metrics.json"
+          sudo cp /var/lib/haxlab/derived/training/elite-player-medium/offline-gate.json "$OUT/offline-gate.json" 2>/dev/null || true
+          sudo cp /var/lib/haxlab/derived/training/elite-player-medium/sandbox-benchmark.json "$OUT/sandbox-benchmark.json"
+          sudo chown -R "$USER":"$USER" "$OUT"
+
+          echo "## Medium candidate" >> "$GITHUB_STEP_SUMMARY"
+          cat "$OUT/pipeline-summary.json" >> "$GITHUB_STEP_SUMMARY"
+          echo >> "$GITHUB_STEP_SUMMARY"
+          cat "$OUT/sandbox-benchmark.json" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: elite-medium-candidate-evidence
+          path: elite-medium-evidence
+          retention-days: 14
