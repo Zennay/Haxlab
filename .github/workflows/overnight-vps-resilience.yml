@@ -1,0 +1,33 @@
+name: Overnight VPS resilience probe
+
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/overnight-vps-resilience.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 5
+    steps:
+      - name: Verify restart and timer resilience
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== HAXLAB RESTART POLICY ==="
+          for u in haxlab-ingest.service haxlab-worker.service haxlab-analyzer.service; do
+            systemctl show "$u" -p Id -p ActiveState -p SubState -p Restart -p RestartUSec -p NRestarts -p Result -p ExecMainStatus
+          done
+          echo "=== HAXLAB TIMERS ==="
+          systemctl list-timers --all --no-pager | grep -i haxlab || true
+          echo "=== FTMO RESILIENCE ==="
+          systemctl show ftmo-autonomous.service -p Id -p ActiveState -p SubState -p Result -p ExecMainStatus -p NRestarts
+          systemctl show ftmo-autonomous.timer -p Id -p ActiveState -p SubState -p Unit -p NextElapseUSecRealtime -p LastTriggerUSec -p Persistent
+          systemctl is-enabled ftmo-autonomous.timer
+          echo "=== FTMO RECENT JOURNAL ==="
+          journalctl --no-pager -u ftmo-autonomous.service --since "-90 min" -n 100 || true
+          echo "=== OOM / KERNEL ==="
+          journalctl -k --no-pager --since "-6 hours" | grep -Ei 'oom|out of memory|killed process' | tail -50 || true

@@ -1,0 +1,31 @@
+name: Overnight VPS health probe
+
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/overnight-vps-health.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 5
+    steps:
+      - name: Probe HaxLab and FTMO overnight runtime
+        shell: bash
+        run: |
+          set -uo pipefail
+          echo "=== HOST ==="; date -Is; uptime; free -h; df -h /
+          echo "=== HAXLAB SERVICES ==="
+          systemctl is-active haxlab-ingest.service haxlab-worker.service haxlab-analyzer.service || true
+          systemctl show haxlab-ingest.service haxlab-worker.service haxlab-analyzer.service -p Id -p ActiveState -p SubState -p NRestarts --no-pager || true
+          echo "=== HAXLAB AUTONOMY ==="; sudo cat /var/lib/haxlab/state/autonomy-status.json 2>/dev/null || true
+          echo "=== HAXLAB STATUS ==="; sudo -u haxlab haxlab-status 2>&1 || sudo /usr/local/sbin/haxlab-actions-control status 2>&1 || true
+          echo "=== HAXLAB WARNINGS 60M ==="; journalctl --no-pager --since "-60 min" -u haxlab-ingest.service -u haxlab-worker.service -u haxlab-analyzer.service -p warning 2>&1 | tail -120 || true
+          echo "=== FTMO UNITS ==="; systemctl list-units --all --no-pager | grep -Ei 'ftmo|research|paper' || true
+          echo "=== FTMO TIMERS ==="; systemctl list-timers --all --no-pager | grep -Ei 'ftmo|research|paper' || true
+          echo "=== FTMO AUTONOMY ==="; cat /opt/ftmo-autonomous/.scratch/autonomy/status.json 2>/dev/null || true
+          echo "=== FTMO RECENT ==="; find /opt/ftmo-autonomous/.scratch -maxdepth 3 -type f \( -name '*.json' -o -name '*.log' \) -mmin -180 -printf '%TY-%Tm-%TdT%TH:%TM:%TS %p\n' 2>/dev/null | sort | tail -80 || true
+          echo "=== FAILED SYSTEMD ==="; systemctl --failed --no-pager || true

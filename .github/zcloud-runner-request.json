@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "operation": "haxlab-action",
+  "project_id": "haxlab",
+  "worker_id": "haxlab::w1",
+  "owner_id": "chatgpt:haxlab:w1",
+  "payload": {
+    "action": "live-play-probe"
+  }
+}

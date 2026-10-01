@@ -16,7 +16,7 @@ copy_chunk_size_bytes = 1048576
 # Do not train just because one new replay exists.
 minimum_new_usable_matches = 250
 minimum_new_gold_or_elite_matches = 50
-automatic_training_enabled = false
+automatic_training_enabled = true
 
 [evaluation]
 minimum_games_vs_champion = 500

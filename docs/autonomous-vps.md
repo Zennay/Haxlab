@@ -130,3 +130,20 @@ The daemon should stay lightweight when idle.
 CPU-heavy parsing/training runs are explicit jobs with concurrency limits. Training and evaluation must not starve ingestion or make the VPS unresponsive.
 
 The runtime ledger is the source of truth for what has already been seen, archived, parsed, trained on and evaluated.
+
+
+## VPS autonomy reconciler
+
+The continuous ingest/worker/analyzer services are complemented by
+`haxlab-autonomy.timer`, which runs a bounded reconciliation every ten minutes.
+
+The reconciler automatically:
+- waits for ingest/analysis to finish;
+- refreshes the current skill leaderboard when missing;
+- builds the versioned human-imitation manifest when missing;
+- writes `/var/lib/haxlab/state/autonomy-status.json` using explicit
+  `RUNNING / BLOCKED / NEEDS_AI / FAILED_RETRYABLE` states.
+
+Training or champion promotion remains fail-closed until the current Closed-Loop
+Arena v2 / guard-independence executor is audited on canonical main. The timer
+must never fall back to the legacy rule "new data means auto-promote".

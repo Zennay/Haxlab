@@ -1,0 +1,89 @@
+name: Recover zCloud Actions Runner
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/recover-zcloud-runner.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 5
+    steps:
+      - name: Recover zCloud web service
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! systemctl is-active --quiet zennay-cloud.service; then
+            sudo -n systemctl restart zennay-cloud.service
+          fi
+          systemctl is-active zennay-cloud.service
+          for i in {1..20}; do
+            if curl -fsS --max-time 3 http://127.0.0.1:8765/api/status >/tmp/zcloud-status.json; then
+              python3 -c 'import json; s=json.load(open("/tmp/zcloud-status.json")); print(json.dumps({"time":s.get("time"),"errors":s.get("errors"),"dynamic_workers":s.get("dynamic_workers"),"firefox":s.get("chatgpt_firefox")}, indent=2))'
+              exit 0
+            fi
+            sleep 1
+          done
+          journalctl -u zennay-cloud.service -n 80 --no-pager || true
+          exit 2
+
+      - name: Recover zCloud runner on shared VPS
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== system runner units ==="
+          systemctl list-unit-files --type=service --no-pager | grep -Ei 'actions\.runner|zcloud' || true
+          echo "=== user runner units ==="
+          systemctl --user list-unit-files --type=service --no-pager | grep -Ei 'actions\.runner|zcloud' || true
+
+          mapfile -t system_units < <(
+            systemctl list-unit-files --type=service --no-legend 2>/dev/null |
+            awk '{print $1}' |
+            grep -Ei '^actions\.runner\..*zcloud.*\.service$' || true
+          )
+          mapfile -t user_units < <(
+            systemctl --user list-unit-files --type=service --no-legend 2>/dev/null |
+            awk '{print $1}' |
+            grep -Ei '^actions\.runner\..*zcloud.*\.service$' || true
+          )
+
+          if (( ${#system_units[@]} == 0 && ${#user_units[@]} == 0 )); then
+            echo "No zCloud Actions runner service found" >&2
+            exit 2
+          fi
+
+          recovered=0
+          for unit in "${system_units[@]}"; do
+            echo "Attempting system recovery for $unit"
+            if sudo -n systemctl restart "$unit"; then
+              sudo -n systemctl is-active "$unit"
+              recovered=1
+            else
+              echo "sudo restart failed for $unit"
+            fi
+          done
+          for unit in "${user_units[@]}"; do
+            echo "Attempting user recovery for $unit"
+            if systemctl --user restart "$unit"; then
+              systemctl --user is-active "$unit"
+              recovered=1
+            else
+              echo "user restart failed for $unit"
+            fi
+          done
+
+          if (( recovered == 0 )); then
+            echo "Found zCloud runner but could not restart it" >&2
+            exit 3
+          fi
+
+          sleep 3
+          echo "=== recovered status ==="
+          for unit in "${system_units[@]}"; do sudo -n systemctl --no-pager --full status "$unit" || true; done
+          for unit in "${user_units[@]}"; do systemctl --user --no-pager --full status "$unit" || true; done

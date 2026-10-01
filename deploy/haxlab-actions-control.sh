@@ -6,7 +6,7 @@ STATE_DB="${HAXLAB_STATE_DB:-/var/lib/haxlab/state/haxlab.sqlite3}"
 CURRENT_ANALYZER_VERSION="$("${APP_DIR}/.venv/bin/python" -c 'from haxlab.runtime.state import CURRENT_ANALYZER_VERSION; print(CURRENT_ANALYZER_VERSION)')"
 
 usage() {
-  echo "Usage: haxlab-actions-control {status|deploy|restart-analyzer|retry-failed-analysis|feature-smoke|player-stats|skill-leaderboard|training-manifest|analyzer-logs|failed-analysis}" >&2
+  echo "Usage: haxlab-actions-control {status|deploy|champion-info|champion-runtime|live-play-probe|live-play-start ROOM_ID|live-play-stop|live-play-status|live-host-prereq|live-host-keygen|live-host-install-token CIPHERTEXT|live-host-start|live-host-status|restart-analyzer|retry-failed-analysis|feature-smoke|player-stats|skill-leaderboard|training-manifest|analyzer-logs|failed-analysis}" >&2
   exit 2
 }
 
@@ -48,6 +48,290 @@ case "${action}" in
       ORDER BY count DESC
       LIMIT 15;
     " || true
+    ;;
+
+  champion-info)
+    root="/var/lib/haxlab/derived/champions/elite-player"
+    echo "=== champion root ==="
+    if [[ ! -d "${root}" ]]; then
+      echo "missing: ${root}" >&2
+      exit 1
+    fi
+    ls -la "${root}" || true
+    echo
+    "${APP_DIR}/.venv/bin/python" - "${root}" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+import numpy as np
+
+root = Path(sys.argv[1])
+metrics_files = sorted(
+    root.glob("versions/*/metrics.json"),
+    key=lambda p: p.stat().st_mtime,
+    reverse=True,
+)
+if not metrics_files:
+    raise SystemExit("no champion metrics found")
+
+rows = []
+for metrics_path in metrics_files[:8]:
+    try:
+        metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        rows.append({"path": str(metrics_path), "error": str(exc)})
+        continue
+    version_dir = metrics_path.parent
+    model_candidates = sorted(version_dir.glob("*.npz"))
+    model_info = []
+    for model_path in model_candidates:
+        try:
+            with np.load(model_path, allow_pickle=False) as data:
+                model_info.append({
+                    "path": str(model_path),
+                    "keys": sorted(data.files),
+                    "shapes": {k: list(data[k].shape) for k in data.files},
+                })
+        except Exception as exc:
+            model_info.append({"path": str(model_path), "error": str(exc)})
+    rows.append({
+        "version": version_dir.name,
+        "metrics_path": str(metrics_path),
+        "metrics": metrics,
+        "models": model_info,
+    })
+
+runtime_documents = []
+for row in rows[:3]:
+    if not isinstance(row, dict):
+        continue
+    metrics = row.get("metrics") or {}
+    runtime_path = metrics.get("runtime_model_path")
+    if not runtime_path:
+        continue
+    path = Path(str(runtime_path))
+    if not path.is_file():
+        runtime_documents.append({"path": str(path), "error": "missing"})
+        continue
+    try:
+        runtime_documents.append({
+            "path": str(path),
+            "payload": json.loads(path.read_text(encoding="utf-8")),
+        })
+    except Exception as exc:
+        runtime_documents.append({"path": str(path), "error": str(exc)})
+
+print(json.dumps({
+    "root": str(root),
+    "versions": rows,
+    "runtime_documents": runtime_documents,
+}, indent=2, sort_keys=True))
+PY
+    ;;
+
+  champion-runtime)
+    root="/var/lib/haxlab/derived/champions/elite-player"
+    "${APP_DIR}/.venv/bin/python" - "${root}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+metrics_files = sorted(
+    root.glob("versions/*/metrics.json"),
+    key=lambda p: p.stat().st_mtime,
+    reverse=True,
+)
+if not metrics_files:
+    raise SystemExit("no champion metrics found")
+metrics_path = metrics_files[0]
+metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+runtime_path = Path(str(metrics.get("runtime_model_path") or ""))
+runtime = None
+if runtime_path.is_file():
+    runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
+print(json.dumps({
+    "version": metrics_path.parent.name,
+    "metrics_path": str(metrics_path),
+    "runtime_model_path": str(runtime_path),
+    "architecture": metrics.get("architecture"),
+    "base_input_columns": metrics.get("base_input_columns"),
+    "runtime": metrics.get("runtime"),
+    "training": metrics.get("training"),
+    "runtime_model": runtime,
+}, indent=2, sort_keys=True))
+PY
+    ;;
+
+  live-play-probe)
+    "${APP_DIR}/.venv/bin/python" -m haxlab.live.inference --probe
+    node --check "${APP_DIR}/tools/live_haxball_bot.js"
+    ;;
+
+  live-play-start)
+    room_id="${2:-}"
+    if [[ ! "${room_id}" =~ ^[A-Za-z0-9_-]{4,80}$ ]]; then
+      echo "invalid room id" >&2
+      exit 2
+    fi
+    env_file="/var/lib/haxlab/state/live-play.env"
+    tmp_file="$(mktemp)"
+    {
+      printf 'HAXLAB_ROOM_ID=%s\n' "${room_id}"
+      printf 'HAXLAB_PLAYER_NAME=%s\n' "HaxLab AI"
+      printf 'HAXLAB_PLAYER_AVATAR=%s\n' "AI"
+      printf 'HAXLAB_LIVE_ROLE=%s\n' "st"
+      printf 'HAXLAB_INFER_EVERY_TICKS=%s\n' "2"
+    } >"${tmp_file}"
+    install -o haxlab -g haxlab -m 0600 "${tmp_file}" "${env_file}"
+    rm -f "${tmp_file}"
+    systemctl restart haxlab-live-bot.service
+    sleep 2
+    systemctl --no-pager --full status haxlab-live-bot.service || true
+    journalctl -u haxlab-live-bot.service -n 80 --no-pager
+    ;;
+
+  live-play-stop)
+    systemctl stop haxlab-live-bot.service 2>/dev/null || true
+    echo "stopped"
+    ;;
+
+  live-play-status)
+    systemctl --no-pager --full status haxlab-live-bot.service || true
+    echo
+    if [[ -s /var/lib/haxlab/state/live-room-link ]]; then
+      echo "=== room link ==="
+      cat /var/lib/haxlab/state/live-room-link
+      echo
+    fi
+    journalctl -u haxlab-live-bot.service -n 120 --no-pager || true
+    ;;
+
+  live-host-prereq)
+    token_file="/var/lib/haxlab/state/haxball-headless-token"
+    if [[ -s "${token_file}" ]]; then
+      token_len="$(tr -d '\r\n' <"${token_file}" | wc -c | tr -d ' ')"
+      echo "headless_token=present"
+      echo "headless_token_length=${token_len}"
+    else
+      echo "headless_token=missing"
+      echo "token_url=https://www.haxball.com/headlesstoken"
+      exit 3
+    fi
+    ;;
+
+  live-host-keygen)
+    private_key="/var/lib/haxlab/state/live-host-token-key.pem"
+    public_key="/var/lib/haxlab/state/live-host-token-key.pub.pem"
+    if [[ ! -s "${private_key}" ]]; then
+      openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "${private_key}" >/dev/null 2>&1
+      chown root:root "${private_key}"
+      chmod 0600 "${private_key}"
+    fi
+    openssl pkey -in "${private_key}" -pubout -out "${public_key}" >/dev/null 2>&1
+    chmod 0644 "${public_key}"
+    echo "=== live host token public key ==="
+    cat "${public_key}"
+    ;;
+
+  live-host-install-token)
+    ciphertext="${2:-}"
+    private_key="/var/lib/haxlab/state/live-host-token-key.pem"
+    token_file="/var/lib/haxlab/state/haxball-headless-token"
+    if [[ ! -s "${private_key}" ]]; then
+      echo "missing host-token private key; run live-host-keygen first" >&2
+      exit 3
+    fi
+    if [[ ! "${ciphertext}" =~ ^[A-Za-z0-9+/=]{100,1000}$ ]]; then
+      echo "invalid encrypted token payload" >&2
+      exit 2
+    fi
+    encrypted_tmp="$(mktemp)"
+    token_tmp="$(mktemp)"
+    trap 'rm -f "${encrypted_tmp}" "${token_tmp}"' EXIT
+    printf '%s' "${ciphertext}" | base64 -d >"${encrypted_tmp}"
+    openssl pkeyutl -decrypt       -inkey "${private_key}"       -in "${encrypted_tmp}"       -out "${token_tmp}"       -pkeyopt rsa_padding_mode:oaep       -pkeyopt rsa_oaep_md:sha256
+    token="$(tr -d '\r\n' <"${token_tmp}")"
+    if [[ ${#token} -lt 20 || ${#token} -gt 512 ]]; then
+      echo "decrypted token has invalid length" >&2
+      exit 3
+    fi
+    printf '%s\n' "${token}" >"${token_tmp}"
+    install -o root -g root -m 0600 "${token_tmp}" "${token_file}"
+    echo "headless_token=installed_securely"
+    trap - EXIT
+    rm -f "${encrypted_tmp}" "${token_tmp}"
+    "$0" live-host-start
+    ;;
+
+  live-host-start)
+    token_file="/var/lib/haxlab/state/haxball-headless-token"
+    token=""
+    if [[ -s "${token_file}" ]]; then
+      token="$(tr -d '\r\n' <"${token_file}")"
+      if [[ ${#token} -lt 20 || ${#token} -gt 512 ]]; then
+        echo "headless_token=invalid_length" >&2
+        exit 3
+      fi
+      echo "headless_token=present"
+    else
+      echo "headless_token=missing_trying_without_token"
+    fi
+    env_file="/var/lib/haxlab/state/live-play.env"
+    tmp_file="$(mktemp)"
+    {
+      printf 'HAXLAB_LIVE_MODE=%s\n' "host"
+      if [[ -n "${token}" ]]; then
+        printf 'HAXLAB_HEADLESS_TOKEN=%s\n' "${token}"
+      fi
+      printf 'HAXLAB_HOST_ROOM_NAME=%s\n' "HaxLab AI Challenge"
+      printf 'HAXLAB_HOST_MAX_PLAYERS=%s\n' "4"
+      printf 'HAXLAB_HOST_PUBLIC=%s\n' "0"
+      printf 'HAXLAB_ROOM_LINK_FILE=%s\n' "/var/lib/haxlab/state/live-room-link"
+      printf 'HAXLAB_PLAYER_NAME=%s\n' "HaxLab AI"
+      printf 'HAXLAB_PLAYER_AVATAR=%s\n' "AI"
+      printf 'HAXLAB_LIVE_ROLE=%s\n' "st"
+      printf 'HAXLAB_INFER_EVERY_TICKS=%s\n' "2"
+    } >"${tmp_file}"
+    install -o haxlab -g haxlab -m 0600 "${tmp_file}" "${env_file}"
+    rm -f "${tmp_file}"
+    rm -f /var/lib/haxlab/state/live-room-link
+    systemctl restart haxlab-live-bot.service
+    for _ in {1..15}; do
+      if [[ -s /var/lib/haxlab/state/live-room-link ]]; then
+        break
+      fi
+      if ! systemctl is-active --quiet haxlab-live-bot.service; then
+        break
+      fi
+      sleep 1
+    done
+    systemctl --no-pager --full status haxlab-live-bot.service || true
+    echo
+    if [[ -s /var/lib/haxlab/state/live-room-link ]]; then
+      echo "=== room link ==="
+      cat /var/lib/haxlab/state/live-room-link
+    else
+      echo "room_link=pending_or_failed"
+    fi
+    echo
+    journalctl -u haxlab-live-bot.service -n 120 --no-pager || true
+    test -s /var/lib/haxlab/state/live-room-link
+    ;;
+
+  live-host-status)
+    systemctl --no-pager --full status haxlab-live-bot.service || true
+    echo
+    if [[ -s /var/lib/haxlab/state/live-room-link ]]; then
+      echo "=== room link ==="
+      cat /var/lib/haxlab/state/live-room-link
+    else
+      echo "room_link=missing"
+    fi
+    echo
+    journalctl -u haxlab-live-bot.service -n 120 --no-pager || true
     ;;
 
   restart-analyzer)

@@ -1,0 +1,40 @@
+name: Read zCloud Thinking Picker Probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/zcloud-picker-probe-read.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  read:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 5
+    steps:
+      - name: Read live picker probe and runner state
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== PICKER EVENTS ==="
+          python3 - <<'PY'
+          import json
+          import sqlite3
+
+          c = sqlite3.connect("/home/ubuntu/zennay-cloud/history.db")
+          c.row_factory = sqlite3.Row
+          rows = c.execute("""
+          SELECT id,ts,project_id,worker_slot,event,reason,error,tab_id
+          FROM runner_events
+          WHERE event IN (
+            'thinking-picker-live-probe',
+            'thinking-picker-live-probe-failed'
+          )
+          ORDER BY id DESC
+          LIMIT 30
+          """).fetchall()
+          print(json.dumps([dict(r) for r in rows], ensure_ascii=False, indent=2))
+          PY

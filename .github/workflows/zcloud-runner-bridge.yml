@@ -1,0 +1,384 @@
+name: HaxLab zCloud Runner Bridge
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/zcloud-runner-request.json"
+      - ".github/workflows/zcloud-runner-bridge.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-zcloud-runner-bridge
+  cancel-in-progress: false
+
+jobs:
+  bridge:
+    name: Execute whitelisted zCloud/HaxLab request
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout request
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Execute request on VPS
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sqlite3
+          import sys
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+
+          BASE = "http://127.0.0.1:8765"
+          REQUEST_PATH = Path(".github/zcloud-runner-request.json")
+          ALLOWED_PROJECT = "haxlab"
+          ALLOWED_WORKER = "haxlab::w1"
+          ALLOWED_HAXLAB_ACTIONS = {
+              "status",
+              "deploy",
+              "champion-info",
+              "champion-runtime",
+              "live-play-probe",
+              "live-play-stop",
+              "live-play-status",
+              "live-host-prereq",
+              "live-host-keygen",
+              "live-host-start",
+              "live-host-status",
+              "restart-analyzer",
+              "retry-failed-analysis",
+              "feature-smoke",
+              "player-stats",
+              "skill-leaderboard",
+              "training-manifest",
+              "analyzer-logs",
+              "failed-analysis",
+          }
+
+          def request_json(method, endpoint, payload=None):
+              data = None
+              headers = {"User-Agent": "haxlab-zcloud-runner-bridge/1"}
+              if payload is not None:
+                  data = json.dumps(payload).encode("utf-8")
+                  headers["Content-Type"] = "application/json"
+              req = urllib.request.Request(
+                  BASE + endpoint,
+                  data=data,
+                  headers=headers,
+                  method=method,
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as response:
+                      return {
+                          "http_status": response.status,
+                          "body": json.load(response),
+                      }
+              except urllib.error.HTTPError as exc:
+                  raw = exc.read().decode("utf-8", "replace")
+                  try:
+                      body = json.loads(raw)
+                  except Exception:
+                      body = {"raw": raw[:4000]}
+                  return {"http_status": exc.code, "body": body}
+
+          def require_identity(req):
+              project = str(req.get("project_id") or "")
+              worker = str(req.get("worker_id") or "")
+              owner = str(req.get("owner_id") or "")
+              if project != ALLOWED_PROJECT:
+                  raise SystemExit("project_id must be haxlab")
+              if worker != ALLOWED_WORKER:
+                  raise SystemExit("worker_id must be haxlab::w1")
+              if not owner or len(owner) > 160:
+                  raise SystemExit("owner_id is required")
+              return project, worker, owner
+
+          def validate_scope(metadata):
+              scope = (metadata or {}).get("conflict_scope")
+              if not isinstance(scope, dict):
+                  raise SystemExit("metadata.conflict_scope is required")
+              capabilities = scope.get("capabilities") or []
+              files = scope.get("files") or []
+              if not isinstance(capabilities, list) or not isinstance(files, list):
+                  raise SystemExit("conflict_scope capabilities/files must be lists")
+              for path in files:
+                  p = str(path)
+                  if not p or p.startswith("/") or ".." in p.split("/"):
+                      raise SystemExit(f"unsafe conflict_scope path: {p}")
+
+          if not REQUEST_PATH.is_file():
+              raise SystemExit(f"missing request file: {REQUEST_PATH}")
+
+          req = json.loads(REQUEST_PATH.read_text(encoding="utf-8"))
+          if req.get("version") != 1:
+              raise SystemExit("unsupported request version")
+
+          operation = str(req.get("operation") or "snapshot")
+          project, worker, owner = require_identity(req)
+          payload = req.get("payload") or {}
+          result = {
+              "operation": operation,
+              "project_id": project,
+              "worker_id": worker,
+              "owner_id": owner,
+              "github_run_id": os.environ.get("GITHUB_RUN_ID"),
+          }
+
+          if operation == "snapshot":
+              status = request_json("GET", "/api/status")
+              targets = request_json("GET", "/api/runner-targets")
+              queue = request_json("GET", "/api/portfolio-queue?all=1")
+              claims = request_json(
+                  "GET",
+                  "/api/task-claims?project=" + urllib.parse.quote(project),
+              )
+              autonomy = request_json("GET", "/api/autonomy")
+
+              queue_body = queue.get("body") if isinstance(queue, dict) else {}
+              if isinstance(queue_body, dict):
+                  items = queue_body.get("items") or []
+                  queue_body = dict(queue_body)
+                  queue_body["items"] = [
+                      item for item in items
+                      if str(item.get("project_id") or item.get("project") or "") == project
+                  ]
+
+              control = subprocess.run(
+                  ["sudo", "/usr/local/sbin/haxlab-actions-control", "status"],
+                  text=True,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.STDOUT,
+                  timeout=60,
+                  check=False,
+              )
+              targets_body = targets.get("body") if isinstance(targets, dict) else {}
+              project_target = None
+              if isinstance(targets_body, dict):
+                  projects = targets_body.get("projects") or {}
+                  if isinstance(projects, dict):
+                      project_target = projects.get(worker)
+
+              result.update({
+                  "zcloud_status": status,
+                  "runner_target": {
+                      "http_status": targets.get("http_status"),
+                      "project": project_target,
+                      "global_allocation": (
+                          targets_body.get("global_allocation")
+                          if isinstance(targets_body, dict) else None
+                      ),
+                  },
+                  "portfolio_queue": {
+                      "http_status": queue.get("http_status"),
+                      "body": queue_body,
+                  },
+                  "claims": claims,
+                  "autonomy": autonomy,
+                  "haxlab_status": {
+                      "exit_code": control.returncode,
+                      "output": control.stdout[-12000:],
+                  },
+              })
+
+          elif operation == "preflight":
+              body = dict(payload)
+              body["project_id"] = project
+              body["worker_id"] = worker
+              body["owner_id"] = owner
+              result["response"] = request_json("POST", "/api/worker-preflight", body)
+
+          elif operation == "claim":
+              claim_key = str(payload.get("claim_key") or "")
+              if not claim_key:
+                  raise SystemExit("payload.claim_key is required")
+              metadata = payload.get("metadata") or {}
+              validate_scope(metadata)
+              lease_seconds = int(payload.get("lease_seconds") or 900)
+              if lease_seconds < 60 or lease_seconds > 3600:
+                  raise SystemExit("lease_seconds must be between 60 and 3600")
+              body = {
+                  "action": "acquire",
+                  "project_id": project,
+                  "worker_id": worker,
+                  "owner_id": owner,
+                  "claim_key": claim_key,
+                  "lease_seconds": lease_seconds,
+                  "metadata": metadata,
+              }
+              alternatives = payload.get("alternatives")
+              if alternatives is not None:
+                  if not isinstance(alternatives, list):
+                      raise SystemExit("alternatives must be a list")
+                  for item in alternatives:
+                      validate_scope((item or {}).get("metadata") or {})
+                  body["alternatives"] = alternatives
+              result["response"] = request_json("POST", "/api/task-claims", body)
+
+          elif operation in {"heartbeat", "release"}:
+              claim_key = str(payload.get("claim_key") or "")
+              if not claim_key:
+                  raise SystemExit("payload.claim_key is required")
+              body = {
+                  "action": operation,
+                  "project_id": project,
+                  "worker_id": worker,
+                  "owner_id": owner,
+                  "claim_key": claim_key,
+              }
+              if operation == "heartbeat":
+                  lease_seconds = int(payload.get("lease_seconds") or 900)
+                  if lease_seconds < 60 or lease_seconds > 3600:
+                      raise SystemExit("lease_seconds must be between 60 and 3600")
+                  body["lease_seconds"] = lease_seconds
+              result["response"] = request_json("POST", "/api/task-claims", body)
+
+          elif operation == "pause-project-compute":
+              result["response"] = request_json(
+                  "POST",
+                  "/api/runner-control",
+                  {"project_id": project, "action": "pause"},
+              )
+              db = sqlite3.connect("/home/ubuntu/zennay-cloud/history.db", timeout=10)
+              try:
+                  db.execute("BEGIN IMMEDIATE")
+                  db.execute(
+                      "INSERT OR IGNORE INTO autonomy_runtime(project_id, initialized_at, manual_pause, last_reason) VALUES(?, datetime('now'), 1, ?)",
+                      (project, "manual_pause_ftmo_priority"),
+                  )
+                  db.execute(
+                      "UPDATE autonomy_runtime SET manual_pause=1, last_reason=? WHERE project_id=?",
+                      ("manual_pause_ftmo_priority", project),
+                  )
+                  db.execute("UPDATE runner_targets SET active=0 WHERE project_id=?", (project,))
+                  db.execute("UPDATE runner_workers SET desired_state='paused' WHERE project_id=?", (project,))
+                  db.commit()
+              finally:
+                  db.close()
+              commands = [
+                  ["sudo", "systemctl", "stop", "haxlab-autonomy.timer"],
+                  ["sudo", "systemctl", "mask", "--runtime", "haxlab-autonomy.service", "haxlab-autonomy.timer"],
+                  ["sudo", "systemctl", "daemon-reload"],
+                  ["sudo", "systemctl", "stop", "haxlab-autonomy.service"],
+                  ["sudo", "systemctl", "kill", "--kill-who=all", "--signal=TERM", "haxlab-autonomy.service"],
+                  ["sudo", "pkill", "-TERM", "-f", "[h]axlab-train-bc"],
+                  ["sudo", "pkill", "-KILL", "-f", "[h]axlab-train-bc"],
+              ]
+              command_results = []
+              for command in commands:
+                  proc = subprocess.run(
+                      command,
+                      text=True,
+                      stdout=subprocess.PIPE,
+                      stderr=subprocess.STDOUT,
+                      timeout=60,
+                      check=False,
+                  )
+                  command_results.append({
+                      "command": command[1:3],
+                      "exit_code": proc.returncode,
+                      "output": proc.stdout[-4000:],
+                  })
+              verify = subprocess.run(
+                  ["bash", "-lc", "printf 'trainer='; pgrep -af '[h]axlab-train-bc' || true; printf 'service='; systemctl is-active haxlab-autonomy.service 2>/dev/null || true; printf 'timer='; systemctl is-active haxlab-autonomy.timer 2>/dev/null || true; printf 'service_mask='; systemctl is-enabled haxlab-autonomy.service 2>/dev/null || true; printf 'timer_mask='; systemctl is-enabled haxlab-autonomy.timer 2>/dev/null || true"],
+                  text=True,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.STDOUT,
+                  timeout=60,
+                  check=False,
+              )
+              result["commands"] = command_results
+              result["verification"] = verify.stdout[-8000:]
+
+          elif operation == "live-play-start":
+              room_ref = str(payload.get("room_id") or payload.get("room_url") or "").strip()
+              room_id = room_ref
+              if "://" in room_ref or "?" in room_ref:
+                  parsed = urllib.parse.urlparse(room_ref)
+                  values = urllib.parse.parse_qs(parsed.query).get("c") or []
+                  room_id = str(values[0] if values else "").strip()
+              safe_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+              if not (4 <= len(room_id) <= 80) or any(ch not in safe_chars for ch in room_id):
+                  raise SystemExit("payload.room_id/room_url does not contain a safe HaxBall room id")
+              proc = subprocess.run(
+                  ["sudo", "/usr/local/sbin/haxlab-actions-control", "live-play-start", room_id],
+                  text=True,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.STDOUT,
+                  timeout=120,
+                  check=False,
+              )
+              result["room_id"] = room_id
+              result["exit_code"] = proc.returncode
+              result["output"] = proc.stdout[-20000:]
+              if proc.returncode != 0:
+                  print("ZCLOUD_BRIDGE_RESULT_BEGIN")
+                  print(json.dumps(result, indent=2, sort_keys=True))
+                  print("ZCLOUD_BRIDGE_RESULT_END")
+                  raise SystemExit(proc.returncode)
+
+          elif operation == "live-host-install-token":
+              ciphertext = str(payload.get("ciphertext") or "").strip()
+              safe_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/=")
+              if not (100 <= len(ciphertext) <= 1000) or any(ch not in safe_chars for ch in ciphertext):
+                  raise SystemExit("payload.ciphertext is invalid")
+              proc = subprocess.run(
+                  ["sudo", "/usr/local/sbin/haxlab-actions-control", "live-host-install-token", ciphertext],
+                  text=True,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.STDOUT,
+                  timeout=180,
+                  check=False,
+              )
+              result["exit_code"] = proc.returncode
+              result["output"] = proc.stdout[-20000:]
+              if proc.returncode != 0:
+                  print("ZCLOUD_BRIDGE_RESULT_BEGIN")
+                  print(json.dumps(result, indent=2, sort_keys=True))
+                  print("ZCLOUD_BRIDGE_RESULT_END")
+                  raise SystemExit(proc.returncode)
+
+          elif operation == "haxlab-action":
+              action = str(payload.get("action") or "")
+              if action not in ALLOWED_HAXLAB_ACTIONS:
+                  raise SystemExit("unsupported HaxLab action")
+              proc = subprocess.run(
+                  ["sudo", "/usr/local/sbin/haxlab-actions-control", action],
+                  text=True,
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.STDOUT,
+                  timeout=480,
+                  check=False,
+              )
+              result["action"] = action
+              result["exit_code"] = proc.returncode
+              result["output"] = proc.stdout[-20000:]
+              if proc.returncode != 0:
+                  print("ZCLOUD_BRIDGE_RESULT_BEGIN")
+                  print(json.dumps(result, indent=2, sort_keys=True))
+                  print("ZCLOUD_BRIDGE_RESULT_END")
+                  raise SystemExit(proc.returncode)
+
+          else:
+              raise SystemExit(f"unsupported operation: {operation}")
+
+          print("ZCLOUD_BRIDGE_RESULT_BEGIN")
+          print(json.dumps(result, indent=2, sort_keys=True))
+          print("ZCLOUD_BRIDGE_RESULT_END")
+
+          response = result.get("response")
+          if isinstance(response, dict) and int(response.get("http_status") or 0) >= 400:
+              raise SystemExit(2)
+          PY

@@ -1,0 +1,41 @@
+name: Screenshot Violentmonkey Installer
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/zcloud-vm-gui-screenshot.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shot:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 4
+    steps:
+      - name: Reopen and capture Violentmonkey installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          export DISPLAY=:99
+          WIN="$(xdotool search --onlyvisible --class firefox 2>/dev/null | tail -n1 || true)"
+          test -n "$WIN"
+          xdotool windowactivate --sync "$WIN"
+          xdotool key --window "$WIN" ctrl+l
+          xdotool type --window "$WIN" --delay 1 'http://127.0.0.1:8765/zcloud-worker.user.js'
+          xdotool key --window "$WIN" Return
+          sleep 2
+          echo "TITLE=$(xdotool getwindowname "$WIN" || true)"
+          python3 - <<'PY'
+          import base64, io
+          from PIL import ImageGrab
+          img=ImageGrab.grab()
+          img.thumbnail((650,650))
+          buf=io.BytesIO()
+          img.convert("RGB").save(buf,format="JPEG",quality=45,optimize=True)
+          print("IMAGE_BEGIN")
+          print(base64.b64encode(buf.getvalue()).decode())
+          print("IMAGE_END")
+          PY

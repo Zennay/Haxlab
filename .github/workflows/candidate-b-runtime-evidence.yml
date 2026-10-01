@@ -1,0 +1,58 @@
+name: Candidate B read-only runtime evidence
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/candidate-b-runtime-evidence.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  evidence:
+    runs-on: self-hosted
+    timeout-minutes: 5
+    steps:
+      - name: Capture Candidate-B and champion evidence without mutation
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "EVIDENCE_HOST=$(hostname)"
+          echo "EVIDENCE_TIME=$(date -u +%FT%TZ)"
+
+          echo "=== Candidate-B process ==="
+          pgrep -af 'haxlab.learning.elite_pipeline.*elite-player-candidate-b' || true
+
+          echo "=== Candidate-B process metrics ==="
+          pids="$(pgrep -f 'haxlab.learning.elite_pipeline.*elite-player-candidate-b' | tr '\n' ' ' || true)"
+          if [ -n "$pids" ]; then
+            ps -o pid,ppid,etime,%cpu,%mem,stat,cmd -p $pids || true
+          else
+            echo "CANDIDATE_B_PROCESS_NOT_FOUND"
+          fi
+
+          echo "=== Candidate-B log metadata/tail ==="
+          if [ -f /tmp/haxlab-candidate-b.log ]; then
+            stat --printf='LOG_SIZE=%s LOG_MTIME=%y\n' /tmp/haxlab-candidate-b.log
+            tail -n 80 /tmp/haxlab-candidate-b.log
+          else
+            echo "CANDIDATE_B_LOG_NOT_FOUND"
+          fi
+
+          echo "=== Current champion registry ==="
+          registry=/var/lib/haxlab/derived/training/elite-champions/registry.json
+          if sudo -n test -f "$registry"; then
+            sudo -n cat "$registry"
+          else
+            echo "CHAMPION_REGISTRY_NOT_FOUND_OR_UNREADABLE"
+          fi
+
+          echo "=== Live champion version metadata ==="
+          versions=/var/lib/haxlab/derived/champions/elite-player/versions
+          if sudo -n test -d "$versions"; then
+            sudo -n find "$versions" -maxdepth 2 -type f \( -name 'metadata.json' -o -name 'runtime-model.json' \) -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 12
+          else
+            echo "CHAMPION_VERSIONS_NOT_FOUND_OR_UNREADABLE"
+          fi

@@ -1,0 +1,39 @@
+name: Inspect zCloud Violentmonkey Storage
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/zcloud-vm-storage-inspect.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 6
+    steps:
+      - name: Inspect Violentmonkey extension storage
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=/home/ubuntu/snap/firefox/common/chatgpt-webext-profile/storage/default/moz-extension+++1e84f8a6-6cfe-433a-91a0-8d757fdc30bb
+          echo "=== FILE TREE ==="
+          find "$ROOT" -maxdepth 5 -type f -printf '%p %s bytes\n' 2>/dev/null | head -n 200 || true
+
+          echo "=== STRINGS MATCHES ==="
+          find "$ROOT" -type f -size -50M -print0 2>/dev/null |
+            xargs -0 -r strings -a 2>/dev/null |
+            grep -E -m30 'zCloud Dynamic Worker|SCRIPT_VERSION|zcloud-worker\.user\.js|violentmonkey-ready' || true
+
+          echo "=== SQLITE DATABASES ==="
+          while IFS= read -r -d '' db; do
+            echo "--- $db ---"
+            file "$db" || true
+            if command -v sqlite3 >/dev/null && sqlite3 "$db" '.tables' >/tmp/tables 2>/dev/null; then
+              cat /tmp/tables
+              sqlite3 "$db" "SELECT name,sql FROM sqlite_master WHERE type IN ('table','index') ORDER BY name;" 2>/dev/null | head -n 160 || true
+            fi
+          done < <(find "$ROOT" -type f \( -name '*.sqlite' -o -name '*.db' \) -print0 2>/dev/null)
