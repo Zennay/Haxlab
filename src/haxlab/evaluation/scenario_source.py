@@ -165,6 +165,57 @@ def select_scenario_source(
     )
 
 
+
+def select_scenario_sources(
+    db_path: Path,
+    *,
+    count: int = 3,
+    max_candidates: int = 1000,
+    exclude_sha256: set[str] | None = None,
+) -> dict[str, Any]:
+    """Select a deterministic, disjoint set of healthy replay sources.
+
+    Selection deliberately reuses the single-source selector and expands its
+    exclusion set after every pick. This preserves the established ordering
+    contract (sampled states descending, SHA-256 ascending) while guaranteeing
+    that no replay can appear twice in one frozen evaluation suite.
+    """
+    requested = max(1, int(count))
+    initial_excluded = {
+        str(value).strip().lower()
+        for value in (exclude_sha256 or set())
+        if str(value).strip()
+    }
+    excluded = set(initial_excluded)
+    selected: list[dict[str, Any]] = []
+
+    for _ in range(requested):
+        candidate = select_scenario_source(
+            db_path,
+            max_candidates=max_candidates,
+            exclude_sha256=excluded,
+        )
+        replay_sha = str(candidate.get("sha256") or "").strip().lower()
+        if len(replay_sha) != 64:
+            raise RuntimeError("selected replay source has invalid SHA-256")
+        source = {
+            key: value
+            for key, value in candidate.items()
+            if key != "excluded_sha256_count"
+        }
+        selected.append(source)
+        excluded.add(replay_sha)
+
+    return {
+        "schema": "haxlab-replay-scenario-source-set-v2",
+        "selection_algorithm": "state-pass-v4-sampled-states-desc-sha256-asc",
+        "requested_source_count": requested,
+        "source_count": len(selected),
+        "initial_excluded_sha256_count": len(initial_excluded),
+        "sources": selected,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="haxlab-scenario-source")
     parser.add_argument(
@@ -173,6 +224,12 @@ def main() -> int:
         default=Path("/var/lib/haxlab/state/haxlab.sqlite3"),
     )
     parser.add_argument("--max-candidates", type=int, default=1000)
+    parser.add_argument(
+        "--count",
+        type=int,
+        default=1,
+        help="Number of disjoint replay sources to select. Values >1 emit a v2 source-set manifest.",
+    )
     parser.add_argument(
         "--exclude-sha256",
         action="append",
@@ -198,11 +255,19 @@ def main() -> int:
             if line.strip()
         )
 
-    result = select_scenario_source(
-        args.state_db,
-        max_candidates=max(1, args.max_candidates),
-        exclude_sha256=excluded,
-    )
+    if max(1, args.count) == 1:
+        result = select_scenario_source(
+            args.state_db,
+            max_candidates=max(1, args.max_candidates),
+            exclude_sha256=excluded,
+        )
+    else:
+        result = select_scenario_sources(
+            args.state_db,
+            count=max(1, args.count),
+            max_candidates=max(1, args.max_candidates),
+            exclude_sha256=excluded,
+        )
     rendered = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
