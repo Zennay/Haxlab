@@ -21,14 +21,23 @@ jobs:
           ref: experiment/closed-loop-arena-v2
           fetch-depth: 1
 
+      - name: Create isolated Arena test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .arena-ci-venv
+          python3 -m venv .arena-ci-venv
+          .arena-ci-venv/bin/pip install --upgrade pip
+          .arena-ci-venv/bin/pip install -e '.[dev]'
+
       - name: Validate Python and Arena v2 contracts
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m compileall -q src tests
+          .arena-ci-venv/bin/python -m compileall -q src tests
           NODE_PATH=/opt/haxlab/node_modules node --check tools/elite_closed_loop_arena_v2.js
           NODE_PATH=/opt/haxlab/node_modules node tests/test_closed_loop_arena_v2.js
-          PYTHONPATH="$GITHUB_WORKSPACE/src" /opt/haxlab/.venv/bin/python - <<'PY'
+          PYTHONPATH="$GITHUB_WORKSPACE/src" .arena-ci-venv/bin/python - <<'PY'
           import runpy
           ns = runpy.run_path("tests/test_closed_loop_arena.py")
           names = [
@@ -47,7 +56,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          PYTHONPATH="$GITHUB_WORKSPACE/src" /opt/haxlab/.venv/bin/python -m pytest -q \
+          PYTHONPATH="$GITHUB_WORKSPACE/src" .arena-ci-venv/bin/pytest -q \
             tests/test_closed_loop_arena.py \
             tests/test_evaluation.py \
             tests/test_champion_gate.py \
