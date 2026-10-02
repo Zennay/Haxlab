@@ -1,104 +1,291 @@
-name: FTMO PR448 exact-head proof via HaxLab
+name: FTMO PR448 deploy and queue finalizer
 
 on:
   push:
     branches: [main]
     paths:
       - ".github/workflows/ftmo-pr433-exact-head-proof.yml"
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: ftmo-pr448-exact-head-proof-haxlab
+  group: ftmo-pr448-deploy-finalizer-haxlab
   cancel-in-progress: true
 
 jobs:
-  proof:
+  finalize:
     runs-on: self-hosted
     timeout-minutes: 30
     env:
-      TARGET_SHA: 3034aa82c6dfae98803a4c15a105f56c8f94a9be
-      FTMO_AUTONOMOUS_CLOUD_BUDGET_USD: '0.00'
-      FTMO_ALLOW_PAID_AWS: ''
+      QUEUE_ID: ftmo-7ee077e0b88278da
+      EXACT_HEAD: 3034aa82c6dfae98803a4c15a105f56c8f94a9be
+      MERGE_SHA: 920df21438332e57e2bd4027bdd0e8f68f922e8d
+      FULL_TEST_RUN: '37020168266'
+      PUBLICATION_RUN: '37020167847'
+      CACHE_RUN: '37020167797'
+      HAXLAB_PROOF_RUN: '37021001278'
+      FTMO_ROOT: /opt/ftmo-autonomous
+
     steps:
-      - name: Verify VPS identity and fetch exact FTMO head
+      - name: Verify exact proofs on VPS
         shell: bash
         run: |
           set -euo pipefail
           test "$(hostname)" = "vps-bb300bba"
-          src="$RUNNER_TEMP/ftmo-pr448-exact-head"
-          rm -rf "$src"
-          gh repo clone Zennay/Ftmo "$src" -- --filter=blob:none --no-checkout >/dev/null
-          git -C "$src" checkout --detach "$TARGET_SHA" >/dev/null
-          test "$(git -C "$src" rev-parse HEAD)" = "$TARGET_SHA"
-          echo "exact_head_sha=$TARGET_SHA"
+          gh auth status >/dev/null 2>&1
+          python3 - <<'PY'
+          import json, os, subprocess
 
-      - name: Install isolated test environment
+          expected = {
+              int(os.environ["FULL_TEST_RUN"]): "Test suite",
+              int(os.environ["PUBLICATION_RUN"]): "Provider foundation publication integrity proof",
+              int(os.environ["CACHE_RUN"]): "Dukascopy resume-cache integrity proof",
+          }
+          for run_id, name in expected.items():
+              run=json.loads(subprocess.check_output(
+                  ["gh","api",f"repos/Zennay/Ftmo/actions/runs/{run_id}"], text=True
+              ))
+              if (run.get("status"),run.get("conclusion")) != ("completed","success"):
+                  raise SystemExit(f"FTMO proof {run_id} not green")
+              if run.get("name") != name or run.get("head_sha") != os.environ["EXACT_HEAD"]:
+                  raise SystemExit(f"FTMO proof {run_id} identity mismatch")
+          hax=json.loads(subprocess.check_output(
+              ["gh","api",f"repos/Zennay/Haxlab/actions/runs/{os.environ['HAXLAB_PROOF_RUN']}"],
+              text=True,
+          ))
+          if (hax.get("status"),hax.get("conclusion")) != ("completed","success"):
+              raise SystemExit("HaxLab exact-head proof not green")
+          print("FTMO_PR448_ALL_EXACT_PROOFS_GREEN=1")
+          PY
+
+      - name: Dispatch and prove canonical FTMO deployment
         shell: bash
         run: |
           set -euo pipefail
-          src="$RUNNER_TEMP/ftmo-pr448-exact-head"
-          venv="$RUNNER_TEMP/ftmo-pr448-exact-head-venv"
-          rm -rf "$venv"
-          python3 -m venv "$venv"
-          "$venv/bin/python" -m pip install -q -r "$src/requirements-ci.txt"
-          "$venv/bin/python" -m pip install -q -e "$src"
+          python3 - <<'PY'
+          import json, os, subprocess, time
 
-      - name: Compile changed runtime surface
+          merge=os.environ["MERGE_SHA"]
+
+          def api(path):
+              return json.loads(subprocess.check_output(["gh","api",path],text=True))
+
+          def contains_merge(head):
+              if not head:
+                  return False
+              comp=api(f"repos/Zennay/Ftmo/compare/{merge}...{head}")
+              return comp.get("status") in {"ahead","identical"}
+
+          def matching():
+              data=api("repos/Zennay/Ftmo/actions/workflows/deploy-autonomous-vps.yml/runs?per_page=30")
+              return [
+                  r for r in data.get("workflow_runs",[])
+                  if r.get("name")=="Verify autonomous VPS runtime"
+                  and contains_merge(r.get("head_sha"))
+              ]
+
+          runs=matching()
+          running=[r for r in runs if r.get("status")!="completed"]
+          successful=[r for r in runs if r.get("status")=="completed" and r.get("conclusion")=="success"]
+          if not running and not successful:
+              subprocess.check_call([
+                  "gh","workflow","run","deploy-autonomous-vps.yml",
+                  "--repo","Zennay/Ftmo","--ref","main"
+              ])
+              print("FTMO_PR448_DEPLOY_DISPATCHED=1")
+
+          chosen=None
+          for _ in range(240):
+              runs=matching()
+              if runs:
+                  runs.sort(key=lambda r:r.get("created_at") or "", reverse=True)
+                  for candidate in runs:
+                      if candidate.get("status")=="completed":
+                          chosen=candidate
+                          break
+                  if chosen:
+                      break
+              time.sleep(5)
+
+          if not chosen:
+              raise SystemExit("no completed canonical deployment found")
+          if chosen.get("conclusion")!="success":
+              raise SystemExit(
+                  f"latest completed canonical deployment failed: "
+                  f"{chosen.get('id')} {chosen.get('conclusion')}"
+              )
+          if not contains_merge(chosen.get("head_sha")):
+              raise SystemExit("deployment head does not contain PR448 merge")
+          with open(os.environ["GITHUB_ENV"],"a",encoding="utf-8") as h:
+              h.write(f"DEPLOY_RUN={chosen['id']}\n")
+              h.write(f"DEPLOY_HEAD={chosen['head_sha']}\n")
+          print("FTMO_PR448_DEPLOY_GREEN="+json.dumps({
+              "run_id":chosen["id"],"head_sha":chosen["head_sha"]
+          },sort_keys=True))
+          PY
+
+      - name: Verify live runtime and finish SQLite queue
         shell: bash
         run: |
           set -euo pipefail
-          src="$RUNNER_TEMP/ftmo-pr448-exact-head"
-          venv="$RUNNER_TEMP/ftmo-pr448-exact-head-venv"
-          "$venv/bin/python" -m compileall -q             "$src/src/prop_trading_ai/ops/autonomous_rollover.py"             "$src/src/prop_trading_ai/data/market/dukascopy_resume_cache.py"             "$src/src/prop_trading_ai/data/market/dukascopy_tick_resume_cache.py"
+          python3 - <<'PY'
+          import importlib.util, json, os, sqlite3, subprocess, sys
+          from pathlib import Path
 
-      - name: Prove staged provider publication and sealed boundaries
-        shell: bash
-        run: |
-          set -euo pipefail
-          src="$RUNNER_TEMP/ftmo-pr448-exact-head"
-          venv="$RUNNER_TEMP/ftmo-pr448-exact-head-venv"
-          cd "$src"
-          "$venv/bin/python" -m pytest -q \
-            tests/test_provider_foundation_publication.py \
-            tests/test_provider_validation_json_integrity.py \
-            tests/test_autonomous_provider_retry.py \
-            tests/test_zero_cost_workflow_boundary.py
-          echo "FTMO_PR448_TARGETED_GREEN=1"
+          def gh(path):
+              return json.loads(subprocess.check_output(["gh","api",path],text=True))
 
-      - name: Persist proof receipt
+          root=Path(os.environ["FTMO_ROOT"])
+          status_path=root/".scratch/autonomy/status.json"
+          if not status_path.is_file() or status_path.is_symlink():
+              raise SystemExit("unsafe/missing FTMO runtime status")
+          status=json.loads(status_path.read_text(encoding="utf-8"))
+          research=status.get("research") or {}
+          controller=status.get("research_controller") or {}
+          loop=controller.get("generation_loop") or {}
+          outcome=controller.get("outcome_execution") or {}
+          compute=controller.get("compute") or {}
+          revision=str(status.get("runtime_revision") or "")
+          ancestry=gh(f"repos/Zennay/Ftmo/compare/{os.environ['MERGE_SHA']}...{revision}")
+          if ancestry.get("status") not in {"ahead","identical"}:
+              raise SystemExit("live runtime does not contain PR448 merge")
+          if str(status.get("deployment_workflow_run_id") or "") != str(os.environ["DEPLOY_RUN"]):
+              raise SystemExit("live deployment workflow id mismatch")
+          required={
+              "research_cycle_ok":status.get("research_cycle_ok") is True,
+              "generation_29":research.get("generation_number")==29,
+              "development_sealed":research.get("development_access_allowed") is False,
+              "walk_forward_sealed":research.get("walk_forward_access_allowed") is False,
+              "final_holdout_sealed":research.get("final_holdout_access_allowed") is False,
+              "no_outcomes":loop.get("outcomes_executed") is False,
+              "wf_not_accessed":loop.get("walk_forward_accessed") is False,
+              "holdout_not_accessed":loop.get("final_holdout_accessed") is False,
+              "live_false":status.get("live_trading_allowed") is False,
+              "broker_false":status.get("broker_order_submission_allowed") is False,
+              "controller_wf_false":outcome.get("walk_forward_accessed") is False,
+              "controller_holdout_false":outcome.get("final_holdout_accessed") is False,
+              "controller_broker_false":outcome.get("broker_order_submission_allowed") is False,
+              "compute_ok":compute.get("ok") is True,
+              "zero_cloud":str(status.get("autonomous_cloud_budget_usd"))=="0.00",
+          }
+          bad=[k for k,v in required.items() if not v]
+          if bad:
+              raise SystemExit("sealed runtime verification failed: "+",".join(bad))
+          state=subprocess.check_output(
+              ["systemctl","is-active","ftmo-autonomous-marathon.service"],text=True
+          ).strip()
+          pid=subprocess.check_output(
+              ["systemctl","show","ftmo-autonomous-marathon.service","-p","MainPID","--value"],
+              text=True,
+          ).strip()
+          if state!="active" or not pid.isdigit() or int(pid)<=0:
+              raise SystemExit("FTMO marathon service not healthy")
+
+          zroot=Path("/home/ubuntu/zennay-cloud")
+          db=zroot/"history.db"
+          server_path=zroot/"server.py"
+          sys.path.insert(0,str(zroot))
+          spec=importlib.util.spec_from_file_location("zcloud_live_server",server_path)
+          if spec is None or spec.loader is None:
+              raise SystemExit("cannot load live zCloud server")
+          server=importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(server)
+          server.DB=db
+
+          qid=os.environ["QUEUE_ID"]
+          def read_queue():
+              with sqlite3.connect(db) as c:
+                  c.row_factory=sqlite3.Row
+                  row=c.execute(
+                      "SELECT queue_id,project_id,status,eligible,worker_slot,evidence,updated_at "
+                      "FROM portfolio_queue WHERE queue_id=?",(qid,)
+                  ).fetchone()
+              return dict(row) if row else None
+
+          item=read_queue()
+          print("QUEUE_BEFORE="+json.dumps(item,sort_keys=True))
+          if not item or item.get("project_id")!="ftmo":
+              raise SystemExit("queue item missing/project mismatch")
+
+          evidence=(
+              "Worker1 Gen29 staged provider-publication integrity complete. PR #448 merged as "
+              +os.environ["MERGE_SHA"]+" from exact head "+os.environ["EXACT_HEAD"]+". "
+              "Native exact-head runs "+os.environ["FULL_TEST_RUN"]+", "
+              +os.environ["PUBLICATION_RUN"]+", "+os.environ["CACHE_RUN"]+" SUCCESS; "
+              "HaxLab exact-head VPS proof "+os.environ["HAXLAB_PROOF_RUN"]+" SUCCESS; "
+              "canonical deploy/runtime verify "+os.environ["DEPLOY_RUN"]+" SUCCESS; "
+              "Generation 29 OOS/live/broker boundaries sealed, cloud budget 0.00, marathon active."
+          )
+
+          if not (item["status"]=="done" and int(item["eligible"] or 0)==0 and item["worker_slot"] is None):
+              if item["status"] not in {"claimed","running","verifying","in_progress"} or item["worker_slot"] is None:
+                  raise SystemExit(
+                      f"refusing queue mutation status={item['status']} "
+                      f"eligible={item['eligible']} worker_slot={item['worker_slot']}"
+                  )
+              result=server.portfolio_queue_finish(
+                  int(item["worker_slot"]),qid,"DONE",evidence
+              )
+              print("QUEUE_FINISH_RESULT="+json.dumps(result,sort_keys=True,default=str))
+
+          final=read_queue()
+          print("QUEUE_AFTER="+json.dumps(final,sort_keys=True))
+          if not final or final["status"]!="done" or int(final["eligible"] or 0)!=0 or final["worker_slot"] is not None:
+              raise SystemExit("queue final state not done/eligible=0/worker_slot=None")
+          with open(os.environ["GITHUB_ENV"],"a",encoding="utf-8") as h:
+              h.write(f"LIVE_REVISION={revision}\n")
+              h.write(f"LIVE_STAGE={research.get('next_stage')}\n")
+          print("FTMO_PR448_RUNTIME_AND_QUEUE_GREEN=1")
+          PY
+
+      - name: Persist durable finalizer receipt
         if: always()
         env:
-          PROOF_RESULT: ${{ job.status }}
+          FINALIZER_RESULT: ${{ job.status }}
         shell: bash
         run: |
           set -euo pipefail
-          receipt="/tmp/ftmo-pr448-haxlab-${GITHUB_RUN_ID}.json"
+          receipt="/tmp/ftmo-pr448-finalizer-${GITHUB_RUN_ID}.json"
           python3 - <<'PY' > "$receipt"
-          import json, os, socket
+          import json, os, sqlite3
+          from pathlib import Path
+          queue=None
+          db=Path("/home/ubuntu/zennay-cloud/history.db")
+          if db.is_file():
+              with sqlite3.connect(db) as c:
+                  c.row_factory=sqlite3.Row
+                  row=c.execute(
+                      "SELECT queue_id,project_id,status,eligible,worker_slot,evidence,updated_at "
+                      "FROM portfolio_queue WHERE queue_id=?",(os.environ["QUEUE_ID"],)
+                  ).fetchone()
+                  queue=dict(row) if row else None
           print(json.dumps({
-              "project": "ftmo",
-              "pr": 448,
-              "target_sha": os.environ["TARGET_SHA"],
-              "workflow_run_id": os.environ["GITHUB_RUN_ID"],
-              "workflow_run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
-              "runner_name": os.environ.get("RUNNER_NAME"),
-              "runner_host": socket.gethostname(),
-              "result": os.environ["PROOF_RESULT"],
-              "paid_cloud_budget_usd": os.environ.get("FTMO_AUTONOMOUS_CLOUD_BUDGET_USD"),
-              "proof": [
-                  "exact-sha-checkout",
-                  "isolated-install",
-                  "compile",
-                  "provider-foundation-publication-tests",
-                  "provider-validation-integrity-tests",
-                  "provider-retry-compatibility-tests",
-                  "zero-cost-boundary-tests"
-              ]
-          }, sort_keys=True))
+              "project":"ftmo",
+              "queue_id":os.environ["QUEUE_ID"],
+              "result":os.environ["FINALIZER_RESULT"],
+              "workflow_run_id":os.environ["GITHUB_RUN_ID"],
+              "workflow_run_attempt":os.environ["GITHUB_RUN_ATTEMPT"],
+              "runner_name":os.environ.get("RUNNER_NAME"),
+              "exact_head":os.environ["EXACT_HEAD"],
+              "merge_sha":os.environ["MERGE_SHA"],
+              "proof_runs":{
+                  "full_test":os.environ["FULL_TEST_RUN"],
+                  "provider_publication":os.environ["PUBLICATION_RUN"],
+                  "cache_integrity":os.environ["CACHE_RUN"],
+                  "haxlab_exact_head":os.environ["HAXLAB_PROOF_RUN"],
+              },
+              "deploy_run":os.environ.get("DEPLOY_RUN"),
+              "deploy_head":os.environ.get("DEPLOY_HEAD"),
+              "live_revision":os.environ.get("LIVE_REVISION"),
+              "live_stage":os.environ.get("LIVE_STAGE"),
+              "queue_readback":queue,
+          },sort_keys=True,default=str))
           PY
           encoded="$(base64 -w0 "$receipt")"
-          path="runtime-evidence/ftmo-pr448-haxlab-proof-${GITHUB_RUN_ID}.json"
-          gh api --method PUT "repos/Zennay/Haxlab/contents/$path"             -f message="Record FTMO PR448 HaxLab proof run ${GITHUB_RUN_ID}"             -f content="$encoded" >/dev/null
-          echo "FTMO_PR448_RECEIPT_PATH=$path"
+          path="runtime-evidence/ftmo-${QUEUE_ID}-finalizer-${GITHUB_RUN_ID}.json"
+          gh api --method PUT "repos/Zennay/Haxlab/contents/$path" \
+            -f message="Record FTMO PR448 queue finalizer ${GITHUB_RUN_ID}" \
+            -f content="$encoded" >/dev/null
+          echo "FTMO_PR448_FINALIZER_RECEIPT=$path"
