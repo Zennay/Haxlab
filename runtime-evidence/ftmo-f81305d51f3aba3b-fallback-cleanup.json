@@ -1,0 +1,94 @@
+{
+  "host": "vps-bb300bba",
+  "project": "ftmo",
+  "queue_item": "ftmo-f81305d51f3aba3b",
+  "result": "success",
+  "workflow_cleanup": {
+    "cancel_requested": [
+      {
+        "name": "FTMO PR444 independent exact-head proof",
+        "repo": "Zennay/zCloud",
+        "run_id": 37005801699
+      },
+      {
+        "name": "Finalize FTMO f813 queue via zSSH runner",
+        "repo": "Zennay/zSSH",
+        "run_id": 37006714251
+      },
+      {
+        "name": "Finalize FTMO f813 queue via zSSH runner",
+        "repo": "Zennay/zSSH",
+        "run_id": 37006530974
+      }
+    ],
+    "observed": [
+      {
+        "conclusion": "failure",
+        "databaseId": 37006360365,
+        "headSha": "c8d731aa9d827ba9f2136f88fe7f4be08f76f9e2",
+        "name": "Finalize FTMO f813 Worker5 queue item",
+        "repo": "Zennay/zCloud",
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 37006060661,
+        "headSha": "1dbf54081dab7bafc254b4f6abdd68a810b0c257",
+        "name": "Enqueue FTMO PR444 exact-head proof on zSSH",
+        "repo": "Zennay/zCloud",
+        "status": "completed"
+      },
+      {
+        "conclusion": "",
+        "databaseId": 37005801699,
+        "headSha": "5e8133a529ede3c48763b9a6f10a4590f48cd102",
+        "name": "FTMO PR444 independent exact-head proof",
+        "repo": "Zennay/zCloud",
+        "status": "queued"
+      },
+      {
+        "conclusion": "",
+        "databaseId": 37006714251,
+        "headSha": "e5dd9e7805eba58ba035346f014b0985b50cf9f7",
+        "name": "Finalize FTMO f813 queue via zSSH runner",
+        "repo": "Zennay/zSSH",
+        "status": "pending"
+      },
+      {
+        "conclusion": "",
+        "databaseId": 37006530974,
+        "headSha": "49151da1eb686283140d22349fff9dd1bfbc2aeb",
+        "name": "Finalize FTMO f813 queue via zSSH runner",
+        "repo": "Zennay/zSSH",
+        "status": "queued"
+      }
+    ]
+  },
+  "workflow_run_id": 37007028001,
+  "zssh_queue_cleanup": {
+    "action": "dropped",
+    "after": {
+      "eligible": 0,
+      "evidence": "Superseded by successful FTMO PR444 exact-head HaxLab proof 37005946247 and completed source queue finalizer 37006428771.",
+      "project_id": "zssh",
+      "queue_id": "zssh-ftmo-pr444-exact-head-proof-20261002-worker5",
+      "status": "dropped",
+      "updated_at": "2026-10-02T12:37:26.860609+00:00",
+      "worker_slot": null
+    },
+    "before": {
+      "eligible": 1,
+      "evidence": "",
+      "project_id": "zssh",
+      "queue_id": "zssh-ftmo-pr444-exact-head-proof-20261002-worker5",
+      "status": "queued",
+      "updated_at": "2026-10-02T12:28:13.736892+00:00",
+      "worker_slot": null
+    },
+    "drop_result": {
+      "dropped": true,
+      "queue_id": "zssh-ftmo-pr444-exact-head-proof-20261002-worker5"
+    },
+    "queue_id": "zssh-ftmo-pr444-exact-head-proof-20261002-worker5"
+  }
+}
