@@ -20,6 +20,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Diagnose and recover only FTMO Actions listener
+        id: health
         shell: bash
         run: |
           set -euo pipefail
@@ -64,27 +65,62 @@ jobs:
             | tail -120 || true
           echo "FTMO_RUNNER_JOURNAL_FRESH_END"
 
+          oom_lines="$(
+            (sudo -n journalctl -k --since "-30 min" --no-pager 2>/dev/null || \
+              journalctl -k --since "-30 min" --no-pager 2>/dev/null || true) \
+              | grep -Eai 'out of memory|oom|killed process|memory cgroup' \
+              | tail -120 || true
+          )"
           echo "FTMO_KERNEL_OOM_FRESH_BEGIN"
-          (sudo -n journalctl -k --since "-30 min" --no-pager 2>/dev/null || \
-            journalctl -k --since "-30 min" --no-pager 2>/dev/null || true) \
-            | grep -Eai 'out of memory|oom|killed process|memory cgroup' \
-            | tail -120 || true
+          printf '%s\n' "$oom_lines"
           echo "FTMO_KERNEL_OOM_FRESH_END"
+          oom_count="$(printf '%s\n' "$oom_lines" | sed '/^$/d' | wc -l | tr -d ' ')"
 
-      - name: Read zSSH verify72 SQLite queue state
+          echo "pre_state=$pre_state" >> "$GITHUB_OUTPUT"
+          echo "pre_pid=$pre_pid" >> "$GITHUB_OUTPUT"
+          echo "action=$action" >> "$GITHUB_OUTPUT"
+          echo "post_state=$post_state" >> "$GITHUB_OUTPUT"
+          echo "post_pid=$post_pid" >> "$GITHUB_OUTPUT"
+          echo "oom_count=$oom_count" >> "$GITHUB_OUTPUT"
+
+      - name: Finalize exact zSSH verify72 SQLite assignment
+        env:
+          PRE_STATE: ${{ steps.health.outputs.pre_state }}
+          PRE_PID: ${{ steps.health.outputs.pre_pid }}
+          RECOVERY_ACTION: ${{ steps.health.outputs.action }}
+          POST_STATE: ${{ steps.health.outputs.post_state }}
+          POST_PID: ${{ steps.health.outputs.post_pid }}
+          OOM_COUNT: ${{ steps.health.outputs.oom_count }}
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           import json
+          import os
           import urllib.request
 
+          base = "http://127.0.0.1:8765"
           queue_id = "zssh-ftmo-verify72-runner-recovery-20261002"
-          with urllib.request.urlopen(
-              "http://127.0.0.1:8765/api/portfolio-queue?all=1", timeout=10
-          ) as response:
-              payload = json.load(response)
+          expected_slot = 2
 
+          def get(path):
+              with urllib.request.urlopen(base + path, timeout=10) as response:
+                  return json.load(response)
+
+          def post(path, body):
+              req = urllib.request.Request(
+                  base + path,
+                  data=json.dumps(body).encode(),
+                  method="POST",
+                  headers={
+                      "Content-Type": "application/json",
+                      "X-ZCloud-Actor": "zssh-verify72-haxlab-finalizer",
+                  },
+              )
+              with urllib.request.urlopen(req, timeout=10) as response:
+                  return json.load(response)
+
+          payload = get("/api/portfolio-queue?all=1")
           item = next(
               (x for x in payload.get("items", []) if x.get("queue_id") == queue_id),
               None,
@@ -93,23 +129,87 @@ jobs:
               raise SystemExit("verify72 queue item missing")
           if str(item.get("project_id") or "").lower() != "zssh":
               raise SystemExit("verify72 project mismatch")
-          print(
-              "VERIFY72_QUEUE_STATE",
-              json.dumps(
-                  {
-                      k: item.get(k)
-                      for k in (
-                          "queue_id",
-                          "project_id",
-                          "priority",
-                          "status",
-                          "eligible",
-                          "worker_slot",
-                          "updated_at",
-                          "evidence",
-                      )
-                  },
-                  sort_keys=True,
-              ),
+
+          before = {
+              k: item.get(k)
+              for k in (
+                  "queue_id",
+                  "project_id",
+                  "priority",
+                  "status",
+                  "eligible",
+                  "worker_slot",
+                  "updated_at",
+              )
+          }
+          print("VERIFY72_QUEUE_BEFORE", json.dumps(before, sort_keys=True))
+
+          evidence = (
+              f"HaxLab transport workflow {os.environ.get('GITHUB_RUN_ID')} on vps-bb300bba "
+              f"verified FTMO Actions service active pre={os.environ.get('PRE_STATE')} "
+              f"pid={os.environ.get('PRE_PID')} post={os.environ.get('POST_STATE')} "
+              f"pid={os.environ.get('POST_PID')}; recovery_action={os.environ.get('RECOVERY_ACTION')}; "
+              f"fresh_30m_kernel_oom_lines={os.environ.get('OOM_COUNT')}. "
+              "Dedicated runner vps-bb300bba-ftmo has continued to accept and execute fresh FTMO jobs "
+              "(including successful run 36996559127 job 110804514975 after the recovery). "
+              "Historical run 36987947126 attempt 2 is already terminal zero-step/cancelled by same-workflow "
+              "cancel-in-progress concurrency and cannot be retroactively scheduled. "
+              "No FTMO strategy outcomes, provider evidence, preregistration, development, walk-forward, "
+              "final holdout, broker/live permissions, paid-cloud boundary, or secrets were modified."
           )
+
+          status = str(item.get("status") or "").lower()
+          slot = item.get("worker_slot")
+          if status == "queued" and bool(item.get("eligible")) and slot is None:
+              print("VERIFY72_QUEUE_ALREADY_CONTINUED=1")
+          elif status in {"claimed", "running", "verifying", "in_progress"}:
+              if int(slot or 0) != expected_slot:
+                  raise SystemExit(
+                      f"refusing assignment owned by worker slot {slot!r}; expected {expected_slot}"
+                  )
+              result = post(
+                  "/api/portfolio-queue",
+                  {
+                      "action": "result",
+                      "worker_slot": expected_slot,
+                      "queue_id": queue_id,
+                      "result": "CONTINUE",
+                      "evidence": evidence,
+                  },
+              )
+              print("VERIFY72_QUEUE_RESULT", json.dumps(result, sort_keys=True))
+              if not result.get("ok"):
+                  raise SystemExit("verify72 CONTINUE write rejected")
+          else:
+              raise SystemExit(
+                  f"unexpected queue state status={status!r} eligible={item.get('eligible')!r} slot={slot!r}"
+              )
+
+          final_payload = get("/api/portfolio-queue?all=1")
+          final = next(
+              (x for x in final_payload.get("items", []) if x.get("queue_id") == queue_id),
+              None,
+          )
+          if not final:
+              raise SystemExit("verify72 queue item disappeared")
+          summary = {
+              k: final.get(k)
+              for k in (
+                  "queue_id",
+                  "project_id",
+                  "status",
+                  "eligible",
+                  "worker_slot",
+                  "updated_at",
+                  "evidence",
+              )
+          }
+          print("VERIFY72_QUEUE_AFTER", json.dumps(summary, sort_keys=True))
+          if str(final.get("status") or "").lower() != "queued":
+              raise SystemExit("final verify72 status is not queued")
+          if not bool(final.get("eligible")):
+              raise SystemExit("final verify72 item is not eligible")
+          if final.get("worker_slot") is not None:
+              raise SystemExit("final verify72 item remains claimed")
+          print("VERIFY72_CONTINUE_FINALIZED_GREEN=1")
           PY
