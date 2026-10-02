@@ -1,0 +1,115 @@
+name: zSSH verify72 FTMO runner reprobe
+
+on:
+  push:
+    branches:
+      - ops/zssh-verify72-ftmo-runner-reprobe-20261002
+    paths:
+      - .github/workflows/zssh-verify72-ftmo-runner-reprobe.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zssh-verify72-ftmo-runner-reprobe
+  cancel-in-progress: false
+
+jobs:
+  reprobe:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 5
+    steps:
+      - name: Diagnose and recover only FTMO Actions listener
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          SERVICE=actions.runner.Zennay-Ftmo.vps-bb300bba-ftmo.service
+          RUN_USER=ftmo-runner
+
+          pre_state="$(systemctl is-active "$SERVICE" || true)"
+          pre_pid="$(systemctl show "$SERVICE" -p MainPID --value || true)"
+          action=preserve-healthy-listener
+
+          if [[ "$pre_state" != "active" ]]; then
+            action=start-inactive-listener
+            sudo -n systemctl reset-failed "$SERVICE" || true
+            sudo -n systemctl start "$SERVICE"
+          elif pgrep -u "$RUN_USER" -f 'Runner\.Worker' >/dev/null 2>&1; then
+            action=preserve-active-worker
+          fi
+
+          for _ in $(seq 1 15); do
+            systemctl is-active --quiet "$SERVICE" && break
+            sleep 2
+          done
+
+          post_state="$(systemctl is-active "$SERVICE" || true)"
+          post_pid="$(systemctl show "$SERVICE" -p MainPID --value || true)"
+          test "$post_state" = "active"
+          [[ "$post_pid" =~ ^[1-9][0-9]*$ ]]
+          test -r "/proc/$post_pid/cmdline"
+          cmdline="$(tr '\0' ' ' < "/proc/$post_pid/cmdline")"
+          [[ "$cmdline" == *"Runner.Listener"* || "$cmdline" == *"runsvc.sh"* ]]
+
+          echo "FTMO_RUNNER_SERVICE=$SERVICE"
+          echo "FTMO_RUNNER_PRE state=$pre_state pid=$pre_pid"
+          echo "FTMO_RUNNER_ACTION=$action"
+          echo "FTMO_RUNNER_POST state=$post_state pid=$post_pid"
+          systemctl show "$SERVICE" -p ActiveState -p SubState -p MainPID -p NRestarts -p Result --no-pager
+
+          echo "FTMO_RUNNER_JOURNAL_FRESH_BEGIN"
+          journalctl -u "$SERVICE" --since "-30 min" --no-pager 2>/dev/null \
+            | grep -Eai 'listening for jobs|running job|job request|shutdown|signal|stopp|start|kill|oom|memory|session' \
+            | tail -120 || true
+          echo "FTMO_RUNNER_JOURNAL_FRESH_END"
+
+          echo "FTMO_KERNEL_OOM_FRESH_BEGIN"
+          (sudo -n journalctl -k --since "-30 min" --no-pager 2>/dev/null || \
+            journalctl -k --since "-30 min" --no-pager 2>/dev/null || true) \
+            | grep -Eai 'out of memory|oom|killed process|memory cgroup' \
+            | tail -120 || true
+          echo "FTMO_KERNEL_OOM_FRESH_END"
+
+      - name: Read zSSH verify72 SQLite queue state
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import urllib.request
+
+          queue_id = "zssh-ftmo-verify72-runner-recovery-20261002"
+          with urllib.request.urlopen(
+              "http://127.0.0.1:8765/api/portfolio-queue?all=1", timeout=10
+          ) as response:
+              payload = json.load(response)
+
+          item = next(
+              (x for x in payload.get("items", []) if x.get("queue_id") == queue_id),
+              None,
+          )
+          if not item:
+              raise SystemExit("verify72 queue item missing")
+          if str(item.get("project_id") or "").lower() != "zssh":
+              raise SystemExit("verify72 project mismatch")
+          print(
+              "VERIFY72_QUEUE_STATE",
+              json.dumps(
+                  {
+                      k: item.get(k)
+                      for k in (
+                          "queue_id",
+                          "project_id",
+                          "priority",
+                          "status",
+                          "eligible",
+                          "worker_slot",
+                          "updated_at",
+                          "evidence",
+                      )
+                  },
+                  sort_keys=True,
+              ),
+          )
+          PY
