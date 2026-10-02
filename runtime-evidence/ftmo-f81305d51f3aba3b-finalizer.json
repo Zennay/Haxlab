@@ -1,0 +1,79 @@
+{
+  "exact_proof_run": 37005946247,
+  "finalizer_workflow_run_id": 37006428771,
+  "finish_result": {
+    "attention": null,
+    "next_task": {
+      "attempts": 0,
+      "blocker": "",
+      "claim_expires": null,
+      "claimed_at": null,
+      "completion_criteria": "Lees de huidige FTMO HQ/handoff en pak de belangrijkste veilige, nog niet geblokkeerde roadmapstap op. Dit is een groter werkpakket: ga door met meerdere samenhangende stappen in dezelfde baan zolang dat veilig kan, in plaats van te stoppen na de eerste losse wijziging. Compleet wil zeggen: minstens een paar echte code/config/workflow-wijzigingen met test- of build-bewijs; alleen lezen, auditen of status geven is geen resultaat. Current project next-step hint: Run the frozen walk-forward for the Generation-10 candidate; keep development and validation strictly separated. FTMO priority rule: keep advancing safe preregistered generations continuously; after one gate is proven, continue to the next safe write-capable generation step instead of yielding the lane to lower-priority projects.",
+      "created_at": "2026-10-02T12:27:07.115503+00:00",
+      "eligible": true,
+      "evidence": "",
+      "metadata_json": "{}",
+      "parent_queue_id": "ftmo-f81305d51f3aba3b",
+      "priority": "P0",
+      "project_id": "ftmo",
+      "queue_id": "ftmo-9c518045b0d66472",
+      "source_url": "https://app.notion.com/p/3db9e19ac9558135940bec5110a2157e",
+      "status": "queued",
+      "title": "Execute substantial FTMO roadmap work package",
+      "updated_at": "2026-10-02T12:27:07.115503+00:00",
+      "worker_slot": null
+    },
+    "queue_audit": {
+      "created": [],
+      "projects": 6,
+      "ready": 45,
+      "removed": [],
+      "time": "2026-10-02T12:27:07.119552+00:00"
+    },
+    "queue_id": "ftmo-f81305d51f3aba3b",
+    "result": "DONE",
+    "updated": true
+  },
+  "job_status": "success",
+  "merge_sha": "f028eea5f0b6cd3c11ea821cdc92096facde8c8f",
+  "project": "ftmo",
+  "proven_head": "a156246682bd836c071b461f66009e7d620c00b4",
+  "queue_before": {
+    "eligible": 1,
+    "evidence": "",
+    "parent_queue_id": "ftmo-0a59a8cee22fa709",
+    "priority": "P0",
+    "project_id": "ftmo",
+    "queue_id": "ftmo-f81305d51f3aba3b",
+    "status": "claimed",
+    "title": "Execute substantial FTMO roadmap work package",
+    "updated_at": "2026-10-02T12:27:01.635056+00:00",
+    "worker_slot": 5
+  },
+  "queue_id": "ftmo-f81305d51f3aba3b",
+  "queue_readback": {
+    "eligible": 0,
+    "evidence": "Worker5 Gen29 BI5 transfer-framing package complete. PR #444 merged as f028eea5f0b6cd3c11ea821cdc92096facde8c8f from exact proven head a156246682bd836c071b461f66009e7d620c00b4. HaxLab exact-head VPS proof run 37005946247 SUCCESS on vps-bb300bba: isolated install, compile, Dukascopy public provider tests, timeout/retry, autonomous-provider-retry, zero-cost boundary and full-suite collection. Transfer-Encoding/Content-Length ambiguity and unsupported transfer codings fail closed; bounded chunked framing remains supported. Gen29 stays provider_foundation; development, walk-forward, final holdout, live/broker and paid-cloud boundaries remain sealed.",
+    "parent_queue_id": "ftmo-0a59a8cee22fa709",
+    "priority": "P0",
+    "project_id": "ftmo",
+    "queue_id": "ftmo-f81305d51f3aba3b",
+    "status": "done",
+    "title": "Execute substantial FTMO roadmap work package",
+    "updated_at": "2026-10-02T12:27:07.108394+00:00",
+    "worker_slot": null
+  },
+  "schema_version": 1,
+  "successors": [
+    {
+      "eligible": 1,
+      "parent_queue_id": "ftmo-f81305d51f3aba3b",
+      "priority": "P0",
+      "project_id": "ftmo",
+      "queue_id": "ftmo-9c518045b0d66472",
+      "status": "queued",
+      "updated_at": "2026-10-02T12:27:07.115503+00:00",
+      "worker_slot": null
+    }
+  ]
+}
