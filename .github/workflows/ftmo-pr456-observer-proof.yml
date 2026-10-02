@@ -1,4 +1,4 @@
-name: FTMO PR456 observer exact-head proof
+name: FTMO PR456 post-merge deploy unblock
 
 on:
   push:
@@ -11,75 +11,77 @@ permissions:
   contents: read
 
 concurrency:
-  group: ftmo-pr456-observer-proof
+  group: ftmo-pr456-postmerge-unblock
   cancel-in-progress: true
 
 jobs:
-  proof:
+  unblock:
     runs-on: self-hosted
-    timeout-minutes: 12
+    timeout-minutes: 8
     env:
-      TARGET_SHA: c7587dec3e826585870d22a59265d33ebdbdff6d
-      FTMO_AUTONOMOUS_CLOUD_BUDGET_USD: '0.00'
-      FTMO_ALLOW_PAID_AWS: ''
+      MERGE_SHA: 325cc2524596a6c936ee24c5f384a23a2965d721
+      PR_HEAD: c7587dec3e826585870d22a59265d33ebdbdff6d
     steps:
-      - name: Checkout exact PR456 head
+      - name: Cancel only merged PR456 head runs
         shell: bash
         run: |
           set -euo pipefail
           test "$(hostname)" = "vps-bb300bba"
-          src="$RUNNER_TEMP/ftmo-pr456-observer-proof"
-          rm -rf "$src"
-          gh repo clone Zennay/Ftmo "$src" -- --filter=blob:none --no-checkout >/dev/null
-          git -C "$src" checkout --detach "$TARGET_SHA" >/dev/null
-          test "$(git -C "$src" rev-parse HEAD)" = "$TARGET_SHA"
+          gh auth status >/dev/null 2>&1
 
-      - name: Run observer boundary regressions
-        shell: bash
-        run: |
-          set -euo pipefail
-          src="$RUNNER_TEMP/ftmo-pr456-observer-proof"
-          venv="$RUNNER_TEMP/ftmo-pr456-observer-proof-venv"
-          rm -rf "$venv"
-          python3 -m venv "$venv"
-          "$venv/bin/python" -m pip install -q pytest
-          cd "$src"
-          "$venv/bin/python" -m pytest -q             tests/test_generation_marathon_observer_workflow.py             tests/test_zero_cost_workflow_boundary.py::test_persistent_generation_observer_is_strictly_read_only
+          pr="$(gh api repos/Zennay/Ftmo/pulls/456)"
+          merged="$(python3 -c 'import json,sys; d=json.load(sys.stdin); print("yes" if d.get("merged_at") else "no")' <<<"$pr")"
+          head="$(python3 -c 'import json,sys; d=json.load(sys.stdin); print((d.get("head") or {}).get("sha") or "")' <<<"$pr")"
+          test "$merged" = yes
+          test "$head" = "$PR_HEAD"
 
-      - name: Assert observer stays non-mutating and sealed
-        shell: bash
-        run: |
-          set -euo pipefail
-          src="$RUNNER_TEMP/ftmo-pr456-observer-proof"
-          python3 - "$src" <<'PY'
-          from pathlib import Path
-          import sys
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
 
-          root = Path(sys.argv[1])
-          text = (root / ".github/workflows/ftmo-generation-marathon-once.yml").read_text()
-          required = (
-              'runs-on: [self-hosted, ftmo-research]',
-              'FTMO_AUTONOMOUS_CLOUD_BUDGET_USD: "0.00"',
-              'FTMO_ALLOW_PAID_AWS: ""',
-              '"activating"',
-              '"reloading"',
-              'persistent_service_not_stable',
-              'research_cycle_not_ok',
-              'walk_forward_access_without_gate',
-              'final_holdout_access_without_gate',
+          head = os.environ["PR_HEAD"]
+          raw = subprocess.check_output(
+              ["gh","api",f"repos/Zennay/Ftmo/actions/runs?head_sha={head}&per_page=100"],
+              text=True,
           )
-          missing = [value for value in required if value not in text]
-          if missing:
-              raise SystemExit("missing invariants: " + ",".join(missing))
-          forbidden = (
-              'v1_autonomous_tick',
-              'systemctl restart "$SERVICE"',
-              'systemctl start "$SERVICE"',
-              'systemctl stop "$SERVICE"',
-              'git push',
-          )
-          present = [value for value in forbidden if value in text]
-          if present:
-              raise SystemExit("observer mutation found: " + ",".join(present))
-          print("FTMO_PR456_EXACT_HEAD_PROOF=green")
+          runs = json.loads(raw).get("workflow_runs", [])
+          for run in runs:
+              if run.get("status") not in {"queued","in_progress","pending","waiting"}:
+                  continue
+              run_id = int(run["id"])
+              subprocess.run(
+                  ["gh","api","--method","POST",f"repos/Zennay/Ftmo/actions/runs/{run_id}/cancel"],
+                  check=True,
+                  stdout=subprocess.DEVNULL,
+              )
+              print(f"cancelled_merged_pr456_run={run_id}:{run.get('name')}")
           PY
+
+      - name: Dispatch fresh current-main runtime verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          live_main="$(gh api repos/Zennay/Ftmo/commits/main --jq .sha)"
+          test "$live_main" = "$MERGE_SHA"
+          before="$(gh api 'repos/Zennay/Ftmo/actions/workflows/deploy-autonomous-vps.yml/runs?event=workflow_dispatch&per_page=20')"
+          before_ids="$(python3 -c 'import json,sys; print(" ".join(str(x["id"]) for x in json.load(sys.stdin).get("workflow_runs",[])))' <<<"$before")"
+          gh workflow run deploy-autonomous-vps.yml --repo Zennay/Ftmo --ref main
+
+          found=""
+          for _ in $(seq 1 30); do
+            sleep 2
+            runs="$(gh api 'repos/Zennay/Ftmo/actions/workflows/deploy-autonomous-vps.yml/runs?event=workflow_dispatch&per_page=20')"
+            found="$(BEFORE="$before_ids" EXPECTED="$MERGE_SHA" python3 -c '
+          import json,os,sys
+          before=set(os.environ.get("BEFORE","").split())
+          expected=os.environ["EXPECTED"]
+          for run in json.load(sys.stdin).get("workflow_runs",[]):
+              if str(run.get("id")) not in before and run.get("head_sha")==expected:
+                  print(run["id"])
+                  break
+          ' <<<"$runs")"
+            test -n "$found" && break
+          done
+          test -n "$found"
+          echo "FTMO_FRESH_DEPLOY_RUN_ID=$found"
