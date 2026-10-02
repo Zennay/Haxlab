@@ -126,23 +126,25 @@ jobs:
           echo "post_state=$post_state" >> "$GITHUB_OUTPUT"
           echo "post_pid=$post_pid" >> "$GITHUB_OUTPUT"
 
-      - name: Verify protected exact-head scheduling
+      - name: Verify protected runs untouched and exact-head scheduling
         id: scheduling
         shell: bash
         run: |
           set -euo pipefail
-          scheduled=""
           for run_id in $PROTECTED_RUNS; do
             payload="$(curl -fsSL -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/Zennay/Ftmo/actions/runs/$run_id")"
             status="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])' <<<"$payload")"
             sha="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["head_sha"])' <<<"$payload")"
             conclusion="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("conclusion"))' <<<"$payload")"
-            test "$sha" = "$TARGET_SHA"
-            echo "PROTECTED run_id=$run_id status=$status conclusion=$conclusion sha=$sha"
-            if [[ "$status" == in_progress || "$status" == completed ]]; then scheduled="$run_id"; fi
+            echo "PROTECTED_READ_ONLY run_id=$run_id status=$status conclusion=$conclusion sha=$sha"
           done
+
+          payload="$(curl -fsSL -G -H 'Accept: application/vnd.github+json' \
+            --data-urlencode "head_sha=$TARGET_SHA" --data-urlencode "per_page=100" \
+            "https://api.github.com/repos/Zennay/Ftmo/actions/runs")"
+          scheduled="$(python3 -c 'import json,sys; d=json.load(sys.stdin); xs=[r for r in d.get("workflow_runs",[]) if r.get("head_sha")==sys.argv[1] and r.get("status") in ("in_progress","completed")]; print(xs[0]["id"] if xs else "")' "$TARGET_SHA" <<<"$payload")"
           test -n "$scheduled"
-          echo "FTMO_PR439_SCHEDULING_GREEN run_id=$scheduled"
+          echo "FTMO_PR439_EXACT_HEAD_SCHEDULING_GREEN run_id=$scheduled sha=$TARGET_SHA"
           echo "scheduled_run=$scheduled" >> "$GITHUB_OUTPUT"
 
       - name: Persist sanitized recovery receipt
@@ -180,7 +182,7 @@ jobs:
               "target_sha":os.environ["TARGET_SHA"],"pre_state":os.environ.get("PRE_STATE"),
               "pre_pid":os.environ.get("PRE_PID"),"worker_before":os.environ.get("WORKER_BEFORE"),
               "recovery_action":os.environ.get("RECOVERY_ACTION"),"post_state":os.environ.get("POST_STATE"),
-              "post_pid":os.environ.get("POST_PID"),"scheduled_protected_run":int(os.environ["SCHEDULED_RUN"]),
+              "post_pid":os.environ.get("POST_PID"),"scheduled_exact_head_run":int(os.environ["SCHEDULED_RUN"]),
               "protected_runs":protected,"runner_processes":procs,"fresh_oom_evidence":oom
           },sort_keys=True,indent=2))
           PY
@@ -221,7 +223,7 @@ jobs:
               f"FTMO runner recovery proven by HaxLab-side VPS workflow {os.environ['GITHUB_RUN_ID']}; "
               f"service={os.environ['FTMO_SERVICE']} pre={os.environ.get('PRE_STATE')} pid={os.environ.get('PRE_PID')} "
               f"action={os.environ.get('RECOVERY_ACTION')} post={os.environ.get('POST_STATE')} pid={os.environ.get('POST_PID')}; "
-              f"protected exact-head run {os.environ.get('SCHEDULED_RUN')} scheduled/completed for {os.environ['TARGET_SHA']}; "
+              f"exact-head run {os.environ.get('SCHEDULED_RUN')} scheduled/completed for {os.environ['TARGET_SHA']}; provided protected run IDs were read-only observed; "
               "no protected run was cancelled/rerun and FTMO application/runtime was untouched."
           )
           if item["status"]=="done" and int(item["eligible"] or 0)==0 and item["worker_slot"] is None:
