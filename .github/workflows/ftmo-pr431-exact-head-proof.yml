@@ -1,4 +1,4 @@
-name: FTMO PR431 exact-head proof
+name: FTMO PR431 integrated-main proof
 
 on:
   push:
@@ -19,7 +19,7 @@ jobs:
     runs-on: self-hosted
     timeout-minutes: 15
     env:
-      TARGET_SHA: 73abec192bcc27efbb3850b0e2f1ac742dcf7045
+      TARGET_SHA: 82fdec619e09d9c55e774b7aafeff21b73b1bec3
     steps:
       - name: Verify VPS runner
         shell: bash
