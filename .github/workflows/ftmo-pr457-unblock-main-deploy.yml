@@ -12,7 +12,7 @@ permissions:
 jobs:
   cancel-stale:
     runs-on: [self-hosted, haxlab]
-    timeout-minutes: 5
+    timeout-minutes: 6
     env:
       FTMO_REPO: Zennay/Ftmo
       PR457_PROOF_RUN: "37041021841"
