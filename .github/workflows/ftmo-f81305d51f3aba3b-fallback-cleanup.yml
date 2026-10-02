@@ -1,0 +1,139 @@
+name: Cleanup completed FTMO f813 fallback routes
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/ftmo-f81305d51f3aba3b-fallback-cleanup.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: self-hosted
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Cancel only redundant helper workflow runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          python3 - <<'PY'
+          import json, subprocess, time
+          targets = {
+              "Zennay/zCloud": {
+                  "FTMO PR444 independent exact-head proof",
+                  "Enqueue FTMO PR444 exact-head proof on zSSH",
+                  "Finalize FTMO f813 Worker5 queue item",
+              },
+              "Zennay/zSSH": {
+                  "Finalize FTMO f813 queue via zSSH runner",
+              },
+          }
+          cancelled = []
+          observed = []
+          for repo, names in targets.items():
+              rows = json.loads(subprocess.check_output(
+                  ["gh","run","list","--repo",repo,"--limit","100",
+                   "--json","databaseId,name,status,conclusion,headSha"], text=True
+              ))
+              for row in rows:
+                  if row.get("name") not in names:
+                      continue
+                  observed.append({"repo":repo, **row})
+                  if row.get("status") in {"queued","in_progress","waiting","requested","pending"}:
+                      subprocess.run(
+                          ["gh","run","cancel",str(row["databaseId"]),"--repo",repo],
+                          check=True, stdout=subprocess.DEVNULL,
+                      )
+                      cancelled.append({"repo":repo,"run_id":row["databaseId"],"name":row["name"]})
+          print("REDUNDANT_HELPER_RUNS_OBSERVED=" + json.dumps(observed,sort_keys=True))
+          print("REDUNDANT_HELPER_RUNS_CANCEL_REQUESTED=" + json.dumps(cancelled,sort_keys=True))
+          open("/tmp/ftmo-f813-cancelled.json","w").write(json.dumps({
+              "observed":observed,"cancel_requested":cancelled
+          },sort_keys=True))
+          PY
+
+      - name: Drop only still-queued redundant zSSH proof item
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import importlib.util, json, sqlite3, sys
+          from pathlib import Path
+          root=Path("/home/ubuntu/zennay-cloud")
+          db=root/"history.db"
+          server_path=root/"server.py"
+          qid="zssh-ftmo-pr444-exact-head-proof-20261002-worker5"
+          sys.path.insert(0,str(root))
+          spec=importlib.util.spec_from_file_location("zcloud_live_server",server_path)
+          server=importlib.util.module_from_spec(spec)
+          assert spec and spec.loader
+          spec.loader.exec_module(server)
+          server.DB=db
+          with sqlite3.connect(db) as c:
+              c.row_factory=sqlite3.Row
+              row=c.execute(
+                  "SELECT queue_id,project_id,status,eligible,worker_slot,evidence,updated_at "
+                  "FROM portfolio_queue WHERE queue_id=?",(qid,)
+              ).fetchone()
+          before=dict(row) if row else None
+          action="absent"
+          result=None
+          if before:
+              action="preserved"
+              if before["status"]=="queued" and before["worker_slot"] is None:
+                  result=server.portfolio_queue_drop(
+                      qid,
+                      "Superseded by successful FTMO PR444 exact-head HaxLab proof 37005946247 "
+                      "and completed source queue finalizer 37006428771."
+                  )
+                  action="dropped"
+          with sqlite3.connect(db) as c:
+              c.row_factory=sqlite3.Row
+              row=c.execute(
+                  "SELECT queue_id,project_id,status,eligible,worker_slot,evidence,updated_at "
+                  "FROM portfolio_queue WHERE queue_id=?",(qid,)
+              ).fetchone()
+          after=dict(row) if row else None
+          payload={"queue_id":qid,"action":action,"before":before,"after":after,"drop_result":result}
+          print("REDUNDANT_ZSSH_QUEUE_CLEANUP="+json.dumps(payload,sort_keys=True,default=str))
+          Path("/tmp/ftmo-f813-zssh-queue-cleanup.json").write_text(
+              json.dumps(payload,sort_keys=True,default=str),encoding="utf-8"
+          )
+          PY
+
+      - name: Persist cleanup receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p runtime-evidence
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          cancellation=json.loads(Path("/tmp/ftmo-f813-cancelled.json").read_text())
+          queue=json.loads(Path("/tmp/ftmo-f813-zssh-queue-cleanup.json").read_text())
+          payload={
+              "project":"ftmo",
+              "queue_item":"ftmo-f81305d51f3aba3b",
+              "workflow_run_id":int(os.environ["GITHUB_RUN_ID"]),
+              "host":"vps-bb300bba",
+              "result":"success",
+              "workflow_cleanup":cancellation,
+              "zssh_queue_cleanup":queue,
+          }
+          Path("runtime-evidence/ftmo-f81305d51f3aba3b-fallback-cleanup.json").write_text(
+              json.dumps(payload,sort_keys=True,indent=2,default=str)+"\n",encoding="utf-8"
+          )
+          PY
+          git config user.name "haxlab-automation"
+          git config user.email "haxlab-automation@users.noreply.github.com"
+          git add runtime-evidence/ftmo-f81305d51f3aba3b-fallback-cleanup.json
+          git commit -m "Record FTMO f813 fallback cleanup"
+          git push origin HEAD:main
