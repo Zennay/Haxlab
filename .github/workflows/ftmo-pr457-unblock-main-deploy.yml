@@ -1,0 +1,93 @@
+name: Unblock FTMO PR457 main deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/ftmo-pr457-unblock-main-deploy.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  cancel-stale:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 5
+    env:
+      FTMO_REPO: Zennay/Ftmo
+      PR457_PROOF_RUN: "37041021841"
+    steps:
+      - name: Cancel only verified superseded FTMO runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+
+          proof="$(gh api "repos/Zennay/Haxlab/actions/runs/$PR457_PROOF_RUN")"
+          python3 -c 'import json,sys; d=json.load(sys.stdin); assert (d["status"],d["conclusion"])==("completed","success"); print("PR457_PROOF_GREEN=1")' <<<"$proof"
+
+          python3 - <<'PY'
+          import json
+          import subprocess
+
+          repo = "Zennay/Ftmo"
+          stale = {
+              36941649689: {
+                  "name": "FTMO checkpoint targeted proof",
+                  "head_branch": "worker/ftmo-checkpoint-zcloud-proof-20261001",
+                  "before": "2026-10-02T00:00:00Z",
+              },
+              36942167531: {
+                  "name": "Worker2 FTMO research heartbeat targeted proof",
+                  "head_branch": "worker2/ftmo-research-heartbeat-zcloud-proof-20261001",
+                  "before": "2026-10-02T00:00:00Z",
+              },
+              37025413812: {
+                  "name": "Worker2 provider-validation VPS proof",
+                  "head_branch": "worker2/gen29-provider-validation-content-stability",
+                  "merged_pr": 450,
+              },
+              37040896887: {
+                  "name": "Test suite",
+                  "head_branch": "worker5/gen29-exact-provider-labels",
+                  "merged_pr": 457,
+              },
+              37040897060: {
+                  "name": "Provider foundation publication integrity proof",
+                  "head_branch": "worker5/gen29-exact-provider-labels",
+                  "merged_pr": 457,
+              },
+          }
+
+          def api(path, *extra):
+              cmd = ["gh", "api", f"repos/{repo}/{path}", *extra]
+              return subprocess.check_output(cmd, text=True)
+
+          for run_id, expected in stale.items():
+              run = json.loads(api(f"actions/runs/{run_id}"))
+              if run.get("status") != "queued":
+                  print(f"RUN_{run_id}_SKIP_STATUS={run.get('status')}")
+                  continue
+              if run.get("name") != expected["name"] or run.get("head_branch") != expected["head_branch"]:
+                  raise SystemExit(f"run identity mismatch for {run_id}")
+              if "merged_pr" in expected:
+                  pr = json.loads(api(f"pulls/{expected['merged_pr']}"))
+                  if pr.get("state") != "closed" or not pr.get("merged_at"):
+                      raise SystemExit(f"PR {expected['merged_pr']} is not merged")
+                  if pr.get("head", {}).get("ref") != expected["head_branch"]:
+                      raise SystemExit(f"PR head mismatch for {run_id}")
+              else:
+                  if not run.get("created_at", "") < expected["before"]:
+                      raise SystemExit(f"old proof run is not old enough: {run_id}")
+                  pulls = json.loads(api(f"commits/{run['head_sha']}/pulls"))
+                  if pulls:
+                      raise SystemExit(f"unexpected PR association for temporary proof {run_id}")
+              subprocess.check_call(["gh", "api", "-X", "POST", f"repos/{repo}/actions/runs/{run_id}/cancel"])
+              print(f"CANCELLED_SUPERSEDED_RUN={run_id}")
+
+          main_runs = json.loads(api("actions/runs?event=push&head_sha=0c3af6764322aa485547a5d36f732301bf83c5e3&per_page=20"))
+          deploy = next((r for r in main_runs.get("workflow_runs", []) if r.get("id") == 37041325264), None)
+          if deploy is None:
+              raise SystemExit("canonical main deploy run missing")
+          print("CANONICAL_MAIN_DEPLOY_STATUS=" + str(deploy.get("status")))
+          PY
