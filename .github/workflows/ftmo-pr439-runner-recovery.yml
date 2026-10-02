@@ -133,7 +133,7 @@ jobs:
           set -euo pipefail
           scheduled=""
           for run_id in $PROTECTED_RUNS; do
-            payload="$(gh api "repos/Zennay/Ftmo/actions/runs/$run_id")"
+            payload="$(curl -fsSL -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/Zennay/Ftmo/actions/runs/$run_id")"
             status="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])' <<<"$payload")"
             sha="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["head_sha"])' <<<"$payload")"
             conclusion="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("conclusion"))' <<<"$payload")"
@@ -159,7 +159,7 @@ jobs:
           set -euo pipefail
           receipt="/tmp/ftmo-pr439-haxlab-recovery-${GITHUB_RUN_ID}.json"
           python3 - <<'PY' > "$receipt"
-          import json,os,socket,subprocess
+          import json,os,socket,subprocess,urllib.request
           oom=subprocess.run(["bash","-lc",
             "(sudo -n journalctl -k --since '-60 min' --no-pager 2>/dev/null || journalctl -k --since '-60 min' --no-pager 2>/dev/null || true) | grep -Eai 'out of memory|oom|killed process|memory cgroup' | tail -80"],
             text=True,capture_output=True).stdout.strip().splitlines()
@@ -168,7 +168,9 @@ jobs:
             text=True,capture_output=True).stdout.strip().splitlines()
           protected=[]
           for rid in os.environ["PROTECTED_RUNS"].split():
-              d=json.loads(subprocess.check_output(["gh","api",f"repos/Zennay/Ftmo/actions/runs/{rid}"],text=True))
+              req=urllib.request.Request(f"https://api.github.com/repos/Zennay/Ftmo/actions/runs/{rid}",headers={"Accept":"application/vnd.github+json","User-Agent":"zssh-runner-recovery"})
+              with urllib.request.urlopen(req,timeout=10) as resp:
+                  d=json.load(resp)
               protected.append({"run_id":int(rid),"name":d.get("name"),"status":d.get("status"),
                   "conclusion":d.get("conclusion"),"head_sha":d.get("head_sha"),"updated_at":d.get("updated_at")})
           print(json.dumps({
