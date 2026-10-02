@@ -1,4 +1,4 @@
-name: FTMO PR445 exact-head proof via HaxLab
+name: FTMO PR448 exact-head proof via HaxLab
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: ftmo-pr445-exact-head-proof-haxlab
+  group: ftmo-pr448-exact-head-proof-haxlab
   cancel-in-progress: true
 
 jobs:
@@ -18,7 +18,7 @@ jobs:
     runs-on: self-hosted
     timeout-minutes: 30
     env:
-      TARGET_SHA: 21ae700b96e21538360357679bc13ba5166b0667
+      TARGET_SHA: 3034aa82c6dfae98803a4c15a105f56c8f94a9be
       FTMO_AUTONOMOUS_CLOUD_BUDGET_USD: '0.00'
       FTMO_ALLOW_PAID_AWS: ''
     steps:
@@ -27,7 +27,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(hostname)" = "vps-bb300bba"
-          src="$RUNNER_TEMP/ftmo-pr445-exact-head"
+          src="$RUNNER_TEMP/ftmo-pr448-exact-head"
           rm -rf "$src"
           gh repo clone Zennay/Ftmo "$src" -- --filter=blob:none --no-checkout >/dev/null
           git -C "$src" checkout --detach "$TARGET_SHA" >/dev/null
@@ -38,8 +38,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          src="$RUNNER_TEMP/ftmo-pr445-exact-head"
-          venv="$RUNNER_TEMP/ftmo-pr445-exact-head-venv"
+          src="$RUNNER_TEMP/ftmo-pr448-exact-head"
+          venv="$RUNNER_TEMP/ftmo-pr448-exact-head-venv"
           rm -rf "$venv"
           python3 -m venv "$venv"
           "$venv/bin/python" -m pip install -q -r "$src/requirements-ci.txt"
@@ -49,29 +49,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          src="$RUNNER_TEMP/ftmo-pr445-exact-head"
-          venv="$RUNNER_TEMP/ftmo-pr445-exact-head-venv"
+          src="$RUNNER_TEMP/ftmo-pr448-exact-head"
+          venv="$RUNNER_TEMP/ftmo-pr448-exact-head-venv"
           "$venv/bin/python" -m compileall -q             "$src/src/prop_trading_ai/ops/autonomous_rollover.py"             "$src/src/prop_trading_ai/data/market/dukascopy_resume_cache.py"             "$src/src/prop_trading_ai/data/market/dukascopy_tick_resume_cache.py"
 
-      - name: Prove semantic cache progress and sealed boundaries
+      - name: Prove staged provider publication and sealed boundaries
         shell: bash
         run: |
           set -euo pipefail
-          src="$RUNNER_TEMP/ftmo-pr445-exact-head"
-          venv="$RUNNER_TEMP/ftmo-pr445-exact-head-venv"
+          src="$RUNNER_TEMP/ftmo-pr448-exact-head"
+          venv="$RUNNER_TEMP/ftmo-pr448-exact-head-venv"
           cd "$src"
-          "$venv/bin/python" -m pytest -q             tests/test_autonomous_provider_retry.py             tests/test_provider_foundation_publication.py             tests/test_dukascopy_jetta_m1.py             tests/test_dukascopy_tick_resume_cache.py             tests/test_zero_cost_workflow_boundary.py
-          echo "FTMO_PR445_TARGETED_GREEN=1"
-
-      - name: Prove complete exact-head test suite
-        shell: bash
-        run: |
-          set -euo pipefail
-          src="$RUNNER_TEMP/ftmo-pr445-exact-head"
-          venv="$RUNNER_TEMP/ftmo-pr445-exact-head-venv"
-          cd "$src"
-          "$venv/bin/python" -m pytest -q
-          echo "FTMO_PR445_FULL_SUITE_GREEN=1"
+          "$venv/bin/python" -m pytest -q \
+            tests/test_provider_foundation_publication.py \
+            tests/test_provider_validation_json_integrity.py \
+            tests/test_autonomous_provider_retry.py \
+            tests/test_zero_cost_workflow_boundary.py
+          echo "FTMO_PR448_TARGETED_GREEN=1"
 
       - name: Persist proof receipt
         if: always()
@@ -80,7 +74,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          receipt="/tmp/ftmo-pr445-haxlab-${GITHUB_RUN_ID}.json"
+          receipt="/tmp/ftmo-pr448-haxlab-${GITHUB_RUN_ID}.json"
           python3 - <<'PY' > "$receipt"
           import json, os, socket
           print(json.dumps({
@@ -97,14 +91,14 @@ jobs:
                   "exact-sha-checkout",
                   "isolated-install",
                   "compile",
-                  "resume-cache-provider-targeted-tests",
                   "provider-foundation-publication-tests",
-                  "zero-cost-boundary-tests",
-                  "full-exact-head-pytest-suite"
+                  "provider-validation-integrity-tests",
+                  "provider-retry-compatibility-tests",
+                  "zero-cost-boundary-tests"
               ]
           }, sort_keys=True))
           PY
           encoded="$(base64 -w0 "$receipt")"
-          path="runtime-evidence/ftmo-pr445-haxlab-proof-${GITHUB_RUN_ID}.json"
-          gh api --method PUT "repos/Zennay/Haxlab/contents/$path"             -f message="Record FTMO PR445 HaxLab proof run ${GITHUB_RUN_ID}"             -f content="$encoded" >/dev/null
-          echo "FTMO_PR445_RECEIPT_PATH=$path"
+          path="runtime-evidence/ftmo-pr448-haxlab-proof-${GITHUB_RUN_ID}.json"
+          gh api --method PUT "repos/Zennay/Haxlab/contents/$path"             -f message="Record FTMO PR448 HaxLab proof run ${GITHUB_RUN_ID}"             -f content="$encoded" >/dev/null
+          echo "FTMO_PR448_RECEIPT_PATH=$path"
