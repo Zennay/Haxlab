@@ -1,0 +1,32 @@
+name: Snapshot live FTMO successor queue
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/snapshot-ftmo-successor.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 5
+    steps:
+      - name: Read live FTMO queue
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          python3 - <<'PY'
+          import json, urllib.request
+          with urllib.request.urlopen("http://127.0.0.1:8765/api/portfolio-queue?all=1", timeout=10) as r:
+              payload=json.load(r)
+          items=[x for x in payload.get("items",[]) if str(x.get("project_id") or "").lower()=="ftmo"]
+          items.sort(key=lambda x:(str(x.get("created_at") or ""),str(x.get("queue_id") or "")), reverse=True)
+          print("FTMO_QUEUE_LIVE="+json.dumps([
+              {k:x.get(k) for k in ("queue_id","priority","status","eligible","worker_slot","title","completion_criteria","parent_queue_id","source_url","created_at","updated_at","evidence")}
+              for x in items[:8]
+          ], sort_keys=True))
+          PY
