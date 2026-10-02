@@ -22,6 +22,7 @@ jobs:
       QUEUE_ID: ftmo-7ee077e0b88278da
       EXACT_HEAD: 3034aa82c6dfae98803a4c15a105f56c8f94a9be
       MERGE_SHA: 920df21438332e57e2bd4027bdd0e8f68f922e8d
+      DEPLOY_FIX_SHA: b03e28641dd2937327150bf3f654ae6e347f52cf
       FULL_TEST_RUN: '37020168266'
       PUBLICATION_RUN: '37020167847'
       CACHE_RUN: '37020167797'
@@ -68,24 +69,30 @@ jobs:
           import json, os, subprocess, time
 
           merge=os.environ["MERGE_SHA"]
+          deploy_fix=os.environ["DEPLOY_FIX_SHA"]
 
           def api(path):
               return json.loads(subprocess.check_output(["gh","api",path],text=True))
 
-          def contains_merge(head):
+          def contains_required(head):
               if not head:
                   return False
-              comp=api(f"repos/Zennay/Ftmo/compare/{merge}...{head}")
-              return comp.get("status") in {"ahead","identical"}
+              merge_comp=api(f"repos/Zennay/Ftmo/compare/{merge}...{head}")
+              fix_comp=api(f"repos/Zennay/Ftmo/compare/{deploy_fix}...{head}")
+              return (
+                  merge_comp.get("status") in {"ahead","identical"}
+                  and fix_comp.get("status") in {"ahead","identical"}
+              )
 
           def matching():
               data=api("repos/Zennay/Ftmo/actions/workflows/deploy-autonomous-vps.yml/runs?per_page=30")
               return [
                   r for r in data.get("workflow_runs",[])
                   if r.get("name")=="Verify autonomous VPS runtime"
-                  and contains_merge(r.get("head_sha"))
+                  and contains_required(r.get("head_sha"))
               ]
 
+          dispatched=False
           runs=matching()
           running=[r for r in runs if r.get("status")!="completed"]
           successful=[r for r in runs if r.get("status")=="completed" and r.get("conclusion")=="success"]
@@ -94,30 +101,43 @@ jobs:
                   "gh","workflow","run","deploy-autonomous-vps.yml",
                   "--repo","Zennay/Ftmo","--ref","main"
               ])
+              dispatched=True
               print("FTMO_PR448_DEPLOY_DISPATCHED=1")
 
           chosen=None
+          last_failure=None
           for _ in range(240):
               runs=matching()
-              if runs:
-                  runs.sort(key=lambda r:r.get("created_at") or "", reverse=True)
-                  for candidate in runs:
-                      if candidate.get("status")=="completed":
-                          chosen=candidate
-                          break
-                  if chosen:
-                      break
+              runs.sort(key=lambda r:r.get("created_at") or "", reverse=True)
+              successes=[
+                  r for r in runs
+                  if r.get("status")=="completed" and r.get("conclusion")=="success"
+              ]
+              if successes:
+                  chosen=successes[0]
+                  break
+              active=[r for r in runs if r.get("status")!="completed"]
+              failures=[r for r in runs if r.get("status")=="completed"]
+              if failures:
+                  last_failure=failures[0]
+              if not active and last_failure is not None and dispatched:
+                  raise SystemExit(
+                      f"dispatched canonical deployment failed: "
+                      f"{last_failure.get('id')} {last_failure.get('conclusion')}"
+                  )
+              if not active and not dispatched:
+                  subprocess.check_call([
+                      "gh","workflow","run","deploy-autonomous-vps.yml",
+                      "--repo","Zennay/Ftmo","--ref","main"
+                  ])
+                  dispatched=True
+                  print("FTMO_PR448_DEPLOY_REDISPATCHED=1")
               time.sleep(5)
 
           if not chosen:
-              raise SystemExit("no completed canonical deployment found")
-          if chosen.get("conclusion")!="success":
-              raise SystemExit(
-                  f"latest completed canonical deployment failed: "
-                  f"{chosen.get('id')} {chosen.get('conclusion')}"
-              )
-          if not contains_merge(chosen.get("head_sha")):
-              raise SystemExit("deployment head does not contain PR448 merge")
+              raise SystemExit("no successful canonical deployment found")
+          if not contains_required(chosen.get("head_sha")):
+              raise SystemExit("deployment head does not contain PR448 merge and PR449 fix")
           with open(os.environ["GITHUB_ENV"],"a",encoding="utf-8") as h:
               h.write(f"DEPLOY_RUN={chosen['id']}\n")
               h.write(f"DEPLOY_HEAD={chosen['head_sha']}\n")
@@ -270,6 +290,7 @@ jobs:
               "runner_name":os.environ.get("RUNNER_NAME"),
               "exact_head":os.environ["EXACT_HEAD"],
               "merge_sha":os.environ["MERGE_SHA"],
+              "deploy_fix_sha":os.environ["DEPLOY_FIX_SHA"],
               "proof_runs":{
                   "full_test":os.environ["FULL_TEST_RUN"],
                   "provider_publication":os.environ["PUBLICATION_RUN"],
