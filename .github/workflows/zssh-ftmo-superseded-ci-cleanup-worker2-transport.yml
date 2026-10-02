@@ -59,11 +59,20 @@ jobs:
               ))
 
           def cancel(rid):
-              subprocess.check_call([
+              latest=gh_json(f"repos/{repo}/actions/runs/{rid}")
+              if latest.get("status") not in active_statuses:
+                  return {"action":"raced_terminal","status":latest.get("status"),"conclusion":latest.get("conclusion")}
+              proc=subprocess.run([
                   "gh","api","--method","POST",
                   "-H","X-GitHub-Api-Version: 2022-11-28",
                   f"repos/{repo}/actions/runs/{rid}/cancel",
-              ], stdout=subprocess.DEVNULL)
+              ], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+              if proc.returncode == 0:
+                  return {"action":"cancel_requested"}
+              latest=gh_json(f"repos/{repo}/actions/runs/{rid}")
+              if latest.get("status") not in active_statuses:
+                  return {"action":"raced_terminal","status":latest.get("status"),"conclusion":latest.get("conclusion")}
+              raise SystemExit(f"cancel failed run={rid} status={latest.get('status')} stderr={proc.stderr.strip()[:300]}")
 
           main_sha=gh_json(f"repos/{repo}/branches/main")["commit"]["sha"]
           open_prs=gh_json(f"repos/{repo}/pulls?state=open&per_page=100")
@@ -103,8 +112,11 @@ jobs:
           kept=[]
 
           if trun.get("status") in active_statuses:
-              cancel(target_run)
-              cancelled.append({"id":target_run,"reason":"closed_pr421_exact_target"})
+              outcome=cancel(target_run)
+              if outcome["action"]=="cancel_requested":
+                  cancelled.append({"id":target_run,"reason":"closed_pr421_exact_target"})
+              else:
+                  kept.append({"id":target_run,"reason":"terminal_race_closed_pr421_exact_target",**outcome})
           else:
               kept.append({"id":target_run,"reason":f"already_terminal:{trun.get('status')}:{trun.get('conclusion')}"})
 
@@ -134,14 +146,20 @@ jobs:
               if open_pr is not None:
                   latest=(open_pr.get("head") or {}).get("sha")
                   if latest and sha!=latest:
-                      cancel(rid)
-                      cancelled.append({"id":rid,"status":status,"sha":sha,"branch":branch,"reason":"stale_head_of_open_pr","pr":int(open_pr["number"]),"latest_sha":latest})
+                      outcome=cancel(rid)
+                      if outcome["action"]=="cancel_requested":
+                          cancelled.append({"id":rid,"status":status,"sha":sha,"branch":branch,"reason":"stale_head_of_open_pr","pr":int(open_pr["number"]),"latest_sha":latest})
+                      else:
+                          kept.append({"id":rid,"status":status,"sha":sha,"branch":branch,"reason":"terminal_race_stale_open_pr",**outcome})
                       continue
 
               related=gh_json(f"repos/{repo}/commits/{sha}/pulls") if sha else []
               if related and all(p.get("state")=="closed" for p in related):
-                  cancel(rid)
-                  cancelled.append({"id":rid,"status":status,"sha":sha,"branch":branch,"reason":"associated_prs_closed_or_merged","prs":[{"number":int(p["number"]),"merged":bool(p.get("merged_at"))} for p in related]})
+                  outcome=cancel(rid)
+                  if outcome["action"]=="cancel_requested":
+                      cancelled.append({"id":rid,"status":status,"sha":sha,"branch":branch,"reason":"associated_prs_closed_or_merged","prs":[{"number":int(p["number"]),"merged":bool(p.get("merged_at"))} for p in related]})
+                  else:
+                      kept.append({"id":rid,"status":status,"sha":sha,"branch":branch,"reason":"terminal_race_closed_or_merged_pr",**outcome})
                   continue
 
               kept.append({"id":rid,"status":status,"sha":sha,"branch":branch,"reason":"no_safe_cancel_proof"})
