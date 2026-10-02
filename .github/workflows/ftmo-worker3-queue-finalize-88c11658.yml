@@ -1,0 +1,162 @@
+name: Finalize FTMO Worker3 queue item 88c11658
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/ftmo-worker3-queue-finalize-88c11658.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ftmo-worker3-queue-finalize-88c11658
+  cancel-in-progress: true
+
+jobs:
+  finalize:
+    runs-on: self-hosted
+    timeout-minutes: 8
+    steps:
+      - name: Verify merged package and VPS proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          gh auth status >/dev/null 2>&1
+
+          python3 - <<'PY'
+          import json
+          import subprocess
+
+          MERGE_SHA = "c504c3b92c265b36b45ebe718109a10aca06de26"
+          INTEGRATED_SHA = "82fdec619e09d9c55e774b7aafeff21b73b1bec3"
+          PROOF_RUN = 37000591441
+
+          def gh_json(path):
+              raw = subprocess.check_output(
+                  ["gh", "api", "-H", "X-GitHub-Api-Version: 2022-11-28", path],
+                  text=True,
+              )
+              return json.loads(raw)
+
+          pr = gh_json("repos/Zennay/Ftmo/pulls/429")
+          if not pr.get("merged") or pr.get("merge_commit_sha") != MERGE_SHA:
+              raise SystemExit("PR429 merge identity mismatch")
+
+          proof = gh_json(f"repos/Zennay/Haxlab/actions/runs/{PROOF_RUN}")
+          if (proof.get("status"), proof.get("conclusion")) != ("completed", "success"):
+              raise SystemExit(
+                  f"integrated proof not green: {proof.get('status')}/{proof.get('conclusion')}"
+              )
+
+          main_sha = gh_json("repos/Zennay/Ftmo/branches/main")["commit"]["sha"]
+          ancestry = gh_json(f"repos/Zennay/Ftmo/compare/{MERGE_SHA}...{main_sha}")
+          if ancestry.get("status") not in {"ahead", "identical"}:
+              raise SystemExit(
+                  f"current main no longer contains PR429 merge: {ancestry.get('status')}"
+              )
+
+          integrated = gh_json(f"repos/Zennay/Ftmo/compare/{INTEGRATED_SHA}...{main_sha}")
+          if integrated.get("status") not in {"ahead", "identical"}:
+              raise SystemExit(
+                  f"current main no longer contains integrated proof SHA: {integrated.get('status')}"
+              )
+
+          print("FTMO_WORKER3_PACKAGE_GREEN=" + json.dumps({
+              "pr": 429,
+              "merge_sha": MERGE_SHA,
+              "integrated_tested_sha": INTEGRATED_SHA,
+              "proof_run": PROOF_RUN,
+              "proof_conclusion": proof.get("conclusion"),
+              "current_main_sha": main_sha,
+              "generation": 29,
+              "stage": "provider_foundation",
+              "strategy_outcomes_accessed": False,
+              "walk_forward_accessed": False,
+              "final_holdout_accessed": False,
+          }, sort_keys=True))
+          PY
+
+      - name: Finalize exact SQLite queue assignment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from __future__ import annotations
+          import importlib.util
+          import json
+          import sqlite3
+          import sys
+          from pathlib import Path
+
+          queue_id = "ftmo-88c11658a14d8dbb"
+          expected_project = "ftmo"
+          live_root = Path("/home/ubuntu/zennay-cloud")
+          server_path = live_root / "server.py"
+          db_path = live_root / "history.db"
+          if not server_path.is_file() or not db_path.is_file():
+              raise SystemExit("live zCloud server/history.db missing")
+
+          sys.path.insert(0, str(live_root))
+          spec = importlib.util.spec_from_file_location("zcloud_live_server", server_path)
+          if spec is None or spec.loader is None:
+              raise SystemExit("cannot load live zCloud server module")
+          server = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(server)
+          server.DB = db_path
+
+          def read_item():
+              with sqlite3.connect(db_path) as c:
+                  c.row_factory = sqlite3.Row
+                  row = c.execute(
+                      "SELECT queue_id,project_id,title,status,eligible,worker_slot,evidence,updated_at "
+                      "FROM portfolio_queue WHERE queue_id=?",
+                      (queue_id,),
+                  ).fetchone()
+              return dict(row) if row else None
+
+          item = read_item()
+          print("QUEUE_BEFORE=" + json.dumps(item, sort_keys=True, default=str))
+          if item is None:
+              raise SystemExit("queue item missing")
+          if item["project_id"] != expected_project:
+              raise SystemExit(f"project mismatch: {item['project_id']}")
+
+          evidence = (
+              "Worker3 Gen29 cache-progress integrity completed. PR #429 merged as "
+              "c504c3b92c265b36b45ebe718109a10aca06de26. Integrated canonical-main VPS proof "
+              "37000591441 SUCCESS on vps-bb300bba checked out exact "
+              "82fdec619e09d9c55e774b7aafeff21b73b1bec3 (a descendant of #429), compiled and "
+              "passed Jetta regressions, the full autonomous provider-retry suite containing the "
+              "new cache-progress filesystem regressions, and zero-cost/self-hosted boundary tests. "
+              "Generation 29 remained provider_foundation; no strategy outcomes, walk-forward, "
+              "final holdout, live/broker permission, or paid-cloud boundary was opened."
+          )
+
+          if item["status"] == "done":
+              print("QUEUE_ALREADY_DONE=1")
+          elif item["status"] in {"claimed", "running", "verifying", "in_progress"} and item["worker_slot"] is not None:
+              result = server.portfolio_queue_finish(
+                  int(item["worker_slot"]), queue_id, "DONE", evidence
+              )
+              print("QUEUE_FINISH_RESULT=" + json.dumps(result, sort_keys=True, default=str))
+              if not result.get("updated"):
+                  raise SystemExit("portfolio_queue_finish refused active assignment")
+          else:
+              raise SystemExit(
+                  "refusing nonstandard queue mutation; "
+                  f"status={item['status']} worker_slot={item['worker_slot']}"
+              )
+
+          final = read_item()
+          print("QUEUE_AFTER=" + json.dumps(final, sort_keys=True, default=str))
+          if (
+              not final
+              or final["status"] != "done"
+              or int(final["eligible"] or 0) != 0
+              or final["worker_slot"] is not None
+          ):
+              raise SystemExit("queue final state is not done/eligible=0/worker_slot=null")
+          print("ZCLOUD_SQLITE_QUEUE_FINALIZE_GREEN=1")
+          PY
