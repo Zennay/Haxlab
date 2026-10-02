@@ -12,7 +12,7 @@ permissions:
 jobs:
   prove:
     runs-on: [self-hosted, haxlab]
-    timeout-minutes: 15
+    timeout-minutes: 16
     env:
       TARGET_SHA: a1bcba2758e59540237cd6ccdee393cea3c36745
       FTMO_AUTONOMOUS_CLOUD_BUDGET_USD: "0.00"
