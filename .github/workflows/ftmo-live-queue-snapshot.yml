@@ -1,0 +1,54 @@
+name: FTMO live queue snapshot
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/ftmo-live-queue-snapshot.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: self-hosted
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: main
+      - name: Snapshot live FTMO queue
+        shell: bash
+        env:
+          RECEIPT_PATH: runtime-evidence/ftmo-live-queue-snapshot.json
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          python3 - <<'PY'
+          import json, os, sqlite3
+          from pathlib import Path
+          db=Path("/home/ubuntu/zennay-cloud/history.db")
+          if not db.is_file():
+              raise SystemExit("zCloud SQLite missing")
+          with sqlite3.connect(db) as c:
+              c.row_factory=sqlite3.Row
+              rows=[dict(r) for r in c.execute(
+                  "SELECT queue_id,project_id,priority,title,status,eligible,worker_slot,parent_queue_id,updated_at,evidence "
+                  "FROM portfolio_queue WHERE project_id='ftmo' "
+                  "ORDER BY updated_at DESC LIMIT 25"
+              ).fetchall()]
+          payload={
+              "project":"ftmo",
+              "runner_host":"vps-bb300bba",
+              "workflow_run_id":int(os.environ["RUN_ID"]),
+              "rows":rows,
+          }
+          Path(os.environ["RECEIPT_PATH"]).parent.mkdir(parents=True,exist_ok=True)
+          Path(os.environ["RECEIPT_PATH"]).write_text(json.dumps(payload,indent=2,sort_keys=True,default=str)+"\n")
+          PY
+          git config user.name "HaxLab FTMO queue snapshot"
+          git config user.email "haxlab-ftmo-queue@users.noreply.github.com"
+          git add "$RECEIPT_PATH"
+          git commit -m "Record FTMO live queue snapshot"
+          git push origin HEAD:main
