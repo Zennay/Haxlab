@@ -1,0 +1,66 @@
+name: Finalize FTMO Worker1 bf297 package
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/finalize-ftmo-bf297.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  finalize:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 5
+    steps:
+      - name: Verify integrated proof and persist queue DONE
+        shell: bash
+        env:
+          QUEUE_ID: ftmo-bf297325b329e899
+          PROOF_RUN: "37000591441"
+          MERGE_SHA: 82fdec619e09d9c55e774b7aafeff21b73b1bec3
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          proof="$(gh api "repos/Zennay/Haxlab/actions/runs/$PROOF_RUN")"
+          python3 -c 'import json,sys; d=json.load(sys.stdin); (d.get("status"),d.get("conclusion"))==("completed","success") or (_ for _ in ()).throw(SystemExit("integrated-main proof not green")); print("PR431_INTEGRATED_PROOF_GREEN=1")' <<<"$proof"
+          python3 - <<'PY'
+          import json, os, urllib.request
+          base="http://127.0.0.1:8765"
+          queue_id=os.environ["QUEUE_ID"]
+          merge_sha=os.environ["MERGE_SHA"]
+          proof_run=os.environ["PROOF_RUN"]
+          evidence=(
+              f"Worker1 Gen29 exact Jetta response-metadata integrity completed. PR #431 merged as {merge_sha}; "
+              f"integrated-main VPS proof {proof_run} SUCCESS on vps-bb300bba covering exact checkout, isolated install, "
+              "provider compile, default-fetch response-resource/metadata regressions, full Jetta decoder/transport tests, "
+              "provider-retry regressions and zero-cost workflow boundaries. Generation 29 remains provider_foundation; "
+              "Generation 10 remains terminally closed/rejected; development/walk-forward/final-holdout/live/broker "
+              "boundaries and zero-cost policy unchanged."
+          )
+          def get(path):
+              with urllib.request.urlopen(base+path,timeout=10) as r: return json.load(r)
+          def post(path,payload):
+              req=urllib.request.Request(base+path,data=json.dumps(payload).encode(),method="POST",headers={"Content-Type":"application/json"})
+              with urllib.request.urlopen(req,timeout=10) as r: return json.load(r)
+          live=get("/api/portfolio-queue?all=1")
+          item=next((x for x in live.get("items",[]) if x.get("queue_id")==queue_id),None)
+          if not item: raise RuntimeError("queue item missing")
+          if str(item.get("project_id") or "").lower()!="ftmo": raise RuntimeError("project mismatch")
+          status=str(item.get("status") or "").lower()
+          if status=="done":
+              print("QUEUE_ALREADY_DONE",json.dumps(item,sort_keys=True))
+          else:
+              if status not in {"claimed","running","verifying","in_progress"}: raise RuntimeError("queue not actively owned: "+status)
+              slot=item.get("worker_slot")
+              if slot is None: raise RuntimeError("worker_slot missing")
+              result=post("/api/portfolio-queue",{"action":"result","worker_slot":slot,"queue_id":queue_id,"result":"DONE","evidence":evidence})
+              print("QUEUE_DONE_WRITE",json.dumps(result,sort_keys=True))
+              if not result.get("ok"): raise RuntimeError("DONE write rejected")
+          verify=get("/api/portfolio-queue?all=1")
+          final=next((x for x in verify.get("items",[]) if x.get("queue_id")==queue_id),None)
+          if not final or str(final.get("status") or "").lower()!="done" or bool(final.get("eligible")):
+              raise RuntimeError("DONE state not persisted")
+          print("QUEUE_DONE_VERIFIED",json.dumps({k:final.get(k) for k in ("queue_id","status","eligible","worker_slot","evidence")},sort_keys=True))
+          PY
