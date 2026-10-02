@@ -19,7 +19,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$(hostname)" = "vps-bb300bba"
-          systemctl is-active ftmo-autonomous-marathon.service
+          systemctl show ftmo-autonomous-marathon.service \
+            -p ActiveState -p SubState -p MainPID -p ExecMainStartTimestamp -p ExecMainStatus --no-pager || true
           python3 - <<'PY'
           import json
           from pathlib import Path
