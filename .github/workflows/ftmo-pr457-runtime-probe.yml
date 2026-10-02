@@ -1,0 +1,51 @@
+name: FTMO PR457 runtime probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/ftmo-pr457-runtime-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 3
+    steps:
+      - name: Read sanitized FTMO runtime state
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          systemctl is-active ftmo-autonomous-marathon.service
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path("/opt/ftmo-autonomous/.scratch/autonomy/status.json")
+          d=json.loads(p.read_text())
+          research=d.get("research") or {}
+          controller=d.get("research_controller") or {}
+          print(json.dumps({
+            "completed_at_utc": d.get("completed_at_utc"),
+            "research_cycle_completed_at_utc": d.get("research_cycle_completed_at_utc"),
+            "runtime_revision": d.get("runtime_revision"),
+            "deployment_workflow_run_id": d.get("deployment_workflow_run_id"),
+            "ok": d.get("ok"),
+            "research_cycle_ok": d.get("research_cycle_ok"),
+            "cloud_budget_usd": d.get("autonomous_cloud_budget_usd"),
+            "live_trading_allowed": d.get("live_trading_allowed"),
+            "broker_order_submission_allowed": d.get("broker_order_submission_allowed"),
+            "research": {
+              "generation_number": research.get("generation_number"),
+              "next_stage": research.get("next_stage"),
+              "development_access_allowed": research.get("development_access_allowed"),
+              "walk_forward_access_allowed": research.get("walk_forward_access_allowed"),
+              "final_holdout_access_allowed": research.get("final_holdout_access_allowed"),
+            },
+            "compute": (controller.get("compute") or {}).get("ok"),
+            "generation_loop": controller.get("generation_loop"),
+            "outcome_execution": controller.get("outcome_execution"),
+          },sort_keys=True,default=str))
+          PY
