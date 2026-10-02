@@ -1,0 +1,85 @@
+name: FTMO PR456 observer exact-head proof
+
+on:
+  push:
+    branches:
+      - worker/ftmo-pr456-observer-proof
+    paths:
+      - ".github/workflows/ftmo-pr456-observer-proof.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ftmo-pr456-observer-proof
+  cancel-in-progress: true
+
+jobs:
+  proof:
+    runs-on: self-hosted
+    timeout-minutes: 12
+    env:
+      TARGET_SHA: c7587dec3e826585870d22a59265d33ebdbdff6d
+      FTMO_AUTONOMOUS_CLOUD_BUDGET_USD: '0.00'
+      FTMO_ALLOW_PAID_AWS: ''
+    steps:
+      - name: Checkout exact PR456 head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          src="$RUNNER_TEMP/ftmo-pr456-observer-proof"
+          rm -rf "$src"
+          gh repo clone Zennay/Ftmo "$src" -- --filter=blob:none --no-checkout >/dev/null
+          git -C "$src" checkout --detach "$TARGET_SHA" >/dev/null
+          test "$(git -C "$src" rev-parse HEAD)" = "$TARGET_SHA"
+
+      - name: Run observer boundary regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/ftmo-pr456-observer-proof"
+          venv="$RUNNER_TEMP/ftmo-pr456-observer-proof-venv"
+          rm -rf "$venv"
+          python3 -m venv "$venv"
+          "$venv/bin/python" -m pip install -q pytest
+          cd "$src"
+          "$venv/bin/python" -m pytest -q             tests/test_generation_marathon_observer_workflow.py             tests/test_zero_cost_workflow_boundary.py::test_persistent_generation_observer_is_strictly_read_only
+
+      - name: Assert observer stays non-mutating and sealed
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/ftmo-pr456-observer-proof"
+          python3 - "$src" <<'PY'
+          from pathlib import Path
+          import sys
+
+          root = Path(sys.argv[1])
+          text = (root / ".github/workflows/ftmo-generation-marathon-once.yml").read_text()
+          required = (
+              'runs-on: [self-hosted, ftmo-research]',
+              'FTMO_AUTONOMOUS_CLOUD_BUDGET_USD: "0.00"',
+              'FTMO_ALLOW_PAID_AWS: ""',
+              '"activating"',
+              '"reloading"',
+              'persistent_service_not_stable',
+              'research_cycle_not_ok',
+              'walk_forward_access_without_gate',
+              'final_holdout_access_without_gate',
+          )
+          missing = [value for value in required if value not in text]
+          if missing:
+              raise SystemExit("missing invariants: " + ",".join(missing))
+          forbidden = (
+              'v1_autonomous_tick',
+              'systemctl restart "$SERVICE"',
+              'systemctl start "$SERVICE"',
+              'systemctl stop "$SERVICE"',
+              'git push',
+          )
+          present = [value for value in forbidden if value in text]
+          if present:
+              raise SystemExit("observer mutation found: " + ",".join(present))
+          print("FTMO_PR456_EXACT_HEAD_PROOF=green")
+          PY
