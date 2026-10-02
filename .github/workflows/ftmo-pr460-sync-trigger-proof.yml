@@ -81,3 +81,4 @@ jobs:
           encoded="$(base64 -w0 "$receipt")"
           path="runtime-evidence/ftmo-pr460-haxlab-proof-${GITHUB_RUN_ID}.json"
           gh api --method PUT "repos/Zennay/Haxlab/contents/$path"             -f message="Record FTMO PR460 HaxLab proof ${GITHUB_RUN_ID}"             -f content="$encoded" >/dev/null
+# trigger: ftmo-pr460
