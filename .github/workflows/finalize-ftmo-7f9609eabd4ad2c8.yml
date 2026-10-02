@@ -7,7 +7,7 @@ on:
       - ".github/workflows/finalize-ftmo-7f9609eabd4ad2c8.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: finalize-ftmo-7f9609eabd4ad2c8
@@ -150,3 +150,52 @@ jobs:
               raise SystemExit("queue evidence missing merge SHA")
           print("SQLITE_QUEUE_DONE=1")
           PY
+
+      - name: Persist finalizer receipt
+        if: always()
+        shell: bash
+        env:
+          FINALIZER_STATUS: ${{ job.status }}
+          FINALIZER_RUN_ID: ${{ github.run_id }}
+          RECEIPT_PATH: runtime-evidence/ftmo-7f9609eabd4ad2c8-finalizer.json
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          git pull --rebase origin main
+          mkdir -p "$(dirname "$RECEIPT_PATH")"
+          python3 - <<'PY'
+          import json, os, sqlite3
+          from pathlib import Path
+          db=Path("/home/ubuntu/zennay-cloud/history.db")
+          row=None
+          if db.is_file():
+              with sqlite3.connect(db) as c:
+                  c.row_factory=sqlite3.Row
+                  got=c.execute(
+                      "SELECT queue_id,project_id,status,eligible,worker_slot,evidence,updated_at "
+                      "FROM portfolio_queue WHERE queue_id=?",
+                      (os.environ["QUEUE_ID"],)
+                  ).fetchone()
+                  row=dict(got) if got else None
+          payload={
+              "project":"ftmo",
+              "queue_id":os.environ["QUEUE_ID"],
+              "merge_sha":os.environ["MERGE_SHA"],
+              "proven_head":os.environ["PROVEN_HEAD"],
+              "exact_proof_run":int(os.environ["EXACT_PROOF_RUN"]),
+              "finalizer_workflow_run_id":int(os.environ["FINALIZER_RUN_ID"]),
+              "job_status":os.environ["FINALIZER_STATUS"],
+              "runner_host":"vps-bb300bba",
+              "queue_readback":row,
+          }
+          Path(os.environ["RECEIPT_PATH"]).write_text(
+              json.dumps(payload,indent=2,sort_keys=True,default=str)+"\n",encoding="utf-8"
+          )
+          PY
+          git config user.name "HaxLab FTMO finalizer"
+          git config user.email "haxlab-ftmo-finalizer@users.noreply.github.com"
+          git add "$RECEIPT_PATH"
+          if ! git diff --cached --quiet; then
+            git commit -m "Record FTMO queue finalizer receipt"
+            git push origin HEAD:main
+          fi
