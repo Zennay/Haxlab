@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - ".github/workflows/ftmo-pr443-exact-head-proof.yml"
+      - ".github/workflows/ftmo-pr433-exact-head-proof.yml"
 
 permissions:
   contents: write
@@ -60,7 +60,7 @@ jobs:
           src="$RUNNER_TEMP/ftmo-pr443-exact-head"
           venv="$RUNNER_TEMP/ftmo-pr443-exact-head-venv"
           cd "$src"
-          "$venv/bin/python" -m pytest -q             tests/test_autonomous_provider_retry.py             tests/test_provider_foundation_publication.py             tests/test_dukascopy_resume_cache.py             tests/test_dukascopy_tick_resume_cache.py             tests/test_zero_cost_workflow_boundary.py
+          "$venv/bin/python" -m pytest -q             tests/test_autonomous_provider_retry.py             tests/test_provider_foundation_publication.py             tests/test_dukascopy_jetta_m1.py             tests/test_dukascopy_tick_resume_cache.py             tests/test_zero_cost_workflow_boundary.py
           echo "FTMO_PR443_TARGETED_GREEN=1"
 
       - name: Prove complete exact-head test suite
@@ -85,7 +85,7 @@ jobs:
           import json, os, socket
           print(json.dumps({
               "project": "ftmo",
-              "pr": 433,
+              "pr": 443,
               "target_sha": os.environ["TARGET_SHA"],
               "workflow_run_id": os.environ["GITHUB_RUN_ID"],
               "workflow_run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
