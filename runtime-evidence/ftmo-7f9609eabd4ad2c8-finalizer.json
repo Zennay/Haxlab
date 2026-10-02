@@ -1,0 +1,19 @@
+{
+  "exact_proof_run": 37003970627,
+  "finalizer_workflow_run_id": 37004748423,
+  "job_status": "success",
+  "merge_sha": "f761bc3af1e62a16cdc441df7d4585d4a6e32f54",
+  "project": "ftmo",
+  "proven_head": "9e99499cfd6ab8ee78841317b147aad54fa5d41f",
+  "queue_id": "ftmo-7f9609eabd4ad2c8",
+  "queue_readback": {
+    "eligible": 0,
+    "evidence": "Worker2 Gen29 BI5 payload decompression integrity completed. PR #442 merged as f761bc3af1e62a16cdc441df7d4585d4a6e32f54; exact tested head 9e99499cfd6ab8ee78841317b147aad54fa5d41f; self-hosted VPS proof 37003970627 SUCCESS on vps-bb300bba (exact checkout, isolated install, compile, full Dukascopy public provider regressions, timeout/retry compatibility, autonomous provider retry compatibility, zero-cost boundaries, repository test collection). Generation 10 remained terminally closed; Generation 29 remained provider_foundation; development/walk-forward/final-holdout/live/broker/paid-cloud boundaries unchanged. SQLite finalizer workflow 37004709356.",
+    "project_id": "ftmo",
+    "queue_id": "ftmo-7f9609eabd4ad2c8",
+    "status": "done",
+    "updated_at": "2026-10-02T12:06:11.826719+00:00",
+    "worker_slot": null
+  },
+  "runner_host": "vps-bb300bba"
+}
