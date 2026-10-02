@@ -51,3 +51,47 @@ jobs:
             "outcome_execution": controller.get("outcome_execution"),
           },sort_keys=True,default=str))
           PY
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root=Path("/opt/ftmo-autonomous")
+          config=json.loads((root/"configs/research_machine.json").read_text())
+          active=config.get("active_generation") or {}
+          closure=root/"artifacts/autonomous_generations/g29/outcomes/generation-closure.json"
+          split=root/"artifacts/autonomous_generations/g29/research-split.json"
+          prereg=root/"artifacts/autonomous_generations/g29/preregistration/pack_manifest.json"
+          summaries=[
+            root/"artifacts/autonomous_generations/g29/outcomes/development-pack-summary.json",
+            root/"artifacts/autonomous_generations/g29/outcomes/walk-forward-summary.json",
+            root/"artifacts/autonomous_generations/g29/outcomes/final-holdout-summary.json",
+          ]
+          closure_meta=None
+          if closure.is_file() and not closure.is_symlink():
+              raw=json.loads(closure.read_text())
+              closure_meta={k:raw.get(k) for k in (
+                  "scope","status","generation_id","generation_number","reason",
+                  "provider_skip_hash","failure_reasons","outcomes_executed",
+                  "walk_forward_accessed","final_holdout_accessed"
+              )}
+          chain=root/"artifacts/autonomous_runtime/reserve_chain"
+          reserve_files=sorted(chain.glob("research_window_reserve_v*.json"))
+          windows={}
+          if reserve_files:
+              raw=json.loads(reserve_files[-1].read_text())
+              for row in raw.get("windows",[]):
+                  if row.get("generation_number") in (29,30):
+                      windows[str(row["generation_number"])]={k:row.get(k) for k in (
+                          "label","status","development_start","development_end",
+                          "walk_forward_start","walk_forward_end","holdout_start","holdout_end"
+                      )}
+          print(json.dumps({
+              "active_generation": {k:active.get(k) for k in ("generation_id","generation_number","next_stage")},
+              "g29_closure": closure_meta,
+              "g29_split_exists": split.exists(),
+              "g29_prereg_exists": prereg.exists(),
+              "g29_strategy_outcome_summary_exists": [p.exists() for p in summaries],
+              "latest_reserve": reserve_files[-1].name if reserve_files else None,
+              "windows": windows,
+          },sort_keys=True,default=str))
+          PY
