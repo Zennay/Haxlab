@@ -1,0 +1,10 @@
+{
+  "project": "ftmo",
+  "pull_request": 441,
+  "queue_item": "ftmo-7f9609eabd4ad2c8",
+  "result": "success",
+  "runner_host": "vps-bb300bba",
+  "scope": "exact final head; compile; full Dukascopy public tests; timeout/retry; provider retry; zero-cost boundary; repo collection",
+  "target_sha": "a127d8b25ac7d652df077924cb536daa8a7fd503",
+  "workflow_run_id": 37004453778
+}
