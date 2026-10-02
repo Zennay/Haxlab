@@ -28,35 +28,47 @@ jobs:
           python3 - <<'PY' > /tmp/ftmo-worker2-queue-snapshot.json
           import json, os, sqlite3, socket
           from pathlib import Path
-          db=Path("/home/ubuntu/zennay-cloud/history.db")
-          if not db.is_file():
-              raise SystemExit("live zCloud history.db missing")
-          with sqlite3.connect(db) as c:
-              c.row_factory=sqlite3.Row
-              row=c.execute(
-                  "SELECT queue_id,project_id,title,status,eligible,worker_slot,evidence,updated_at,parent_queue_id "
-                  "FROM portfolio_queue WHERE queue_id=?",
-                  (os.environ["QUEUE_ID"],),
-              ).fetchone()
-              claimed=c.execute(
-                  "SELECT queue_id,project_id,title,status,eligible,worker_slot,updated_at,parent_queue_id "
-                  "FROM portfolio_queue WHERE project_id='ftmo' AND status IN ('claimed','running','verifying','in_progress') "
-                  "ORDER BY updated_at DESC LIMIT 10"
-              ).fetchall()
-          item=dict(row) if row else None
-          if item is None:
-              raise SystemExit("requested queue item missing")
-          print(json.dumps({
-              "schema_version":1,
-              "requested":item,
-              "active_ftmo":[dict(r) for r in claimed],
-              "workflow_run_id":os.environ["GITHUB_RUN_ID"],
-              "runner_host":socket.gethostname(),
-          },sort_keys=True))
+
+          payload = {
+              "schema_version": 2,
+              "requested_queue_id": os.environ["QUEUE_ID"],
+              "requested": None,
+              "active_ftmo": [],
+              "error": None,
+              "workflow_run_id": os.environ["GITHUB_RUN_ID"],
+              "runner_host": socket.gethostname(),
+          }
+          try:
+              db=Path("/home/ubuntu/zennay-cloud/history.db")
+              if not db.is_file():
+                  raise RuntimeError("live zCloud history.db missing")
+              with sqlite3.connect(db) as c:
+                  c.row_factory=sqlite3.Row
+                  columns=[r["name"] for r in c.execute("PRAGMA table_info(portfolio_queue)").fetchall()]
+                  payload["queue_columns"]=columns
+                  wanted=["queue_id","project_id","title","status","eligible","worker_slot","evidence","updated_at"]
+                  if "parent_queue_id" in columns:
+                      wanted.append("parent_queue_id")
+                  select=",".join(wanted)
+                  row=c.execute(
+                      f"SELECT {select} FROM portfolio_queue WHERE queue_id=?",
+                      (os.environ["QUEUE_ID"],),
+                  ).fetchone()
+                  active=c.execute(
+                      f"SELECT {select} FROM portfolio_queue "
+                      "WHERE project_id='ftmo' AND status IN ('claimed','running','verifying','in_progress') "
+                      "ORDER BY updated_at DESC LIMIT 10"
+                  ).fetchall()
+              payload["requested"]=dict(row) if row else None
+              payload["active_ftmo"]=[dict(r) for r in active]
+          except Exception as exc:
+              payload["error"]=repr(exc)
+          print(json.dumps(payload,sort_keys=True))
           PY
           cat /tmp/ftmo-worker2-queue-snapshot.json
 
       - name: Persist sanitized snapshot
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
@@ -64,4 +76,4 @@ jobs:
           path="runtime-evidence/ftmo-worker2-queue-snapshot-${GITHUB_RUN_ID}.json"
           gh api --method PUT "repos/Zennay/Haxlab/contents/$path"             -f message="Record FTMO Worker2 queue snapshot ${GITHUB_RUN_ID}"             -f content="$encoded" >/dev/null
           echo "QUEUE_SNAPSHOT_RECEIPT=$path"
-# trigger: worker2-live-queue
+# trigger: worker2-live-queue-v2
