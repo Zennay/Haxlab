@@ -1,0 +1,45 @@
+name: zSSH PR46 VPS proof
+
+on:
+  push:
+    branches:
+      - ops/zssh-pr46-vps-proof-20261003
+
+permissions:
+  contents: read
+
+jobs:
+  zssh-proof:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact zSSH PR head
+        uses: actions/checkout@v4
+        with:
+          repository: Zennay/zSSH
+          ref: 9171cbe0ebb6ef76857ba3708e7f0b62470cd53f
+          path: zssh
+
+      - name: Verify exact head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C zssh rev-parse HEAD)" = "9171cbe0ebb6ef76857ba3708e7f0b62470cd53f"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd zssh
+          npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Run full zSSH suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd zssh
+          npm test
+          node --check server.mjs
+          node --check agent-transport.mjs
+          node --check agent-runtime.mjs
+          node --check agent.mjs
