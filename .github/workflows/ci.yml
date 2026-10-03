@@ -98,3 +98,29 @@ jobs:
         run: |
           set -euo pipefail
           sudo /usr/local/sbin/haxlab-actions-control feature-smoke
+
+
+  zssh-pr46-proof:
+    name: zSSH PR46 exact-head proof
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact zSSH head
+        uses: actions/checkout@v4
+        with:
+          repository: Zennay/zSSH
+          ref: c4ee4a02de2af64ffb141ea0734e9eecf7ee24dd
+          path: zssh
+
+      - name: Verify and test zSSH
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C zssh rev-parse HEAD)" = "c4ee4a02de2af64ffb141ea0734e9eecf7ee24dd"
+          cd zssh
+          npm install --ignore-scripts --no-audit --no-fund
+          npm test
+          node --check server.mjs
+          node --check agent-transport.mjs
+          node --check agent-runtime.mjs
+          node --check agent.mjs
