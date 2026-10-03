@@ -1,0 +1,4 @@
+{"eligible": 1, "evidence": "", "parent_queue_id": "ftmo-7f9609eabd4ad2c8", "project_id": "ftmo", "queue_id": "ftmo-7ee077e0b88278da", "status": "claimed", "title": "Execute substantial FTMO roadmap work package", "updated_at": "2026-10-03T21:40:21.902395+00:00", "worker_slot": 1}
+QUEUE_STATUS=claimed
+QUEUE_ELIGIBLE=1
+QUEUE_WORKER_SLOT=1
