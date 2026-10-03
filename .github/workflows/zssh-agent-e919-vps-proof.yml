@@ -1,0 +1,80 @@
+name: zSSH outbound agent exact-head proof
+
+on:
+  push:
+    branches:
+      - proof/zssh-agent-e919-vps-20261003
+    paths-ignore:
+      - runtime-evidence/zssh-agent-e919-vps-proof.json
+
+permissions:
+  contents: write
+
+concurrency:
+  group: zssh-agent-e919-vps-proof
+  cancel-in-progress: true
+
+jobs:
+  proof:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    env:
+      TARGET_SHA: e919fb8678b7a742a4c924fae2b37839034ac4a3
+    steps:
+      - name: Verify VPS and fetch exact zSSH head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          src="$RUNNER_TEMP/zssh-agent-e919"
+          rm -rf "$src"
+          gh repo clone Zennay/zSSH "$src" -- --filter=blob:none --no-checkout >/dev/null
+          git -C "$src" checkout --detach "$TARGET_SHA" >/dev/null
+          test "$(git -C "$src" rev-parse HEAD)" = "$TARGET_SHA"
+          echo "ZSSH_EXACT_HEAD=$TARGET_SHA"
+
+      - name: Install zSSH dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/zssh-agent-e919"
+          npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Prove outbound agent transport and full suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/zssh-agent-e919"
+          node --check agent-transport.mjs
+          node --check agent-runtime.mjs
+          node --check agent.mjs
+          node --test test/agent-runtime.test.mjs test/agent-transport.test.mjs
+          npm test
+          echo "ZSSH_AGENT_TRANSPORT_VPS_GREEN=1"
+
+      - name: Persist sanitized zSSH proof receipt
+        if: success()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          receipt="$RUNNER_TEMP/zssh-agent-e919-proof.json"
+          python3 - <<'PY' > "$receipt"
+          import json, os, socket
+          print(json.dumps({
+              "schema_version": 1,
+              "project": "zssh",
+              "proof": "outbound-agent-exact-head",
+              "target_sha": os.environ["TARGET_SHA"],
+              "workflow_run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "workflow_run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+              "execution_runner": os.environ.get("RUNNER_NAME"),
+              "hostname": socket.gethostname(),
+              "tests": ["node-check-agent-modules", "agent-runtime", "agent-transport", "full-npm-test"],
+              "result": "success"
+          }, sort_keys=True, indent=2))
+          PY
+          encoded="$(base64 -w0 "$receipt")"
+          gh api --method PUT             "repos/Zennay/Haxlab/contents/runtime-evidence/zssh-agent-e919-vps-proof.json"             -f message="Record zSSH outbound agent exact-head VPS proof $GITHUB_RUN_ID"             -f content="$encoded"             -f branch="$GITHUB_REF_NAME" >/dev/null
+          echo "ZSSH_PROOF_RECEIPT=runtime-evidence/zssh-agent-e919-vps-proof.json"
