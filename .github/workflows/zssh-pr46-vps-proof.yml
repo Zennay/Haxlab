@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - ops/zssh-pr46-vps-proof-20261003
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
