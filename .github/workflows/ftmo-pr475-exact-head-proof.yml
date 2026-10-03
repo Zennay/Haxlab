@@ -81,13 +81,17 @@ jobs:
           )"
 
           before="$(sha256sum "$status" | awk '{print $1}')"
-          .venv-proof/bin/python -m prop_trading_ai.cli.v1_project_telemetry \
-            --root . \
-            --config configs/research_machine.json \
-            --runtime-status "$status" \
-            --expected-runtime-revision "$expected" \
-            --output "/tmp/ftmo-pr475-$GITHUB_RUN_ID.json" \
-            --markdown-output "/tmp/ftmo-pr475-$GITHUB_RUN_ID.md"
+          runtime_json="/tmp/ftmo-pr475-$GITHUB_RUN_ID.json"
+          runtime_md="/tmp/ftmo-pr475-$GITHUB_RUN_ID.md"
+          rm -f "$runtime_json" "$runtime_md"
+          sudo -n -u ftmo-runner env HOME=/home/ftmo-runner \
+            "$venv/bin/python" -m prop_trading_ai.cli.v1_project_telemetry \
+              --root . \
+              --config configs/research_machine.json \
+              --runtime-status "$status" \
+              --expected-runtime-revision "$expected" \
+              --output "$runtime_json" \
+              --markdown-output "$runtime_md"
           after="$(sha256sum "$status" | awk '{print $1}')"
           test "$before" = "$after"
 
