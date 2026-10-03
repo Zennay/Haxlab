@@ -76,6 +76,17 @@ jobs:
           assert source == runtime
           assert len(source) == 40 and source == source.lower()
           assert all(ch in "0123456789abcdef" for ch in source)
+          assert payload.get("autonomous_cloud_budget_usd") == "0.00"
+          assert payload.get("live_trading_allowed") is False
+          assert payload.get("broker_order_submission_allowed") is False
+          research=payload.get("research")
+          assert isinstance(research, dict)
+          for field in (
+              "development_access_allowed",
+              "walk_forward_access_allowed",
+              "final_holdout_access_allowed",
+          ):
+              assert research.get(field) is False, field
           print(source)
           PY
           )"
@@ -85,7 +96,7 @@ jobs:
           runtime_md="/tmp/ftmo-pr475-$GITHUB_RUN_ID.md"
           rm -f "$runtime_json" "$runtime_md"
           sudo -n -u ftmo-runner env HOME=/home/ftmo-runner \
-            "$venv/bin/python" -m prop_trading_ai.cli.v1_project_telemetry \
+            .venv-proof/bin/python -m prop_trading_ai.cli.v1_project_telemetry \
               --root . \
               --config configs/research_machine.json \
               --runtime-status "$status" \
