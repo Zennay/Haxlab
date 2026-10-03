@@ -1,0 +1,152 @@
+name: FTMO PR473 canonical receipt telemetry proof
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/ftmo-pr473-canonical-receipt-proof.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ftmo-pr473-canonical-receipt-proof
+  cancel-in-progress: true
+
+jobs:
+  proof:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    env:
+      TARGET_SHA: e17d084955e5b8cf49a1f057441760db3cf7afda
+      FTMO_STABLE_ROOT: /opt/ftmo-autonomous
+      FTMO_AUTONOMOUS_CLOUD_BUDGET_USD: '0.00'
+      FTMO_ALLOW_PAID_AWS: ''
+    steps:
+      - name: Prove PR473 against live runtime and canonical receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          gh auth status >/dev/null 2>&1
+          work="$RUNNER_TEMP/ftmo-pr473-$GITHUB_RUN_ID"
+          rm -rf "$work"
+          gh repo clone Zennay/Ftmo "$work" -- --filter=blob:none --no-checkout >/dev/null
+          cd "$work"
+          git fetch --no-tags origin "$TARGET_SHA"
+          git checkout --detach "$TARGET_SHA" >/dev/null
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+
+          venv="$RUNNER_TEMP/ftmo-pr473-venv-$GITHUB_RUN_ID"
+          rm -rf "$venv"
+          python3 -m venv "$venv"
+          "$venv/bin/python" -m pip install -q -r requirements-ci.txt
+          "$venv/bin/python" -m pip install -q -e .
+
+          "$venv/bin/python" -m py_compile src/prop_trading_ai/cli/v1_project_telemetry.py
+          "$venv/bin/python" -m pytest -q \
+            tests/test_project_telemetry_cli.py \
+            tests/test_project_telemetry_runtime_status.py \
+            tests/test_zero_cost_workflow_boundary.py
+
+          receipt="artifacts/autonomous_runtime/vps-controller-receipt.json"
+          status="$FTMO_STABLE_ROOT/.scratch/autonomy/status.json"
+          test -f "$receipt"
+          test ! -L "$receipt"
+          test -f "$status"
+          test ! -L "$status"
+
+          expected="$("$venv/bin/python" - "$receipt" <<'PY'
+          import json, sys
+          from pathlib import Path
+          data=json.loads(Path(sys.argv[1]).read_text())
+          source=data["source_main_sha"]
+          runtime=data["runtime_revision"]
+          assert runtime == source
+          assert len(source) == 40
+          assert all(ch in "0123456789abcdef" for ch in source)
+          print(source)
+          PY
+          )"
+
+          before="$(sha256sum "$status" | awk '{print $1}')"
+          "$venv/bin/python" -m prop_trading_ai.cli.v1_project_telemetry \
+            --root . \
+            --config configs/research_machine.json \
+            --runtime-status "$status" \
+            --expected-runtime-revision "$expected" \
+            --output "$RUNNER_TEMP/ftmo-pr473.json" \
+            --markdown-output "$RUNNER_TEMP/ftmo-pr473.md"
+          after="$(sha256sum "$status" | awk '{print $1}')"
+          test "$before" = "$after"
+
+          grep -F 'Live autonomous:** Generation **30**' "$RUNNER_TEMP/ftmo-pr473.md"
+          grep -F 'matches canonical deploy receipt' "$RUNNER_TEMP/ftmo-pr473.md"
+          ! grep -F 'older deployed revision' "$RUNNER_TEMP/ftmo-pr473.md"
+          ! grep -F 'differs from canonical deploy receipt' "$RUNNER_TEMP/ftmo-pr473.md"
+          grep -F 'provider_foundation_window_not_elapsed' "$RUNNER_TEMP/ftmo-pr473.md"
+          grep -F '2026-12-25T21:00:00+00:00' "$RUNNER_TEMP/ftmo-pr473.md"
+
+          "$venv/bin/python" - "$RUNNER_TEMP/ftmo-pr473.json" "$expected" <<'PY'
+          import json, sys
+          from pathlib import Path
+          data=json.loads(Path(sys.argv[1]).read_text())
+          expected=sys.argv[2]
+          live=data["autonomous_runtime"]
+          assert live["runtime_revision"] == expected
+          assert live["runtime_revision_matches_expected"] is True
+          assert live["generation_number"] == 30
+          assert live["stage"] == "provider_foundation"
+          assert live["action"] == "provider_foundation_window_not_elapsed"
+          assert live["development_access_allowed"] is False
+          assert live["walk_forward_access_allowed"] is False
+          assert live["final_holdout_access_allowed"] is False
+          assert live["live_trading_allowed"] is False
+          assert live["broker_order_submission_allowed"] is False
+          print(json.dumps({
+              "expected_deploy_source": expected,
+              "live_runtime_revision": live["runtime_revision"],
+              "live_generation": live["generation_number"],
+              "live_action": live["action"],
+          }, sort_keys=True))
+          PY
+
+          "$venv/bin/python" -m pytest --collect-only -q >/tmp/ftmo-pr473-collection-$GITHUB_RUN_ID.txt
+          test -s /tmp/ftmo-pr473-collection-$GITHUB_RUN_ID.txt
+          test "$FTMO_AUTONOMOUS_CLOUD_BUDGET_USD" = '0.00'
+          test -z "${FTMO_ALLOW_PAID_AWS:-}"
+          echo "FTMO_PR473_CANONICAL_RECEIPT_PROOF=success"
+
+      - name: Persist proof receipt
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' > /tmp/ftmo-pr473-proof.json
+          import json, os
+          print(json.dumps({
+              "project":"ftmo",
+              "pull_request":473,
+              "target_sha":os.environ["TARGET_SHA"],
+              "result":"success",
+              "runner_host":"vps-bb300bba",
+              "runner_name":os.environ.get("RUNNER_NAME"),
+              "workflow_run_id":os.environ["GITHUB_RUN_ID"],
+              "paid_cloud_budget_usd":"0.00",
+              "proof":[
+                  "exact-sha-checkout",
+                  "telemetry-runtime-regressions",
+                  "canonical-deploy-receipt-match",
+                  "live-gen30-read-only-render",
+                  "zero-cost-boundary",
+                  "full-suite-collection"
+              ]
+          },sort_keys=True))
+          PY
+          encoded="$(base64 -w0 /tmp/ftmo-pr473-proof.json)"
+          dest="runtime-evidence/ftmo-pr473-canonical-receipt-proof-$GITHUB_RUN_ID.json"
+          gh api --method PUT "repos/Zennay/Haxlab/contents/$dest" \
+            -f message="Record FTMO PR473 canonical receipt proof $GITHUB_RUN_ID" \
+            -f content="$encoded" >/dev/null
+          echo "FTMO_PR473_PROOF_RECEIPT=$dest"
