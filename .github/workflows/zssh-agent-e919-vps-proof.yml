@@ -3,15 +3,15 @@ name: zSSH outbound agent exact-head proof
 on:
   push:
     branches:
-      - proof/zssh-agent-e919-vps-20261003
+      - proof/zssh-agent-6020-vps-20261003
     paths-ignore:
-      - runtime-evidence/zssh-agent-e919-vps-proof.json
+      - runtime-evidence/zssh-agent-6020-vps-proof.json
 
 permissions:
   contents: write
 
 concurrency:
-  group: zssh-agent-e919-vps-proof
+  group: zssh-agent-6020-vps-proof
   cancel-in-progress: true
 
 jobs:
@@ -19,14 +19,14 @@ jobs:
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 15
     env:
-      TARGET_SHA: e919fb8678b7a742a4c924fae2b37839034ac4a3
+      TARGET_SHA: 6020aa3feba1bbb8335761c49bd8a3022ce0a5a8
     steps:
       - name: Verify VPS and fetch exact zSSH head
         shell: bash
         run: |
           set -euo pipefail
           test "$(hostname)" = "vps-bb300bba"
-          src="$RUNNER_TEMP/zssh-agent-e919"
+          src="$RUNNER_TEMP/zssh-agent-6020"
           rm -rf "$src"
           gh repo clone Zennay/zSSH "$src" -- --filter=blob:none --no-checkout >/dev/null
           git -C "$src" checkout --detach "$TARGET_SHA" >/dev/null
@@ -37,14 +37,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cd "$RUNNER_TEMP/zssh-agent-e919"
+          cd "$RUNNER_TEMP/zssh-agent-6020"
           npm install --ignore-scripts --no-audit --no-fund
 
       - name: Prove outbound agent transport and full suite
         shell: bash
         run: |
           set -euo pipefail
-          cd "$RUNNER_TEMP/zssh-agent-e919"
+          cd "$RUNNER_TEMP/zssh-agent-6020"
           node --check agent-transport.mjs
           node --check agent-runtime.mjs
           node --check agent.mjs
@@ -59,7 +59,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          receipt="$RUNNER_TEMP/zssh-agent-e919-proof.json"
+          receipt="$RUNNER_TEMP/zssh-agent-6020-proof.json"
           python3 - <<'PY' > "$receipt"
           import json, os, socket
           print(json.dumps({
@@ -76,5 +76,5 @@ jobs:
           }, sort_keys=True, indent=2))
           PY
           encoded="$(base64 -w0 "$receipt")"
-          gh api --method PUT             "repos/Zennay/Haxlab/contents/runtime-evidence/zssh-agent-e919-vps-proof.json"             -f message="Record zSSH outbound agent exact-head VPS proof $GITHUB_RUN_ID"             -f content="$encoded"             -f branch="$GITHUB_REF_NAME" >/dev/null
-          echo "ZSSH_PROOF_RECEIPT=runtime-evidence/zssh-agent-e919-vps-proof.json"
+          gh api --method PUT             "repos/Zennay/Haxlab/contents/runtime-evidence/zssh-agent-6020-vps-proof.json"             -f message="Record zSSH outbound agent exact-head VPS proof $GITHUB_RUN_ID"             -f content="$encoded"             -f branch="$GITHUB_REF_NAME" >/dev/null
+          echo "ZSSH_PROOF_RECEIPT=runtime-evidence/zssh-agent-6020-vps-proof.json"
