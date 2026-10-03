@@ -1,4 +1,5 @@
 name: FTMO PR471 future-window proof
+# Triggered after workflow registration.
 
 on:
   push:
