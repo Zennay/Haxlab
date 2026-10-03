@@ -18,7 +18,7 @@ jobs:
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 35
     env:
-      TARGET_SHA: 58aa7064b95d96ec3462ccc4509cbb6afe65310b
+      TARGET_SHA: 8fff315440d65c1511c4cb452ae1ca99c3e72fcd
       FTMO_AUTONOMOUS_CLOUD_BUDGET_USD: "0.00"
       FTMO_ALLOW_PAID_AWS: ""
     steps:
