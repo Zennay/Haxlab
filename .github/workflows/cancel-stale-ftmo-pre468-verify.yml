@@ -1,0 +1,37 @@
+name: Cancel stale FTMO pre-468 verify
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/cancel-stale-ftmo-pre468-verify.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  cancel:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 5
+    steps:
+      - name: Cancel only exact superseded verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          run_id=37160440905
+          stale_sha=4b1947d0f56fe676dedd081feef094ecbbf7e8a2
+          expected_current=1c5ca5cda99845c425f6f04cc5fa459d5085cebe
+          current="$(gh api repos/Zennay/Ftmo/commits/main --jq .sha)"
+          test "$current" = "$expected_current"
+          name="$(gh api repos/Zennay/Ftmo/actions/runs/$run_id --jq .name)"
+          head="$(gh api repos/Zennay/Ftmo/actions/runs/$run_id --jq .head_sha)"
+          status="$(gh api repos/Zennay/Ftmo/actions/runs/$run_id --jq .status)"
+          test "$name" = "Verify autonomous VPS runtime"
+          test "$head" = "$stale_sha"
+          if [[ "$status" == "in_progress" || "$status" == "queued" || "$status" == "pending" ]]; then
+            gh api --method POST repos/Zennay/Ftmo/actions/runs/$run_id/cancel >/dev/null
+            echo "CANCELLED_STALE_FTMO_VERIFY=$run_id"
+          else
+            echo "STALE_VERIFY_ALREADY_TERMINAL=$status"
+          fi
