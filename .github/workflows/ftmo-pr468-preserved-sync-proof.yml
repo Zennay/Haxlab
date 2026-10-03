@@ -1,0 +1,105 @@
+name: FTMO PR468 preserved-state sync proof
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/ftmo-pr468-preserved-sync-proof.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ftmo-pr468-preserved-sync-proof
+  cancel-in-progress: true
+
+jobs:
+  prove:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    env:
+      TARGET_SHA: 0ff8fd49547a141dc87d5c4a933be758a4a1d6c8
+      FTMO_AUTONOMOUS_CLOUD_BUDGET_USD: "0.00"
+      FTMO_ALLOW_PAID_AWS: ""
+    steps:
+      - name: Fetch exact FTMO PR468 head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          src="$RUNNER_TEMP/ftmo-pr468-proof"
+          rm -rf "$src"
+          gh repo clone Zennay/Ftmo "$src" -- --filter=blob:none --no-checkout >/dev/null
+          git -C "$src" checkout --detach "$TARGET_SHA" >/dev/null
+          test "$(git -C "$src" rev-parse HEAD)" = "$TARGET_SHA"
+
+      - name: Install isolated environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/ftmo-pr468-proof"
+          venv="$RUNNER_TEMP/ftmo-pr468-venv"
+          rm -rf "$venv"
+          python3 -m venv "$venv"
+          "$venv/bin/python" -m pip install -q -r "$src/requirements-ci.txt"
+          "$venv/bin/python" -m pip install -q -e "$src"
+
+      - name: Prove preserved-state sync short circuit and guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/ftmo-pr468-proof"
+          venv="$RUNNER_TEMP/ftmo-pr468-venv"
+          cd "$src"
+          "$venv/bin/python" -m compileall -q src/prop_trading_ai/research/state_sync.py
+          "$venv/bin/python" -m pytest -q             tests/test_research_state_sync_guard.py             tests/test_autonomous_research_state_sync.py
+          echo "FTMO_PR468_PRESERVED_SYNC_GREEN=1"
+
+      - name: Prove adjacent sealed boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/ftmo-pr468-proof"
+          venv="$RUNNER_TEMP/ftmo-pr468-venv"
+          cd "$src"
+          "$venv/bin/python" -m pytest -q             tests/test_autonomous_deploy_lockstep.py             tests/test_autonomous_provider_retry.py             tests/test_provider_foundation_publication.py             tests/test_zero_cost_workflow_boundary.py
+          echo "FTMO_PR468_ADJACENT_BOUNDARIES_GREEN=1"
+
+      - name: Persist sanitized proof receipt
+        if: always()
+        shell: bash
+        env:
+          PROOF_RESULT: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          receipt="/tmp/ftmo-pr468-proof-${GITHUB_RUN_ID}.json"
+          python3 - <<'PY' > "$receipt"
+          import json, os, socket
+          print(json.dumps({
+              "project":"ftmo",
+              "pr":468,
+              "target_sha":os.environ["TARGET_SHA"],
+              "workflow_run_id":os.environ["GITHUB_RUN_ID"],
+              "workflow_run_attempt":os.environ["GITHUB_RUN_ATTEMPT"],
+              "runner_name":os.environ.get("RUNNER_NAME"),
+              "runner_host":socket.gethostname(),
+              "result":os.environ["PROOF_RESULT"],
+              "paid_cloud_budget_usd":os.environ["FTMO_AUTONOMOUS_CLOUD_BUDGET_USD"],
+              "walk_forward_accessed":False,
+              "final_holdout_accessed":False,
+              "live_trading_allowed":False,
+              "broker_order_submission_allowed":False,
+              "proof":[
+                  "exact-sha-checkout",
+                  "preserved-newer-stable-short-circuit",
+                  "monotonic-generation-stage-guard",
+                  "provider-retry-isolation",
+                  "provider-foundation-safety",
+                  "zero-cost-boundary"
+              ]
+          }, sort_keys=True))
+          PY
+          encoded="$(base64 -w0 "$receipt")"
+          path="runtime-evidence/ftmo-pr468-haxlab-proof-${GITHUB_RUN_ID}.json"
+          gh api --method PUT "repos/Zennay/Haxlab/contents/$path"             -f message="Record FTMO PR468 exact-head proof ${GITHUB_RUN_ID}"             -f content="$encoded" >/dev/null
+          echo "FTMO_PR468_RECEIPT_PATH=$path"
