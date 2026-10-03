@@ -1,0 +1,59 @@
+name: FTMO post-472 queue cleanup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/ftmo-post472-queue-cleanup.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 5
+    env:
+      MAIN_SHA: e715786a700ef0598f3362798482a5ecce9264c8
+      MAIN_TEST_RUN: '37162185421'
+      STALE_TELEMETRY_RUN: '37161824207'
+      STALE_PR_TEST_RUN: '37162104418'
+      PR_HEAD: 2f796c5fc2febf7ee4bd2f6c0e6d23e3ff32750d
+      PREVIOUS_RUNTIME_SOURCE: 5335e0e17d3a1c35a40698cd2beebebdcdb26f8b
+    steps:
+      - name: Cancel only obsolete FTMO runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          gh auth status >/dev/null 2>&1
+          test "$(gh api repos/Zennay/Ftmo/branches/main --jq .commit.sha)" = "$MAIN_SHA"
+
+          test "$(gh api repos/Zennay/Ftmo/actions/runs/$MAIN_TEST_RUN --jq .head_sha)" = "$MAIN_SHA"
+          test "$(gh api repos/Zennay/Ftmo/actions/runs/$MAIN_TEST_RUN --jq .event)" = "push"
+          test "$(gh api repos/Zennay/Ftmo/actions/runs/$MAIN_TEST_RUN --jq .name)" = "Test suite"
+
+          pr="$(gh api repos/Zennay/Ftmo/pulls/472)"
+          test "$(jq -r .merged <<<"$pr")" = "true"
+          test "$(jq -r .head.sha <<<"$pr")" = "$PR_HEAD"
+
+          cancel_if_queued() {
+            rid="$1"; expected_sha="$2"; expected_event="$3"; expected_name="$4"
+            test "$(gh api repos/Zennay/Ftmo/actions/runs/$rid --jq .head_sha)" = "$expected_sha"
+            test "$(gh api repos/Zennay/Ftmo/actions/runs/$rid --jq .event)" = "$expected_event"
+            test "$(gh api repos/Zennay/Ftmo/actions/runs/$rid --jq .name)" = "$expected_name"
+            status="$(gh api repos/Zennay/Ftmo/actions/runs/$rid --jq .status)"
+            case "$status" in
+              queued|pending)
+                gh api --method POST "repos/Zennay/Ftmo/actions/runs/$rid/cancel" >/dev/null
+                echo "cancelled_obsolete=$rid"
+                ;;
+              completed) echo "already_terminal=$rid" ;;
+              in_progress) echo "refusing_active=$rid" >&2; exit 1 ;;
+              *) echo "unexpected_status=$status run=$rid" >&2; exit 1 ;;
+            esac
+          }
+
+          cancel_if_queued "$STALE_TELEMETRY_RUN" "$PREVIOUS_RUNTIME_SOURCE" workflow_run "FTMO project telemetry"
+          cancel_if_queued "$STALE_PR_TEST_RUN" "$PR_HEAD" pull_request "Test suite"
+          echo "protected_main_test=$MAIN_TEST_RUN"
