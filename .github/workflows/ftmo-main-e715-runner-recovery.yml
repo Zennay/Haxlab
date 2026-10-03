@@ -1,0 +1,73 @@
+name: Recover FTMO runner for telemetry main e715
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/ftmo-main-e715-runner-recovery.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  recover:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 6
+    env:
+      MAIN_SHA: e715786a700ef0598f3362798482a5ecce9264c8
+      MAIN_TEST_RUN: '37162185421'
+      FTMO_SERVICE: actions.runner.Zennay-Ftmo.vps-bb300bba-ftmo.service
+      FTMO_RUN_USER: ftmo-runner
+    steps:
+      - name: Recover idle FTMO listener and prove scheduling
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          gh auth status >/dev/null 2>&1
+          test "$(gh api repos/Zennay/Ftmo/branches/main --jq .commit.sha)" = "$MAIN_SHA"
+          test "$(gh api repos/Zennay/Ftmo/actions/runs/$MAIN_TEST_RUN --jq .head_sha)" = "$MAIN_SHA"
+          test "$(gh api repos/Zennay/Ftmo/actions/runs/$MAIN_TEST_RUN --jq .event)" = "push"
+          test "$(gh api repos/Zennay/Ftmo/actions/runs/$MAIN_TEST_RUN --jq .name)" = "Test suite"
+
+          pre_state="$(systemctl is-active "$FTMO_SERVICE" || true)"
+          pre_pid="$(systemctl show "$FTMO_SERVICE" -p MainPID --value || true)"
+          worker=0
+          pgrep -u "$FTMO_RUN_USER" -f 'Runner\.Worker' >/dev/null 2>&1 && worker=1 || true
+          echo "FTMO_RUNNER_PRE state=$pre_state pid=$pre_pid worker=$worker"
+
+          if [[ "$worker" -eq 1 ]]; then
+            action=preserve-active-worker
+          else
+            sudo -n systemctl reset-failed "$FTMO_SERVICE" || true
+            sudo -n systemctl restart "$FTMO_SERVICE"
+            action=restart-idle-listener
+          fi
+
+          for _ in $(seq 1 30); do
+            state="$(systemctl is-active "$FTMO_SERVICE" || true)"
+            pid="$(systemctl show "$FTMO_SERVICE" -p MainPID --value || true)"
+            if [[ "$state" == active && "$pid" =~ ^[1-9][0-9]*$ ]] && test -r "/proc/$pid/cmdline"; then
+              cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline")"
+              if [[ "$cmd" == *"Runner.Listener"* || "$cmd" == *"runsvc.sh"* ]]; then
+                break
+              fi
+            fi
+            sleep 2
+          done
+          test "$state" = active
+          [[ "$pid" =~ ^[1-9][0-9]*$ ]]
+          echo "FTMO_RUNNER_RECOVERY_ACTION=$action"
+
+          started=""
+          for _ in $(seq 1 48); do
+            status="$(gh api repos/Zennay/Ftmo/actions/runs/$MAIN_TEST_RUN --jq .status)"
+            echo "FTMO_MAIN_E715_TEST status=$status"
+            if [[ "$status" == in_progress || "$status" == completed ]]; then
+              started=1
+              break
+            fi
+            sleep 5
+          done
+          test -n "$started"
+          echo "FTMO_MAIN_E715_SCHEDULING_GREEN=1"
