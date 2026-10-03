@@ -1,0 +1,143 @@
+name: FTMO PR475 post-476 composition proof
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/ftmo-pr475-df912-composition-proof.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ftmo-pr475-df912-composition-proof
+  cancel-in-progress: true
+
+jobs:
+  proof:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 30
+    env:
+      TARGET_SHA: df912b152218952023d184a84204dcad7a72e305
+      TARGET_BRANCH: fix/gen30-runtime-status-integrity
+      FTMO_AUTONOMOUS_CLOUD_BUDGET_USD: '0.00'
+      FTMO_ALLOW_PAID_AWS: ''
+    steps:
+      - name: Prove combined FTMO head on VPS
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          gh auth status >/dev/null 2>&1
+
+          branch_sha="$(gh api repos/Zennay/Ftmo/git/ref/heads/$TARGET_BRANCH --jq .object.sha)"
+          test "$branch_sha" = "$TARGET_SHA"
+
+          work="$RUNNER_TEMP/ftmo-pr475-composition-$GITHUB_RUN_ID"
+          rm -rf "$work"
+          gh repo clone Zennay/Ftmo "$work" -- --filter=blob:none --no-checkout >/dev/null
+          cd "$work"
+          git fetch --no-tags origin "$TARGET_SHA" >/dev/null
+          git checkout --detach "$TARGET_SHA" >/dev/null
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          git merge-base --is-ancestor c7aba84919e2aea9d941c90e2da407f4d2bea85c HEAD
+
+          python3 -m venv .venv-proof
+          .venv-proof/bin/python -m pip install -q -r requirements-ci.txt
+          .venv-proof/bin/python -m pip install -q -e .
+          .venv-proof/bin/python -m py_compile             src/prop_trading_ai/cli/v1_project_telemetry.py             src/prop_trading_ai/ops/autonomous_rollover.py
+          .venv-proof/bin/python -m pytest -q             tests/test_project_telemetry.py             tests/test_project_telemetry_cli.py             tests/test_project_telemetry_runtime_status.py             tests/test_autonomous_provider_retry.py             tests/test_zero_cost_workflow_boundary.py
+          .venv-proof/bin/python -m pytest --collect-only -q >"/tmp/ftmo-pr475-composition-$GITHUB_RUN_ID.collect"
+          test -s "/tmp/ftmo-pr475-composition-$GITHUB_RUN_ID.collect"
+
+          status="/opt/ftmo-autonomous/.scratch/autonomy/status.json"
+          receipt="artifacts/autonomous_runtime/vps-controller-receipt.json"
+          test -f "$status" && test ! -L "$status"
+          test -f "$receipt" && test ! -L "$receipt"
+          expected="$(.venv-proof/bin/python - "$receipt" <<'PY'
+          import json, sys
+          from pathlib import Path
+          p=json.loads(Path(sys.argv[1]).read_text())
+          assert p["source_main_sha"] == p["runtime_revision"]
+          assert p["autonomous_cloud_budget_usd"] == "0.00"
+          assert p["live_trading_allowed"] is False
+          assert p["broker_order_submission_allowed"] is False
+          research=p["research"]
+          assert research["development_access_allowed"] is False
+          assert research["walk_forward_access_allowed"] is False
+          assert research["final_holdout_access_allowed"] is False
+          print(p["runtime_revision"])
+          PY
+          )"
+
+          out="/tmp/ftmo-pr475-composition-$GITHUB_RUN_ID.json"
+          md="/tmp/ftmo-pr475-composition-$GITHUB_RUN_ID.md"
+          before="$(sha256sum "$status" | awk '{print $1}')"
+          sudo -n -u ftmo-runner env HOME=/home/ftmo-runner             "$work/.venv-proof/bin/python" -m prop_trading_ai.cli.v1_project_telemetry               --root "$work"               --config "$work/configs/research_machine.json"               --runtime-status "$status"               --expected-runtime-revision "$expected"               --output "$out"               --markdown-output "$md"
+          after="$(sha256sum "$status" | awk '{print $1}')"
+          test "$before" = "$after"
+
+          .venv-proof/bin/python - "$out" <<'PY'
+          import json, sys
+          from pathlib import Path
+          live=json.loads(Path(sys.argv[1]).read_text())["autonomous_runtime"]
+          assert live["generation_number"] == 30
+          assert live["stage"] == "provider_foundation"
+          assert live["action"] == "provider_foundation_window_not_elapsed"
+          assert live["runtime_revision_matches_expected"] is True
+          assert live["research_cycle_ok"] is True
+          assert live["development_access_allowed"] is False
+          assert live["walk_forward_access_allowed"] is False
+          assert live["final_holdout_access_allowed"] is False
+          assert live["live_trading_allowed"] is False
+          assert live["broker_order_submission_allowed"] is False
+          PY
+          grep -F 'matches canonical deploy receipt' "$md"
+          grep -F '2026-12-25T21:00:00+00:00' "$md"
+          test "$FTMO_AUTONOMOUS_CLOUD_BUDGET_USD" = '0.00'
+          test -z "${FTMO_ALLOW_PAID_AWS:-}"
+          echo FTMO_PR475_DF912_COMPOSITION_GREEN=1
+
+      - name: Persist composition proof receipt
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          receipt="/tmp/ftmo-pr475-df912-$GITHUB_RUN_ID.json"
+          python3 - <<'PY' >"$receipt"
+          import json, os
+          print(json.dumps({
+            "schema_version":1,
+            "project":"ftmo",
+            "pull_request":475,
+            "target_sha":os.environ["TARGET_SHA"],
+            "includes_main_sha":"c7aba84919e2aea9d941c90e2da407f4d2bea85c",
+            "result":"success",
+            "runner_host":"vps-bb300bba",
+            "runner_name":os.environ.get("RUNNER_NAME"),
+            "workflow_run_id":os.environ["GITHUB_RUN_ID"],
+            "paid_cloud_budget_usd":"0.00",
+            "walk_forward_accessed":False,
+            "final_holdout_accessed":False,
+            "live_or_broker_access_opened":False,
+            "scope":[
+              "exact-branch-ref",
+              "post-476-ancestry",
+              "telemetry-filesystem-integrity",
+              "sealed-authority-invariants",
+              "nonstandard-json-rejection",
+              "provider-clock-fail-closed",
+              "canonical-deploy-receipt-authority",
+              "live-gen30-runtime-overlay",
+              "zero-cost-boundary",
+              "full-suite-collection"
+            ]
+          },sort_keys=True))
+          PY
+          content="$(base64 -w0 "$receipt")"
+          path="runtime-evidence/ftmo-pr475-df912-composition-proof.json"
+          old="$(gh api "repos/Zennay/Haxlab/contents/$path" --jq .sha 2>/dev/null || true)"
+          args=(--method PUT "repos/Zennay/Haxlab/contents/$path" -f message="Record FTMO PR475 post-476 composition proof" -f content="$content")
+          if [ -n "$old" ]; then args+=(-f sha="$old"); fi
+          gh api "${args[@]}" >/dev/null
