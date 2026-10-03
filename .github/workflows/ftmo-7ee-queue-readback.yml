@@ -1,0 +1,60 @@
+name: FTMO queue readback ftmo-7ee077e0b88278da
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/ftmo-7ee-queue-readback.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ftmo-7ee-queue-readback
+  cancel-in-progress: true
+
+jobs:
+  readback:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 8
+    env:
+      QUEUE_ID: ftmo-7ee077e0b88278da
+    steps:
+      - name: Read live SQLite queue state
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          python3 - <<'PY' > /tmp/ftmo-7ee-queue.json
+          import json, os, sqlite3
+          from pathlib import Path
+          db=Path("/home/ubuntu/zennay-cloud/history.db")
+          if not db.is_file():
+              raise SystemExit("live zCloud history.db missing")
+          with sqlite3.connect(db) as c:
+              c.row_factory=sqlite3.Row
+              row=c.execute(
+                  "SELECT queue_id,project_id,title,status,eligible,worker_slot,evidence,updated_at,parent_queue_id "
+                  "FROM portfolio_queue WHERE queue_id=?",
+                  (os.environ["QUEUE_ID"],),
+              ).fetchone()
+          if row is None:
+              raise SystemExit("queue item missing")
+          item=dict(row)
+          print(json.dumps(item,sort_keys=True,default=str))
+          print("QUEUE_STATUS="+str(item.get("status")))
+          print("QUEUE_ELIGIBLE="+str(item.get("eligible")))
+          print("QUEUE_WORKER_SLOT="+str(item.get("worker_slot")))
+          PY
+          cat /tmp/ftmo-7ee-queue.json
+
+      - name: Persist sanitized readback
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          encoded="$(base64 -w0 /tmp/ftmo-7ee-queue.json)"
+          path="runtime-evidence/ftmo-7ee-live-queue-readback-${GITHUB_RUN_ID}.json"
+          gh api --method PUT "repos/Zennay/Haxlab/contents/$path"             -f message="Record live FTMO 7ee queue readback ${GITHUB_RUN_ID}"             -f content="$encoded" >/dev/null
+          echo "QUEUE_READBACK_RECEIPT=$path"
+# trigger: worker1-live-readback
