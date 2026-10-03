@@ -1,0 +1,63 @@
+name: FTMO PR470 stale run cleanup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/ftmo-pr470-stale-run-cancel.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 5
+    env:
+      MAIN_SHA: 27ed1bf808d97e168a200c301f820d16894516b4
+      CANONICAL_DEPLOY_RUN: '37160939790'
+    steps:
+      - name: Cancel only superseded FTMO PR test runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          gh auth status >/dev/null 2>&1
+          live_main="$(gh api repos/Zennay/Ftmo/branches/main --jq .commit.sha)"
+          test "$live_main" = "$MAIN_SHA"
+
+          deploy_head="$(gh api repos/Zennay/Ftmo/actions/runs/$CANONICAL_DEPLOY_RUN --jq .head_sha)"
+          deploy_name="$(gh api repos/Zennay/Ftmo/actions/runs/$CANONICAL_DEPLOY_RUN --jq .name)"
+          test "$deploy_head" = "$MAIN_SHA"
+          test "$deploy_name" = "Verify autonomous VPS runtime"
+
+          check_and_cancel() {
+            run_id="$1"
+            expected_head="$2"
+            actual_head="$(gh api repos/Zennay/Ftmo/actions/runs/$run_id --jq .head_sha)"
+            event="$(gh api repos/Zennay/Ftmo/actions/runs/$run_id --jq .event)"
+            name="$(gh api repos/Zennay/Ftmo/actions/runs/$run_id --jq .name)"
+            status="$(gh api repos/Zennay/Ftmo/actions/runs/$run_id --jq .status)"
+            test "$actual_head" = "$expected_head"
+            test "$actual_head" != "$MAIN_SHA"
+            test "$event" = "pull_request"
+            test "$name" = "Test suite"
+            case "$status" in
+              queued|in_progress|pending)
+                gh run cancel "$run_id" --repo Zennay/Ftmo
+                echo "cancelled_stale_run=$run_id head=$actual_head status=$status"
+                ;;
+              completed)
+                echo "already_completed_stale_run=$run_id"
+                ;;
+              *)
+                echo "unexpected_status=$status run=$run_id" >&2
+                exit 1
+                ;;
+            esac
+          }
+
+          check_and_cancel 37160555183 65eec5273ab1d7bad8892b20b2900c73759b8664
+          check_and_cancel 37160852415 0722263a522ad41f3af8a81adc63545c841bbefe
+          echo "protected_canonical_deploy_run=$CANONICAL_DEPLOY_RUN"
