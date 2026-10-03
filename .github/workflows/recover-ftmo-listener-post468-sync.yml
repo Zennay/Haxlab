@@ -1,0 +1,83 @@
+name: Recover FTMO listener for post-468 sync
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/recover-ftmo-listener-post468-sync.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 8
+    env:
+      FTMO_SERVICE: actions.runner.Zennay-Ftmo.vps-bb300bba-ftmo.service
+      FTMO_RUN_USER: ftmo-runner
+      TARGET_RUN: "37160753650"
+      TARGET_SHA: 1c5ca5cda99845c425f6f04cc5fa459d5085cebe
+    steps:
+      - name: Recover only idle unhealthy FTMO listener
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+
+          payload="$(gh api "repos/Zennay/Ftmo/actions/runs/$TARGET_RUN")"
+          target_sha="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["head_sha"])' <<<"$payload")"
+          target_name="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])' <<<"$payload")"
+          test "$target_sha" = "$TARGET_SHA"
+          test "$target_name" = "Sync autonomous VPS research state"
+
+          pre_state="$(systemctl is-active "$FTMO_SERVICE" || true)"
+          pre_pid="$(systemctl show "$FTMO_SERVICE" -p MainPID --value || true)"
+          worker_before=0
+          listener_before=0
+          pgrep -u "$FTMO_RUN_USER" -f 'Runner\.Worker' >/dev/null 2>&1 && worker_before=1 || true
+          if [[ "$pre_pid" =~ ^[1-9][0-9]*$ ]] && test -r "/proc/$pre_pid/cmdline"; then
+            cmd="$(tr '\0' ' ' < "/proc/$pre_pid/cmdline")"
+            [[ "$cmd" == *"Runner.Listener"* || "$cmd" == *"runsvc.sh"* ]] && listener_before=1 || true
+          fi
+          echo "PRE state=$pre_state pid=$pre_pid listener=$listener_before worker=$worker_before"
+
+          if [[ "$pre_state" != "active" ]]; then
+            sudo -n systemctl reset-failed "$FTMO_SERVICE" || true
+            sudo -n systemctl start "$FTMO_SERVICE"
+            action=start-inactive-listener
+          elif [[ "$worker_before" -eq 1 ]]; then
+            action=preserve-active-worker
+          elif [[ "$listener_before" -eq 1 ]]; then
+            action=preserve-healthy-listener
+          else
+            sudo -n systemctl restart "$FTMO_SERVICE"
+            action=restart-unhealthy-listener
+          fi
+
+          post_state=""
+          for _ in $(seq 1 30); do
+            post_state="$(systemctl is-active "$FTMO_SERVICE" || true)"
+            [[ "$post_state" == active ]] && break
+            sleep 2
+          done
+          test "$post_state" = active
+          echo "FTMO_RUNNER_RECOVERY_ACTION=$action"
+          echo "POST state=$post_state pid=$(systemctl show "$FTMO_SERVICE" -p MainPID --value)"
+
+      - name: Prove target sync leaves queue
+        shell: bash
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 30); do
+            payload="$(gh api "repos/Zennay/Ftmo/actions/runs/$TARGET_RUN")"
+            status="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])' <<<"$payload")"
+            conclusion="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("conclusion"))' <<<"$payload")"
+            echo "TARGET_RUN status=$status conclusion=$conclusion"
+            if [[ "$status" == "in_progress" || "$status" == "completed" ]]; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "target sync remained queued after listener recovery" >&2
+          exit 1
