@@ -1,4 +1,5 @@
 name: FTMO main5335 PR471 queue cleanup
+# Registered; this update triggers the cleanup.
 
 on:
   push:
