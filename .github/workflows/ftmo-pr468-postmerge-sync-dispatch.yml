@@ -1,0 +1,39 @@
+name: Dispatch FTMO PR468 post-merge sync proof
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/ftmo-pr468-postmerge-sync-dispatch.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  dispatch:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 10
+    env:
+      TARGET_MAIN_SHA: 1c5ca5cda99845c425f6f04cc5fa459d5085cebe
+    steps:
+      - name: Dispatch exact-current FTMO research-state sync
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          current="$(gh api repos/Zennay/Ftmo/commits/main --jq .sha)"
+          test "$current" = "$TARGET_MAIN_SHA"
+          before="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          gh workflow run sync-autonomous-research-state.yml --repo Zennay/Ftmo --ref main
+          echo "FTMO_SYNC_DISPATCHED_AT=$before"
+          for i in $(seq 1 30); do
+            run_json="$(gh api 'repos/Zennay/Ftmo/actions/workflows/sync-autonomous-research-state.yml/runs?event=workflow_dispatch&branch=main&per_page=10')"
+            run_id="$(printf '%s' "$run_json" | python3 -c 'import json,sys,os; d=json.load(sys.stdin); target=os.environ["TARGET_MAIN_SHA"]; print(next((str(r["id"]) for r in d.get("workflow_runs",[]) if r.get("head_sha")==target), ""))')"
+            if [[ -n "$run_id" ]]; then
+              echo "FTMO_SYNC_RUN_ID=$run_id"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "workflow dispatch accepted but exact-head run not observed" >&2
+          exit 1
