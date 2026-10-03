@@ -1,4 +1,4 @@
-name: zSSH PR46 VPS proof
+name: zSSH PR47 VPS proof
 
 on:
   push:
@@ -20,14 +20,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Zennay/zSSH
-          ref: c4ee4a02de2af64ffb141ea0734e9eecf7ee24dd
+          ref: 6020aa3feba1bbb8335761c49bd8a3022ce0a5a8
           path: zssh
 
       - name: Verify exact head
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git -C zssh rev-parse HEAD)" = "c4ee4a02de2af64ffb141ea0734e9eecf7ee24dd"
+          test "$(git -C zssh rev-parse HEAD)" = "6020aa3feba1bbb8335761c49bd8a3022ce0a5a8"
 
       - name: Install dependencies
         shell: bash
