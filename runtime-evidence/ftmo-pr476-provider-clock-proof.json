@@ -1,0 +1,22 @@
+{
+  "final_holdout_accessed": false,
+  "host": "vps-bb300bba",
+  "live_or_broker_access_opened": false,
+  "paid_cloud_budget_usd": "0.00",
+  "pr": 476,
+  "project": "ftmo",
+  "research_outcomes_accessed": false,
+  "result": "success",
+  "runner": "vps-bb300bba-haxlab",
+  "schema_version": 1,
+  "scope": [
+    "exact-sha-checkout",
+    "omitted-clock-future-window-no-provider-io",
+    "explicit-clock-boundary",
+    "provider-foundation-regressions",
+    "zero-cost-boundaries"
+  ],
+  "target_sha": "e763d57eb978295b2f15f5ed83eb83635c7aa926",
+  "walk_forward_accessed": false,
+  "workflow_run_id": "37163042485"
+}
