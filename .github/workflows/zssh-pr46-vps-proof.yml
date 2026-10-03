@@ -20,14 +20,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Zennay/zSSH
-          ref: 9171cbe0ebb6ef76857ba3708e7f0b62470cd53f
+          ref: c4ee4a02de2af64ffb141ea0734e9eecf7ee24dd
           path: zssh
 
       - name: Verify exact head
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git -C zssh rev-parse HEAD)" = "9171cbe0ebb6ef76857ba3708e7f0b62470cd53f"
+          test "$(git -C zssh rev-parse HEAD)" = "c4ee4a02de2af64ffb141ea0734e9eecf7ee24dd"
 
       - name: Install dependencies
         shell: bash
