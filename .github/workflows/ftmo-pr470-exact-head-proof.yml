@@ -1,0 +1,96 @@
+name: FTMO PR470 exact-head VPS proof
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/ftmo-pr470-exact-head-proof.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ftmo-pr470-exact-head-proof
+  cancel-in-progress: true
+
+jobs:
+  proof:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 30
+    env:
+      TARGET_SHA: 0722263a522ad41f3af8a81adc63545c841bbefe
+      TARGET_PR: '470'
+      FTMO_AUTONOMOUS_CLOUD_BUDGET_USD: '0.00'
+      FTMO_ALLOW_PAID_AWS: ''
+    steps:
+      - name: Prove exact FTMO head on VPS
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          gh auth status >/dev/null 2>&1
+          work="$RUNNER_TEMP/ftmo-pr470-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          rm -rf "$work"
+          gh repo clone Zennay/Ftmo "$work" -- --filter=blob:none --no-checkout
+          cd "$work"
+          git fetch --no-tags origin "$TARGET_SHA"
+          git checkout --detach "$TARGET_SHA"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          python3 - <<'PY'
+          import json, os, subprocess
+          pr=json.loads(subprocess.check_output(
+              ["gh","api",f"repos/Zennay/Ftmo/pulls/{os.environ['TARGET_PR']}"],
+              text=True,
+          ))
+          if pr.get("head",{}).get("sha") != os.environ["TARGET_SHA"]:
+              raise SystemExit("PR470 head moved")
+          if pr.get("state") != "open":
+              raise SystemExit("PR470 is not open")
+          print("FTMO_PR470_IDENTITY=verified")
+          PY
+          python3 -m venv .venv-proof
+          .venv-proof/bin/python -m pip install -q -r requirements-ci.txt
+          .venv-proof/bin/python -m pip install -q -e .
+          .venv-proof/bin/python -m py_compile src/prop_trading_ai/research/state_sync.py
+          .venv-proof/bin/python -m pytest -q             tests/test_autonomous_deploy_lockstep.py             tests/test_autonomous_research_state_sync.py             tests/test_research_state_sync_guard.py             tests/test_zero_cost_workflow_boundary.py
+          .venv-proof/bin/python -m pytest --collect-only -q >/tmp/ftmo-pr470-collection-$GITHUB_RUN_ID.txt
+          test -s /tmp/ftmo-pr470-collection-$GITHUB_RUN_ID.txt
+          test "$FTMO_AUTONOMOUS_CLOUD_BUDGET_USD" = '0.00'
+          test -z "${FTMO_ALLOW_PAID_AWS:-}"
+          echo "FTMO_PR470_EXACT_HEAD_PROOF=success"
+
+      - name: Persist durable proof receipt
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          receipt="/tmp/ftmo-pr470-proof-$GITHUB_RUN_ID.json"
+          python3 - <<'PY' > "$receipt"
+          import json, os
+          print(json.dumps({
+              "project":"ftmo",
+              "pull_request":470,
+              "target_sha":os.environ["TARGET_SHA"],
+              "result":"success",
+              "runner_host":"vps-bb300bba",
+              "runner_name":os.environ.get("RUNNER_NAME"),
+              "workflow_run_id":os.environ["GITHUB_RUN_ID"],
+              "workflow_run_attempt":os.environ["GITHUB_RUN_ATTEMPT"],
+              "paid_cloud_budget_usd":"0.00",
+              "walk_forward_accessed":False,
+              "final_holdout_accessed":False,
+              "proof":[
+                  "exact-sha-checkout",
+                  "state-sync-compile",
+                  "canonical-deploy-lockstep",
+                  "research-state-sync-regressions",
+                  "zero-cost-boundary",
+                  "full-suite-collection"
+              ]
+          },sort_keys=True))
+          PY
+          encoded="$(base64 -w0 "$receipt")"
+          dest="runtime-evidence/ftmo-pr470-haxlab-proof-$GITHUB_RUN_ID.json"
+          gh api --method PUT "repos/Zennay/Haxlab/contents/$dest"             -f message="Record FTMO PR470 exact-head proof $GITHUB_RUN_ID"             -f content="$encoded" >/dev/null
+          echo "FTMO_PR470_PROOF_RECEIPT=$dest"
