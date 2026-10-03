@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - ".github/workflows/zssh-agent-7f8d-exact-head-proof.yml"
+      - ".github/workflows/zssh-agent-6020-exact-head-proof.yml"
 
 permissions:
   contents: write
