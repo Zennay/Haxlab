@@ -1,0 +1,58 @@
+name: zSSH bounded ops exact-head proof
+
+on:
+  push:
+    branches:
+      - ops/zssh-bounded-ops-proof-20261003
+    paths:
+      - ".github/workflows/zssh-bounded-ops-proof-20261003.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zssh-bounded-ops-proof-20261003
+  cancel-in-progress: true
+
+jobs:
+  proof:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 12
+    env:
+      TARGET_SHA: af9ad9422d294f223bc3627943cc1876eb245cf1
+    steps:
+      - name: Verify VPS identity and fetch exact zSSH merge
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          src="$RUNNER_TEMP/zssh-bounded-ops-proof"
+          rm -rf "$src"
+          gh repo clone Zennay/zSSH "$src" -- --filter=blob:none --no-checkout >/dev/null
+          git -C "$src" checkout --detach "$TARGET_SHA" >/dev/null
+          test "$(git -C "$src" rev-parse HEAD)" = "$TARGET_SHA"
+          echo "ZSSH_EXACT_HEAD_GREEN=1"
+
+      - name: Install exact-head dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd "$RUNNER_TEMP/zssh-bounded-ops-proof"
+          npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Prove bounded operation contracts
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd "$RUNNER_TEMP/zssh-bounded-ops-proof"
+          node --check server.mjs
+          node --test test/security.test.mjs test/scoped-sudo.test.mjs
+          echo "ZSSH_BOUNDED_OPS_TARGETED_GREEN=1"
+
+      - name: Prove complete zSSH exact-head suite
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd "$RUNNER_TEMP/zssh-bounded-ops-proof"
+          node --test
+          echo "ZSSH_BOUNDED_OPS_FULL_SUITE_GREEN=1"
