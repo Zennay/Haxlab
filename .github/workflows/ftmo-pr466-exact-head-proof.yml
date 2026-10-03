@@ -1,0 +1,119 @@
+name: FTMO PR466 exact-head immutable deploy proof
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/ftmo-pr466-exact-head-proof.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ftmo-pr466-exact-head-proof
+  cancel-in-progress: true
+
+jobs:
+  prove:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 18
+    env:
+      TARGET_SHA: 6e3dd5296eda9ec4a00404f6215b19fb634e8a1d
+      FTMO_AUTONOMOUS_CLOUD_BUDGET_USD: "0.00"
+      FTMO_ALLOW_PAID_AWS: ""
+    steps:
+      - name: Fetch exact FTMO PR466 head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          src="$RUNNER_TEMP/ftmo-pr466-proof"
+          rm -rf "$src"
+          gh repo clone Zennay/Ftmo "$src" -- --filter=blob:none --no-checkout >/dev/null
+          git -C "$src" checkout --detach "$TARGET_SHA" >/dev/null
+          test "$(git -C "$src" rev-parse HEAD)" = "$TARGET_SHA"
+          echo "FTMO_PR466_EXACT_SHA=$TARGET_SHA"
+
+      - name: Install isolated environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/ftmo-pr466-proof"
+          venv="$RUNNER_TEMP/ftmo-pr466-venv"
+          rm -rf "$venv"
+          python3 -m venv "$venv"
+          "$venv/bin/python" -m pip install -q -r "$src/requirements-ci.txt"
+          "$venv/bin/python" -m pip install -q -e "$src"
+
+      - name: Prove immutable deploy and sync lockstep
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/ftmo-pr466-proof"
+          venv="$RUNNER_TEMP/ftmo-pr466-venv"
+          cd "$src"
+          "$venv/bin/python" -m compileall -q src/prop_trading_ai/research/immutable.py src/prop_trading_ai/research/provider_validation.py
+          "$venv/bin/python" -m pytest -q tests/test_autonomous_deploy_lockstep.py tests/test_autonomous_research_state_sync.py tests/test_immutable_evidence.py
+          echo "FTMO_PR466_IMMUTABLE_LOCKSTEP_GREEN=1"
+
+      - name: Prove latest provider path authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/ftmo-pr466-proof"
+          venv="$RUNNER_TEMP/ftmo-pr466-venv"
+          cd "$src"
+          "$venv/bin/python" -m pytest -q tests/test_provider_validation_ancestor_integrity.py tests/test_provider_validation_json_integrity.py tests/test_provider_validation.py
+          echo "FTMO_PR466_PROVIDER_PATH_GREEN=1"
+
+      - name: Prove adjacent provider-foundation safety
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/ftmo-pr466-proof"
+          venv="$RUNNER_TEMP/ftmo-pr466-venv"
+          cd "$src"
+          "$venv/bin/python" -m pytest -q tests/test_provider_foundation_publication.py tests/test_autonomous_provider_retry.py tests/test_zero_cost_workflow_boundary.py
+          echo "FTMO_PR466_ADJACENT_GREEN=1"
+
+      - name: Collect full exact-head suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/ftmo-pr466-proof"
+          venv="$RUNNER_TEMP/ftmo-pr466-venv"
+          cd "$src"
+          "$venv/bin/python" -m pytest --collect-only -q >"$RUNNER_TEMP/ftmo-pr466-collect.txt"
+          tail -n 2 "$RUNNER_TEMP/ftmo-pr466-collect.txt"
+          echo "FTMO_PR466_COLLECTION_GREEN=1"
+
+      - name: Persist sanitized proof receipt
+        if: always()
+        shell: bash
+        env:
+          PROOF_RESULT: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          receipt="/tmp/ftmo-pr466-proof-${GITHUB_RUN_ID}.json"
+          python3 - <<'PY' > "$receipt"
+          import json, os, socket
+          print(json.dumps({
+              "project":"ftmo",
+              "queue_id":"ftmo-2e49bff2460feac8",
+              "pr":466,
+              "target_sha":os.environ["TARGET_SHA"],
+              "workflow_run_id":os.environ["GITHUB_RUN_ID"],
+              "workflow_run_attempt":os.environ["GITHUB_RUN_ATTEMPT"],
+              "runner_name":os.environ.get("RUNNER_NAME"),
+              "runner_host":socket.gethostname(),
+              "result":os.environ["PROOF_RESULT"],
+              "paid_cloud_budget_usd":os.environ["FTMO_AUTONOMOUS_CLOUD_BUDGET_USD"],
+              "walk_forward_accessed":False,
+              "final_holdout_accessed":False,
+              "proof":["exact-sha-checkout","isolated-install","immutable-compile","provider-validation-compile","autonomous-deploy-lockstep","research-state-sync","immutable-evidence","provider-ancestor-integrity","provider-parent-authority","provider-foundation-publication","autonomous-provider-retry","zero-cost-boundary","full-suite-collection"]
+          },sort_keys=True))
+          PY
+          encoded="$(base64 -w0 "$receipt")"
+          path="runtime-evidence/ftmo-pr466-haxlab-proof-${GITHUB_RUN_ID}.json"
+          gh api --method PUT "repos/Zennay/Haxlab/contents/$path" -f message="Record FTMO PR466 HaxLab exact-head proof ${GITHUB_RUN_ID}" -f content="$encoded" >/dev/null
+          echo "FTMO_PR466_RECEIPT_PATH=$path"
