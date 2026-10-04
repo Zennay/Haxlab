@@ -1,0 +1,59 @@
+name: zSSH reviewer public trust migration proof
+
+on:
+  push:
+    paths:
+      - ".github/workflows/zssh-reviewer-trust-migration-proof.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  prove:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout canonical trust-format fix
+        uses: actions/checkout@v4
+        with:
+          repository: Zennay/zSSH
+          ref: 91afd8e4786ad62a93a4e873cc622867d1b359e8
+          path: zssh
+          fetch-depth: 1
+
+      - name: Migrate live reviewer public trust without rotating identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd zssh
+          test "$(git rev-parse HEAD)" = "91afd8e4786ad62a93a4e873cc622867d1b359e8"
+          npm install --ignore-scripts --no-audit --no-fund >/dev/null
+
+          output="$(npm run --silent review:target)"
+          printf '%s\n' "$output"
+
+          node --input-type=module - "$output" "$HOME/.config/zssh/reviewer-agent-public.json" <<'NODE'
+          import { readFileSync } from "node:fs";
+          import { agentPublicKeysFromEnv } from "./agent-transport.mjs";
+          const [raw, publicFile] = process.argv.slice(2);
+          const report = JSON.parse(raw);
+          if (report.target_id !== "zt_NgZ8uUmNyTS--jC_") throw new Error("review target identity changed");
+          if (report.public_key_sha256 !== "2d1c4fd95e3b145ac80c520c30643c3ba50e7e95d621988221076d6b1cbe859d") {
+            throw new Error("review target public-key fingerprint changed");
+          }
+          const config = JSON.parse(readFileSync(publicFile, "utf8"));
+          if (config.version !== 1 || config.gateway_public_key_config !== undefined) {
+            throw new Error("reviewer public trust file was not normalized");
+          }
+          if (JSON.stringify(Object.keys(config.targets)) !== JSON.stringify([report.target_id])) {
+            throw new Error("gateway trust target mismatch");
+          }
+          const trusted = agentPublicKeysFromEnv({ ZSSH_AGENT_PUBLIC_KEYS_FILE: publicFile });
+          if (trusted.size !== 1 || !trusted.has(report.target_id)) {
+            throw new Error("gateway loader did not accept reviewer public trust file");
+          }
+          NODE
+
+          test "$(stat -c '%a' "$HOME/.config/zssh/agent-ed25519.pem")" = "600"
+          test "$(stat -c '%a' "$HOME/.config/zssh/reviewer-agent-public.json")" = "600"
+          echo "ZSSH_REVIEWER_TRUST_MIGRATION_GREEN"
