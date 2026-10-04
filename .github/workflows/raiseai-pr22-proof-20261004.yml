@@ -20,7 +20,7 @@ jobs:
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 35
     env:
-      TARGET_SHA: bc3d9d6e310db64c37c8ce3c2fdaae2daeda67c9
+      TARGET_SHA: 96eede22c4807b1dea1e5bf3b752cdad95a30eaf
     steps:
       - name: Verify VPS execution host
         shell: bash
