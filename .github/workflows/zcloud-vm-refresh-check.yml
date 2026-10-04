@@ -22,6 +22,28 @@ jobs:
           export XDG_RUNTIME_DIR=/run/user/1000
           export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
 
+          echo "=== ZCLOUD DASHBOARD RECOVERY ==="
+          sudo -n systemctl reset-failed zennay-cloud.service || true
+          sudo -n systemctl restart zennay-cloud.service
+          for i in {1..30}; do
+            if sudo -n systemctl is-active --quiet zennay-cloud.service && curl -fsS --max-time 3 http://127.0.0.1:8765/ >/dev/null 2>&1; then
+              break
+            fi
+            sleep 2
+          done
+          sudo -n systemctl is-active zennay-cloud.service
+          curl -fsS --max-time 5 http://127.0.0.1:8765/ >/dev/null
+          echo "=== ZCLOUD 8765 LISTENER ==="
+          ss -ltnp | grep ':8765' || true
+          echo "=== ZCLOUD PUBLIC SELFTEST ==="
+          if curl -fsS --max-time 6 http://198.244.191.182:8765/ >/dev/null 2>&1; then
+            echo "ZCLOUD_DASHBOARD_PUBLIC_GREEN"
+          else
+            echo "ZCLOUD_DASHBOARD_PUBLIC_SELFTEST_FAILED"
+            sudo -n ufw status 2>/dev/null || true
+            sudo -n nft list ruleset 2>/dev/null | grep -C 2 -E '8765|reject|drop' || true
+          fi
+
           systemctl --user restart chatgpt-firefox.service
           for i in {1..30}; do
             systemctl --user is-active --quiet chatgpt-firefox.service && break
