@@ -1,0 +1,72 @@
+name: Recover RaiseAI self-hosted runner
+
+on:
+  push:
+    branches:
+      - ops/raiseai-watch-proof-20261003
+    paths:
+      - ".github/workflows/raiseai-runner-recovery-20261003.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: raiseai-runner-recovery-20261003
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 8
+    env:
+      RAISE_SERVICE: actions.runner.Zennay-RaiseAI.vps-bb300bba.service
+    steps:
+      - name: Recover only idle RaiseAI Actions listener
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          service="$RAISE_SERVICE"
+
+          pre_state="$(systemctl is-active "$service" || true)"
+          pre_pid="$(systemctl show "$service" -p MainPID --value || true)"
+          cgroup="$(systemctl show "$service" -p ControlGroup --value || true)"
+          worker_before=0
+
+          if [[ -n "$cgroup" && -r "/sys/fs/cgroup${cgroup}/cgroup.procs" ]]; then
+            while read -r pid; do
+              [[ -r "/proc/$pid/cmdline" ]] || continue
+              cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline")"
+              if [[ "$cmd" == *"Runner.Worker"* ]]; then
+                worker_before=1
+                break
+              fi
+            done < "/sys/fs/cgroup${cgroup}/cgroup.procs"
+          fi
+
+          echo "RAISE_RUNNER_PRE state=$pre_state pid=$pre_pid worker=$worker_before cgroup=$cgroup"
+
+          if [[ "$worker_before" -eq 1 ]]; then
+            action=preserve-active-worker
+          else
+            sudo -n systemctl reset-failed "$service" || true
+            sudo -n systemctl restart "$service"
+            action=restart-idle-listener
+          fi
+
+          for _ in $(seq 1 30); do
+            post_state="$(systemctl is-active "$service" || true)"
+            post_pid="$(systemctl show "$service" -p MainPID --value || true)"
+            if [[ "$post_state" == "active" && "$post_pid" =~ ^[1-9][0-9]*$ && -r "/proc/$post_pid/cmdline" ]]; then
+              post_cmd="$(tr '\0' ' ' < "/proc/$post_pid/cmdline")"
+              if [[ "$post_cmd" == *"Runner.Listener"* || "$post_cmd" == *"runsvc.sh"* ]]; then
+                echo "RAISE_RUNNER_RECOVERY action=$action state=$post_state pid=$post_pid"
+                exit 0
+              fi
+            fi
+            sleep 2
+          done
+
+          systemctl --no-pager --full status "$service" || true
+          exit 1
