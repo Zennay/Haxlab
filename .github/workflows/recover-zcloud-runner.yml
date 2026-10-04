@@ -19,9 +19,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! systemctl is-active --quiet zennay-cloud.service; then
-            sudo -n systemctl restart zennay-cloud.service
-          fi
+          # A cancelled/stuck guarded deploy may leave self-heal suppressed.
+          # This cross-runner recovery is intentionally outside that deploy and
+          # restores the control plane before touching the zCloud Actions listener.
+          sudo -n rm -f /home/ubuntu/zennay-cloud/.disable-self-heal
+          sudo -n systemctl reset-failed zennay-cloud.service || true
+          sudo -n systemctl restart zennay-cloud.service
           systemctl is-active zennay-cloud.service
           for i in {1..20}; do
             if curl -fsS --max-time 3 http://127.0.0.1:8765/api/status >/tmp/zcloud-status.json; then
