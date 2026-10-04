@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: raiseai-pr23-build-identity-proof
@@ -28,6 +28,11 @@ jobs:
         run: |
           set -euo pipefail
           test "$(hostname)" = "vps-bb300bba"
+
+      - name: Checkout proof orchestrator
+        uses: actions/checkout@v4
+        with:
+          path: haxlab-proof
 
       - name: Configure Android SDK
         uses: android-actions/setup-android@v3
@@ -106,3 +111,24 @@ jobs:
             raiseai-pr23-build-identity-proof.txt
             raise-pr23/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 14
+
+      - name: Record green exact-head proof marker
+        working-directory: haxlab-proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --rebase origin ops/raiseai-pr22-proof-20261004-0103
+          mkdir -p .github/proofs
+          marker=".github/proofs/raiseai-pr23-exact-head-green.env"
+          {
+            echo "proof=GREEN"
+            echo "raise_sha=$RAISE_SHA"
+            echo "github_run_id=$GITHUB_RUN_ID"
+            echo "artifact_name=RaiseAI-pr23-build-identity-proof-$GITHUB_RUN_ID"
+            cat ../raiseai-pr23-build-identity-proof.txt
+          } > "$marker"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$marker"
+          git commit -m "Record green RaiseAI PR23 proof $RAISE_SHA"
+          git push origin HEAD:ops/raiseai-pr22-proof-20261004-0103
