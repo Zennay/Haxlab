@@ -1,0 +1,101 @@
+name: RaiseAI PR23 build-identity proof
+
+on:
+  push:
+    branches:
+      - ops/raiseai-pr22-proof-20261004-0103
+    paths:
+      - ".github/workflows/raiseai-pr23-build-identity-proof.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: raiseai-pr23-build-identity-proof
+  cancel-in-progress: true
+
+jobs:
+  prove:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 35
+    env:
+      RAISE_SHA: b6418f66d29334e76dd2fdba90eb053eaeda3203
+      RAISE_BUILD_REVISION: b6418f66d29334e76dd2fdba90eb053eaeda3203
+    steps:
+      - name: Verify VPS execution host
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+
+      - name: Configure Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools"
+
+      - name: Install Android 35 toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Checkout exact RaiseAI PR23 head
+        uses: actions/checkout@v4
+        with:
+          repository: Zennay/RaiseAI
+          ref: ${{ env.RAISE_SHA }}
+          path: raise-pr23
+
+      - name: Prove exact build identity and Watch APK
+        working-directory: raise-pr23
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RAISE_SHA"
+          test -z "$(git status --porcelain --untracked-files=normal)"
+          bash -n upgrade-watch.command
+          bash -n physical-validation.command
+          python3 -m unittest discover -s tests -p 'test_watch_e2e_evidence_validator.py'
+          python3 -m unittest discover -s tests -p 'test_watch_sensor_trace_analyzer.py'
+          python3 -m unittest discover -s tests -p 'test_watch_sensor_trial_analyzer.py'
+          ./gradlew --no-daemon \
+            -Dorg.gradle.jvmargs="-Xmx1280m -Dfile.encoding=UTF-8" \
+            -Dorg.gradle.workers.max=1 \
+            :app:verifyEvidenceBuildIdentity testDebugUnitTest assembleDebug
+          grep -R --fixed-strings "$RAISE_SHA" app/build/generated >/dev/null
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          python3 - <<'PY'
+          import os
+          import zipfile
+          apk = "app/build/outputs/apk/debug/app-debug.apk"
+          needle = os.environ["RAISE_SHA"].encode("ascii")
+          with zipfile.ZipFile(apk) as archive:
+              dex_files = [name for name in archive.namelist() if name.endswith(".dex")]
+              hits = [name for name in dex_files if needle in archive.read(name)]
+          if not hits:
+              raise SystemExit("exact source revision not embedded in APK DEX")
+          print("Exact source revision embedded in:", ", ".join(hits))
+          PY
+
+      - name: Record proof
+        working-directory: raise-pr23
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "RaiseAI PR23 build identity proof"
+            echo "host=$(hostname)"
+            echo "source_revision=$(git rev-parse HEAD)"
+            echo "version=$(tr -d '\r\n' < VERSION.txt)"
+            echo "apk_sha256=$(sha256sum app/build/outputs/apk/debug/app-debug.apk | awk '{print $1}')"
+          } | tee ../raiseai-pr23-build-identity-proof.txt
+
+      - name: Upload proof artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RaiseAI-pr23-build-identity-proof-${{ github.run_id }}
+          path: |
+            raiseai-pr23-build-identity-proof.txt
+            raise-pr23/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14
