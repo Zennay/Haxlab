@@ -1,0 +1,64 @@
+name: Recover zCloud listener for FTMO queue
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/ftmo-zcloud-listener-recovery.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 5
+    steps:
+      - name: Restart only idle zCloud Actions listener
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          service="actions.runner.Zennay-zCloud.zcloud-vps-1.service"
+          systemctl cat "$service" >/dev/null
+
+          group="$(systemctl show "$service" -p ControlGroup --value || true)"
+          worker=0
+          if [[ -n "$group" && -r "/sys/fs/cgroup$group/cgroup.procs" ]]; then
+            while read -r pid; do
+              [[ -r "/proc/$pid/cmdline" ]] || continue
+              cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline" || true)"
+              if [[ "$cmd" == *"Runner.Worker"* ]]; then
+                worker=1
+                echo "ZCLOUD_RUNNER_ACTIVE_WORKER pid=$pid"
+                break
+              fi
+            done < "/sys/fs/cgroup$group/cgroup.procs"
+          fi
+
+          state="$(systemctl is-active "$service" || true)"
+          pid="$(systemctl show "$service" -p MainPID --value || true)"
+          echo "ZCLOUD_RUNNER_PRE state=$state pid=$pid worker=$worker"
+
+          if [[ "$worker" -eq 1 ]]; then
+            echo "ZCLOUD_RUNNER_RECOVERY=preserve_active_worker"
+            exit 0
+          fi
+
+          sudo -n systemctl reset-failed "$service" || true
+          sudo -n systemctl restart "$service"
+
+          for _ in $(seq 1 20); do
+            post="$(systemctl is-active "$service" || true)"
+            post_pid="$(systemctl show "$service" -p MainPID --value || true)"
+            if [[ "$post" == "active" && "$post_pid" =~ ^[1-9][0-9]*$ && -r "/proc/$post_pid/cmdline" ]]; then
+              cmd="$(tr '\0' ' ' < "/proc/$post_pid/cmdline" || true)"
+              if [[ "$cmd" == *"Runner.Listener"* || "$cmd" == *"runsvc.sh"* ]]; then
+                echo "ZCLOUD_RUNNER_RECOVERY=restart_idle_listener"
+                echo "ZCLOUD_RUNNER_POST state=$post pid=$post_pid"
+                exit 0
+              fi
+            fi
+            sleep 2
+          done
+          exit 1
