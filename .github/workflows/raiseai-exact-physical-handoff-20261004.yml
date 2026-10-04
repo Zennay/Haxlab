@@ -125,21 +125,54 @@ jobs:
           mkdir -p "$OUT"
 
           cp app/build/outputs/apk/debug/app-debug.apk "$OUT/RaiseAI-v1.5.2-debug.apk"
-          cp upgrade-watch.command "$OUT/"
-          cp physical-validation.command "$OUT/"
-          for f in START-HERE.md DEVICE-TEST.md watch-preflight.command pull-diagnostics.command; do
-            if [ -f "$f" ]; then cp "$f" "$OUT/"; fi
-          done
+
+          # Preserve the exact clean source revision needed by physical-validation.command.
+          git branch -f physical-handoff "$RAISE_SHA"
+          git bundle create "$OUT/RaiseAI-v1.5.2-source.bundle" physical-handoff
+          git bundle verify "$OUT/RaiseAI-v1.5.2-source.bundle"
+          git branch -D physical-handoff
+
+          apk_sha="$(sha256sum app/build/outputs/apk/debug/app-debug.apk | awk '{print $1}')"
+          bundle_sha="$(sha256sum "$OUT/RaiseAI-v1.5.2-source.bundle" | awk '{print $1}')"
 
           {
             echo "version=1.5.2"
             echo "version_code=19"
             echo "source_revision=$RAISE_SHA"
             echo "source_branch=main"
-            echo "apk_sha256=$(sha256sum app/build/outputs/apk/debug/app-debug.apk | awk '{print $1}')"
+            echo "apk_sha256=$apk_sha"
+            echo "source_bundle_sha256=$bundle_sha"
             echo "built_on=$(hostname)"
             echo "note=No gateway/provider secrets are bundled; provision credentials separately."
           } > "$OUT/BUILD-IDENTITY.txt"
+
+          cat > "$OUT/README-PHYSICAL-HANDOFF.txt" <<EOF
+Raise AI v1.5.2 physical validation handoff
+
+Exact source revision:
+  $RAISE_SHA
+
+This artifact contains:
+  - RaiseAI-v1.5.2-debug.apk: independently identity-checked Watch APK
+  - RaiseAI-v1.5.2-source.bundle: exact clean Git source needed by the validation orchestrator
+  - BUILD-IDENTITY.txt: version, source SHA and SHA-256 checksums
+
+Restore the exact source on the Mac paired with the Galaxy Watch 7:
+  git clone RaiseAI-v1.5.2-source.bundle RaiseAI-v1.5.2
+  cd RaiseAI-v1.5.2
+  git checkout physical-handoff
+  test "\$(git rev-parse HEAD)" = "$RAISE_SHA"
+  test -z "\$(git status --porcelain --untracked-files=normal)"
+
+Then run the canonical physical session from that clean checkout:
+  bash ./physical-validation.command all /path/to/watch-gateway.properties
+
+The orchestrator will build/install from this exact source revision, require fresh
+schema-v2 quick_ai evidence, and bind the 30 raise / 100 non-trigger dataset to
+the same app version + source revision.
+
+Do not copy gateway/provider secrets into this artifact.
+EOF
 
       - name: Upload physical-session handoff
         uses: actions/upload-artifact@v4
