@@ -1,0 +1,117 @@
+name: RaiseAI Watch PR20/PR21 exact-head proof
+
+on:
+  push:
+    branches:
+      - ops/raiseai-watch-proof-20261003
+    paths:
+      - ".github/workflows/raiseai-watch-proof-20261003.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: raiseai-watch-proof-20261003
+  cancel-in-progress: true
+
+jobs:
+  prove:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 35
+    env:
+      RAISE_REPO: Zennay/RaiseAI
+      PR20_SHA: df28337931caafd6584040cd4d4885766f073d00
+      PR21_SHA: 320c6b3e369ec73de693a98f96bb8132d4d4d149
+    steps:
+      - name: Verify VPS execution host
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          echo "RUNNER_NAME=${RUNNER_NAME:-unknown}"
+          echo "HOST=$(hostname)"
+
+      - name: Configure Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools"
+
+      - name: Install Android 35 toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          java -version
+          python3 --version
+
+      - name: Checkout RaiseAI PR20 exact head
+        uses: actions/checkout@v4
+        with:
+          repository: Zennay/RaiseAI
+          ref: ${{ env.PR20_SHA }}
+          path: raise-pr20
+
+      - name: Prove PR20 Watch E2E evidence gate
+        working-directory: raise-pr20
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PR20_SHA"
+          bash -n pull-diagnostics.command
+          bash -n provision-watch-gateway.command
+          bash -n install-watch-apk.command
+          bash -n upgrade-watch.command
+          python3 -m py_compile tools/validate-watch-e2e-evidence.py
+          python3 -m unittest discover -s tests -p 'test_watch_e2e_evidence_validator.py'
+          ./gradlew --no-daemon testDebugUnitTest assembleDebug
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          echo "PR20_EXACT_HEAD_GREEN=$PR20_SHA"
+
+      - name: Checkout RaiseAI PR21 exact head
+        uses: actions/checkout@v4
+        with:
+          repository: Zennay/RaiseAI
+          ref: ${{ env.PR21_SHA }}
+          path: raise-pr21
+
+      - name: Prove PR21 V1 reliability evidence gate
+        working-directory: raise-pr21
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PR21_SHA"
+          bash -n pull-diagnostics.command
+          bash -n pull-watch-data.command
+          bash -n provision-watch-gateway.command
+          bash -n install-watch-apk.command
+          bash -n upgrade-watch.command
+          python3 -m py_compile \
+            tools/validate-watch-e2e-evidence.py \
+            tools/analyze-watch-sensor-traces.py \
+            tools/analyze-watch-sensor-trials.py
+          python3 -m unittest discover -s tests -p 'test_watch_e2e_evidence_validator.py'
+          python3 -m unittest discover -s tests -p 'test_watch_sensor_trace_analyzer.py'
+          python3 -m unittest discover -s tests -p 'test_watch_sensor_trial_analyzer.py'
+          ./gradlew --no-daemon testDebugUnitTest assembleDebug
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          echo "PR21_EXACT_HEAD_GREEN=$PR21_SHA"
+
+      - name: Record proof summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "RaiseAI exact-head Watch proof"
+            echo "host=$(hostname)"
+            echo "runner=${RUNNER_NAME:-unknown}"
+            echo "pr20=$PR20_SHA"
+            echo "pr21=$PR21_SHA"
+          } | tee raiseai-watch-proof.txt
+
+      - name: Upload proof artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RaiseAI-watch-proof-${{ github.run_id }}
+          path: raiseai-watch-proof.txt
+          retention-days: 14
