@@ -1,0 +1,110 @@
+name: RaiseAI physical-session bundle
+
+on:
+  push:
+    branches:
+      - ops/raiseai-pr22-proof-20261004-0103
+    paths:
+      - ".github/workflows/raiseai-physical-session-bundle-20261004.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: raiseai-physical-session-bundle-20261004
+  cancel-in-progress: true
+
+jobs:
+  bundle:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 35
+    env:
+      RAISE_SHA: f4abeea8c8ef1a3c5a9e0543488e6407b1e26343
+    steps:
+      - name: Verify VPS execution host
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+
+      - name: Configure Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools"
+
+      - name: Install Android 35 toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Checkout exact merged RaiseAI main
+        uses: actions/checkout@v4
+        with:
+          repository: Zennay/RaiseAI
+          ref: ${{ env.RAISE_SHA }}
+          path: raise-main
+
+      - name: Build exact Watch APK
+        working-directory: raise-main
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RAISE_SHA"
+          test -z "$(git status --porcelain --untracked-files=normal)"
+          test "$(tr -d '\r\n' < VERSION.txt)" = "1.5.1"
+          bash physical-validation.command --help >/dev/null
+          ./gradlew --no-daemon \
+            -Dorg.gradle.jvmargs="-Xmx1280m -Dfile.encoding=UTF-8" \
+            -Dorg.gradle.workers.max=1 \
+            testDebugUnitTest assembleDebug
+          test -s app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Assemble Mac physical-session bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC="$GITHUB_WORKSPACE/raise-main"
+          OUT="$GITHUB_WORKSPACE/RaiseAI-v1.5.1-physical-session"
+          mkdir -p "$OUT/tools"
+          cp "$SRC/app/build/outputs/apk/debug/app-debug.apk" "$OUT/RaiseAI-v1.5.1-f4abeea8.apk"
+          for f in \
+            VERSION.txt START-HERE.md physical-validation.command \
+            install-watch-apk.command provision-watch-gateway.command \
+            upgrade-watch.command watch-preflight.command \
+            pull-watch-data.command pull-diagnostics.command; do
+            cp "$SRC/$f" "$OUT/$f"
+          done
+          cp "$SRC/tools/validate-watch-e2e-evidence.py" "$OUT/tools/"
+          cp "$SRC/tools/analyze-watch-sensor-traces.py" "$OUT/tools/"
+          cp "$SRC/tools/analyze-watch-sensor-trials.py" "$OUT/tools/"
+          cat > "$OUT/EXACT-BUILD.txt" <<EOF
+          Raise AI physical validation build
+          version=1.5.1
+          source_revision=$RAISE_SHA
+          apk_sha256=$(sha256sum "$OUT/RaiseAI-v1.5.1-f4abeea8.apk" | awk '{print $1}')
+          built_on=$(hostname)
+          workflow_run=$GITHUB_RUN_ID
+          EOF
+          cat > "$OUT/INSTALL-ME-FIRST.txt" <<'EOF'
+          This bundle is pinned to RaiseAI v1.5.1 main commit:
+          f4abeea8c8ef1a3c5a9e0543488e6407b1e26343
+
+          Preferred path on the Mac paired with the Galaxy Watch 7:
+          1. Put the VPS watch-gateway.properties somewhere on this Mac.
+          2. Keep Wireless debugging enabled on the Watch.
+          3. Run the physical validation from a clean checkout of the exact source commit:
+             bash ./physical-validation.command all /path/to/watch-gateway.properties
+
+          The included APK is the exact build artifact for the same source revision.
+          Use install-watch-apk.command only for targeted install/debugging; the canonical
+          evidence flow remains physical-validation.command so build identity is checked.
+          EOF
+
+      - name: Upload exact physical-session bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: RaiseAI-v1.5.1-physical-session-f4abeea8
+          path: RaiseAI-v1.5.1-physical-session
+          retention-days: 30
