@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   build-handoff:
-    runs-on: [self-hosted, haxlab]
+    runs-on: self-hosted
     timeout-minutes: 35
     steps:
       - name: Verify VPS execution host
