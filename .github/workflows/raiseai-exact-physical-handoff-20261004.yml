@@ -130,6 +130,14 @@ jobs:
           git branch -f main "$RAISE_SHA"
           git bundle create "$OUT/RaiseAI-v1.5.2-source.bundle" main
           git bundle verify "$OUT/RaiseAI-v1.5.2-source.bundle"
+          test "$(git bundle list-heads "$OUT/RaiseAI-v1.5.2-source.bundle" refs/heads/main | awk '{print $1}')" = "$RAISE_SHA"
+
+          RESTORE_DIR="../raiseai-v1.5.2-bundle-restore-check"
+          rm -rf "$RESTORE_DIR"
+          git clone -q -b main "$OUT/RaiseAI-v1.5.2-source.bundle" "$RESTORE_DIR"
+          test "$(git -C "$RESTORE_DIR" rev-parse HEAD | tr 'A-F' 'a-f')" = "$RAISE_SHA"
+          test -z "$(git -C "$RESTORE_DIR" status --porcelain --untracked-files=normal)"
+          rm -rf "$RESTORE_DIR"
           git branch -D main
 
           apk_sha="$(sha256sum app/build/outputs/apk/debug/app-debug.apk | awk '{print $1}')"
