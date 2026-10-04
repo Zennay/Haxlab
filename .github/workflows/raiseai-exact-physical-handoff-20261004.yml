@@ -216,7 +216,8 @@ printf '%s' "$revision" | grep -Eq '^[0-9a-f]{40}
         shell: bash
         run: |
           set -euo pipefail
-          git pull --rebase origin ops/raiseai-pr22-proof-20261004-0103
+          git fetch origin ops/raiseai-pr22-proof-20261004-0103
+          git checkout -B ops/raiseai-pr22-proof-20261004-0103 origin/ops/raiseai-pr22-proof-20261004-0103
           mkdir -p .github/proofs
           marker=".github/proofs/raiseai-v1.5.2-physical-handoff-green.env"
           {
