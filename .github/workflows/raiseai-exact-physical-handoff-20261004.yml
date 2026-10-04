@@ -1,6 +1,11 @@
 name: RaiseAI v1.5.2 merged-main physical handoff
 
 on:
+  push:
+    branches:
+      - ops/raiseai-pr22-proof-20261004-0103
+    paths:
+      - ".github/raiseai-v152-physical-handoff.sha"
   workflow_dispatch:
 
 permissions:
@@ -21,6 +26,21 @@ jobs:
           set -euo pipefail
           test "$(hostname)" = "vps-bb300bba"
 
+      - name: Checkout handoff trigger
+        uses: actions/checkout@v4
+        with:
+          path: orchestrator
+
+      - name: Load exact merged-main revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision="$(tr -d '\r\n' < orchestrator/.github/raiseai-v152-physical-handoff.sha | tr 'A-F' 'a-f')"
+          printf '%s' "$revision" | grep -Eq '^[0-9a-f]{40}$'
+          echo "RAISE_SHA=$revision" >> "$GITHUB_ENV"
+          echo "RAISE_BUILD_REVISION=$revision" >> "$GITHUB_ENV"
+          echo "Pinned physical-handoff revision: $revision"
+
       - name: Configure Android SDK
         uses: android-actions/setup-android@v3
         with:
@@ -32,24 +52,32 @@ jobs:
           set -euo pipefail
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Checkout current merged RaiseAI main
+      - name: Checkout exact RaiseAI merged-main revision
         uses: actions/checkout@v4
         with:
           repository: Zennay/RaiseAI
-          ref: main
+          ref: ${{ env.RAISE_SHA }}
           path: raiseai
           fetch-depth: 1
+
+      - name: Prove trigger still equals current RaiseAI main
+        working-directory: raiseai
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD | tr 'A-F' 'a-f')" = "$RAISE_SHA"
+          remote_main="$(git ls-remote origin refs/heads/main | awk '{print $1}' | tr 'A-F' 'a-f')"
+          test "$remote_main" = "$RAISE_SHA"
+          echo "Current RaiseAI main is exactly $RAISE_SHA"
 
       - name: Prove merged-main v1.5.2 identity and build APK
         working-directory: raiseai
         shell: bash
         run: |
           set -euo pipefail
-          SHA="$(git rev-parse HEAD)"
           test -z "$(git status --porcelain --untracked-files=normal)"
           test "$(tr -d '\r\n' < VERSION.txt)" = "1.5.2"
           grep -Eq 'versionCode[[:space:]]*=[[:space:]]*19' app/build.gradle.kts
-          export RAISE_BUILD_REVISION="$SHA"
 
           bash -n upgrade-watch.command
           bash -n physical-validation.command
@@ -57,9 +85,12 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_watch_sensor_trace_analyzer.py'
           python3 -m unittest discover -s tests -p 'test_watch_sensor_trial_analyzer.py'
 
-          ./gradlew --no-daemon             -Dorg.gradle.jvmargs="-Xmx1280m -Dfile.encoding=UTF-8"             -Dorg.gradle.workers.max=1             :app:verifyEvidenceBuildIdentity testDebugUnitTest assembleDebug
+          ./gradlew --no-daemon \
+            -Dorg.gradle.jvmargs="-Xmx1280m -Dfile.encoding=UTF-8" \
+            -Dorg.gradle.workers.max=1 \
+            :app:verifyEvidenceBuildIdentity testDebugUnitTest assembleDebug
 
-          grep -R --fixed-strings "$SHA" app/build/generated >/dev/null
+          grep -R --fixed-strings "$RAISE_SHA" app/build/generated >/dev/null
           test -s app/build/outputs/apk/debug/app-debug.apk
 
           python3 - <<'PY'
@@ -69,14 +100,14 @@ jobs:
           elem = meta["elements"][0]
           if elem.get("versionCode") != 19 or elem.get("versionName") != "1.5.2":
               raise SystemExit(f"unexpected APK version metadata: {elem.get('versionCode')} / {elem.get('versionName')}")
+          print("APK release identity:", elem["versionCode"], elem["versionName"])
           PY
 
           python3 - <<'PY'
           import os
           import zipfile
           apk = "app/build/outputs/apk/debug/app-debug.apk"
-          sha = os.popen("git rev-parse HEAD").read().strip()
-          needle = sha.encode("ascii")
+          needle = os.environ["RAISE_SHA"].encode("ascii")
           with zipfile.ZipFile(apk) as archive:
               dex_files = [name for name in archive.namelist() if name.endswith(".dex")]
               hits = [name for name in dex_files if needle in archive.read(name)]
@@ -90,7 +121,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SHA="$(git rev-parse HEAD)"
           OUT="../raiseai-v1.5.2-physical-handoff"
           mkdir -p "$OUT"
 
@@ -104,7 +134,7 @@ jobs:
           {
             echo "version=1.5.2"
             echo "version_code=19"
-            echo "source_revision=$SHA"
+            echo "source_revision=$RAISE_SHA"
             echo "source_branch=main"
             echo "apk_sha256=$(sha256sum app/build/outputs/apk/debug/app-debug.apk | awk '{print $1}')"
             echo "built_on=$(hostname)"
