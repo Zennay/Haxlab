@@ -1,4 +1,4 @@
-name: FTMO PR506 exact-head strict JSON proof
+name: FTMO PR507 exact-head publication integrity proof
 
 on:
   push:
@@ -10,6 +10,8 @@ permissions:
   contents: write
 
 concurrency:
+  # Keep the predecessor group for this one transition so the now-stale
+  # PR506 HaxLab proof is cancelled immediately when this carrier starts.
   group: ftmo-pr506-strict-json-proof
   cancel-in-progress: true
 
@@ -18,9 +20,9 @@ jobs:
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 35
     env:
-      TARGET_SHA: 7f4bc79b9f13ae0dbcccb0a3c3286bce72121faa
-      EXPECTED_MAIN_SHA: b2fbd35cf970813d9428da4aa9668070778654fd
-      TARGET_PR: "506"
+      TARGET_SHA: 9e397dc2a667880774660db47ce14b84ce7e446b
+      EXPECTED_MAIN_SHA: ffac9e856abd6547913375be9206a7b86603a2d8
+      TARGET_PR: "507"
       FTMO_AUTONOMOUS_CLOUD_BUDGET_USD: "0.00"
       FTMO_ALLOW_PAID_AWS: ""
     steps:
@@ -34,11 +36,11 @@ jobs:
           test "$(gh api "repos/Zennay/Ftmo/pulls/$TARGET_PR" --jq .head.sha)" = "$TARGET_SHA"
           test "$(gh api "repos/Zennay/Ftmo/pulls/$TARGET_PR" --jq .base.sha)" = "$EXPECTED_MAIN_SHA"
 
-      - name: Fetch exact FTMO PR506 head
+      - name: Fetch exact FTMO PR507 head
         shell: bash
         run: |
           set -euo pipefail
-          src="$RUNNER_TEMP/ftmo-pr506-haxlab-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          src="$RUNNER_TEMP/ftmo-pr507-haxlab-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           rm -rf "$src"
           git init -q "$src"
           git -C "$src" remote add origin https://github.com/Zennay/Ftmo.git
@@ -51,20 +53,27 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          venv="$RUNNER_TEMP/ftmo-pr506-haxlab-venv-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          venv="$RUNNER_TEMP/ftmo-pr507-haxlab-venv-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           rm -rf "$venv"
           python3 -m venv "$venv"
           "$venv/bin/python" -m pip install -q -r "$FTMO_SRC/requirements-ci.txt"
           "$venv/bin/python" -m pip install -q -e "$FTMO_SRC"
           echo "FTMO_VENV=$venv" >> "$GITHUB_ENV"
 
-      - name: Prove strict research-state JSON boundary
+      - name: Prove publication integrity and strict parser composition
         shell: bash
         run: |
           set -euo pipefail
           cd "$FTMO_SRC"
-          "$FTMO_VENV/bin/python" -m py_compile src/prop_trading_ai/research/state_sync.py
-          "$FTMO_VENV/bin/python" -m pytest -q tests/test_research_state_sync_guard.py
+          "$FTMO_VENV/bin/python" -m py_compile \
+            src/prop_trading_ai/ops/deploy_publish.py \
+            src/prop_trading_ai/research/research_machine.py \
+            src/prop_trading_ai/research/state_sync.py
+          "$FTMO_VENV/bin/python" -m pytest -q \
+            tests/test_deploy_publish_integrity.py \
+            tests/test_research_machine.py \
+            tests/test_research_state_sync_publication_integrity.py \
+            tests/test_research_state_sync_guard.py
           test "$FTMO_AUTONOMOUS_CLOUD_BUDGET_USD" = "0.00"
           test -z "${FTMO_ALLOW_PAID_AWS:-}"
 
@@ -96,10 +105,10 @@ jobs:
               code = pytest.main(["--collect-only", "-q"], plugins=[collector])
           if code != pytest.ExitCode.OK or not collector.paths or not collector.count:
               raise SystemExit("pytest collection failed: " + captured.getvalue()[-2000:])
-          Path(".scratch/pr506-test-files.txt").write_text(
+          Path(".scratch/pr507-test-files.txt").write_text(
               "\n".join(collector.paths) + "\n", encoding="utf-8"
           )
-          Path(".scratch/pr506-test-count.txt").write_text(
+          Path(".scratch/pr507-test-count.txt").write_text(
               str(collector.count) + "\n", encoding="utf-8"
           )
           print(f"collected_tests={collector.count}")
@@ -111,10 +120,10 @@ jobs:
             [[ -n "$test_file" ]] || continue
             "$FTMO_VENV/bin/python" -m pytest -q "$test_file"
             executed=$((executed + 1))
-          done < .scratch/pr506-test-files.txt
+          done < .scratch/pr507-test-files.txt
           test "$executed" -gt 0
-          echo "FTMO_PR506_FULL_SUITE_GREEN=1"
-          echo "planned_collected_tests=$(cat .scratch/pr506-test-count.txt)"
+          echo "FTMO_PR507_FULL_SUITE_GREEN=1"
+          echo "planned_collected_tests=$(cat .scratch/pr507-test-count.txt)"
           echo "executed_test_files=$executed"
 
       - name: Revalidate exact identities
@@ -133,13 +142,13 @@ jobs:
           PROOF_RESULT: ${{ job.status }}
         run: |
           set -euo pipefail
-          receipt="/tmp/ftmo-pr506-haxlab-proof-$GITHUB_RUN_ID.json"
+          receipt="/tmp/ftmo-pr507-haxlab-proof-$GITHUB_RUN_ID.json"
           python3 - <<'PY' > "$receipt"
           import json, os, socket
           print(json.dumps({
               "schema_version": 1,
               "project": "ftmo",
-              "pull_request": 506,
+              "pull_request": 507,
               "target_sha": os.environ["TARGET_SHA"],
               "expected_main_sha": os.environ["EXPECTED_MAIN_SHA"],
               "workflow_run_id": os.environ["GITHUB_RUN_ID"],
@@ -155,22 +164,23 @@ jobs:
               "live_or_broker_access_opened": False,
               "proof": [
                   "exact-pr-head-base-main-identity",
-                  "strict-research-state-json-regressions",
+                  "publication-integrity-regressions",
+                  "strict-json-composition-regressions",
                   "full-suite-file-batches",
                   "zero-cost-boundary"
               ]
           }, sort_keys=True))
           PY
           encoded="$(base64 -w0 "$receipt")"
-          path="runtime-evidence/ftmo-pr506-haxlab-proof-$GITHUB_RUN_ID.json"
+          path="runtime-evidence/ftmo-pr507-haxlab-proof-$GITHUB_RUN_ID.json"
           gh api --method PUT "repos/Zennay/Haxlab/contents/$path" \
-            -f message="Record FTMO PR506 exact-head proof $GITHUB_RUN_ID" \
+            -f message="Record FTMO PR507 exact-head proof $GITHUB_RUN_ID" \
             -f content="$encoded" >/dev/null
-          echo "FTMO_PR506_HAXLAB_RECEIPT_PATH=$path"
+          echo "FTMO_PR507_HAXLAB_RECEIPT_PATH=$path"
 
       - name: Cleanup
         if: always()
         shell: bash
         run: |
-          rm -rf "$RUNNER_TEMP/ftmo-pr506-haxlab-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
-                 "$RUNNER_TEMP/ftmo-pr506-haxlab-venv-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          rm -rf "$RUNNER_TEMP/ftmo-pr507-haxlab-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+                 "$RUNNER_TEMP/ftmo-pr507-haxlab-venv-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
