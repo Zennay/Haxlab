@@ -67,6 +67,15 @@ jobs:
           grep -R --fixed-strings "$RAISE_SHA" app/build/generated >/dev/null
           test -s app/build/outputs/apk/debug/app-debug.apk
           python3 - <<'PY'
+          import json
+          from pathlib import Path
+          meta = json.loads(Path("app/build/outputs/apk/debug/output-metadata.json").read_text())
+          elem = meta["elements"][0]
+          if elem.get("versionCode") != 19 or elem.get("versionName") != "1.5.2":
+              raise SystemExit(f"unexpected APK version metadata: {elem.get('versionCode')} / {elem.get('versionName')}")
+          print("APK release identity:", elem["versionCode"], elem["versionName"])
+          PY
+          python3 - <<'PY'
           import os
           import zipfile
           apk = "app/build/outputs/apk/debug/app-debug.apk"
