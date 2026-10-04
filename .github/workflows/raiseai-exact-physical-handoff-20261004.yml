@@ -244,6 +244,15 @@ jobs:
           chmod +x "$OUT/START-PHYSICAL-SESSION.command"
           bash -n "$OUT/START-PHYSICAL-SESSION.command"
 
+      - name: Reconfirm RaiseAI main before publishing handoff
+        working-directory: raiseai
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_main="$(git ls-remote origin refs/heads/main | awk '{print $1}' | tr 'A-F' 'a-f')"
+          test "$remote_main" = "$RAISE_SHA"
+          echo "RaiseAI main still equals pinned physical-handoff revision $RAISE_SHA"
+
       - name: Upload physical-session handoff
         uses: actions/upload-artifact@v4
         with:
