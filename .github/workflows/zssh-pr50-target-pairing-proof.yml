@@ -1,0 +1,47 @@
+name: zSSH PR50 target-pairing VPS proof
+
+on:
+  push:
+    branches:
+      - proof/zssh-pr50-target-pairing-20261004
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact zSSH PR head
+        uses: actions/checkout@v4
+        with:
+          repository: Zennay/zSSH
+          ref: 163e5789409d5ff775b84563c9e5627ace9a2dfc
+          path: zssh
+
+      - name: Verify exact head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C zssh rev-parse HEAD)" = "163e5789409d5ff775b84563c9e5627ace9a2dfc"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd zssh
+          npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Run full zSSH suite and signed pairing canary
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd zssh
+          npm test
+          node agent-pairing-canary.mjs
+          node --check server.mjs
+          node --check agent-transport.mjs
+          node --check agent-pairing-control.mjs
+          node --check agent-runtime.mjs
+          node --check agent.mjs
