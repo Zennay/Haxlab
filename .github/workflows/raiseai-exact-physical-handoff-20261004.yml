@@ -1,28 +1,119 @@
-name: RaiseAI exact physical handoff
+name: RaiseAI v1.5.2 merged-main physical handoff
 
 on:
-  push:
-    branches:
-      - ops/raiseai-pr22-proof-20261004-0103
-    paths:
-      - ".github/workflows/raiseai-exact-physical-handoff-20261004.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: raiseai-exact-physical-handoff-20261004
+  group: raiseai-v152-merged-main-physical-handoff
   cancel-in-progress: true
 
 jobs:
-  superseded:
+  build-handoff:
     runs-on: [self-hosted, haxlab]
-    timeout-minutes: 2
+    timeout-minutes: 35
     steps:
-      - name: Superseded by PR23 build identity fix
+      - name: Verify VPS execution host
         shell: bash
         run: |
           set -euo pipefail
-          echo "Do not package the f4abeea8 APK: BuildConfig.SOURCE_REVISION was proven to be unknown."
-          echo "Wait for RaiseAI PR23 exact build-identity proof and package only the corrected merged revision."
+          test "$(hostname)" = "vps-bb300bba"
+
+      - name: Configure Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools"
+
+      - name: Install Android 35 toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Checkout current merged RaiseAI main
+        uses: actions/checkout@v4
+        with:
+          repository: Zennay/RaiseAI
+          ref: main
+          path: raiseai
+          fetch-depth: 1
+
+      - name: Prove merged-main v1.5.2 identity and build APK
+        working-directory: raiseai
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse HEAD)"
+          test -z "$(git status --porcelain --untracked-files=normal)"
+          test "$(tr -d '\r\n' < VERSION.txt)" = "1.5.2"
+          grep -Eq 'versionCode[[:space:]]*=[[:space:]]*19' app/build.gradle.kts
+          export RAISE_BUILD_REVISION="$SHA"
+
+          bash -n upgrade-watch.command
+          bash -n physical-validation.command
+          python3 -m unittest discover -s tests -p 'test_watch_e2e_evidence_validator.py'
+          python3 -m unittest discover -s tests -p 'test_watch_sensor_trace_analyzer.py'
+          python3 -m unittest discover -s tests -p 'test_watch_sensor_trial_analyzer.py'
+
+          ./gradlew --no-daemon             -Dorg.gradle.jvmargs="-Xmx1280m -Dfile.encoding=UTF-8"             -Dorg.gradle.workers.max=1             :app:verifyEvidenceBuildIdentity testDebugUnitTest assembleDebug
+
+          grep -R --fixed-strings "$SHA" app/build/generated >/dev/null
+          test -s app/build/outputs/apk/debug/app-debug.apk
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          meta = json.loads(Path("app/build/outputs/apk/debug/output-metadata.json").read_text())
+          elem = meta["elements"][0]
+          if elem.get("versionCode") != 19 or elem.get("versionName") != "1.5.2":
+              raise SystemExit(f"unexpected APK version metadata: {elem.get('versionCode')} / {elem.get('versionName')}")
+          PY
+
+          python3 - <<'PY'
+          import os
+          import zipfile
+          apk = "app/build/outputs/apk/debug/app-debug.apk"
+          sha = os.popen("git rev-parse HEAD").read().strip()
+          needle = sha.encode("ascii")
+          with zipfile.ZipFile(apk) as archive:
+              dex_files = [name for name in archive.namelist() if name.endswith(".dex")]
+              hits = [name for name in dex_files if needle in archive.read(name)]
+          if not hits:
+              raise SystemExit("merged-main source revision not embedded in APK DEX")
+          print("Exact merged-main revision embedded in:", ", ".join(hits))
+          PY
+
+      - name: Assemble physical-session handoff
+        working-directory: raiseai
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHA="$(git rev-parse HEAD)"
+          OUT="../raiseai-v1.5.2-physical-handoff"
+          mkdir -p "$OUT"
+
+          cp app/build/outputs/apk/debug/app-debug.apk "$OUT/RaiseAI-v1.5.2-debug.apk"
+          cp upgrade-watch.command "$OUT/"
+          cp physical-validation.command "$OUT/"
+          for f in START-HERE.md DEVICE-TEST.md watch-preflight.command pull-diagnostics.command; do
+            if [ -f "$f" ]; then cp "$f" "$OUT/"; fi
+          done
+
+          {
+            echo "version=1.5.2"
+            echo "version_code=19"
+            echo "source_revision=$SHA"
+            echo "source_branch=main"
+            echo "apk_sha256=$(sha256sum app/build/outputs/apk/debug/app-debug.apk | awk '{print $1}')"
+            echo "built_on=$(hostname)"
+            echo "note=No gateway/provider secrets are bundled; provision credentials separately."
+          } > "$OUT/BUILD-IDENTITY.txt"
+
+      - name: Upload physical-session handoff
+        uses: actions/upload-artifact@v4
+        with:
+          name: RaiseAI-v1.5.2-physical-handoff-${{ github.run_id }}
+          path: raiseai-v1.5.2-physical-handoff
+          retention-days: 14
