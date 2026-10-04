@@ -15,7 +15,7 @@ jobs:
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 15
     env:
-      ZSSH_TARGET_SHA: 45ab6f0f17ad82ab60a30a5797f239af01f33494
+      ZSSH_TARGET_SHA: e335bb58b849f80a58c3a99e6b4bb2361b6c759a
     steps:
       - name: Verify VPS host
         shell: bash
