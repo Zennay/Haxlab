@@ -20,8 +20,8 @@ jobs:
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 35
     env:
-      RAISE_SHA: 887cbbb456e6eb7fd626f24ea46242971d7a1502
-      RAISE_BUILD_REVISION: 887cbbb456e6eb7fd626f24ea46242971d7a1502
+      RAISE_SHA: d6b9c7d009651aaf0e4c65dc251d4c8bac9e5c34
+      RAISE_BUILD_REVISION: d6b9c7d009651aaf0e4c65dc251d4c8bac9e5c34
     steps:
       - name: Verify VPS execution host
         shell: bash
@@ -54,16 +54,13 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$RAISE_SHA"
           test -z "$(git status --porcelain --untracked-files=normal)"
-          test "$(tr -d '\\r\\n' < VERSION.txt)" = "1.5.2"
+          test "$(tr -d '\r\n' < VERSION.txt)" = "1.5.2"
           bash -n upgrade-watch.command
           bash -n physical-validation.command
           python3 -m unittest discover -s tests -p 'test_watch_e2e_evidence_validator.py'
           python3 -m unittest discover -s tests -p 'test_watch_sensor_trace_analyzer.py'
           python3 -m unittest discover -s tests -p 'test_watch_sensor_trial_analyzer.py'
-          ./gradlew --no-daemon \
-            -Dorg.gradle.jvmargs="-Xmx1280m -Dfile.encoding=UTF-8" \
-            -Dorg.gradle.workers.max=1 \
-            :app:verifyEvidenceBuildIdentity testDebugUnitTest assembleDebug
+          ./gradlew --no-daemon             -Dorg.gradle.jvmargs="-Xmx1280m -Dfile.encoding=UTF-8"             -Dorg.gradle.workers.max=1             :app:verifyEvidenceBuildIdentity testDebugUnitTest assembleDebug
           grep -R --fixed-strings "$RAISE_SHA" app/build/generated >/dev/null
           test -s app/build/outputs/apk/debug/app-debug.apk
           python3 - <<'PY'
