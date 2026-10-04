@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "project": "zssh",
+  "proof": "reviewer-target-fixture",
+  "result": "success",
+  "workflow_run_id": 37165092032,
+  "execution_runner": "vps-bb300bba-haxlab",
+  "hostname": "vps-bb300bba",
+  "source_sha": "d346051d64953dcf260cfeb78214249026e17dc1",
+  "target_id": "zt_NgZ8uUmNyTS--jC_",
+  "public_key_sha256": "2d1c4fd95e3b145ac80c520c30643c3ba50e7e95d621988221076d6b1cbe859d",
+  "review_root": "/home/ubuntu/zssh-review",
+  "review_file": "/home/ubuntu/zssh-review/sample.txt",
+  "review_write_file": "/home/ubuntu/zssh-review/output.txt",
+  "private_key_path_recorded_only": "/home/ubuntu/.config/zssh/agent-ed25519.pem",
+  "private_key_material_recorded": false,
+  "modes": {
+    "config_dir": "700",
+    "private_key": "600",
+    "public_config": "600",
+    "review_root": "700",
+    "review_file": "600"
+  }
+}
