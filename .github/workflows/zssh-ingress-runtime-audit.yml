@@ -1,0 +1,68 @@
+name: zSSH ingress and runtime audit
+
+on:
+  push:
+    paths:
+      - ".github/workflows/zssh-ingress-runtime-audit.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 8
+    steps:
+      - name: Inspect ingress and zSSH runtime safely
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo "ZSSH_INGRESS_AUDIT_V1"
+          echo "hostname=$(hostname)"
+          echo "user=$(id -un)"
+
+          echo "listener443.begin"
+          ss -ltnp 2>/dev/null | awk '$4 ~ /:443$/ {print}' | sed -E 's/pid=[0-9]+/pid=REDACTED/g'
+          echo "listener443.end"
+
+          for svc in nginx apache2 traefik haproxy caddy cloudflared; do
+            printf 'system.%s.active=%s\n' "$svc" "$(systemctl is-active "$svc" 2>/dev/null || true)"
+            printf 'system.%s.enabled=%s\n' "$svc" "$(systemctl is-enabled "$svc" 2>/dev/null || true)"
+          done
+
+          for cmd in nginx apache2 traefik haproxy caddy cloudflared certbot; do
+            if command -v "$cmd" >/dev/null 2>&1; then
+              printf 'binary.%s=true\n' "$cmd"
+            else
+              printf 'binary.%s=false\n' "$cmd"
+            fi
+          done
+
+          echo "tls.local.begin"
+          if command -v openssl >/dev/null 2>&1; then
+            timeout 8 openssl s_client -connect 127.0.0.1:443 -servername localhost </dev/null 2>/dev/null |
+              openssl x509 -noout -subject -issuer -dates -ext subjectAltName 2>/dev/null || true
+          fi
+          echo "tls.local.end"
+
+          echo "systemd.user.zssh.begin"
+          systemctl --user list-unit-files 'zssh*' --no-legend 2>/dev/null || true
+          systemctl --user list-units 'zssh*' --all --no-legend 2>/dev/null || true
+          echo "systemd.user.zssh.end"
+
+          if [[ -d "$HOME/.local/share/zssh" ]]; then
+            echo "zssh.release_tree.begin"
+            find "$HOME/.local/share/zssh" -maxdepth 3 -mindepth 1 -printf '%y %p\n' 2>/dev/null | sed "s|$HOME|~|" | head -80
+            echo "zssh.release_tree.end"
+          fi
+
+          for unit in "$HOME/.config/systemd/user/zssh.service" "$HOME/.config/systemd/user/zssh-agent.service"; do
+            if [[ -f "$unit" ]]; then
+              printf 'unit.%s.exists=true\n' "$(basename "$unit")"
+              grep -E '^(Description|ExecStart|EnvironmentFile|WorkingDirectory|Restart|NoNewPrivileges|ProtectSystem)=' "$unit" 2>/dev/null || true
+            else
+              printf 'unit.%s.exists=false\n' "$(basename "$unit")"
+            fi
+          done
+
+          echo "ZSSH_INGRESS_AUDIT_END"
