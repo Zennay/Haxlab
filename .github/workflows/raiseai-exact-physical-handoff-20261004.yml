@@ -127,10 +127,10 @@ jobs:
           cp app/build/outputs/apk/debug/app-debug.apk "$OUT/RaiseAI-v1.5.2-debug.apk"
 
           # Preserve the exact clean source revision needed by physical-validation.command.
-          git branch -f physical-handoff "$RAISE_SHA"
-          git bundle create "$OUT/RaiseAI-v1.5.2-source.bundle" physical-handoff
+          git branch -f main "$RAISE_SHA"
+          git bundle create "$OUT/RaiseAI-v1.5.2-source.bundle" main
           git bundle verify "$OUT/RaiseAI-v1.5.2-source.bundle"
-          git branch -D physical-handoff
+          git branch -D main
 
           apk_sha="$(sha256sum app/build/outputs/apk/debug/app-debug.apk | awk '{print $1}')"
           bundle_sha="$(sha256sum "$OUT/RaiseAI-v1.5.2-source.bundle" | awk '{print $1}')"
@@ -158,9 +158,8 @@ This artifact contains:
   - BUILD-IDENTITY.txt: version, source SHA and SHA-256 checksums
 
 Restore the exact source on the Mac paired with the Galaxy Watch 7:
-  git clone RaiseAI-v1.5.2-source.bundle RaiseAI-v1.5.2
+  git clone -b main RaiseAI-v1.5.2-source.bundle RaiseAI-v1.5.2
   cd RaiseAI-v1.5.2
-  git checkout physical-handoff
   test "\$(git rev-parse HEAD)" = "$RAISE_SHA"
   test -z "\$(git status --porcelain --untracked-files=normal)"
 
