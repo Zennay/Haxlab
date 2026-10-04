@@ -20,7 +20,7 @@ jobs:
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 35
     env:
-      TARGET_SHA: 53f247523813c8721a62ea4079d12bab85c51ba4
+      TARGET_SHA: 8f54d9e11c35a80088e2037fe7878766a3778d31
       EXPECTED_MAIN_SHA: ffac9e856abd6547913375be9206a7b86603a2d8
       TARGET_PR: "507"
       FTMO_AUTONOMOUS_CLOUD_BUDGET_USD: "0.00"
@@ -73,7 +73,8 @@ jobs:
             tests/test_deploy_publish_integrity.py \
             tests/test_research_machine.py \
             tests/test_research_state_sync_publication_integrity.py \
-            tests/test_research_state_sync_guard.py
+            tests/test_research_state_sync_guard.py \
+            tests/test_zero_cost_workflow_boundary.py
           test "$FTMO_AUTONOMOUS_CLOUD_BUDGET_USD" = "0.00"
           test -z "${FTMO_ALLOW_PAID_AWS:-}"
 
