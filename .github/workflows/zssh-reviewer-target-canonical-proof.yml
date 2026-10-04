@@ -1,0 +1,56 @@
+name: zSSH canonical reviewer target proof
+
+on:
+  push:
+    paths:
+      - ".github/workflows/zssh-reviewer-target-canonical-proof.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  prove:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout canonical reviewer bootstrap
+        uses: actions/checkout@v4
+        with:
+          repository: Zennay/zSSH
+          ref: 8a892084c53fff93ac5b8094cb0eaa0105bcbd0a
+          path: zssh
+          fetch-depth: 1
+
+      - name: Prove canonical bootstrap is idempotent on live reviewer fixture
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd zssh
+          test "$(git rev-parse HEAD)" = "8a892084c53fff93ac5b8094cb0eaa0105bcbd0a"
+          npm install --ignore-scripts --no-audit --no-fund >/dev/null
+
+          output="$(npm run --silent review:target)"
+          printf '%s\n' "$output"
+
+          node --input-type=module - "$output" <<'NODE'
+          const report = JSON.parse(process.argv[2]);
+          if (report.ok !== true) throw new Error("review target bootstrap did not return ok=true");
+          if (report.target_id !== "zt_NgZ8uUmNyTS--jC_") throw new Error("review target identity changed");
+          if (report.public_key_sha256 !== "2d1c4fd95e3b145ac80c520c30643c3ba50e7e95d621988221076d6b1cbe859d") {
+            throw new Error("review target public-key fingerprint changed");
+          }
+          if (report.private_key_printed !== false) throw new Error("private key output invariant changed");
+          if (report.release_variables?.ZSSH_REVIEW_FILE !== "/home/ubuntu/zssh-review/sample.txt") {
+            throw new Error("review read path changed");
+          }
+          if (report.release_variables?.ZSSH_REVIEW_WRITE_FILE !== "/home/ubuntu/zssh-review/output.txt") {
+            throw new Error("review write path changed");
+          }
+          NODE
+
+          test "$(stat -c '%a' "$HOME/.config/zssh/agent-ed25519.pem")" = "600"
+          test "$(stat -c '%a' "$HOME/.config/zssh/reviewer-agent-public.json")" = "600"
+          test "$(stat -c '%a' "$HOME/zssh-review")" = "700"
+          test "$(stat -c '%a' "$HOME/zssh-review/sample.txt")" = "600"
+          grep -F 'zSSH reviewer fixture' "$HOME/zssh-review/sample.txt" >/dev/null
+          echo "ZSSH_CANONICAL_REVIEWER_TARGET_GREEN"
