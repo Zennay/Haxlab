@@ -77,7 +77,10 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_watch_sensor_trace_analyzer.py'
           python3 -m unittest discover -s tests -p 'test_watch_sensor_trial_analyzer.py'
 
-          RAISE_BUILD_REVISION="$TARGET_SHA" ./gradlew --no-daemon testDebugUnitTest assembleDebug
+          RAISE_BUILD_REVISION="$TARGET_SHA" ./gradlew --no-daemon \
+            -Dorg.gradle.jvmargs="-Xmx1280m -Dfile.encoding=UTF-8" \
+            -Dorg.gradle.workers.max=1 \
+            testDebugUnitTest assembleDebug
           test -s app/build/outputs/apk/debug/app-debug.apk
 
           generated="$(find app/build/generated -type f -name 'BuildConfig.*' -print | head -n 1)"
