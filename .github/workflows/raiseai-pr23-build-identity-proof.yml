@@ -117,7 +117,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git pull --rebase origin ops/raiseai-pr22-proof-20261004-0103
+          git fetch origin ops/raiseai-pr22-proof-20261004-0103
+          git checkout -B ops/raiseai-pr22-proof-20261004-0103 origin/ops/raiseai-pr22-proof-20261004-0103
           mkdir -p .github/proofs
           marker=".github/proofs/raiseai-pr23-exact-head-green.env"
           {
