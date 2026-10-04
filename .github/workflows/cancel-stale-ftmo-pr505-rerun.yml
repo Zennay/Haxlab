@@ -1,0 +1,47 @@
+name: Cancel stale FTMO PR505 rerun
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/cancel-stale-ftmo-pr505-rerun.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cancel-stale-ftmo-pr505-rerun
+  cancel-in-progress: true
+
+jobs:
+  cancel:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 5
+    steps:
+      - name: Cancel only closed PR505 rerun
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          RUN_ID=37168663043
+          STALE_SHA=2b169258b5cab8e7e967b6a4a27d8600c0a33ff0
+          MAIN_SHA=b2fbd35cf970813d9428da4aa9668070778654fd
+          PR506_SHA=7f4bc79b9f13ae0dbcccb0a3c3286bce72121faa
+
+          test "$(gh api repos/Zennay/Ftmo/commits/main --jq .sha)" = "$MAIN_SHA"
+          test "$(gh api repos/Zennay/Ftmo/pulls/505 --jq .state)" = "closed"
+          test "$(gh api repos/Zennay/Ftmo/pulls/505 --jq .merged)" = "false"
+          test "$(gh api repos/Zennay/Ftmo/pulls/505 --jq .head.sha)" = "$STALE_SHA"
+          test "$(gh api repos/Zennay/Ftmo/pulls/506 --jq .state)" = "open"
+          test "$(gh api repos/Zennay/Ftmo/pulls/506 --jq .head.sha)" = "$PR506_SHA"
+          test "$(gh api repos/Zennay/Ftmo/pulls/506 --jq .base.sha)" = "$MAIN_SHA"
+
+          test "$(gh api repos/Zennay/Ftmo/actions/runs/$RUN_ID --jq .name)" = "Test suite"
+          test "$(gh api repos/Zennay/Ftmo/actions/runs/$RUN_ID --jq .head_sha)" = "$STALE_SHA"
+          status="$(gh api repos/Zennay/Ftmo/actions/runs/$RUN_ID --jq .status)"
+          if [[ "$status" == "queued" || "$status" == "pending" || "$status" == "in_progress" || "$status" == "waiting" ]]; then
+            gh api --method POST "repos/Zennay/Ftmo/actions/runs/$RUN_ID/cancel" >/dev/null
+            echo "CANCELLED_STALE_PR505_RUN=$RUN_ID"
+          else
+            echo "STALE_PR505_ALREADY_TERMINAL=$status"
+          fi
