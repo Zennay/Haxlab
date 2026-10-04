@@ -20,8 +20,8 @@ jobs:
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 35
     env:
-      RAISE_SHA: b6418f66d29334e76dd2fdba90eb053eaeda3203
-      RAISE_BUILD_REVISION: b6418f66d29334e76dd2fdba90eb053eaeda3203
+      RAISE_SHA: 1c9b9ef75503a4555d35c4c8bc4714b07e946e56
+      RAISE_BUILD_REVISION: 1c9b9ef75503a4555d35c4c8bc4714b07e946e56
     steps:
       - name: Verify VPS execution host
         shell: bash
@@ -54,6 +54,7 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$RAISE_SHA"
           test -z "$(git status --porcelain --untracked-files=normal)"
+          test "$(tr -d '\\r\\n' < VERSION.txt)" = "1.5.2"
           bash -n upgrade-watch.command
           bash -n physical-validation.command
           python3 -m unittest discover -s tests -p 'test_watch_e2e_evidence_validator.py'
