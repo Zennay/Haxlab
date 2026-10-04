@@ -35,6 +35,23 @@ jobs:
           PY
           )"
           echo "ZCLOUD_LIVE_SERVER sha256=$live_sha lkg=$lkg"
+          stat -c 'ZCLOUD_LIVE_SERVER_STAT mtime=%y ctime=%z size=%s inode=%i' "$live"
+
+          state="$HOME/.local/state/zcloud/recovery"
+          snapshot="$state/snapshots/$lkg"
+          if [[ -f "$snapshot/files/server.py" ]]; then
+            lkg_server_sha="$(sha256sum "$snapshot/files/server.py" | awk '{print $1}')"
+            echo "ZCLOUD_LKG_SERVER sha256=$lkg_server_sha snapshot=$lkg"
+          else
+            echo "ZCLOUD_LKG_SERVER sha256=missing snapshot=$lkg"
+          fi
+
+          echo "ZCLOUD_PROMOTION_LOG_TAIL_BEGIN"
+          tail -n 80 "$state/promotion.log" 2>/dev/null || true
+          echo "ZCLOUD_PROMOTION_LOG_TAIL_END"
+          echo "ZCLOUD_SERVICE_JOURNAL_BEGIN"
+          journalctl -u zennay-cloud.service --since "2026-10-03 23:35:00 UTC" --no-pager 2>/dev/null | tail -n 160 || true
+          echo "ZCLOUD_SERVICE_JOURNAL_END"
 
           work="$RUNNER_TEMP/zcloud-server-provenance-$GITHUB_RUN_ID"
           rm -rf "$work"
