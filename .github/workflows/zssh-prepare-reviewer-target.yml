@@ -1,0 +1,93 @@
+name: zSSH prepare reviewer target fixture
+
+on:
+  push:
+    paths:
+      - ".github/workflows/zssh-prepare-reviewer-target.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout proven zSSH deployment release
+        uses: actions/checkout@v4
+        with:
+          repository: Zennay/zSSH
+          ref: d346051d64953dcf260cfeb78214249026e17dc1
+          path: zssh
+          fetch-depth: 1
+
+      - name: Prepare reviewer fixture and persistent target identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd zssh
+          test "$(git rev-parse HEAD)" = "d346051d64953dcf260cfeb78214249026e17dc1"
+          npm install --ignore-scripts --no-audit --no-fund >/dev/null
+
+          review_root="$HOME/zssh-review"
+          fixture_json="$RUNNER_TEMP/zssh-review-fixture.json"
+          node scripts/prepare-review-target.mjs --root "$review_root" > "$fixture_json"
+
+          key_file="$HOME/.config/zssh/agent-ed25519.pem"
+          public_file="$HOME/.config/zssh/reviewer-agent-public.json"
+          identity_json="$RUNNER_TEMP/zssh-review-identity.json"
+
+          if [[ ! -f "$key_file" ]]; then
+            HOME="$HOME" node scripts/create-agent-identity.mjs > "$identity_json"
+            node --input-type=module - "$identity_json" "$public_file" <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+          const [source, target] = process.argv.slice(2);
+          const report = JSON.parse(readFileSync(source, "utf8"));
+          writeFileSync(target, JSON.stringify({
+            target_id: report.target_id,
+            gateway_public_key_config: report.gateway_public_key_config
+          }, null, 2) + "\n", { mode: 0o600 });
+          NODE
+          else
+            test -f "$public_file" || {
+              echo "Existing agent private key has no reviewer public-config receipt; refusing to replace identity." >&2
+              exit 3
+            }
+          fi
+
+          chmod 700 "$HOME/.config/zssh" "$review_root"
+          chmod 600 "$key_file" "$public_file" "$review_root/sample.txt"
+
+          node --input-type=module - "$fixture_json" "$public_file" "$key_file" <<'NODE'
+          import crypto from "node:crypto";
+          import { readFileSync } from "node:fs";
+          const [fixtureFile, publicFile, keyFile] = process.argv.slice(2);
+          const fixture = JSON.parse(readFileSync(fixtureFile, "utf8"));
+          const pub = JSON.parse(readFileSync(publicFile, "utf8"));
+          const targetId = pub.target_id || Object.keys(pub.gateway_public_key_config?.targets || {})[0];
+          const pem = pub.gateway_public_key_config?.targets?.[targetId]?.public_key_pem;
+          if (!targetId || !pem) throw new Error("reviewer public identity is incomplete");
+          const fingerprint = crypto.createHash("sha256").update(pem).digest("hex");
+          console.log(JSON.stringify({
+            ok: true,
+            hostname: process.env.HOSTNAME || null,
+            canonical_sha: "d346051d64953dcf260cfeb78214249026e17dc1",
+            target_id: targetId,
+            public_key_sha256: fingerprint,
+            private_key_file: keyFile,
+            private_key_mode_expected: "600",
+            review_root: fixture.review_root,
+            review_file: fixture.sample_file,
+            review_write_file: fixture.write_test_file,
+            review_root_mode_expected: "700",
+            review_file_mode_expected: "600"
+          }, null, 2));
+          NODE
+
+          test "$(stat -c '%a' "$HOME/.config/zssh")" = "700"
+          test "$(stat -c '%a' "$key_file")" = "600"
+          test "$(stat -c '%a' "$public_file")" = "600"
+          test "$(stat -c '%a' "$review_root")" = "700"
+          test "$(stat -c '%a' "$review_root/sample.txt")" = "600"
+          grep -F 'zSSH reviewer fixture' "$review_root/sample.txt" >/dev/null
+          echo "ZSSH_REVIEWER_TARGET_FIXTURE_GREEN"
