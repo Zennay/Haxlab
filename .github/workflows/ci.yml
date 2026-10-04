@@ -56,6 +56,18 @@ jobs:
           set -euo pipefail
           node --check tools/decode_replay.js
           node --check tools/extract_imitation.js
+          node --check tools/elite_closed_loop_arena_v2.js
+          node --check tools/elite_policy_runtime.js
+          node --check tools/elite_features.js
+          node --check tools/elite_tactics.js
+          node --check tools/sandbox_replay_start.js
+          node --check tools/sandbox_neutral_start.js
+
+      - name: Arena v2 Node regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          NODE_PATH=/opt/haxlab/node_modules node tests/test_closed_loop_arena_v2.js
 
       - name: Test
         shell: bash
