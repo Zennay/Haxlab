@@ -20,8 +20,8 @@ jobs:
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 35
     env:
-      RAISE_SHA: d6b9c7d009651aaf0e4c65dc251d4c8bac9e5c34
-      RAISE_BUILD_REVISION: d6b9c7d009651aaf0e4c65dc251d4c8bac9e5c34
+      RAISE_SHA: 3b86a68075b64bd3725ad77743613c145d0e1fea
+      RAISE_BUILD_REVISION: 3b86a68075b64bd3725ad77743613c145d0e1fea
     steps:
       - name: Verify VPS execution host
         shell: bash
