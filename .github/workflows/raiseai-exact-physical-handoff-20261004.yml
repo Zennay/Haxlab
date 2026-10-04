@@ -99,7 +99,9 @@ jobs:
           meta = json.loads(Path("app/build/outputs/apk/debug/output-metadata.json").read_text())
           elem = meta["elements"][0]
           if elem.get("versionCode") != 19 or elem.get("versionName") != "1.5.2":
-              raise SystemExit(f"unexpected APK version metadata: {elem.get('versionCode')} / {elem.get('versionName')}")
+              raise SystemExit(
+                  f"unexpected APK version metadata: {elem.get('versionCode')} / {elem.get('versionName')}"
+              )
           print("APK release identity:", elem["versionCode"], elem["versionName"])
           PY
 
@@ -122,6 +124,7 @@ jobs:
         run: |
           set -euo pipefail
           OUT="../raiseai-v1.5.2-physical-handoff"
+          rm -rf "$OUT"
           mkdir -p "$OUT"
 
           cp app/build/outputs/apk/debug/app-debug.apk "$OUT/RaiseAI-v1.5.2-debug.apk"
@@ -130,7 +133,7 @@ jobs:
           git branch -f main "$RAISE_SHA"
           git bundle create "$OUT/RaiseAI-v1.5.2-source.bundle" main
           git bundle verify "$OUT/RaiseAI-v1.5.2-source.bundle"
-          test "$(git bundle list-heads "$OUT/RaiseAI-v1.5.2-source.bundle" refs/heads/main | awk '{print $1}')" = "$RAISE_SHA"
+          test "$(git bundle list-heads "$OUT/RaiseAI-v1.5.2-source.bundle" refs/heads/main | awk '{print $1}' | tr 'A-F' 'a-f')" = "$RAISE_SHA"
 
           RESTORE_DIR="../raiseai-v1.5.2-bundle-restore-check"
           rm -rf "$RESTORE_DIR"
@@ -155,141 +158,91 @@ jobs:
           } > "$OUT/BUILD-IDENTITY.txt"
 
           cat > "$OUT/README-PHYSICAL-HANDOFF.txt" <<EOF
-Raise AI v1.5.2 physical validation handoff
+          Raise AI v1.5.2 physical validation handoff
 
-Exact source revision:
-  $RAISE_SHA
+          Exact source revision:
+            $RAISE_SHA
 
-This artifact contains:
-  - RaiseAI-v1.5.2-debug.apk: independently identity-checked Watch APK
-  - RaiseAI-v1.5.2-source.bundle: exact clean Git source needed by the validation orchestrator
-  - BUILD-IDENTITY.txt: version, source SHA and SHA-256 checksums
+          This artifact contains:
+            - RaiseAI-v1.5.2-debug.apk: independently identity-checked Watch APK
+            - RaiseAI-v1.5.2-source.bundle: exact clean Git source needed by the validation orchestrator
+            - BUILD-IDENTITY.txt: version, source SHA and SHA-256 checksums
+            - START-PHYSICAL-SESSION.command: one-command source verification + physical session starter
 
-Restore the exact source on the Mac paired with the Galaxy Watch 7:
-  git clone -b main RaiseAI-v1.5.2-source.bundle RaiseAI-v1.5.2
-  cd RaiseAI-v1.5.2
-  test "\$(git rev-parse HEAD)" = "$RAISE_SHA"
-  test -z "\$(git status --porcelain --untracked-files=normal)"
+          Restore manually if needed:
+            git clone -b main RaiseAI-v1.5.2-source.bundle RaiseAI-v1.5.2
+            cd RaiseAI-v1.5.2
+            test "\$(git rev-parse HEAD)" = "$RAISE_SHA"
+            test -z "\$(git status --porcelain --untracked-files=normal)"
 
-Then run the canonical physical session from that clean checkout:
-  bash ./physical-validation.command all /path/to/watch-gateway.properties
+          Preferred path:
+            bash ./START-PHYSICAL-SESSION.command /path/to/watch-gateway.properties
 
-The orchestrator will build/install from this exact source revision, require fresh
-schema-v2 quick_ai evidence, and bind the 30 raise / 100 non-trigger dataset to
-the same app version + source revision.
-
-Do not copy gateway/provider secrets into this artifact.
-EOF
+          Do not copy gateway/provider secrets into this artifact.
+          EOF
+          sed -i 's/^          //' "$OUT/README-PHYSICAL-HANDOFF.txt"
 
           cat > "$OUT/START-PHYSICAL-SESSION.command" <<'SCRIPT'
-#!/bin/bash
-set -euo pipefail
-cd "$(dirname "$0")"
-
-PROFILE="${1:-}"
-if [ -z "$PROFILE" ] || [ ! -f "$PROFILE" ]; then
-  echo "Usage: bash ./START-PHYSICAL-SESSION.command /path/to/watch-gateway.properties"
-  exit 2
-fi
-
-command -v git >/dev/null 2>&1 || { echo "git is required"; exit 1; }
-IDENTITY="BUILD-IDENTITY.txt"
-BUNDLE="RaiseAI-v1.5.2-source.bundle"
-[ -f "$IDENTITY" ] && [ -f "$BUNDLE" ] || {
-  echo "Incomplete RaiseAI physical handoff artifact."
-  exit 1
-}
-
-revision="$(sed -n 's/^source_revision=//p' "$IDENTITY" | head -n 1 | tr 'A-F' 'a-f')"
-expected_bundle_sha="$(sed -n 's/^source_bundle_sha256=//p' "$IDENTITY" | head -n 1 | tr 'A-F' 'a-f')"
-printf '%s' "$revision" | grep -Eq '^[0-9a-f]{40}
-
-      - name: Upload physical-session handoff
-        uses: actions/upload-artifact@v4
-        with:
-          name: RaiseAI-v1.5.2-physical-handoff-${{ github.run_id }}
-          path: raiseai-v1.5.2-physical-handoff
-          retention-days: 14
-
-      - name: Record green handoff marker
-        working-directory: orchestrator
-        shell: bash
-        run: |
+          #!/bin/bash
           set -euo pipefail
-          git fetch origin ops/raiseai-pr22-proof-20261004-0103
-          git checkout -B ops/raiseai-pr22-proof-20261004-0103 origin/ops/raiseai-pr22-proof-20261004-0103
-          mkdir -p .github/proofs
-          marker=".github/proofs/raiseai-v1.5.2-physical-handoff-green.env"
-          {
-            echo "proof=GREEN"
-            echo "github_run_id=$GITHUB_RUN_ID"
-            echo "artifact_name=RaiseAI-v1.5.2-physical-handoff-$GITHUB_RUN_ID"
-            cat ../raiseai-v1.5.2-physical-handoff/BUILD-IDENTITY.txt
-          } > "$marker"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "$marker"
-          git commit -m "Record green RaiseAI v1.5.2 physical handoff $RAISE_SHA"
-          git push origin HEAD:ops/raiseai-pr22-proof-20261004-0103
- || { echo "Invalid source revision in BUILD-IDENTITY.txt"; exit 1; }
-printf '%s' "$expected_bundle_sha" | grep -Eq '^[0-9a-f]{64}
+          cd "$(dirname "$0")"
 
-      - name: Upload physical-session handoff
-        uses: actions/upload-artifact@v4
-        with:
-          name: RaiseAI-v1.5.2-physical-handoff-${{ github.run_id }}
-          path: raiseai-v1.5.2-physical-handoff
-          retention-days: 14
+          PROFILE="${1:-}"
+          if [ -z "$PROFILE" ] || [ ! -f "$PROFILE" ]; then
+            echo "Usage: bash ./START-PHYSICAL-SESSION.command /path/to/watch-gateway.properties"
+            exit 2
+          fi
 
-      - name: Record green handoff marker
-        working-directory: orchestrator
-        shell: bash
-        run: |
-          set -euo pipefail
-          git pull --rebase origin ops/raiseai-pr22-proof-20261004-0103
-          mkdir -p .github/proofs
-          marker=".github/proofs/raiseai-v1.5.2-physical-handoff-green.env"
-          {
-            echo "proof=GREEN"
-            echo "github_run_id=$GITHUB_RUN_ID"
-            echo "artifact_name=RaiseAI-v1.5.2-physical-handoff-$GITHUB_RUN_ID"
-            cat ../raiseai-v1.5.2-physical-handoff/BUILD-IDENTITY.txt
-          } > "$marker"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "$marker"
-          git commit -m "Record green RaiseAI v1.5.2 physical handoff $RAISE_SHA"
-          git push origin HEAD:ops/raiseai-pr22-proof-20261004-0103
- || { echo "Invalid bundle checksum in BUILD-IDENTITY.txt"; exit 1; }
+          command -v git >/dev/null 2>&1 || { echo "git is required"; exit 1; }
+          IDENTITY="BUILD-IDENTITY.txt"
+          BUNDLE="RaiseAI-v1.5.2-source.bundle"
+          [ -f "$IDENTITY" ] && [ -f "$BUNDLE" ] || {
+            echo "Incomplete RaiseAI physical handoff artifact."
+            exit 1
+          }
 
-if command -v shasum >/dev/null 2>&1; then
-  actual_bundle_sha="$(shasum -a 256 "$BUNDLE" | awk '{print $1}' | tr 'A-F' 'a-f')"
-elif command -v sha256sum >/dev/null 2>&1; then
-  actual_bundle_sha="$(sha256sum "$BUNDLE" | awk '{print $1}' | tr 'A-F' 'a-f')"
-else
-  echo "Need shasum or sha256sum to verify the source bundle."
-  exit 1
-fi
-[ "$actual_bundle_sha" = "$expected_bundle_sha" ] || {
-  echo "Source bundle SHA-256 mismatch."
-  exit 1
-}
+          revision="$(sed -n 's/^source_revision=//p' "$IDENTITY" | head -n 1 | tr 'A-F' 'a-f')"
+          expected_bundle_sha="$(sed -n 's/^source_bundle_sha256=//p' "$IDENTITY" | head -n 1 | tr 'A-F' 'a-f')"
+          printf '%s' "$revision" | grep -Eq '^[0-9a-f]{40}$' || {
+            echo "Invalid source revision in BUILD-IDENTITY.txt"
+            exit 1
+          }
+          printf '%s' "$expected_bundle_sha" | grep -Eq '^[0-9a-f]{64}$' || {
+            echo "Invalid bundle checksum in BUILD-IDENTITY.txt"
+            exit 1
+          }
 
-RESTORE_DIR="${RAISE_RESTORE_DIR:-$PWD/RaiseAI-v1.5.2-source}"
-[ ! -e "$RESTORE_DIR" ] || {
-  echo "Restore directory already exists: $RESTORE_DIR"
-  echo "Remove it or set RAISE_RESTORE_DIR to a new path."
-  exit 1
-}
+          if command -v shasum >/dev/null 2>&1; then
+            actual_bundle_sha="$(shasum -a 256 "$BUNDLE" | awk '{print $1}' | tr 'A-F' 'a-f')"
+          elif command -v sha256sum >/dev/null 2>&1; then
+            actual_bundle_sha="$(sha256sum "$BUNDLE" | awk '{print $1}' | tr 'A-F' 'a-f')"
+          else
+            echo "Need shasum or sha256sum to verify the source bundle."
+            exit 1
+          fi
+          [ "$actual_bundle_sha" = "$expected_bundle_sha" ] || {
+            echo "Source bundle SHA-256 mismatch."
+            exit 1
+          }
 
-git clone -q -b main "$BUNDLE" "$RESTORE_DIR"
-test "$(git -C "$RESTORE_DIR" rev-parse HEAD | tr 'A-F' 'a-f')" = "$revision"
-test -z "$(git -C "$RESTORE_DIR" status --porcelain --untracked-files=normal)"
+          RESTORE_DIR="${RAISE_RESTORE_DIR:-$PWD/RaiseAI-v1.5.2-source}"
+          [ ! -e "$RESTORE_DIR" ] || {
+            echo "Restore directory already exists: $RESTORE_DIR"
+            echo "Remove it or set RAISE_RESTORE_DIR to a new path."
+            exit 1
+          }
 
-echo "Verified exact RaiseAI v1.5.2 source: $revision"
-cd "$RESTORE_DIR"
-exec bash ./physical-validation.command all "$PROFILE"
-SCRIPT
+          git clone -q -b main "$BUNDLE" "$RESTORE_DIR"
+          test "$(git -C "$RESTORE_DIR" rev-parse HEAD | tr 'A-F' 'a-f')" = "$revision"
+          test -z "$(git -C "$RESTORE_DIR" status --porcelain --untracked-files=normal)"
+
+          echo "Verified exact RaiseAI v1.5.2 source: $revision"
+          cd "$RESTORE_DIR"
+          exec bash ./physical-validation.command all "$PROFILE"
+          SCRIPT
+          sed -i 's/^          //' "$OUT/START-PHYSICAL-SESSION.command"
+          chmod +x "$OUT/START-PHYSICAL-SESSION.command"
+          bash -n "$OUT/START-PHYSICAL-SESSION.command"
 
       - name: Upload physical-session handoff
         uses: actions/upload-artifact@v4
