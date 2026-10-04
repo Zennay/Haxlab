@@ -1,3 +1,4 @@
+# Operational retrigger 2026-10-04 21:28 UTC for zCloud PWQ-10 duplicate-listener recovery
 name: Recover duplicate zCloud Actions listener safely
 
 on:
