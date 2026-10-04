@@ -1,0 +1,86 @@
+name: Quick zCloud LKG provenance
+
+on:
+  push:
+    branches:
+      - 'ops/zcloud-lkg-provenance-20261004'
+    paths:
+      - '.github/workflows/zcloud-lkg-provenance.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-zcloud-server-provenance-20261004
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 3
+    steps:
+      - name: Read live and LKG server provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          root="/home/ubuntu/zennay-cloud"
+          state="$HOME/.local/state/zcloud/recovery"
+          pointer="$state/last-known-good.json"
+          live="$root/server.py"
+
+          snapshot_id="$(python3 - "$pointer" <<'PY'
+          import json, sys
+          from pathlib import Path
+          print(json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["snapshot_id"])
+          PY
+          )"
+          snapshot="$state/snapshots/$snapshot_id"
+
+          echo "ZCLOUD_LIVE_SERVER sha256=$(sha256sum "$live" | awk '{print $1}')"
+          stat -c 'ZCLOUD_LIVE_SERVER_STAT mtime=%y ctime=%z size=%s inode=%i' "$live"
+          echo "ZCLOUD_LKG snapshot=$snapshot_id"
+
+          if [[ -f "$snapshot/files/server.py" ]]; then
+            echo "ZCLOUD_LKG_SERVER sha256=$(sha256sum "$snapshot/files/server.py" | awk '{print $1}')"
+            if cmp -s "$live" "$snapshot/files/server.py"; then
+              echo "ZCLOUD_LIVE_EQUALS_LKG=true"
+            else
+              echo "ZCLOUD_LIVE_EQUALS_LKG=false"
+            fi
+          else
+            echo "ZCLOUD_LKG_SERVER sha256=missing"
+            echo "ZCLOUD_LIVE_EQUALS_LKG=unknown"
+          fi
+
+          if [[ -f "$snapshot/manifest.json" ]]; then
+            python3 - "$snapshot/manifest.json" <<'PY'
+          import json, sys
+          from pathlib import Path
+          data=json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          print("ZCLOUD_LKG_MANIFEST", json.dumps({
+              "snapshot_id": data.get("snapshot_id"),
+              "created_at": data.get("created_at"),
+              "evidence": data.get("evidence"),
+              "git_head": data.get("git_head"),
+              "origin_main": data.get("origin_main"),
+          }, sort_keys=True))
+          PY
+          fi
+
+          echo "ZCLOUD_PROMOTION_EVENTS_BEGIN"
+          if [[ -f "$state/promotion.log" ]]; then
+            tail -n 120 "$state/promotion.log" | grep -E 'promotion_|rollback|prechange|postdeploy|server.py|snapshot' || true
+          fi
+          echo "ZCLOUD_PROMOTION_EVENTS_END"
+
+          echo "ZCLOUD_RECOVERY_FILES_BEGIN"
+          find "$state" -maxdepth 2 -type f -newermt '2026-10-03 23:35:00 UTC' \
+            -printf '%TY-%Tm-%TdT%TH:%TM:%TSZ %p\n' 2>/dev/null | sort | tail -n 120 || true
+          echo "ZCLOUD_RECOVERY_FILES_END"
+
+          echo "ZCLOUD_SERVICE_JOURNAL_BEGIN"
+          journalctl -u zennay-cloud.service --since "2026-10-03 23:35:00 UTC" --no-pager 2>/dev/null \
+            | grep -Eai 'start|stop|restart|rollback|recover|failed|health|server' \
+            | tail -n 160 || true
+          echo "ZCLOUD_SERVICE_JOURNAL_END"
