@@ -1,0 +1,111 @@
+name: RaiseAI exact physical handoff
+
+on:
+  push:
+    branches:
+      - ops/raiseai-pr22-proof-20261004-0103
+    paths:
+      - ".github/workflows/raiseai-exact-physical-handoff-20261004.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: raiseai-exact-physical-handoff-20261004
+  cancel-in-progress: true
+
+jobs:
+  handoff:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    env:
+      RAISE_SHA: f4abeea8c8ef1a3c5a9e0543488e6407b1e26343
+      PROOF_RUN_ID: "37167096144"
+      PROOF_ARTIFACT: RaiseAI-pr22-proof-37167096144
+    steps:
+      - name: Verify VPS execution host
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+
+      - name: Download exact-main proof APK
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PROOF_ARTIFACT }}
+          run-id: ${{ env.PROOF_RUN_ID }}
+          github-token: ${{ github.token }}
+          path: proof
+
+      - name: Checkout exact merged RaiseAI source
+        uses: actions/checkout@v4
+        with:
+          repository: Zennay/RaiseAI
+          ref: ${{ env.RAISE_SHA }}
+          path: RaiseAI-source
+          fetch-depth: 0
+
+      - name: Build reproducible offline handoff
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC="$GITHUB_WORKSPACE/RaiseAI-source"
+          OUT="$GITHUB_WORKSPACE/RaiseAI-v1.5.1-f4abeea8-handoff"
+
+          test "$(git -C "$SRC" rev-parse HEAD)" = "$RAISE_SHA"
+          test -z "$(git -C "$SRC" status --porcelain --untracked-files=normal)"
+          test "$(tr -d '\r\n' < "$SRC/VERSION.txt")" = "1.5.1"
+
+          APK="$(find "$GITHUB_WORKSPACE/proof" -type f -name app-debug.apk -print -quit)"
+          PROOF="$(find "$GITHUB_WORKSPACE/proof" -type f -name raiseai-pr22-proof.txt -print -quit)"
+          test -n "$APK" && test -s "$APK"
+          test -n "$PROOF" && test -s "$PROOF"
+
+          mkdir -p "$OUT"
+          cp "$APK" "$OUT/RaiseAI-v1.5.1-f4abeea8.apk"
+          cp "$PROOF" "$OUT/exact-main-proof.txt"
+
+          git -C "$SRC" bundle create "$OUT/RaiseAI-v1.5.1-f4abeea8.gitbundle" "$RAISE_SHA"
+          git bundle verify "$OUT/RaiseAI-v1.5.1-f4abeea8.gitbundle"
+
+          cat > "$OUT/START-PHYSICAL-VALIDATION.txt" <<'EOF'
+          Exact target revision:
+          f4abeea8c8ef1a3c5a9e0543488e6407b1e26343
+
+          On the Mac paired with the Galaxy Watch 7:
+
+          1. Clone the included exact Git bundle:
+             git clone RaiseAI-v1.5.1-f4abeea8.gitbundle RaiseAI-v1.5.1
+             cd RaiseAI-v1.5.1
+             test "$(git rev-parse HEAD)" = "f4abeea8c8ef1a3c5a9e0543488e6407b1e26343"
+
+          2. Put the VPS watch-gateway.properties file on the Mac.
+
+          3. Run the canonical fail-closed physical session:
+             bash ./physical-validation.command all /path/to/watch-gateway.properties
+
+          This command builds/installs from the exact clean Git revision, verifies fresh
+          schema-v2 quick_ai Watch E2E evidence, then verifies the 30 intentional raise /
+          100 non-trigger V1 reliability dataset.
+
+          The included APK and exact-main-proof.txt are reference evidence for the same
+          revision; do not substitute a different source revision during the session.
+          EOF
+
+          {
+            echo "version=1.5.1"
+            echo "source_revision=$RAISE_SHA"
+            echo "proof_run_id=$PROOF_RUN_ID"
+            echo "proof_artifact=$PROOF_ARTIFACT"
+            echo "apk_sha256=$(sha256sum "$OUT/RaiseAI-v1.5.1-f4abeea8.apk" | awk '{print $1}')"
+            echo "gitbundle_sha256=$(sha256sum "$OUT/RaiseAI-v1.5.1-f4abeea8.gitbundle" | awk '{print $1}')"
+          } > "$OUT/MANIFEST.txt"
+
+      - name: Upload exact physical handoff
+        uses: actions/upload-artifact@v4
+        with:
+          name: RaiseAI-v1.5.1-f4abeea8-exact-physical-handoff
+          path: RaiseAI-v1.5.1-f4abeea8-handoff
+          retention-days: 30
