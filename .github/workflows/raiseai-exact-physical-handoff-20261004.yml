@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: raiseai-v152-merged-main-physical-handoff
@@ -187,3 +187,23 @@ EOF
           name: RaiseAI-v1.5.2-physical-handoff-${{ github.run_id }}
           path: raiseai-v1.5.2-physical-handoff
           retention-days: 14
+
+      - name: Record green handoff marker
+        working-directory: orchestrator
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --rebase origin ops/raiseai-pr22-proof-20261004-0103
+          mkdir -p .github/proofs
+          marker=".github/proofs/raiseai-v1.5.2-physical-handoff-green.env"
+          {
+            echo "proof=GREEN"
+            echo "github_run_id=$GITHUB_RUN_ID"
+            echo "artifact_name=RaiseAI-v1.5.2-physical-handoff-$GITHUB_RUN_ID"
+            cat ../raiseai-v1.5.2-physical-handoff/BUILD-IDENTITY.txt
+          } > "$marker"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$marker"
+          git commit -m "Record green RaiseAI v1.5.2 physical handoff $RAISE_SHA"
+          git push origin HEAD:ops/raiseai-pr22-proof-20261004-0103
