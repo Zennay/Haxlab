@@ -1,0 +1,82 @@
+name: Diagnose zCloud live server provenance
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/zcloud-server-provenance-20261004.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-zcloud-server-provenance-20261004
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 6
+    steps:
+      - name: Match live server bytes against zCloud history
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          live="/home/ubuntu/zennay-cloud/server.py"
+          test -f "$live" && test ! -L "$live"
+          live_sha="$(sha256sum "$live" | awk '{print $1}')"
+          pointer="$HOME/.local/state/zcloud/recovery/last-known-good.json"
+          lkg="$(python3 - "$pointer" <<'PY'
+          import json, sys
+          from pathlib import Path
+          print(json.loads(Path(sys.argv[1]).read_text())["snapshot_id"])
+          PY
+          )"
+          echo "ZCLOUD_LIVE_SERVER sha256=$live_sha lkg=$lkg"
+
+          work="$RUNNER_TEMP/zcloud-server-provenance-$GITHUB_RUN_ID"
+          rm -rf "$work"
+          gh repo clone Zennay/zCloud "$work" -- --filter=blob:none --no-checkout >/dev/null
+          cd "$work"
+          git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*' >/dev/null
+
+          match=""
+          match_scope=""
+          for commit in $(git rev-list --first-parent --max-count=512 origin/main); do
+            if git cat-file -e "$commit:server.py" 2>/dev/null; then
+              sha="$(git show "$commit:server.py" | sha256sum | awk '{print $1}')"
+              if [[ "$sha" == "$live_sha" ]]; then
+                match="$commit"
+                match_scope="main-first-parent"
+                break
+              fi
+            fi
+          done
+
+          if [[ -z "$match" ]]; then
+            for commit in $(git rev-list --all --max-count=1500); do
+              if git cat-file -e "$commit:server.py" 2>/dev/null; then
+                sha="$(git show "$commit:server.py" | sha256sum | awk '{print $1}')"
+                if [[ "$sha" == "$live_sha" ]]; then
+                  match="$commit"
+                  match_scope="all-fetched-heads"
+                  break
+                fi
+              fi
+            done
+          fi
+
+          if [[ -n "$match" ]]; then
+            echo "ZCLOUD_LIVE_SERVER_MATCH scope=$match_scope commit=$match"
+            git show -s --format='ZCLOUD_LIVE_SERVER_MATCH_META %H %cI %s' "$match"
+          else
+            echo "ZCLOUD_LIVE_SERVER_MATCH scope=none commit=none"
+          fi
+
+          git show origin/main:server.py > "$RUNNER_TEMP/zcloud-main-server.py"
+          main_sha="$(sha256sum "$RUNNER_TEMP/zcloud-main-server.py" | awk '{print $1}')"
+          echo "ZCLOUD_MAIN_SERVER sha256=$main_sha commit=$(git rev-parse origin/main)"
+          diff_lines="$(diff -U0 "$live" "$RUNNER_TEMP/zcloud-main-server.py" | wc -l || true)"
+          echo "ZCLOUD_LIVE_SERVER_DIFF_LINES=$diff_lines"
