@@ -1,0 +1,235 @@
+name: Recover duplicate zCloud Actions listener safely
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/recover-zcloud-duplicate-listener-20261004.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recover-zcloud-duplicate-listener-20261004
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 6
+    steps:
+      - name: Converge zCloud runner to one canonical listener
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          test "${RUNNER_NAME:-}" = "vps-bb300bba-haxlab"
+
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+          import subprocess
+          import time
+
+          ROOT = "/home/ubuntu/actions-runner-zcloud"
+          SERVICE = "actions.runner.Zennay-zCloud.zcloud-vps-1.service"
+          TEMP = pathlib.Path(ROOT) / "_work" / "_temp"
+
+          def run(args, *, check=True):
+              proc = subprocess.run(args, text=True, capture_output=True)
+              if check and proc.returncode:
+                  raise SystemExit(
+                      f"command failed rc={proc.returncode}: {args}\n"
+                      f"stdout={proc.stdout}\nstderr={proc.stderr}"
+                  )
+              return proc
+
+          def service_state():
+              return run(["systemctl", "is-active", SERVICE], check=False).stdout.strip()
+
+          def control_group():
+              return run(
+                  ["systemctl", "show", SERVICE, "-p", "ControlGroup", "--value"],
+                  check=False,
+              ).stdout.strip()
+
+          def process_rows():
+              out = run(["ps", "-eo", "pid=,ppid=,user=,args="]).stdout
+              rows = []
+              for raw in out.splitlines():
+                  parts = raw.strip().split(None, 3)
+                  if len(parts) < 4:
+                      continue
+                  pid, ppid, user, args = parts
+                  if ROOT not in args:
+                      continue
+                  kind = None
+                  if f"{ROOT}/bin/Runner.Worker" in args:
+                      kind = "worker"
+                  elif f"{ROOT}/bin/Runner.Listener" in args:
+                      kind = "listener"
+                  elif f"{ROOT}/runsvc.sh" in args:
+                      kind = "supervisor"
+                  if kind:
+                      rows.append(
+                          {
+                              "pid": int(pid),
+                              "ppid": int(ppid),
+                              "user": user,
+                              "args": args,
+                              "kind": kind,
+                          }
+                      )
+              return rows
+
+          def cgroup_contains(pid, cgroup):
+              if not cgroup:
+                  return False
+              try:
+                  text = pathlib.Path(f"/proc/{pid}/cgroup").read_text()
+              except (FileNotFoundError, PermissionError):
+                  return False
+              return cgroup in text
+
+          def still_matches(pid):
+              try:
+                  raw = pathlib.Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode()
+              except (FileNotFoundError, PermissionError):
+                  return False
+              return ROOT in raw and ("Runner.Listener" in raw or "runsvc.sh" in raw)
+
+          def snapshot(tag):
+              state = service_state()
+              cg = control_group()
+              rows = process_rows()
+              payload = {
+                  "tag": tag,
+                  "service_state": state,
+                  "control_group": cg,
+                  "processes": [
+                      {
+                          **row,
+                          "canonical_cgroup": cgroup_contains(row["pid"], cg),
+                      }
+                      for row in rows
+                  ],
+              }
+              print("ZCLOUD_DUPLICATE_LISTENER_SNAPSHOT", json.dumps(payload, sort_keys=True))
+              return state, cg, rows
+
+          if not pathlib.Path(ROOT).is_dir():
+              raise SystemExit(f"runner root missing: {ROOT}")
+
+          state, cg, rows = snapshot("before")
+          if state == "active" and not cg:
+              raise SystemExit("canonical zCloud runner service is active but ControlGroup is empty")
+
+          # Never kill an active Runner.Worker. If an orphan listener currently owns
+          # one, wait boundedly for that job to finish and fail closed if it does not.
+          deadline = time.monotonic() + 180
+          while True:
+              state = service_state()
+              cg = control_group()
+              rows = process_rows()
+              orphan_workers = [
+                  row for row in rows
+                  if row["kind"] == "worker" and not cgroup_contains(row["pid"], cg)
+              ]
+              if not orphan_workers:
+                  break
+              print(
+                  "ZCLOUD_ORPHAN_WORKER_PRESERVED",
+                  json.dumps(orphan_workers, sort_keys=True),
+              )
+              if time.monotonic() >= deadline:
+                  raise SystemExit(
+                      "orphan zCloud Runner.Worker still active after bounded wait; "
+                      "no listener was terminated"
+                  )
+              time.sleep(5)
+
+          state = service_state()
+          cg = control_group()
+          rows = process_rows()
+          orphan = [
+              row for row in rows
+              if row["kind"] in {"listener", "supervisor"}
+              and not cgroup_contains(row["pid"], cg)
+          ]
+
+          print("ZCLOUD_ORPHAN_LISTENER_TARGETS", json.dumps(orphan, sort_keys=True))
+          for row in orphan:
+              pid = row["pid"]
+              if not still_matches(pid):
+                  continue
+              run(["sudo", "-n", "kill", "-TERM", str(pid)])
+
+          term_deadline = time.monotonic() + 15
+          while time.monotonic() < term_deadline:
+              remaining = [row for row in process_rows() if row["pid"] in {x["pid"] for x in orphan}]
+              if not remaining:
+                  break
+              time.sleep(1)
+
+          remaining_pids = {row["pid"] for row in process_rows()} & {row["pid"] for row in orphan}
+          for pid in sorted(remaining_pids):
+              if still_matches(pid):
+                  run(["sudo", "-n", "kill", "-KILL", str(pid)])
+
+          if service_state() != "active":
+              run(["sudo", "-n", "systemctl", "start", SERVICE])
+
+          # Give the canonical service a bounded window to expose exactly one listener.
+          verify_deadline = time.monotonic() + 30
+          final = None
+          while time.monotonic() < verify_deadline:
+              state = service_state()
+              cg = control_group()
+              rows = process_rows()
+              listeners = [row for row in rows if row["kind"] == "listener"]
+              orphan_runtime = [
+                  row for row in rows
+                  if row["kind"] in {"listener", "supervisor"}
+                  and not cgroup_contains(row["pid"], cg)
+              ]
+              canonical_listeners = [
+                  row for row in listeners if cgroup_contains(row["pid"], cg)
+              ]
+              if (
+                  state == "active"
+                  and len(listeners) == 1
+                  and len(canonical_listeners) == 1
+                  and not orphan_runtime
+              ):
+                  final = (state, cg, rows)
+                  break
+              time.sleep(2)
+
+          if final is None:
+              snapshot("verification_failed")
+              raise SystemExit("zCloud runner did not converge to exactly one canonical listener")
+
+          TEMP.mkdir(parents=True, exist_ok=True)
+          sentinel = TEMP / f"zcloud-listener-recovery-{os.environ.get('GITHUB_RUN_ID','unknown')}"
+          sentinel.write_text("stable\n")
+          time.sleep(15)
+          if not sentinel.exists() or sentinel.read_text() != "stable\n":
+              raise SystemExit("runner temp sentinel disappeared after listener convergence")
+          sentinel.unlink(missing_ok=True)
+
+          snapshot("after")
+          print("ZCLOUD_DUPLICATE_LISTENER_RECOVERY_GREEN")
+          PY
+
+      - name: Trigger fresh zCloud regression when authenticated
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+            gh workflow run zcloud-regression-smoke.yml -R Zennay/zCloud --ref main
+            echo "ZCLOUD_REGRESSION_DISPATCHED"
+          else
+            echo "ZCLOUD_REGRESSION_DISPATCH_SKIPPED_NO_GH_AUTH"
+          fi
