@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "project": "zssh",
+  "proof": "target-local-pairing-and-agent-deployment-exact-head",
+  "target_sha": "d346051d64953dcf260cfeb78214249026e17dc1",
+  "workflow_run_id": 37164604375,
+  "workflow_run_attempt": 1,
+  "execution_runner": "vps-bb300bba-haxlab",
+  "hostname": "vps-bb300bba",
+  "result": "success",
+  "dependency_install": "npm install --ignore-scripts --no-audit --no-fund",
+  "validations": [
+    "exact canonical SHA checkout",
+    "full npm test",
+    "agent pairing-control tests",
+    "agent client key-policy tests",
+    "agent identity provisioning tests",
+    "deployment hardening tests",
+    "target-local private key parent mode 0700",
+    "target-local private key mode 0600",
+    "private key absent from provisioning stdout",
+    "tracked-only git archive excludes untracked .env"
+  ]
+}
