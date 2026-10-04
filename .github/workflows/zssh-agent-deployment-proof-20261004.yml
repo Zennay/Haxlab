@@ -1,0 +1,78 @@
+name: zSSH agent deployment hardening VPS proof
+
+on:
+  push:
+    branches:
+      - ops/zssh-agent-deployment-proof-20261004
+    paths:
+      - .github/workflows/zssh-agent-deployment-proof-20261004.yml
+
+permissions:
+  contents: read
+
+jobs:
+  prove:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    env:
+      ZSSH_TARGET_SHA: 45ab6f0f17ad82ab60a30a5797f239af01f33494
+    steps:
+      - name: Verify VPS host
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          echo "ZSSH_AGENT_DEPLOY_HOST=$(hostname)"
+
+      - name: Checkout exact zSSH head
+        uses: actions/checkout@v4
+        with:
+          repository: Zennay/zSSH
+          ref: ${{ env.ZSSH_TARGET_SHA }}
+          path: zssh-proof
+          fetch-depth: 1
+
+      - name: Prove exact checkout
+        shell: bash
+        working-directory: zssh-proof
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$ZSSH_TARGET_SHA"
+          echo "ZSSH_AGENT_DEPLOY_EXACT_HEAD=$ZSSH_TARGET_SHA"
+
+      - name: Install dependencies
+        working-directory: zssh-proof
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Run focused deployment and agent tests
+        working-directory: zssh-proof
+        run: |
+          node --test             test/agent-client.test.mjs             test/agent-identity.test.mjs             test/deploy.test.mjs             test/agent-runtime.test.mjs             test/agent-transport.test.mjs
+
+      - name: Run full zSSH suite
+        working-directory: zssh-proof
+        run: npm test
+
+      - name: Validate installer and runtime syntax
+        shell: bash
+        working-directory: zssh-proof
+        run: |
+          set -Eeuo pipefail
+          bash -n deploy/install-target-agent.sh
+          node --check agent.mjs
+          node --check scripts/create-agent-identity.mjs
+
+      - name: Prove target-local identity permissions
+        shell: bash
+        working-directory: zssh-proof
+        run: |
+          set -Eeuo pipefail
+          proof_dir="$(mktemp -d)"
+          trap 'rm -rf "$proof_dir"' EXIT
+          report="$(node scripts/create-agent-identity.mjs zt_vpsproof123 "$proof_dir/config/agent.pem")"
+          ! grep -F 'BEGIN PRIVATE KEY' <<<"$report"
+          test "$(stat -c '%a' "$proof_dir/config")" = "700"
+          test "$(stat -c '%a' "$proof_dir/config/agent.pem")" = "600"
+          grep -F '"private_key_printed": false' <<<"$report"
+          grep -F '"zt_vpsproof123"' <<<"$report"
+          echo "ZSSH_AGENT_DEPLOYMENT_VPS_PROOF_GREEN=1"
