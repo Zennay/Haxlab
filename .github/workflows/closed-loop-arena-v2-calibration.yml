@@ -24,6 +24,13 @@ jobs:
           ref: ${{ github.sha }}
           clean: true
 
+      - name: Checkout frozen Candidate D source
+        uses: actions/checkout@v4
+        with:
+          ref: 4dd926b1eef89509eb271088378f129aa7e72c57
+          path: .candidate-d-source
+          clean: true
+
       - name: Validate Arena v2 implementation
         shell: bash
         run: |
@@ -75,8 +82,96 @@ jobs:
             exit 1
           }
 
-          require_readable live-runtime "$LIVE_RUNTIME"
+          if ! sudo -u haxlab test -r "$CAND_D"; then
+            echo "ARENA_CANDIDATE_D_REHYDRATE_BEGIN"
+            CAND_D_SOURCE="$GITHUB_WORKSPACE/.candidate-d-source"
+            CAND_D_SOURCE_SHA="$(git -C "$CAND_D_SOURCE" rev-parse HEAD)"
+            if [ "$CAND_D_SOURCE_SHA" != "4dd926b1eef89509eb271088378f129aa7e72c57" ]; then
+              echo "::error title=Candidate D provenance mismatch::historical source checkout is $CAND_D_SOURCE_SHA"
+              exit 1
+            fi
+
+            sudo -u haxlab /opt/haxlab/.venv/bin/python - <<'PY'
+          import hashlib
+          from pathlib import Path
+
+          expected = {
+              Path("/var/lib/haxlab/derived/training/elite-player-candidate-b/shards/train/_index.json"):
+                  "920ca18fdbc3682130307c01f91d61ad745d6642824f19962c6a2c614ffe1923",
+              Path("/var/lib/haxlab/derived/training/elite-player-candidate-b/shards/validation/_index.json"):
+                  "baaa00830ec3906640e893344262282d931de15b7a1c5c63485df1da44d6ba27",
+              Path("/var/lib/haxlab/derived/training/elite-player-candidate-b/shards/holdout/_index.json"):
+                  "a80b9789547ba3befd993bfd4c62c84b2c2c999a6d9283d9b2ef3c08451083fe",
+              Path("/var/lib/haxlab/derived/evaluation/candidate-d-multisource-holdout-v1/frozen-manifest.json"):
+                  "541b635e34492e9409c5d0fbe2ffd6303c75a2cd10348aebee9e5df49669a609",
+          }
+          for path, wanted in expected.items():
+              if not path.is_file():
+                  raise SystemExit(f"missing frozen Candidate D input: {path}")
+              actual = hashlib.sha256(path.read_bytes()).hexdigest()
+              if actual != wanted:
+                  raise SystemExit(
+                      f"frozen Candidate D input hash mismatch: {path}: {actual} != {wanted}"
+                  )
+          print("ARENA_CANDIDATE_D_INPUTS_VERIFIED")
+          PY
+
+            sudo -u haxlab rm -rf /var/lib/haxlab/derived/training/elite-player-candidate-d
+            sudo -u haxlab mkdir -p /var/lib/haxlab/derived/training/elite-player-candidate-d/model
+            sudo -u haxlab env PYTHONPATH="$CAND_D_SOURCE/src" \
+              /opt/haxlab/.venv/bin/python -m haxlab.learning.elite \
+              --train-index /var/lib/haxlab/derived/training/elite-player-candidate-b/shards/train/_index.json \
+              --validation-index /var/lib/haxlab/derived/training/elite-player-candidate-b/shards/validation/_index.json \
+              --holdout-index /var/lib/haxlab/derived/training/elite-player-candidate-b/shards/holdout/_index.json \
+              --output-dir /var/lib/haxlab/derived/training/elite-player-candidate-d/model \
+              --window 8 \
+              --sequence-stride 1 \
+              --hidden-dim 128 \
+              --hidden-dim-2 96 \
+              --epochs 3 \
+              --batch-size 2048 \
+              --learning-rate 0.0008 \
+              --l2 0.00001 \
+              --future-horizon-steps 5 \
+              --future-loss-weight 0.35 \
+              --state-jitter-std 0.05 \
+              --seed 1337 \
+              --progress-path /var/lib/haxlab/derived/training/elite-player-candidate-d/progress.json \
+              > /tmp/haxlab-candidate-d-rehydrate.log
+            echo "ARENA_CANDIDATE_D_REHYDRATE_END"
+          fi
+
           require_readable candidate-d "$CAND_D"
+          require_readable candidate-d-metrics /var/lib/haxlab/derived/training/elite-player-candidate-d/model/metrics.json
+          sudo -u haxlab /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+
+          metrics = json.loads(
+              Path("/var/lib/haxlab/derived/training/elite-player-candidate-d/model/metrics.json").read_text()
+          )
+          expected = {
+              "direction_accuracy": 0.7500804545550468,
+              "joint_accuracy": 0.7444723763901492,
+              "kick_f1": 0.24412347776833754,
+              "future_direction_accuracy": 0.6633016439107772,
+              "samples": 1516384,
+          }
+          for key, wanted in expected.items():
+              actual = metrics.get(key)
+              if isinstance(wanted, int):
+                  if actual != wanted:
+                      raise SystemExit(
+                          f"Candidate D historical metric mismatch: {key}={actual!r} != {wanted!r}"
+                      )
+              elif not isinstance(actual, (int, float)) or abs(actual - wanted) > 1e-9:
+                  raise SystemExit(
+                      f"Candidate D historical metric mismatch: {key}={actual!r} != {wanted!r}"
+                  )
+          print("ARENA_CANDIDATE_D_HISTORICAL_METRICS_VERIFIED")
+          PY
+
+          require_readable live-runtime "$LIVE_RUNTIME"
           require_readable partner-b "$PARTNER_B"
           require_readable partner-c "$PARTNER_C"
           for I in 01 02 03; do
