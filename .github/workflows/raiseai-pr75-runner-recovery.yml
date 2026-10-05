@@ -1,0 +1,89 @@
+name: Recover RaiseAI PR75 listener safely
+
+on:
+  push:
+    branches:
+      - ops/raiseai-pr75-runner-recovery-20261005
+    paths:
+      - ".github/workflows/raiseai-pr75-runner-recovery.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: raiseai-pr75-runner-recovery-20261005
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 7
+    env:
+      RAISE_REPO: Zennay/RaiseAI
+      TARGET_RUN_ID: "37385454877"
+      TARGET_SHA: 3916c2b09084d0912b47e20180a396ff33124d85
+      RAISE_SERVICE: actions.runner.Zennay-RaiseAI.vps-bb300bba.service
+
+    steps:
+      - name: Verify exact queued RaiseAI target
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          test "$(gh api repos/$RAISE_REPO/actions/runs/$TARGET_RUN_ID --jq .head_sha)" = "$TARGET_SHA"
+          test "$(gh api repos/$RAISE_REPO/actions/runs/$TARGET_RUN_ID --jq .name)" = "Raise Watch app CI"
+          status="$(gh api repos/$RAISE_REPO/actions/runs/$TARGET_RUN_ID --jq .status)"
+          test "$status" = "queued" || test "$status" = "in_progress" || test "$status" = "completed"
+          echo "Validated target run $TARGET_RUN_ID @ $TARGET_SHA status=$status"
+
+      - name: Restart only an idle RaiseAI listener
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(gh api repos/$RAISE_REPO/actions/runs/$TARGET_RUN_ID --jq .status)"
+          control_group="$(systemctl show "$RAISE_SERVICE" -p ControlGroup --value || true)"
+          worker=0
+          if [[ -n "$control_group" && "$control_group" != "/" ]]; then
+            for proc in /proc/[0-9]*; do
+              test -r "$proc/cgroup" || continue
+              grep -Fq "$control_group" "$proc/cgroup" || continue
+              test -r "$proc/cmdline" || continue
+              cmdline="$(tr '\0' ' ' < "$proc/cmdline" 2>/dev/null || true)"
+              if [[ "$cmdline" == *"Runner.Worker"* ]]; then
+                worker=1
+                break
+              fi
+            done
+          fi
+
+          service_state="$(systemctl is-active "$RAISE_SERVICE" || true)"
+          echo "RAISEAI_PRE target_status=$status worker=$worker service=$service_state"
+
+          action=none
+          if [[ "$status" == "queued" && "$worker" -eq 0 ]]; then
+            sudo -n systemctl reset-failed "$RAISE_SERVICE" || true
+            sudo -n systemctl restart "$RAISE_SERVICE"
+            action=restarted_idle_listener
+          fi
+
+          for _ in $(seq 1 30); do
+            service_state="$(systemctl is-active "$RAISE_SERVICE" || true)"
+            [[ "$service_state" == "active" ]] && break
+            sleep 2
+          done
+          test "$service_state" = "active"
+          echo "RAISEAI_POST action=$action service=$service_state"
+
+      - name: Observe queue movement without cancelling anything
+        shell: bash
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 24); do
+            target="$(gh api repos/$RAISE_REPO/actions/runs/$TARGET_RUN_ID --jq .status)"
+            older="$(gh api repos/$RAISE_REPO/actions/runs/37383355384 --jq .status 2>/dev/null || echo unknown)"
+            echo "RAISEAI_QUEUE pr75=$target pr74=$older"
+            [[ "$target" == "in_progress" || "$target" == "completed" ]] && exit 0
+            sleep 5
+          done
+          echo "Target may still be queued behind an older valid RaiseAI run; recovery itself completed safely."
+          exit 0
