@@ -18,7 +18,11 @@ jobs:
     timeout-minutes: 180
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout exact event SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
 
       - name: Validate Arena v2 implementation
         shell: bash
@@ -54,13 +58,25 @@ jobs:
           )"
           OUT="/var/lib/haxlab/derived/evaluation/closed-loop-arena-v2-calibration-v1/${GITHUB_SHA:0:12}"
 
-          sudo -u haxlab test -r "$LIVE_RUNTIME"
-          sudo -u haxlab test -r "$CAND_D"
-          sudo -u haxlab test -r "$PARTNER_B"
-          sudo -u haxlab test -r "$PARTNER_C"
+          require_readable() {
+            local label="$1"
+            local path="$2"
+            if sudo -u haxlab test -r "$path"; then
+              echo "ARENA_INPUT_OK label=$label path=$path"
+              return 0
+            fi
+            echo "::error title=Missing Arena v2 calibration input::$label is not readable: $path"
+            sudo -u haxlab ls -ld "$path" 2>/dev/null || true
+            exit 1
+          }
+
+          require_readable live-runtime "$LIVE_RUNTIME"
+          require_readable candidate-d "$CAND_D"
+          require_readable partner-b "$PARTNER_B"
+          require_readable partner-c "$PARTNER_C"
           for I in 01 02 03; do
-            sudo -u haxlab test -r "$ROOT/source-$I/stadium.hbs"
-            sudo -u haxlab test -r "$ROOT/source-$I/scenarios.json"
+            require_readable "source-$I-stadium" "$ROOT/source-$I/stadium.hbs"
+            require_readable "source-$I-scenarios" "$ROOT/source-$I/scenarios.json"
           done
 
           sudo -u haxlab mkdir -p "$OUT"
