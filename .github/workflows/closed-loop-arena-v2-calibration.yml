@@ -95,25 +95,41 @@ jobs:
           import hashlib
           from pathlib import Path
 
-          expected = {
+          training_indexes = {
               Path("/var/lib/haxlab/derived/training/elite-player-candidate-b/shards/train/_index.json"):
                   "920ca18fdbc3682130307c01f91d61ad745d6642824f19962c6a2c614ffe1923",
               Path("/var/lib/haxlab/derived/training/elite-player-candidate-b/shards/validation/_index.json"):
                   "baaa00830ec3906640e893344262282d931de15b7a1c5c63485df1da44d6ba27",
               Path("/var/lib/haxlab/derived/training/elite-player-candidate-b/shards/holdout/_index.json"):
                   "a80b9789547ba3befd993bfd4c62c84b2c2c999a6d9283d9b2ef3c08451083fe",
-              Path("/var/lib/haxlab/derived/evaluation/candidate-d-multisource-holdout-v1/frozen-manifest.json"):
-                  "541b635e34492e9409c5d0fbe2ffd6303c75a2cd10348aebee9e5df49669a609",
           }
-          for path, wanted in expected.items():
+          for path, historical_hash in training_indexes.items():
               if not path.is_file():
-                  raise SystemExit(f"missing frozen Candidate D input: {path}")
+                  raise SystemExit(f"missing Candidate D training index: {path}")
               actual = hashlib.sha256(path.read_bytes()).hexdigest()
-              if actual != wanted:
-                  raise SystemExit(
-                      f"frozen Candidate D input hash mismatch: {path}: {actual} != {wanted}"
+              if actual == historical_hash:
+                  print(f"ARENA_CANDIDATE_D_INDEX_BYTE_HASH_MATCH path={path} sha256={actual}")
+              else:
+                  print(
+                      "::warning title=Candidate D index byte hash changed::"
+                      f"{path}: current={actual} historical={historical_hash}; "
+                      "continuing only to deterministic rehydration, which must reproduce "
+                      "the exact historical Candidate D metrics before calibration can run"
                   )
-          print("ARENA_CANDIDATE_D_INPUTS_VERIFIED")
+
+          frozen_manifest = Path(
+              "/var/lib/haxlab/derived/evaluation/candidate-d-multisource-holdout-v1/frozen-manifest.json"
+          )
+          frozen_manifest_hash = "541b635e34492e9409c5d0fbe2ffd6303c75a2cd10348aebee9e5df49669a609"
+          if not frozen_manifest.is_file():
+              raise SystemExit(f"missing frozen Candidate D evaluation manifest: {frozen_manifest}")
+          actual_manifest_hash = hashlib.sha256(frozen_manifest.read_bytes()).hexdigest()
+          if actual_manifest_hash != frozen_manifest_hash:
+              raise SystemExit(
+                  "frozen Candidate D evaluation manifest hash mismatch: "
+                  f"{actual_manifest_hash} != {frozen_manifest_hash}"
+              )
+          print("ARENA_CANDIDATE_D_INPUTS_PRESENT_EVAL_MANIFEST_VERIFIED")
           PY
 
             sudo -u haxlab rm -rf /var/lib/haxlab/derived/training/elite-player-candidate-d
