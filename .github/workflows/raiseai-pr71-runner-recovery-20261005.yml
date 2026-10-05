@@ -1,0 +1,90 @@
+name: Recover RaiseAI PR71 via HaxLab runner
+
+on:
+  push:
+    branches:
+      - ops/raiseai-pr71-runner-recovery-20261005
+    paths:
+      - ".github/workflows/raiseai-pr71-runner-recovery-20261005.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 7
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RAISE_REPO: Zennay/RaiseAI
+      PR_NUMBER: "71"
+      EXPECTED_HEAD: 3cf92caaea27bdd3134c27990fc19665aac99e59
+      WATCH_RUN_ID: "37339709015"
+      RAISE_SERVICE: actions.runner.Zennay-RaiseAI.vps-bb300bba.service
+    steps:
+      - name: Verify exact protected RaiseAI gate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          test "$(gh api repos/$RAISE_REPO/pulls/$PR_NUMBER --jq .state)" = "open"
+          test "$(gh api repos/$RAISE_REPO/pulls/$PR_NUMBER --jq .head.sha)" = "$EXPECTED_HEAD"
+          test "$(gh api repos/$RAISE_REPO/actions/runs/$WATCH_RUN_ID --jq .head_sha)" = "$EXPECTED_HEAD"
+          test "$(gh api repos/$RAISE_REPO/actions/runs/$WATCH_RUN_ID --jq .name)" = "Raise Watch app CI"
+
+      - name: Restart only idle RaiseAI listener
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          status="$(gh api repos/$RAISE_REPO/actions/runs/$WATCH_RUN_ID --jq .status)"
+          control_group="$(systemctl show "$RAISE_SERVICE" -p ControlGroup --value || true)"
+          worker=0
+          if [[ -n "$control_group" && "$control_group" != "/" ]]; then
+            for proc in /proc/[0-9]*; do
+              test -r "$proc/cgroup" || continue
+              grep -Fq "$control_group" "$proc/cgroup" || continue
+              test -r "$proc/cmdline" || continue
+              cmdline="$(tr '\0' ' ' < "$proc/cmdline" 2>/dev/null || true)"
+              if [[ "$cmdline" == *"Runner.Worker"* ]]; then
+                worker=1
+                break
+              fi
+            done
+          fi
+
+          pre_state="$(systemctl is-active "$RAISE_SERVICE" || true)"
+          echo "RAISEAI_PR71_HAXLAB_PRE status=$status service=$pre_state worker=$worker"
+
+          if [[ "$status" == "queued" && "$worker" -eq 0 ]]; then
+            sudo -n systemctl reset-failed "$RAISE_SERVICE" || true
+            sudo -n systemctl restart "$RAISE_SERVICE"
+            echo "RAISEAI_PR71_HAXLAB_ACTION=restart-idle-listener"
+          else
+            echo "RAISEAI_PR71_HAXLAB_ACTION=preserve"
+          fi
+
+          for _ in $(seq 1 30); do
+            state="$(systemctl is-active "$RAISE_SERVICE" || true)"
+            pid="$(systemctl show "$RAISE_SERVICE" -p MainPID --value || true)"
+            if [[ "$state" == "active" && "$pid" =~ ^[1-9][0-9]*$ ]]; then
+              echo "RAISEAI_PR71_HAXLAB_LISTENER_GREEN state=$state pid=$pid"
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+
+      - name: Prove PR71 schedules
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for _ in $(seq 1 48); do
+            status="$(gh api repos/$RAISE_REPO/actions/runs/$WATCH_RUN_ID --jq .status)"
+            conclusion="$(gh api repos/$RAISE_REPO/actions/runs/$WATCH_RUN_ID --jq '.conclusion // ""')"
+            echo "RAISEAI_PR71_HAXLAB_WATCH status=$status conclusion=$conclusion"
+            if [[ "$status" == "in_progress" || "$status" == "completed" ]]; then
+              exit 0
+            fi
+            sleep 5
+          done
+          exit 1
