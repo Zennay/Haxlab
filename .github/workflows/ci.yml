@@ -14,6 +14,8 @@ on:
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/ci.yml"
+      - ".github/workflows/multisource-suite-v2.yml"
+      - ".github/workflows/closed-loop-arena-v2-calibration.yml"
       - ".github/workflows/vps-control.yml"
       - ".github/workflows/imitation-baseline-pilot.yml"
   workflow_dispatch:
