@@ -12,6 +12,7 @@ on:
       - "configs/evaluation/multisource-suite-v2.json"
       - "pyproject.toml"
       - ".github/workflows/multisource-suite-v2.yml"
+      - ".github/workflows/ci.yml"
   workflow_dispatch:
 
 permissions:
@@ -22,10 +23,10 @@ jobs:
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 20
     steps:
-      - name: Checkout Arena v2 branch
+      - name: Checkout exact event SHA
         uses: actions/checkout@v4
         with:
-          ref: feature/arena-v2-current-main-20261004
+          ref: ${{ github.sha }}
           clean: true
 
       - name: Run multisource v2 regressions
