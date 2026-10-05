@@ -67,6 +67,11 @@ jobs:
             fi
             echo "::error title=Missing Arena v2 calibration input::$label is not readable: $path"
             sudo -u haxlab ls -ld "$path" 2>/dev/null || true
+            if [ "$label" = "candidate-d" ]; then
+              echo "ARENA_CANDIDATE_D_DISCOVERY_BEGIN"
+              sudo -u haxlab find /var/lib/haxlab/derived -type f -name 'runtime-model.json' -path '*candidate-d*' -print 2>/dev/null | sort | head -n 50 || true
+              echo "ARENA_CANDIDATE_D_DISCOVERY_END"
+            fi
             exit 1
           }
 
