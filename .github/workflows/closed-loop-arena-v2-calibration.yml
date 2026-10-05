@@ -163,9 +163,15 @@ jobs:
           import json
           from pathlib import Path
 
-          metrics = json.loads(
+          metadata = json.loads(
               Path("/var/lib/haxlab/derived/training/elite-player-candidate-d/model/metrics.json").read_text()
           )
+          metrics = metadata.get("final_holdout")
+          if not isinstance(metrics, dict):
+              raise SystemExit(
+                  "Candidate D metrics schema mismatch: expected final_holdout mapping; "
+                  f"top-level keys={sorted(metadata)}"
+              )
           expected = {
               "direction_accuracy": 0.7500804545550468,
               "joint_accuracy": 0.7444723763901492,
