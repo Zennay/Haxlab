@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
     paths: [".github/workflows/overnight-vps-health.yml"]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ftmo-priority-rebalance
+  cancel-in-progress: true
 
 permissions:
   contents: read
