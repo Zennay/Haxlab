@@ -4,12 +4,6 @@ on:
   push:
     branches: [main]
     paths: [".github/workflows/overnight-vps-health.yml"]
-  pull_request:
-    branches: [main]
-
-concurrency:
-  group: ftmo-priority-rebalance
-  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -19,49 +13,6 @@ jobs:
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 5
     steps:
-      - name: Rebalance host and verify FTMO
-        shell: bash
-        run: |
-          set -uo pipefail
-          echo "=== FORCE LOW-PRIORITY WORK OFF ==="
-          sudo -n systemctl stop actions.runner.Zennay-RaiseAI.vps-bb300bba.service || true
-          pkill -TERM -f '/home/ubuntu/actions-runner-raiseai/_work/RaiseAI/RaiseAI' || true
-          sudo -n systemctl stop haxlab-analyzer.service || true
-
-          echo "=== FTMO PRE ==="
-          systemctl is-enabled ftmo-autonomous-marathon.service || true
-          systemctl is-active ftmo-autonomous-marathon.service || true
-          sudo -n systemctl status ftmo-autonomous-marathon.service --no-pager -n 60 || true
-          sudo -n systemctl list-jobs --no-pager | grep -i ftmo || true
-
-          echo "=== CLEAN FTMO START ==="
-          sudo -n systemctl stop ftmo-autonomous-marathon.service || true
-          sudo -n systemctl reset-failed ftmo-autonomous-marathon.service || true
-          sudo -n systemctl enable ftmo-autonomous-marathon.service
-          sudo -n systemctl start --no-block ftmo-autonomous-marathon.service
-
-          state=""
-          for i in $(seq 1 45); do
-            state="$(systemctl is-active ftmo-autonomous-marathon.service 2>/dev/null || true)"
-            echo "ftmo_wait=$i state=$state"
-            [[ "$state" == "active" ]] && break
-            [[ "$state" == "failed" ]] && break
-            sleep 2
-          done
-
-          echo "=== FINAL ==="
-          echo "raiseai=$(systemctl is-active actions.runner.Zennay-RaiseAI.vps-bb300bba.service || true)"
-          echo "haxlab_analyzer=$(systemctl is-active haxlab-analyzer.service || true)"
-          echo "ftmo=$state"
-          systemctl show ftmo-autonomous-marathon.service -p ActiveState -p SubState -p MainPID -p CPUWeight -p CPUQuotaPerSecUSec -p MemoryCurrent --no-pager || true
-          sudo -n systemctl status ftmo-autonomous-marathon.service --no-pager -n 80 || true
-          sudo -n journalctl -u ftmo-autonomous-marathon.service -n 120 --no-pager || true
-          echo "=== HOST AFTER ==="
-          uptime
-          free -h
-          ps -eo pid,ppid,user,psr,%cpu,%mem,etime,stat,cmd --sort=-%cpu | head -n 40
-          test "$state" = "active"
-
       - name: Probe HaxLab and FTMO overnight runtime
         shell: bash
         run: |
