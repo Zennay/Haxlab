@@ -1,4 +1,4 @@
-name: Closed-Loop Arena v2 Current-Main Calibration
+name: Closed-Loop Arena v2 Frozen Policy Validation
 
 on:
   push:
