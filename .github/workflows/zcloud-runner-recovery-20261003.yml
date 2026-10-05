@@ -1,3 +1,4 @@
+# recovery retrigger 2026-10-04 22:48 UTC: zCloud receipt audit/deploy queue idle
 name: Recover zCloud production runner
 # retrigger 2026-10-04T20:47Z: latest zCloud production deploys queued/pending
 
