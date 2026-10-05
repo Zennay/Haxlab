@@ -127,7 +127,7 @@ jobs:
 
             echo "=== arena-v2 label=$LABEL source=$I scenarios=16 ==="
             sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node "$GITHUB_WORKSPACE/tools/elite_closed_loop_arena_v2.js" --challenger "$CHALLENGER" --champion "$ARENA_LIVE" --stadium "$SOURCE/stadium.hbs" --scenarios "$SOURCE/scenarios.json" --partner-model "$ARENA_LIVE" --partner-model "$ARENA_PARTNER_B" --partner-model "$ARENA_PARTNER_C" --max-scenarios 16 --seconds 30 --sample-every 6 --plug-repeats 1 --seed 1337 --output "$RESULT" >/dev/null
-            sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" /opt/haxlab/.venv/bin/python -m haxlab.evaluation.closed_loop_arena "$RESULT" --output "$DECISION" >/dev/null
+            sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" /opt/haxlab/.venv/bin/python -m haxlab.evaluation.closed_loop_arena "$RESULT" --calibrated --output "$DECISION" >/dev/null
           }
 
           for LABEL in champion-self candidate-d weak-zero; do
@@ -198,6 +198,7 @@ jobs:
                       "roles": role_rows,
                       "structurally_valid": decision["structurally_valid"],
                       "behavior_gate_passed": decision["behavior_gate_passed"],
+                      "eligible_for_live_promotion": decision["eligible_for_live_promotion"],
                       "reasons": decision["reasons"],
                   })
 
@@ -208,6 +209,9 @@ jobs:
                   "sources": len(selected),
                   "all_structurally_valid": all(r["structurally_valid"] for r in selected),
                   "behavior_passes": sum(bool(r["behavior_gate_passed"]) for r in selected),
+                  "promotion_eligible_sources": sum(
+                      bool(r["eligible_for_live_promotion"]) for r in selected
+                  ),
                   "mean_team_proxy_match_score": statistics.mean(r["team_proxy_match_score"] for r in selected),
                   "mean_plug_proxy_match_score": statistics.mean(r["plug_proxy_match_score"] for r in selected),
                   "mean_team_formation_order_rate": statistics.mean(r["team_formation_order_rate"] for r in selected),
@@ -229,16 +233,34 @@ jobs:
               "runs": rows,
               "sanity": {
                   "champion_identity_all_behavior_pass": aggregate["champion-self"]["behavior_passes"] == 3,
-                  "negative_control_discriminated": aggregate["weak-zero"]["behavior_passes"] < 3,
+                  "champion_identity_all_promotion_eligible": (
+                      aggregate["champion-self"]["promotion_eligible_sources"] == 3
+                  ),
+                  "negative_control_discriminated": (
+                      aggregate["weak-zero"]["promotion_eligible_sources"] == 0
+                  ),
+                  "candidate_d_rejected": (
+                      aggregate["candidate-d"]["promotion_eligible_sources"] == 0
+                  ),
                   "candidate_d_behavior_passes": aggregate["candidate-d"]["behavior_passes"],
               },
-              "threshold_freeze_ready": False,
-              "threshold_freeze_blocker": (
-                  "Full frozen 16-scenario population completed. Keep fail-closed until "
-                  "absolute thresholds are derived from this evidence, reviewed for "
-                  "champion identity safety and committed as a frozen policy."
-              ),
+              "threshold_freeze_ready": True,
+              "threshold_freeze_blocker": None,
           }
+          sanity = summary["sanity"]
+          if not sanity["champion_identity_all_promotion_eligible"]:
+              raise SystemExit(
+                  "frozen policy validation failed: champion-self must pass 3/3 sources"
+              )
+          if not sanity["negative_control_discriminated"]:
+              raise SystemExit(
+                  "frozen policy validation failed: zero-policy control became promotion eligible"
+              )
+          if not sanity["candidate_d_rejected"]:
+              raise SystemExit(
+                  "frozen policy validation failed: known rejected Candidate D became promotion eligible"
+              )
+
           (root / "calibration-summary.json").write_text(
               json.dumps(summary, indent=2) + "\n",
               encoding="utf-8",
