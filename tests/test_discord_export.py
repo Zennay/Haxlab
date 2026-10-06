@@ -74,3 +74,35 @@ def test_read_discord_exports_rejects_invalid_roots(tmp_path: Path) -> None:
         assert str(exc) == "discord_export_root_must_not_be_symlink"
     else:
         raise AssertionError("expected ValueError")
+
+
+
+def test_read_discord_exports_deduplicates_message_ids(tmp_path: Path) -> None:
+    payload = _export_payload()
+    (tmp_path / "a.json").write_text(json.dumps(payload), encoding="utf-8")
+    (tmp_path / "b.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    reports, failures = read_discord_exports(tmp_path)
+
+    assert [report.message_id for report in reports] == ["message-1"]
+    assert failures == []
+
+
+def test_read_discord_exports_reports_conflicting_duplicate_message_id(
+    tmp_path: Path,
+) -> None:
+    first = _export_payload()
+    second = _export_payload()
+    second["messages"][0]["content"] = (
+        "MATCH REPORT #m2 Red Team 2 - 0 Blue Team"
+    )
+    (tmp_path / "a.json").write_text(json.dumps(first), encoding="utf-8")
+    (tmp_path / "b.json").write_text(json.dumps(second), encoding="utf-8")
+
+    reports, failures = read_discord_exports(tmp_path)
+
+    assert len(reports) == 1
+    assert reports[0].report_id == "m1"
+    assert len(failures) == 1
+    assert failures[0].stage == "discord_message_duplicate"
+    assert failures[0].error == "conflicting_duplicate_message_id"
