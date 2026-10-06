@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from haxlab.atomic import atomic_json
+
 
 MANIFEST_SCHEMA = "haxlab-human-imitation-manifest-v3"
 
@@ -332,11 +334,7 @@ def main() -> int:
     if manifest["selection"]["holdout_bucket"] >= manifest["selection"]["holdout_modulus"]:
         raise SystemExit("holdout-bucket must be smaller than holdout-modulus")
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    atomic_json(args.output, manifest)
     print(json.dumps(manifest["stats"], indent=2, sort_keys=True))
     print(f"manifest: {args.output}")
     return 0
