@@ -280,3 +280,59 @@ def test_multisource_gate_rejects_non_list_sources_payload() -> None:
     assert not decision.eligible_to_replace_champion
     assert "invalid_sources_payload" in decision.reasons
 
+
+
+def test_builder_rejects_coerced_count_types() -> None:
+    for invalid in ("12", 12.0, True):
+        duel = _duel("a")
+        duel["matches"] = invalid
+        try:
+            build_multisource_duel([duel])
+        except ValueError as exc:
+            assert "matches must be a non-negative integer" in str(exc)
+        else:
+            raise AssertionError("coerced match counts must be rejected")
+
+
+def test_builder_rejects_coerced_model_paths() -> None:
+    duel = _duel("a")
+    duel["challenger_model"] = {"path": "/tmp/challenger/runtime-model.json"}
+
+    try:
+        build_multisource_duel([duel])
+    except ValueError as exc:
+        assert "challenger_model must be a non-empty string" in str(exc)
+    else:
+        raise AssertionError("non-string model paths must be rejected")
+
+
+def test_builder_rejects_non_hex_scenario_hash() -> None:
+    duel = _duel("z")
+
+    try:
+        build_multisource_duel([duel])
+    except ValueError as exc:
+        assert "invalid scenario_sha256" in str(exc)
+    else:
+        raise AssertionError("non-hex scenario hashes must be rejected")
+
+
+def test_builder_rejects_inconsistent_source_tally() -> None:
+    duel = _duel("a")
+    duel["matches"] += 1
+
+    try:
+        build_multisource_duel([duel])
+    except ValueError as exc:
+        assert "match tally mismatch" in str(exc)
+    else:
+        raise AssertionError("inconsistent source tallies must be rejected")
+
+
+def test_builder_rejects_non_object_source_rows() -> None:
+    try:
+        build_multisource_duel([_duel("a"), "not-an-object"])
+    except ValueError as exc:
+        assert "source 2: duel payload must be an object" in str(exc)
+    else:
+        raise AssertionError("non-object source rows must be rejected")
