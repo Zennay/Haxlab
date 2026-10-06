@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from haxlab.learning.baseline import (
+    _load_shard,
     direction_class,
     direction_from_class,
     train_baseline,
@@ -167,6 +170,14 @@ def test_baseline_trains_and_writes_holdout_metrics(tmp_path: Path) -> None:
 
     metrics = result["final_holdout"]
     assert result["schema"] == "haxlab-bc-baseline-v1"
+    assert result["data_provenance"]["train_index_sha256"] == hashlib.sha256(
+        train_index.read_bytes()
+    ).hexdigest()
+    assert result["data_provenance"]["holdout_index_sha256"] == hashlib.sha256(
+        holdout_index.read_bytes()
+    ).hexdigest()
+    assert result["data_provenance"]["train_index_size_bytes"] == train_index.stat().st_size
+    assert result["data_provenance"]["holdout_index_size_bytes"] == holdout_index.stat().st_size
     assert (output / "model.npz").exists()
     assert (output / "metrics.json").exists()
     assert metrics["samples"] == 1200
@@ -175,3 +186,98 @@ def test_baseline_trains_and_writes_holdout_metrics(tmp_path: Path) -> None:
     assert metrics["direction_accuracy"] > metrics["baselines"][
         "majority_direction_accuracy"
     ]
+
+
+def test_load_shard_rejects_index_meta_provenance_mismatch(
+    tmp_path: Path,
+) -> None:
+    entry = _write_shard(
+        tmp_path,
+        "provenance-a",
+        _synthetic_rows(32, 9),
+    )
+    meta = tmp_path / "provenance-a.meta.json"
+    payload = json.loads(meta.read_text(encoding="utf-8"))
+    payload["replay_sha256"] = "provenance-a"
+    payload["input_fingerprint"] = "a" * 64
+    payload["analysis_sha256"] = "b" * 64
+    meta.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="input_fingerprint mismatch"):
+        _load_shard(
+            {
+                **entry,
+                "input_fingerprint": "c" * 64,
+                "analysis_sha256": "b" * 64,
+            }
+        )
+
+
+def test_baseline_rejects_train_holdout_manifest_provenance_mismatch(
+    tmp_path: Path,
+) -> None:
+    train_dir = tmp_path / "train"
+    holdout_dir = tmp_path / "holdout"
+    train_entries = [
+        _write_shard(train_dir, "train-a", _synthetic_rows(64, 11))
+    ]
+    holdout_entries = [
+        _write_shard(holdout_dir, "holdout-a", _synthetic_rows(64, 12))
+    ]
+    train_index = tmp_path / "train-index.json"
+    holdout_index = tmp_path / "holdout-index.json"
+
+    train_index.write_text(
+        json.dumps(
+            {
+                "schema": "haxlab-imitation-shard-index-v2",
+                "manifest_sha256": "a" * 64,
+                "entries": train_entries,
+            }
+        ),
+        encoding="utf-8",
+    )
+    holdout_index.write_text(
+        json.dumps(
+            {
+                "schema": "haxlab-imitation-shard-index-v2",
+                "manifest_sha256": "b" * 64,
+                "entries": holdout_entries,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="different manifest provenance",
+    ):
+        train_baseline(
+            train_index_path=train_index,
+            holdout_index_path=holdout_index,
+            output_dir=tmp_path / "model",
+            hidden_dim=8,
+            epochs=1,
+            batch_size=32,
+            seed=13,
+        )
+
+
+def test_load_shard_rejects_shard_content_drift(tmp_path: Path) -> None:
+    entry = _write_shard(
+        tmp_path,
+        "content-a",
+        _synthetic_rows(32, 15),
+    )
+    shard_path = Path(entry["shard_path"])
+    original = shard_path.read_bytes()
+    protected = {
+        **entry,
+        "shard_sha256": hashlib.sha256(original).hexdigest(),
+        "shard_size_bytes": len(original),
+    }
+
+    shard_path.write_bytes(original + b"x")
+
+    with pytest.raises(ValueError, match="shard size mismatch|shard sha256 mismatch"):
+        _load_shard(protected)
