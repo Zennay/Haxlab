@@ -587,7 +587,26 @@ def decide_closed_loop_arena(
         label="plug",
     )
     partner_model_count = _integer(plug.get("partner_model_count"))
+    provenance = _require_mapping(
+        structural_failures,
+        payload.get("provenance"),
+        "provenance",
+    )
+    partner_models = provenance.get("partner_models")
+    unique_partner_model_count: int | None = None
+    if not isinstance(partner_models, list):
+        structural_failures.append("invalid_provenance:partner_models:not_list")
+    elif any(type(path) is not str or not path for path in partner_models):
+        structural_failures.append("invalid_provenance:partner_models:invalid_path")
+    else:
+        unique_partner_model_count = len(set(partner_models))
+        if unique_partner_model_count != partner_model_count:
+            structural_failures.append(
+                "partner_model_count_provenance_mismatch:"
+                f"{partner_model_count}!={unique_partner_model_count}"
+            )
     checks["partner_model_count"] = partner_model_count
+    checks["provenance_partner_model_count"] = unique_partner_model_count
     checks["plug_matches"] = plug_matches
     checks["plug_wins"] = plug_wins
     checks["plug_draws"] = plug_draws
