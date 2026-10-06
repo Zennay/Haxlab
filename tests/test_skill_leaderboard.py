@@ -428,3 +428,73 @@ def test_load_match_evidence_skips_player_from_malformed_cadence_artifact(
 
     assert {row["name"] for row in evidence} == {"Valid"}
     assert evidence[0]["minutes"] == 10.0
+
+
+
+def test_load_match_evidence_skips_malformed_artifact_structure(
+    tmp_path: Path,
+) -> None:
+    _write_match(
+        tmp_path / "valid.json",
+        [
+            _player(
+                1,
+                "Valid",
+                1,
+                -40,
+                retained=8,
+                lost=2,
+                recoveries=2,
+                goals=1,
+                assists=0,
+                progression=40,
+            )
+        ],
+    )
+    (tmp_path / "string-schema.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": "4",
+                "simulation": {"sampleEveryTicks": 6},
+                "players": [
+                    _player(
+                        2,
+                        "Wrong schema",
+                        1,
+                        -40,
+                        retained=8,
+                        lost=2,
+                        recoveries=2,
+                        goals=1,
+                        assists=0,
+                        progression=40,
+                    )
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "bad-players.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 4,
+                "simulation": {"sampleEveryTicks": 6},
+                "players": {"not": "a-list"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "bad-player-row.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 4,
+                "simulation": {"sampleEveryTicks": 6},
+                "players": ["not-an-object"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    evidence = load_match_evidence(tmp_path)
+
+    assert {row["name"] for row in evidence} == {"Valid"}
