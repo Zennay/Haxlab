@@ -22,6 +22,27 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _validated_sha256(
+    failures: list[str],
+    *,
+    path: Any,
+    label: str,
+) -> str | None:
+    if not isinstance(path, Path):
+        failures.append(f"provenance:{label}:path:not_path")
+        return None
+    try:
+        if not path.is_file():
+            failures.append(f"provenance:{label}:path:not_regular_file")
+            return None
+        return _sha256(path)
+    except (OSError, ValueError) as exc:
+        failures.append(
+            f"provenance:{label}:sha256:unreadable:{type(exc).__name__}"
+        )
+        return None
+
+
 def _expect_exact(
     failures: list[str],
     mapping: dict[str, Any],
@@ -230,18 +251,39 @@ def validate_reusable_result(
         failures.append("provenance:not_object")
         provenance = {}
 
+    challenger_sha256 = _validated_sha256(
+        failures, path=challenger, label="challenger"
+    )
+    champion_sha256 = _validated_sha256(
+        failures, path=champion, label="champion"
+    )
+    partner_sha256s = [
+        _validated_sha256(failures, path=path, label=f"partner:{index}")
+        for index, path in enumerate(partners)
+    ]
+    stadium_sha256 = _validated_sha256(failures, path=stadium, label="stadium")
+    scenarios_sha256 = _validated_sha256(
+        failures, path=scenarios, label="scenarios"
+    )
+
     expected_provenance = {
         "challenger_model": str(challenger),
-        "challenger_sha256": _sha256(challenger),
         "champion_model": str(champion),
-        "champion_sha256": _sha256(champion),
         "partner_models": [str(path) for path in partners],
-        "partner_sha256s": [_sha256(path) for path in partners],
         "stadium": str(stadium),
-        "stadium_sha256": _sha256(stadium),
         "scenarios": str(scenarios),
-        "scenarios_sha256": _sha256(scenarios),
     }
+    if challenger_sha256 is not None:
+        expected_provenance["challenger_sha256"] = challenger_sha256
+    if champion_sha256 is not None:
+        expected_provenance["champion_sha256"] = champion_sha256
+    if all(value is not None for value in partner_sha256s):
+        expected_provenance["partner_sha256s"] = partner_sha256s
+    if stadium_sha256 is not None:
+        expected_provenance["stadium_sha256"] = stadium_sha256
+    if scenarios_sha256 is not None:
+        expected_provenance["scenarios_sha256"] = scenarios_sha256
+
     for key, expected in expected_provenance.items():
         _expect_exact(failures, provenance, key, expected, f"provenance:{key}")
 
