@@ -243,3 +243,50 @@ def test_collect_ignores_artifact_with_invalid_sampling_cadence(
     assert row["samples"] == 600
     assert row["active_minutes"] == 1.0
     assert row["kick_events"] == 12
+
+
+
+def test_collect_ignores_malformed_simulation_container(
+    tmp_path: Path,
+) -> None:
+    _write_replay(
+        tmp_path,
+        "valid",
+        [
+            {
+                "name": "Cadence",
+                "samples": 600,
+                "nearestBallSamples": 120,
+                "closeBallSamples": 60,
+                "inputEvents": 30,
+                "kickEvents": 12,
+                "kickPressedInputs": 10,
+            }
+        ],
+    )
+    (tmp_path / "malformed.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 4,
+                "simulation": [],
+                "players": [
+                    {
+                        "name": "Cadence",
+                        "samples": 6000,
+                        "nearestBallSamples": 6000,
+                        "closeBallSamples": 6000,
+                        "inputEvents": 6000,
+                        "kickEvents": 6000,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rows = collect(tmp_path)
+
+    assert len(rows) == 1
+    assert rows[0]["matches"] == 1
+    assert rows[0]["samples"] == 600
+    assert rows[0]["active_minutes"] == 1.0
