@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -34,6 +35,117 @@ def _expect_exact(
     actual = mapping[key]
     if type(actual) is not type(expected) or actual != expected:
         failures.append(f"{label}:mismatch:{actual!r}!={expected!r}")
+
+
+def _validate_summary_against_rows(
+    failures: list[str],
+    *,
+    summary: Any,
+    rows: list[Any],
+    label: str,
+) -> None:
+    if not isinstance(summary, dict):
+        failures.append(f"{label}:summary:not_object")
+        return
+
+    outcomes = {"win": 0, "draw": 0, "loss": 0}
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            failures.append(f"{label}:row:{index}:not_object")
+            continue
+        result = row.get("result")
+        if result not in outcomes:
+            failures.append(f"{label}:row:{index}:invalid_result:{result!r}")
+            continue
+        outcomes[result] += 1
+
+    matches = len(rows)
+    expected = {
+        "matches": matches,
+        "wins": outcomes["win"],
+        "draws": outcomes["draw"],
+        "losses": outcomes["loss"],
+    }
+    for key, value in expected.items():
+        _expect_exact(failures, summary, key, value, f"{label}:summary:{key}")
+
+    expected_score = (
+        (outcomes["win"] + 0.5 * outcomes["draw"]) / matches
+        if matches
+        else 0.0
+    )
+    score = summary.get("proxy_match_score")
+    if isinstance(score, bool) or not isinstance(score, (int, float)):
+        failures.append(f"{label}:summary:proxy_match_score:non_numeric")
+    elif not math.isfinite(float(score)) or not math.isclose(
+        float(score),
+        expected_score,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    ):
+        failures.append(
+            f"{label}:summary:proxy_match_score:mismatch:"
+            f"{score!r}!={expected_score!r}"
+        )
+
+
+def _validate_raw_match_grid(
+    failures: list[str],
+    *,
+    team_rows: list[Any],
+    plug_rows: list[Any],
+    max_scenarios: int,
+    plug_repeats: int,
+) -> None:
+    expected_team = {
+        (scenario, side, 0)
+        for scenario in range(1, max_scenarios + 1)
+        for side in (1, 2)
+    }
+    actual_team: set[tuple[Any, Any, Any]] = set()
+    for index, row in enumerate(team_rows):
+        if not isinstance(row, dict):
+            continue
+        _expect_exact(failures, row, "mode", "full_team", f"team:row:{index}:mode")
+        _expect_exact(failures, row, "tested_role", None, f"team:row:{index}:tested_role")
+        actual_team.add(
+            (
+                row.get("scenario_index"),
+                row.get("test_team_id"),
+                row.get("repeat_index"),
+            )
+        )
+    if actual_team != expected_team:
+        failures.append("match_results:team_mode:grid_mismatch")
+
+    expected_plug = {
+        (role, scenario, side, repeat)
+        for role in ROLES
+        for scenario in range(1, max_scenarios + 1)
+        for side in (1, 2)
+        for repeat in range(plug_repeats)
+    }
+    actual_plug: set[tuple[Any, Any, Any, Any]] = set()
+    for index, row in enumerate(plug_rows):
+        if not isinstance(row, dict):
+            continue
+        _expect_exact(
+            failures,
+            row,
+            "mode",
+            "plug_and_play",
+            f"plug:row:{index}:mode",
+        )
+        actual_plug.add(
+            (
+                row.get("tested_role"),
+                row.get("scenario_index"),
+                row.get("test_team_id"),
+                row.get("repeat_index"),
+            )
+        )
+    if actual_plug != expected_plug:
+        failures.append("match_results:plug_and_play:grid_mismatch")
 
 
 def validate_reusable_result(
@@ -125,15 +237,68 @@ def validate_reusable_result(
     expected_plug_rows = max_scenarios * 2 * len(ROLES) * plug_repeats
     if not isinstance(team_rows, list):
         failures.append("match_results:team_mode:not_list")
+        team_rows = []
     elif len(team_rows) != expected_team_rows:
         failures.append(
             f"match_results:team_mode:count:{len(team_rows)}!={expected_team_rows}"
         )
     if not isinstance(plug_rows, list):
         failures.append("match_results:plug_and_play:not_list")
+        plug_rows = []
     elif len(plug_rows) != expected_plug_rows:
         failures.append(
             f"match_results:plug_and_play:count:{len(plug_rows)}!={expected_plug_rows}"
+        )
+
+    _validate_raw_match_grid(
+        failures,
+        team_rows=team_rows,
+        plug_rows=plug_rows,
+        max_scenarios=max_scenarios,
+        plug_repeats=plug_repeats,
+    )
+
+    team_mode = payload.get("team_mode")
+    if not isinstance(team_mode, dict):
+        failures.append("team_mode:not_object")
+        team_mode = {}
+    _validate_summary_against_rows(
+        failures,
+        summary=team_mode.get("summary"),
+        rows=team_rows,
+        label="team",
+    )
+
+    plug = payload.get("plug_and_play")
+    if not isinstance(plug, dict):
+        failures.append("plug_and_play:not_object")
+        plug = {}
+    _validate_summary_against_rows(
+        failures,
+        summary=plug.get("summary"),
+        rows=plug_rows,
+        label="plug",
+    )
+
+    by_role = plug.get("by_role")
+    if not isinstance(by_role, dict):
+        failures.append("plug_and_play:by_role:not_object")
+        by_role = {}
+    for role in ROLES:
+        role_row = by_role.get(role)
+        if not isinstance(role_row, dict):
+            failures.append(f"plug_and_play:by_role:{role}:not_object")
+            role_row = {}
+        role_matches = [
+            row
+            for row in plug_rows
+            if isinstance(row, dict) and row.get("tested_role") == role
+        ]
+        _validate_summary_against_rows(
+            failures,
+            summary=role_row.get("team_outcome"),
+            rows=role_matches,
+            label=f"plug:{role}",
         )
 
     return tuple(failures)
