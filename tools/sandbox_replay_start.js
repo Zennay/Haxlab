@@ -56,6 +56,60 @@ function requireFiniteNumber(value, label) {
   return value;
 }
 
+function validateReplayBots(bots, eliteTeamId) {
+  if (!Array.isArray(bots) || bots.length !== 8) {
+    throw new Error("replay scenario requires exactly 8 bots");
+  }
+  const baselineTeamId = eliteTeamId === 1 ? 2 : 1;
+  const ids = new Set();
+  const slots = new Set();
+  for (const bot of bots) {
+    if (!isPlainObject(bot)) {
+      throw new Error("replay scenario bot must be an object");
+    }
+    if (typeof bot.id !== "number" || !Number.isInteger(bot.id) || bot.id <= 0) {
+      throw new Error("replay scenario bot id must be a positive native integer");
+    }
+    if (ids.has(bot.id)) {
+      throw new Error("replay scenario bot ids must be unique");
+    }
+    ids.add(bot.id);
+    if (
+      typeof bot.teamId !== "number" ||
+      !Number.isInteger(bot.teamId) ||
+      (bot.teamId !== 1 && bot.teamId !== 2)
+    ) {
+      throw new Error("replay scenario teamId must be native team id 1 or 2");
+    }
+    if (typeof bot.isElite !== "boolean") {
+      throw new Error("replay scenario isElite must be a native boolean");
+    }
+    if (
+      typeof bot.role !== "string" ||
+      !Object.prototype.hasOwnProperty.call(ROLE_STARTS, bot.role)
+    ) {
+      throw new Error("replay scenario bot has unknown role");
+    }
+    const expectedTeamId = bot.isElite ? eliteTeamId : baselineTeamId;
+    if (bot.teamId !== expectedTeamId) {
+      throw new Error("scenario bot team mismatch");
+    }
+    const cohort = bot.isElite ? "elite" : "baseline";
+    const slot = `${cohort}:${bot.role}`;
+    if (slots.has(slot)) {
+      throw new Error("replay scenario requires one bot per cohort/role slot");
+    }
+    slots.add(slot);
+  }
+  for (const cohort of ("elite", "baseline")) {
+    for (const role of Object.keys(ROLE_STARTS)) {
+      if (!slots.has(`${cohort}:${role}`)) {
+        throw new Error("replay scenario lineup is incomplete");
+      }
+    }
+  }
+}
+
 function validateDiscState(source, label = "scenario disc") {
   if (!isPlainObject(source)) {
     throw new Error(`${label} must be an object`);
@@ -96,16 +150,12 @@ function applyReplayScenario(room, bots, scenario, eliteTeamId) {
     throw new Error("eliteTeamId must be native team id 1 or 2");
   }
 
+  validateReplayBots(bots, eliteTeamId);
   const mirror = eliteTeamId === 2;
-  const baselineTeamId = mirror ? 1 : 2;
 
   for (const bot of bots) {
-    const isElite = Boolean(bot.isElite);
+    const isElite = bot.isElite;
     const sourceTeamId = isElite ? 1 : 2;
-    const targetTeamId = isElite ? eliteTeamId : baselineTeamId;
-    if (Number(bot.teamId) !== Number(targetTeamId)) {
-      throw new Error("scenario bot team mismatch");
-    }
     const source = scenario.teams[String(sourceTeamId)]?.[bot.role];
     if (!source) {
       throw new Error(
@@ -130,12 +180,24 @@ function prepareReplayScenario(room, bots, scenario, eliteTeamId) {
 }
 
 function primeElitePolicy(policy, eliteBots, scenario) {
+  if (!isPlainObject(scenario)) {
+    throw new Error("scenario must be an object");
+  }
+  if (!Array.isArray(eliteBots) || eliteBots.length !== 4) {
+    throw new Error("elite warmup requires exactly 4 elite bots");
+  }
+  const history = scenario.history ?? [];
+  if (!Array.isArray(history)) {
+    throw new Error("scenario history must be an array");
+  }
   policy.reset();
-  const history = scenario.history || [];
   for (const frame of history) {
+    if (!isPlainObject(frame)) {
+      throw new Error("scenario history frame must be an object");
+    }
     for (const bot of eliteBots) {
       const features = frame.features?.["1"]?.[bot.role];
-      if (!features) {
+      if (!isPlainObject(features)) {
         throw new Error(
           "scenario history missing elite warmup features for " + bot.role,
         );
