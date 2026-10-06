@@ -262,6 +262,74 @@ def test_existing_generation_state_rejects_tampered_champion_score(tmp_path) -> 
         loop.initialize()
 
 
+@pytest.mark.parametrize("value", [True, 2.0, "2", 0, -1])
+def test_existing_generation_state_rejects_invalid_next_generation(
+    tmp_path,
+    value: object,
+) -> None:
+    loop, state = _existing_generation_loop(tmp_path)
+    state["next_generation"] = value
+    loop.save_state(state)
+
+    with pytest.raises(
+        RuntimeError,
+        match="generation_state.next_generation_invalid",
+    ):
+        loop.initialize()
+
+
+def test_existing_generation_state_rejects_generation_rewind(tmp_path) -> None:
+    loop, state = _existing_generation_loop(tmp_path)
+    state["next_generation"] = 1
+    loop.save_state(state)
+
+    with pytest.raises(
+        RuntimeError,
+        match="generation_state.next_generation_not_after_champion",
+    ):
+        loop.initialize()
+
+
+def test_existing_generation_state_rejects_champion_id_generation_drift(
+    tmp_path,
+) -> None:
+    loop, state = _existing_generation_loop(tmp_path)
+    state["champion"]["id"] = "gen-0007"
+    loop.save_state(state)
+
+    with pytest.raises(
+        RuntimeError,
+        match="generation_state.champion_id_generation_mismatch",
+    ):
+        loop.initialize()
+
+
+def test_existing_generation_state_rejects_active_generation_drift(
+    tmp_path,
+) -> None:
+    loop, state = _existing_generation_loop(tmp_path)
+    state["active"] = {"generation": 3}
+    loop.save_state(state)
+
+    with pytest.raises(
+        RuntimeError,
+        match="generation_state.active_generation_mismatch",
+    ):
+        loop.initialize()
+
+
+def test_existing_generation_state_accepts_matching_active_generation(
+    tmp_path,
+) -> None:
+    loop, state = _existing_generation_loop(tmp_path)
+    state["active"] = {"generation": 2}
+    loop.save_state(state)
+
+    loaded = loop.initialize()
+
+    assert loaded["active"]["generation"] == 2
+
+
 
 def test_cached_preregistration_reuses_exact_evaluation_provenance(tmp_path) -> None:
     loop, state = _existing_generation_loop(tmp_path)
