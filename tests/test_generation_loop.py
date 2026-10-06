@@ -1,3 +1,4 @@
+import json
 import math
 
 import pytest
@@ -10,6 +11,7 @@ from haxlab.research.generation_loop import (
     experiment_for_generation,
     generation_state_issues,
     mine_failure,
+    preregistration_issues,
     metric_snapshot,
     sha256_file,
 )
@@ -257,3 +259,90 @@ def test_existing_generation_state_rejects_tampered_champion_score(tmp_path) -> 
         match="generation_state.champion_score_mismatch",
     ):
         loop.initialize()
+
+
+
+def test_cached_preregistration_reuses_exact_evaluation_provenance(tmp_path) -> None:
+    loop, state = _existing_generation_loop(tmp_path)
+    preregistration = loop.preregister(state, 2)
+
+    cached = loop.preregister(state, 2)
+
+    assert cached == preregistration
+    assert preregistration_issues(
+        cached,
+        state=state,
+        generation=2,
+        analysis_version=loop.analysis_version,
+        manifest_sha256=sha256_file(loop.manifest),
+        shard_root=loop.shard_root,
+    ) == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    [
+        ("parent_champion", "wrong-champion", "parent_champion_mismatch"),
+        ("analysis_version", "analysis-v3", "analysis_version_mismatch"),
+        ("dataset_manifest_sha256", "0" * 64, "manifest_sha256_mismatch"),
+    ],
+)
+def test_cached_preregistration_rejects_provenance_drift(
+    tmp_path,
+    field: str,
+    value: object,
+    reason: str,
+) -> None:
+    loop, state = _existing_generation_loop(tmp_path)
+    preregistration = loop.preregister(state, 2)
+    preregistration[field] = value
+    prereg_path = loop.generations_dir / "gen-0002" / "preregistration.json"
+    prereg_path.write_text(
+        json.dumps(preregistration, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match=reason):
+        loop.preregister(state, 2)
+
+
+def test_cached_preregistration_rejects_hyperparameter_mutation(tmp_path) -> None:
+    loop, state = _existing_generation_loop(tmp_path)
+    preregistration = loop.preregister(state, 2)
+    preregistration["hyperparameters"]["learning_rate"] = 0.99
+    prereg_path = loop.generations_dir / "gen-0002" / "preregistration.json"
+    prereg_path.write_text(
+        json.dumps(preregistration, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="preregistration.hyperparameters_mismatch"):
+        loop.preregister(state, 2)
+
+
+def test_cached_preregistration_rejects_unfrozen_holdout(tmp_path) -> None:
+    loop, state = _existing_generation_loop(tmp_path)
+    preregistration = loop.preregister(state, 2)
+    preregistration["split"]["holdout_is_frozen"] = False
+    prereg_path = loop.generations_dir / "gen-0002" / "preregistration.json"
+    prereg_path.write_text(
+        json.dumps(preregistration, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="preregistration.holdout_not_frozen"):
+        loop.preregister(state, 2)
+
+
+def test_cached_preregistration_rejects_hash_tampering(tmp_path) -> None:
+    loop, state = _existing_generation_loop(tmp_path)
+    preregistration = loop.preregister(state, 2)
+    preregistration["preregistration_sha256"] = "f" * 64
+    prereg_path = loop.generations_dir / "gen-0002" / "preregistration.json"
+    prereg_path.write_text(
+        json.dumps(preregistration, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="preregistration.sha256_mismatch"):
+        loop.preregister(state, 2)
