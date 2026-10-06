@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import sqlite3
@@ -47,9 +48,11 @@ def _healthy_candidate(
     ):
         return None
     try:
-        payload = json.loads(analysis_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        analysis_bytes = analysis_file.read_bytes()
+        payload = json.loads(analysis_bytes)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
+    analysis_sha256 = hashlib.sha256(analysis_bytes).hexdigest()
     if not isinstance(payload, dict):
         return None
 
@@ -188,6 +191,7 @@ def _healthy_candidate(
         "sha256": normalized_sha,
         "raw_path": str(raw),
         "analysis_path": str(analysis_file),
+        "analysis_sha256": analysis_sha256,
         "duration_seconds": total_frames / 60.0,
         "sampled_states": sampled_state_count,
         "raw_file_sha256_verified": True,
