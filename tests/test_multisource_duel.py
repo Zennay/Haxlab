@@ -336,3 +336,72 @@ def test_builder_rejects_non_object_source_rows() -> None:
         assert "source 2: duel payload must be an object" in str(exc)
     else:
         raise AssertionError("non-object source rows must be rejected")
+
+
+def test_multisource_gate_rejects_non_object_wrapper_without_exception() -> None:
+    decision = decide_multisource_duel_gate(None)
+
+    assert not decision.eligible_to_replace_champion
+    assert decision.reasons == ("invalid_multisource_payload:object_type",)
+
+
+def test_multisource_gate_rejects_invalid_policy_object_without_exception() -> None:
+    payload = build_multisource_duel([_duel("a"), _duel("b"), _duel("c")])
+
+    decision = decide_multisource_duel_gate(payload, policy=None)
+
+    assert not decision.eligible_to_replace_champion
+    assert decision.reasons == ("invalid_policy:object_type",)
+
+
+def test_multisource_gate_rejects_malformed_minimum_sources_policy() -> None:
+    payload = build_multisource_duel([_duel("a"), _duel("b"), _duel("c")])
+
+    for invalid in (True, "3", 0):
+        decision = decide_multisource_duel_gate(
+            payload,
+            policy=type("Policy", (), {})()
+            if invalid == "object"
+            else __import__(
+                "haxlab.evaluation.multisource_duel",
+                fromlist=["MultisourceDuelPolicy"],
+            ).MultisourceDuelPolicy(minimum_sources=invalid),
+        )
+        assert not decision.eligible_to_replace_champion
+        assert any(
+            reason.startswith("invalid_policy:minimum_sources:")
+            for reason in decision.reasons
+        )
+
+
+def test_multisource_gate_rejects_coerced_wrapper_model_provenance() -> None:
+    payload = build_multisource_duel([_duel("a"), _duel("b"), _duel("c")])
+    payload["challenger_model"] = {"path": "/tmp/challenger/runtime-model.json"}
+
+    decision = decide_multisource_duel_gate(payload)
+
+    assert not decision.eligible_to_replace_champion
+    assert "invalid_challenger_model" in decision.reasons
+
+
+def test_multisource_gate_rejects_boolean_source_index() -> None:
+    payload = build_multisource_duel([_duel("a"), _duel("b"), _duel("c")])
+    payload["sources"][0]["source_index"] = True
+
+    decision = decide_multisource_duel_gate(payload)
+
+    assert not decision.eligible_to_replace_champion
+    assert any(
+        reason.startswith("source_1:source_index_mismatch:")
+        for reason in decision.reasons
+    )
+
+
+def test_multisource_gate_rejects_non_object_nested_duel_without_exception() -> None:
+    payload = build_multisource_duel([_duel("a"), _duel("b"), _duel("c")])
+    payload["sources"][1]["duel"] = ["not", "an", "object"]
+
+    decision = decide_multisource_duel_gate(payload)
+
+    assert not decision.eligible_to_replace_champion
+    assert "source_2:invalid_duel_payload" in decision.reasons
