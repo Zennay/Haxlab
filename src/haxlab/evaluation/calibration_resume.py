@@ -256,6 +256,7 @@ def validate_reusable_result(
         failures.append("provenance:not_object")
         provenance = {}
 
+    bound_input_failures_before = len(failures)
     challenger_sha256 = _validated_sha256(
         failures, path=challenger, label="challenger"
     )
@@ -270,6 +271,8 @@ def validate_reusable_result(
     scenarios_sha256 = _validated_sha256(
         failures, path=scenarios, label="scenarios"
     )
+    if len(failures) > bound_input_failures_before:
+        return tuple(failures)
 
     expected_provenance = {
         "challenger_model": str(challenger),
