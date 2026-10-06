@@ -306,3 +306,45 @@ def test_negative_duration_fails_closed() -> None:
         "below_minimum:-0.500000<0.000000"
         in decision.reasons
     )
+
+
+def test_truthy_string_cannot_enable_raw_policy_contract() -> None:
+    payload = _payload()
+    payload["raw_policy_only"] = "true"
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "arena_must_measure_raw_policy" in decision.reasons
+
+
+def test_numeric_zero_cannot_disable_safety_recovery() -> None:
+    payload = _payload()
+    payload["safety_recovery_enabled"] = 0
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "safety_recovery_must_be_disabled" in decision.reasons
+
+
+def test_numeric_one_cannot_claim_paired_reference_design() -> None:
+    payload = _payload()
+    payload["paired_reference_design"] = 1
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "paired_reference_design_required" in decision.reasons
