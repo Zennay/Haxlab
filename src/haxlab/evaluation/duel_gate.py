@@ -51,12 +51,11 @@ def _required_number(
     if isinstance(value, bool):
         failures.append(f"invalid_metric:{label}:boolean")
         return 0.0
-
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
+    if not isinstance(value, (int, float)):
         failures.append(f"invalid_metric:{label}:non_numeric")
         return 0.0
+
+    number = float(value)
 
     if not math.isfinite(number):
         failures.append(f"invalid_metric:{label}:non_finite")
@@ -80,17 +79,19 @@ def _required_integer(
     *,
     minimum: int | None = None,
 ) -> int:
-    number = _required_number(
-        failures,
-        mapping,
-        key,
-        label,
-        minimum=None if minimum is None else float(minimum),
-    )
-    if not float(number).is_integer():
+    if key not in mapping:
+        failures.append(f"invalid_metric:{label}:missing")
+        return 0
+
+    value = mapping.get(key)
+    if type(value) is not int:
         failures.append(f"invalid_metric:{label}:not_integer")
         return 0
-    return int(number)
+    if minimum is not None and value < minimum:
+        failures.append(
+            f"invalid_metric:{label}:below_minimum:{value}<{minimum}"
+        )
+    return value
 
 
 def _policy_number(
@@ -236,7 +237,10 @@ def decide_duel_gate(
         "require_replay_kick_activity",
     )
 
-    schema = str(duel.get("schema") or "")
+    schema_value = duel.get("schema")
+    schema = schema_value.strip() if type(schema_value) is str else ""
+    if type(schema_value) is not str or not schema:
+        failures.append("invalid_duel:schema")
     supported_schemas = {
         "haxlab-elite-model-duel-v1",
         "haxlab-elite-replay-seeded-duel-v1",
@@ -252,17 +256,24 @@ def decide_duel_gate(
                 "unsupported_replay_duel_mode:"
                 f"{duel.get('evaluation_mode') or 'missing'}"
             )
-        scenario_sha = str(duel.get("scenario_sha256") or "").lower()
+        scenario_sha_value = duel.get("scenario_sha256")
+        scenario_sha = (
+            scenario_sha_value.lower()
+            if type(scenario_sha_value) is str
+            else ""
+        )
         checks["scenario_sha256"] = scenario_sha
         if (
             len(scenario_sha) != 64
             or any(ch not in "0123456789abcdef" for ch in scenario_sha)
         ):
             failures.append("invalid_scenario_sha256")
-        if not str(duel.get("challenger_model") or ""):
-            failures.append("missing_challenger_model")
-        if not str(duel.get("champion_model") or ""):
-            failures.append("missing_champion_model")
+        challenger_model = duel.get("challenger_model")
+        champion_model = duel.get("champion_model")
+        if type(challenger_model) is not str or not challenger_model.strip():
+            failures.append("invalid_challenger_model")
+        if type(champion_model) is not str or not champion_model.strip():
+            failures.append("invalid_champion_model")
 
     matches = _required_integer(
         failures,
