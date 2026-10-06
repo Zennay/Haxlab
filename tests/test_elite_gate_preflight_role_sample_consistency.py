@@ -70,3 +70,21 @@ def test_invalid_role_sample_does_not_emit_secondary_total_mismatch() -> None:
         issue.startswith("final_holdout.samples_mismatch_by_role")
         for issue in issues
     )
+
+
+def test_unexpected_role_key_fails_closed() -> None:
+    split = _complete_split()
+    split["by_role"]["sweeper"] = copy.deepcopy(split["by_role"]["gk"])
+
+    issues = elite_gate_evidence_issues(_metadata(split))
+
+    assert "unexpected_final_holdout.by_role.sweeper" in issues
+
+
+def test_non_string_role_key_fails_closed_without_crashing() -> None:
+    split = _complete_split()
+    split["by_role"][5] = copy.deepcopy(split["by_role"]["gk"])
+
+    issues = elite_gate_evidence_issues(_metadata(split))
+
+    assert "invalid_final_holdout.by_role.role_key:non_string" in issues
