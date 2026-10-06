@@ -956,28 +956,109 @@ function requireArenaPairRow(row, expectedKind, label) {
   requireArenaLineup(row, expectedKind, label);
 
   const proxy = requireArenaObject(row.proxy, label + " proxy");
-  requireArenaMetric(
+  const testProxyScore = requireArenaMetric(
     proxy.test_score,
     label + " proxy.test_score",
     { minimum: 0, maximum: 1 },
   );
+  const opponentProxyScore = requireArenaMetric(
+    proxy.opponent_score,
+    label + " proxy.opponent_score",
+    { minimum: 0, maximum: 1 },
+  );
 
   const goals = requireArenaObject(row.goals, label + " goals");
-  requireArenaMetric(
+  const testGoals = requireArenaMetric(
+    goals.test,
+    label + " goals.test",
+    { minimum: 0, integer: true },
+  );
+  const opponentGoals = requireArenaMetric(
+    goals.opponent,
+    label + " goals.opponent",
+    { minimum: 0, integer: true },
+  );
+  const goalDifferential = requireArenaMetric(
     goals.differential,
     label + " goals.differential",
     { integer: true },
   );
+  if (goalDifferential !== testGoals - opponentGoals) {
+    throw new Error(label + " goals.differential is inconsistent");
+  }
 
   const progression = requireArenaObject(
     row.progression,
     label + " progression",
   );
-  requireArenaMetric(
+  const testProgression = requireArenaMetric(
     progression.test_share,
     label + " progression.test_share",
     { minimum: 0, maximum: 1 },
   );
+  const opponentProgression = requireArenaMetric(
+    progression.opponent_share,
+    label + " progression.opponent_share",
+    { minimum: 0, maximum: 1 },
+  );
+  if (
+    !Number.isFinite(testProgression + opponentProgression) ||
+    Math.abs(testProgression + opponentProgression - 1) > 1e-12
+  ) {
+    throw new Error(label + " progression shares must sum to 1");
+  }
+
+  const territory = requireArenaObject(row.territory, label + " territory");
+  const testHalfRate = requireArenaMetric(
+    territory.test_half_rate,
+    label + " territory.test_half_rate",
+    { minimum: 0, maximum: 1 },
+  );
+  const opponentHalfRate = requireArenaMetric(
+    territory.opponent_half_rate,
+    label + " territory.opponent_half_rate",
+    { minimum: 0, maximum: 1 },
+  );
+  const neutralRate = requireArenaMetric(
+    territory.neutral_rate,
+    label + " territory.neutral_rate",
+    { minimum: 0, maximum: 1 },
+  );
+  const testAttackRate = requireArenaMetric(
+    territory.test_attack_third_rate,
+    label + " territory.test_attack_third_rate",
+    { minimum: 0, maximum: 1 },
+  );
+  const opponentAttackRate = requireArenaMetric(
+    territory.opponent_attack_third_rate,
+    label + " territory.opponent_attack_third_rate",
+    { minimum: 0, maximum: 1 },
+  );
+  if (
+    Math.abs(testHalfRate + opponentHalfRate + neutralRate - 1) > 1e-12
+  ) {
+    throw new Error(label + " territory half rates must sum to 1");
+  }
+  if (testAttackRate + opponentAttackRate > 1 + 1e-12) {
+    throw new Error(label + " attack-third rates exceed 1");
+  }
+
+  const expectedTestProxy = proxyScore(
+    testProgression,
+    testHalfRate,
+    testAttackRate,
+  );
+  const expectedOpponentProxy = proxyScore(
+    opponentProgression,
+    opponentHalfRate,
+    opponentAttackRate,
+  );
+  if (Math.abs(testProxyScore - expectedTestProxy) > 1e-12) {
+    throw new Error(label + " proxy.test_score is inconsistent");
+  }
+  if (Math.abs(opponentProxyScore - expectedOpponentProxy) > 1e-12) {
+    throw new Error(label + " proxy.opponent_score is inconsistent");
+  }
 
   const possession = requireArenaObject(
     row.possession_proxy,
@@ -1004,11 +1085,19 @@ function requireArenaPairRow(row, expectedKind, label) {
 
   const team = requireArenaObject(row.test_team, label + " test_team");
   const roles = requireArenaObject(team.roles, label + " test_team.roles");
+  let roleRuntimeErrors = 0;
   for (const role of ROLES) {
     const metrics = requireArenaObject(
       roles[role],
       label + " test_team.roles." + role,
     );
+    const lineupEntry = row.lineup[role];
+    if (metrics.model_kind !== lineupEntry.model_kind) {
+      throw new Error(label + " " + role + ".model_kind mismatches lineup");
+    }
+    if (metrics.model_path !== lineupEntry.model_path) {
+      throw new Error(label + " " + role + ".model_path mismatches lineup");
+    }
     const policySamples = requireArenaMetric(
       metrics.policy_samples,
       label + " " + role + ".policy_samples",
@@ -1074,11 +1163,19 @@ function requireArenaPairRow(row, expectedKind, label) {
       );
     }
 
-    requireArenaMetric(
+    roleRuntimeErrors += requireArenaMetric(
       metrics.runtime_errors,
       label + " " + role + ".runtime_errors",
       { minimum: 0, integer: true },
     );
+  }
+  const declaredRuntimeErrors = requireArenaMetric(
+    team.runtime_errors,
+    label + " test_team.runtime_errors",
+    { minimum: 0, integer: true },
+  );
+  if (declaredRuntimeErrors !== roleRuntimeErrors) {
+    throw new Error(label + " test_team.runtime_errors is inconsistent");
   }
 }
 
