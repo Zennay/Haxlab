@@ -147,7 +147,12 @@ def decide_multisource_duel_gate(
             f"{payload.get('evaluation_mode') or 'missing'}"
         )
 
-    sources = list(payload.get("sources") or [])
+    raw_sources = payload.get("sources")
+    if not isinstance(raw_sources, list):
+        failures.append("invalid_sources_payload")
+        sources: list[Any] = []
+    else:
+        sources = raw_sources
     declared_source_count = payload.get("source_count")
     if declared_source_count != len(sources):
         failures.append(
@@ -175,6 +180,11 @@ def decide_multisource_duel_gate(
     expected_losses = 0
 
     for index, source in enumerate(sources, start=1):
+        if not isinstance(source, dict):
+            failures.append(f"source_{index}:invalid_source_payload")
+            all_sources_passed = False
+            continue
+
         scenario_sha = str(source.get("scenario_sha256") or "").lower()
         if (
             len(scenario_sha) != 64
@@ -227,8 +237,34 @@ def decide_multisource_duel_gate(
     if len(set(scenario_hashes)) != len(scenario_hashes):
         failures.append("duplicate_scenario_sources")
 
+    declared_scenario_hashes_raw = payload.get("scenario_sha256s")
+    declared_scenario_hashes: list[str] = []
+    if not isinstance(declared_scenario_hashes_raw, list):
+        failures.append("invalid_scenario_sha256s_payload")
+    else:
+        for index, value in enumerate(declared_scenario_hashes_raw, start=1):
+            if not isinstance(value, str):
+                failures.append(
+                    f"declared_scenario_{index}:invalid_scenario_sha256"
+                )
+                declared_scenario_hashes.append("")
+                continue
+            normalized = value.lower()
+            if (
+                len(normalized) != 64
+                or any(ch not in "0123456789abcdef" for ch in normalized)
+            ):
+                failures.append(
+                    f"declared_scenario_{index}:invalid_scenario_sha256"
+                )
+            declared_scenario_hashes.append(normalized)
+    if declared_scenario_hashes != scenario_hashes:
+        failures.append("scenario_sha256s_mismatch")
+
     checks["source_results"] = source_results
     checks["all_sources_passed"] = all_sources_passed
+    checks["scenario_sha256s"] = scenario_hashes
+    checks["declared_scenario_sha256s"] = declared_scenario_hashes
 
     declared_aggregates = {
         "matches": _declared_aggregate_integer(failures, payload, "matches"),
