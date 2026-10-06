@@ -141,6 +141,11 @@ class ElitePolicyRuntime {
 
     this.mean = requireNumericVector(model.mean, "mean", this.inputColumns.length);
     this.std = requireNumericVector(model.std, "std", this.inputColumns.length);
+    for (let index = 0; index < this.std.length; index += 1) {
+      if (this.std[index] < 0) {
+        throw new Error(`std[${index}] may not be negative`);
+      }
+    }
 
     if (model.role_ids != null && !isPlainObject(model.role_ids)) {
       throw new Error("role_ids must be an object when provided");
@@ -148,6 +153,12 @@ class ElitePolicyRuntime {
     this.roleIds = { ...ROLE_IDS, ...(model.role_ids || {}) };
     for (const [role, value] of Object.entries(this.roleIds)) {
       requireNativeInteger(value, `role_ids.${role}`, { min: 0, max: 3 });
+    }
+    const canonicalRoleIds = ["gk", "dm", "am", "st"].map(
+      (role) => this.roleIds[role],
+    );
+    if (new Set(canonicalRoleIds).size !== canonicalRoleIds.length) {
+      throw new Error("canonical role_ids must map gk/dm/am/st to unique ids");
     }
 
     if (!Array.isArray(model.direction_classes) || model.direction_classes.length === 0) {
@@ -181,13 +192,18 @@ class ElitePolicyRuntime {
       throw new Error("kick_thresholds_by_role must be an object when provided");
     }
     this.kickThresholdsByRole = Object.fromEntries(
-      Object.entries(model.kick_thresholds_by_role || {}).map(([role, value]) => [
-        role,
-        requireFiniteNumber(value, `kick_thresholds_by_role.${role}`, {
-          min: 0,
-          max: 1,
-        }),
-      ]),
+      Object.entries(model.kick_thresholds_by_role || {}).map(([role, value]) => {
+        if (!Object.prototype.hasOwnProperty.call(this.roleIds, role)) {
+          throw new Error(`unknown kick threshold role: ${role}`);
+        }
+        return [
+          role,
+          requireFiniteNumber(value, `kick_thresholds_by_role.${role}`, {
+            min: 0,
+            max: 1,
+          }),
+        ];
+      }),
     );
     this.kickMaxDistance = requireFiniteNumber(
       model.kick_max_distance ?? 31.0,
