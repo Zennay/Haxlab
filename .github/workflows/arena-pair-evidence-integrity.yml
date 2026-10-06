@@ -1,0 +1,33 @@
+name: Arena pair evidence integrity
+
+on:
+  push:
+    branches:
+      - validation/arena-pair-evidence-integrity-20261006
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-arena-pair-evidence-integrity
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Validate Arena pair producer
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check tools/elite_closed_loop_arena_v2.js
+          NODE_PATH=/opt/haxlab/node_modules node tests/test_closed_loop_arena_v2.js
+          echo "ARENA_PAIR_VALIDATION_HEAD=$(git rev-parse HEAD)"
+          echo "ARENA_PAIR_VALIDATION_RESULT=green"
