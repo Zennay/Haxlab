@@ -87,18 +87,16 @@ def _require_numeric_field(
     if isinstance(value, bool):
         failures.append(f"invalid_metric:{label}:boolean")
         return
-
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
+    if not isinstance(value, (int, float)):
         failures.append(f"invalid_metric:{label}:non_numeric")
         return
+    if integer and not isinstance(value, int):
+        failures.append(f"invalid_metric:{label}:not_integer")
+        return
 
+    number = float(value)
     if not math.isfinite(number):
         failures.append(f"invalid_metric:{label}:non_finite")
-        return
-    if integer and not number.is_integer():
-        failures.append(f"invalid_metric:{label}:not_integer")
         return
     if minimum is not None and number < minimum:
         failures.append(
