@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 from haxlab.evaluation.calibration_resume import reusable_result_or_reasons
 
@@ -345,4 +346,18 @@ def test_rejects_non_path_bound_input_without_raising(tmp_path: Path) -> None:
 
     assert reusable is False
     assert "provenance:stadium:path:not_path" in reasons
+
+
+def test_rejects_hash_read_failure_without_raising(tmp_path: Path) -> None:
+    inputs = _inputs(tmp_path)
+    result = _write_result(tmp_path, _payload(inputs))
+
+    with patch(
+        "haxlab.evaluation.calibration_resume._sha256",
+        side_effect=PermissionError("denied"),
+    ):
+        reusable, reasons = reusable_result_or_reasons(result, **inputs)
+
+    assert reusable is False
+    assert "provenance:challenger:sha256:unreadable:PermissionError" in reasons
 
