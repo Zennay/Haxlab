@@ -64,6 +64,12 @@ jobs:
             sudo -u haxlab test -r "$path"
           done
 
+          EXPECTED_FROZEN_MANIFEST_SHA="541b635e34492e9409c5d0fbe2ffd6303c75a2cd10348aebee9e5df49669a609"
+          ACTUAL_FROZEN_MANIFEST_SHA="$(
+            sudo -u haxlab sha256sum "$ROOT/frozen-manifest.json" | awk '{print $1}'
+          )"
+          test "$ACTUAL_FROZEN_MANIFEST_SHA" = "$EXPECTED_FROZEN_MANIFEST_SHA"
+
           snapshot() {
             local path="$1"
             sudo -u haxlab sha256sum "$path" | awk '{print $1}'
@@ -117,6 +123,7 @@ jobs:
           echo "CANDIDATE_D_SHA256=$CAND_D_A"
           echo "PARTNER_B_SHA256=$PARTNER_B_A"
           echo "PARTNER_C_SHA256=$PARTNER_C_A"
+          echo "FROZEN_MANIFEST_SHA256=$ACTUAL_FROZEN_MANIFEST_SHA"
           echo "FROZEN_INPUT_SET_SHA256=$FROZEN_A"
 
       - name: Record exact-head validation evidence
