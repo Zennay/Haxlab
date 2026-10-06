@@ -10,6 +10,16 @@ from typing import Any
 
 ARENA_SCHEMA = "haxlab-closed-loop-arena-v2"
 ROLES = ("gk", "dm", "am", "st")
+FROZEN_ARENA_CONFIG = {
+    "seconds": 30,
+    "sample_every": 6,
+    "max_scenarios": 16,
+    "plug_repeats": 1,
+    "seed": 1337,
+    "scenario_count": 16,
+    "roles": list(ROLES),
+    "pair_tie_margin": 0.025,
+}
 
 
 @dataclass(frozen=True)
@@ -117,6 +127,38 @@ def _require_mapping(
         failures.append(f"invalid_object:{label}")
         return {}
     return value
+
+
+def _validate_frozen_arena_config(
+    failures: list[str],
+    *,
+    payload: dict[str, Any],
+) -> bool:
+    config = payload.get("config")
+    if not isinstance(config, dict):
+        failures.append("invalid_object:config")
+        return False
+
+    valid = True
+    for key, expected in FROZEN_ARENA_CONFIG.items():
+        if key not in config:
+            failures.append(f"config:{key}:missing")
+            valid = False
+            continue
+        actual = config[key]
+        if type(actual) is not type(expected):
+            failures.append(f"config:{key}:wrong_type")
+            valid = False
+            continue
+        if key == "roles":
+            if any(type(role) is not str for role in actual):
+                failures.append("config:roles:non_native_role")
+                valid = False
+                continue
+        if actual != expected:
+            failures.append(f"config:{key}:mismatch")
+            valid = False
+    return valid
 
 
 def _validate_outcome_summary(
@@ -240,6 +282,12 @@ def decide_closed_loop_arena(
         structural_failures.append("safety_recovery_must_be_disabled")
     if payload.get("paired_reference_design") is not True:
         structural_failures.append("paired_reference_design_required")
+
+    if policy.calibrated:
+        checks["frozen_config_valid"] = _validate_frozen_arena_config(
+            structural_failures,
+            payload=payload,
+        )
 
     team_mode = _require_mapping(
         structural_failures,
