@@ -13,6 +13,7 @@ from typing import Any
 
 import numpy as np
 
+from haxlab.hashing import sha256_file
 from haxlab.learning.shards import INDEX_SCHEMA
 
 
@@ -97,6 +98,26 @@ def _load_shard(entry: dict[str, Any]) -> tuple[np.ndarray, list[str]]:
         raise ValueError(f"invalid shard metadata path: {meta_path}")
 
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
+    expected_shard_size = entry.get("shard_size_bytes")
+    if expected_shard_size is not None:
+        if type(expected_shard_size) is not int or expected_shard_size < 0:
+            raise ValueError(f"{shard_path}: invalid shard_size_bytes provenance")
+        actual_shard_size = shard_path.stat().st_size
+        if actual_shard_size != expected_shard_size:
+            raise ValueError(
+                f"{shard_path}: shard size mismatch: "
+                f"index={expected_shard_size}:actual={actual_shard_size}"
+            )
+
+    expected_shard_sha = entry.get("shard_sha256")
+    if expected_shard_sha is not None:
+        actual_shard_sha = sha256_file(shard_path)
+        if actual_shard_sha != expected_shard_sha:
+            raise ValueError(
+                f"{shard_path}: shard sha256 mismatch: "
+                f"index={expected_shard_sha!r}:actual={actual_shard_sha!r}"
+            )
 
     expected_replay = entry.get("replay_sha256")
     meta_replay = meta.get("replay_sha256")
