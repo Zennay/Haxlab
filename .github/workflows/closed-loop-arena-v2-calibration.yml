@@ -295,6 +295,8 @@ jobs:
           import statistics
           from pathlib import Path
 
+          from haxlab.evaluation.calibration_gate import decide_calibration_gate
+
           root = Path(os.environ["ARENA_OUT"])
           labels = ("champion-self", "candidate-d", "weak-zero")
           sources = ("01", "02", "03")
@@ -356,6 +358,7 @@ jobs:
                   "mean_team_collapsed_shape_rate": statistics.mean(r["team_collapsed_shape_rate"] for r in selected),
               }
 
+          decision = decide_calibration_gate(aggregate)
           summary = {
               "schema": "haxlab-closed-loop-arena-v2-calibration-batch-v1",
               "code_sha": os.environ["GITHUB_SHA"],
@@ -369,34 +372,16 @@ jobs:
               },
               "aggregate": aggregate,
               "runs": rows,
-              "sanity": {
-                  "champion_identity_all_behavior_pass": aggregate["champion-self"]["behavior_passes"] == 3,
-                  "champion_identity_all_promotion_eligible": (
-                      aggregate["champion-self"]["promotion_eligible_sources"] == 3
-                  ),
-                  "negative_control_discriminated": (
-                      aggregate["weak-zero"]["promotion_eligible_sources"] == 0
-                  ),
-                  "candidate_d_rejected": (
-                      aggregate["candidate-d"]["promotion_eligible_sources"] == 0
-                  ),
-                  "candidate_d_behavior_passes": aggregate["candidate-d"]["behavior_passes"],
-              },
-              "threshold_freeze_ready": True,
-              "threshold_freeze_blocker": None,
+              "sanity": decision.sanity,
+              "threshold_freeze_ready": decision.passed,
+              "threshold_freeze_blocker": (
+                  None if decision.passed else list(decision.reasons)
+              ),
           }
-          sanity = summary["sanity"]
-          if not sanity["champion_identity_all_promotion_eligible"]:
+          if not decision.passed:
               raise SystemExit(
-                  "frozen policy validation failed: champion-self must pass 3/3 sources"
-              )
-          if not sanity["negative_control_discriminated"]:
-              raise SystemExit(
-                  "frozen policy validation failed: zero-policy control became promotion eligible"
-              )
-          if not sanity["candidate_d_rejected"]:
-              raise SystemExit(
-                  "frozen policy validation failed: known rejected Candidate D became promotion eligible"
+                  "frozen policy validation failed: "
+                  + ", ".join(decision.reasons)
               )
 
           (root / "calibration-summary.json").write_text(
