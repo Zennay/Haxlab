@@ -33,11 +33,27 @@ jobs:
           CAND_D=/var/lib/haxlab/derived/training/elite-player-candidate-d/model/runtime-model.json
           PARTNER_B=/var/lib/haxlab/derived/training/elite-player-candidate-b/model/runtime-model.json
           PARTNER_C=/var/lib/haxlab/derived/training/elite-player-candidate-c/model/runtime-model.json
+          ROOT=/var/lib/haxlab/derived/evaluation/candidate-d-multisource-holdout-v1
           LIVE_RUNTIME="$(
             sudo -u haxlab /opt/haxlab/.venv/bin/python -c               'import json; print(json.load(open("/var/lib/haxlab/derived/champions/elite-player/current.json"))["runtime_model_path"])'
           )"
 
-          for path in "$CURRENT" "$LIVE" "$LIVE_RUNTIME" "$CAND_D" "$PARTNER_B" "$PARTNER_C"; do
+          INPUTS=(
+            "$CURRENT"
+            "$LIVE"
+            "$LIVE_RUNTIME"
+            "$CAND_D"
+            "$PARTNER_B"
+            "$PARTNER_C"
+            "$ROOT/frozen-manifest.json"
+            "$ROOT/source-01/stadium.hbs"
+            "$ROOT/source-01/scenarios.json"
+            "$ROOT/source-02/stadium.hbs"
+            "$ROOT/source-02/scenarios.json"
+            "$ROOT/source-03/stadium.hbs"
+            "$ROOT/source-03/scenarios.json"
+          )
+          for path in "${INPUTS[@]}"; do
             sudo -u haxlab test -r "$path"
           done
 
@@ -52,6 +68,18 @@ jobs:
           CAND_D_A="$(snapshot "$CAND_D")"
           PARTNER_B_A="$(snapshot "$PARTNER_B")"
           PARTNER_C_A="$(snapshot "$PARTNER_C")"
+          FROZEN_A="$(
+            for path in \
+              "$ROOT/frozen-manifest.json" \
+              "$ROOT/source-01/stadium.hbs" \
+              "$ROOT/source-01/scenarios.json" \
+              "$ROOT/source-02/stadium.hbs" \
+              "$ROOT/source-02/scenarios.json" \
+              "$ROOT/source-03/stadium.hbs" \
+              "$ROOT/source-03/scenarios.json"; do
+              printf '%s %s\n' "$(snapshot "$path")" "$path"
+            done | sha256sum | awk '{print $1}'
+          )"
 
           sleep 1
 
@@ -61,6 +89,19 @@ jobs:
           test "$CAND_D_A" = "$(snapshot "$CAND_D")"
           test "$PARTNER_B_A" = "$(snapshot "$PARTNER_B")"
           test "$PARTNER_C_A" = "$(snapshot "$PARTNER_C")"
+          FROZEN_B="$(
+            for path in \
+              "$ROOT/frozen-manifest.json" \
+              "$ROOT/source-01/stadium.hbs" \
+              "$ROOT/source-01/scenarios.json" \
+              "$ROOT/source-02/stadium.hbs" \
+              "$ROOT/source-02/scenarios.json" \
+              "$ROOT/source-03/stadium.hbs" \
+              "$ROOT/source-03/scenarios.json"; do
+              printf '%s %s\n' "$(snapshot "$path")" "$path"
+            done | sha256sum | awk '{print $1}'
+          )"
+          test "$FROZEN_A" = "$FROZEN_B"
 
           echo "CALIBRATION_POINTER_INPUTS_STABLE"
           echo "CURRENT_POINTER_SHA256=$CURRENT_A"
@@ -69,6 +110,7 @@ jobs:
           echo "CANDIDATE_D_SHA256=$CAND_D_A"
           echo "PARTNER_B_SHA256=$PARTNER_B_A"
           echo "PARTNER_C_SHA256=$PARTNER_C_A"
+          echo "FROZEN_INPUT_SET_SHA256=$FROZEN_A"
 
       - name: Record exact-head validation evidence
         shell: bash
