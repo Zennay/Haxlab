@@ -388,6 +388,85 @@ assert.throws(
   ),
   /candidate possession_proxy\.test_rate must be a finite number/,
 );
+
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      proxy: { ...candidateIdentityRow.proxy, test_score: 0.6 },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate proxy\.test_score is inconsistent/,
+);
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      goals: { ...candidateIdentityRow.goals, differential: 1 },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate goals\.differential is inconsistent/,
+);
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      progression: {
+        ...candidateIdentityRow.progression,
+        opponent_share: 0.4,
+      },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate progression shares must sum to 1/,
+);
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      territory: {
+        ...candidateIdentityRow.territory,
+        neutral_rate: 0.1,
+      },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate territory half rates must sum to 1/,
+);
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      test_team: {
+        ...candidateIdentityRow.test_team,
+        runtime_errors: 1,
+      },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate test_team\.runtime_errors is inconsistent/,
+);
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      test_team: {
+        ...candidateIdentityRow.test_team,
+        roles: {
+          ...candidateIdentityRow.test_team.roles,
+          dm: {
+            ...candidateIdentityRow.test_team.roles.dm,
+            model_path: "wrong-model.json",
+          },
+        },
+      },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate dm\.model_path mismatches lineup/,
+);
 assert.throws(
   () => pairArenaRows(
     {
