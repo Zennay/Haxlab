@@ -162,6 +162,8 @@ def generation_state_issues(
     champion_id = champion.get("id")
     if not isinstance(champion_id, str) or not champion_id.strip():
         issues.append("generation_state.champion_id_invalid")
+    if champion.get("scope") != "offline_behavior_only":
+        issues.append("generation_state.champion_scope_mismatch")
 
     champion_generation = champion.get("generation")
     valid_champion_generation = (
