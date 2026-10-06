@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -10,13 +11,31 @@ from haxlab.runtime.scanner import scan_once
 from haxlab.runtime.state import RuntimeState
 
 
+def _finite_non_negative_seconds(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a finite non-negative number") from exc
+    if not math.isfinite(parsed) or parsed < 0:
+        raise argparse.ArgumentTypeError("must be a finite non-negative number")
+    return parsed
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="haxlab-daemon")
     parser.add_argument("--incoming", type=Path, required=True)
     parser.add_argument("--raw", type=Path, required=True)
     parser.add_argument("--state-db", type=Path, required=True)
-    parser.add_argument("--interval", type=float, default=60.0)
-    parser.add_argument("--minimum-file-age", type=float, default=30.0)
+    parser.add_argument(
+        "--interval",
+        type=_finite_non_negative_seconds,
+        default=60.0,
+    )
+    parser.add_argument(
+        "--minimum-file-age",
+        type=_finite_non_negative_seconds,
+        default=30.0,
+    )
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
 
