@@ -37,7 +37,12 @@ def read_discord_exports(root: Path) -> tuple[list[MatchReport], list[ImportFail
     reports: list[MatchReport] = []
     failures: list[ImportFailure] = []
 
-    for path in sorted(root.rglob("*.json"), key=lambda p: str(p).casefold()):
+    paths = (
+        path
+        for path in root.rglob("*.json")
+        if path.is_file() and not path.is_symlink()
+    )
+    for path in sorted(paths, key=lambda p: str(p).casefold()):
         try:
             with path.open("r", encoding="utf-8-sig") as handle:
                 payload = json.load(handle)
