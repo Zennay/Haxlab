@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -10,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from haxlab.hashing import sha256_file
 from haxlab.learning.selector import MANIFEST_SCHEMA
 
 
@@ -38,6 +40,76 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
         raise
 
 
+def _native_nonnegative_int(value: object) -> bool:
+    return type(value) is int and value >= 0
+
+
+def _verify_analysis_provenance(entry: dict[str, Any]) -> None:
+    expected_sha = entry.get("analysis_sha256")
+    if expected_sha is None:
+        return
+
+    expected_sha = str(expected_sha)
+    if (
+        len(expected_sha) != 64
+        or expected_sha != expected_sha.lower()
+        or any(char not in "0123456789abcdef" for char in expected_sha)
+    ):
+        raise ValueError("invalid analysis_sha256 provenance")
+
+    analysis_path_value = entry.get("analysis_path")
+    if not analysis_path_value:
+        raise ValueError("analysis_path required when analysis_sha256 is present")
+
+    analysis_path = Path(str(analysis_path_value))
+    if analysis_path.is_symlink():
+        raise ValueError(f"analysis artifact symlink not allowed: {analysis_path}")
+    if not analysis_path.is_file():
+        raise FileNotFoundError(f"analysis artifact missing: {analysis_path}")
+
+    expected_size = entry.get("analysis_size_bytes")
+    if expected_size is not None:
+        if not _native_nonnegative_int(expected_size):
+            raise ValueError("analysis_size_bytes must be a non-negative integer")
+        actual_size = analysis_path.stat().st_size
+        if actual_size != expected_size:
+            raise ValueError(
+                "analysis artifact size mismatch: "
+                f"expected={expected_size}:actual={actual_size}"
+            )
+
+    actual_sha = sha256_file(analysis_path)
+    if actual_sha != expected_sha:
+        raise ValueError(
+            "analysis artifact sha256 mismatch: "
+            f"expected={expected_sha}:actual={actual_sha}"
+        )
+
+
+def _extraction_input_fingerprint(
+    *,
+    replay_sha256: str,
+    selected_player_map: dict[str, str],
+    sample_every_ticks: int,
+    analysis_sha256: object,
+    example_weight: float,
+) -> str:
+    payload = {
+        "replay_sha256": replay_sha256,
+        "selected_player_map": dict(sorted(selected_player_map.items())),
+        "sample_every_ticks": sample_every_ticks,
+        "analysis_sha256": analysis_sha256,
+        "example_weight": example_weight,
+    }
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _extract_one(
     entry: dict[str, Any],
     *,
@@ -51,6 +123,29 @@ def _extract_one(
     shard_path = output_dir / f"{replay_sha256}.f32.gz"
     meta_path = output_dir / f"{replay_sha256}.meta.json"
 
+    selected_players = list(entry.get("selected_players") or [])
+    if not selected_players:
+        raise ValueError(f"{replay_sha256}: no active selected replay players")
+
+    selected_player_map = {
+        str(int(row["replay_player_id"])): str(row["identity"])
+        for row in selected_players
+    }
+    example_weight = float(entry.get("example_weight", 1.0))
+
+    raw_path = Path(str(entry["raw_path"]))
+    if not raw_path.is_file():
+        raise FileNotFoundError(f"{replay_sha256}: raw replay missing: {raw_path}")
+
+    _verify_analysis_provenance(entry)
+    input_fingerprint = _extraction_input_fingerprint(
+        replay_sha256=replay_sha256,
+        selected_player_map=selected_player_map,
+        sample_every_ticks=sample_every_ticks,
+        analysis_sha256=entry.get("analysis_sha256"),
+        example_weight=example_weight,
+    )
+
     if not force and shard_path.exists() and meta_path.exists():
         try:
             previous = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -61,21 +156,9 @@ def _extract_one(
             and int(previous.get("sampleEveryTicks", 0))
             == sample_every_ticks
             and int(previous.get("samples", 0)) > 0
+            and previous.get("input_fingerprint") == input_fingerprint
         ):
             return {**previous, "status": "cached"}
-
-    selected_players = list(entry.get("selected_players") or [])
-    if not selected_players:
-        raise ValueError(f"{replay_sha256}: no active selected replay players")
-
-    selected_player_map = {
-        str(int(row["replay_player_id"])): str(row["identity"])
-        for row in selected_players
-    }
-
-    raw_path = Path(str(entry["raw_path"]))
-    if not raw_path.exists():
-        raise FileNotFoundError(f"{replay_sha256}: raw replay missing: {raw_path}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     command = [
@@ -122,7 +205,10 @@ def _extract_one(
             "shard_path": str(shard_path),
             "selected_player_ids": sorted(set(selected_player_map.values())),
             "selected_players": selected_players,
-            "example_weight": float(entry.get("example_weight", 1.0)),
+            "example_weight": example_weight,
+            "analysis_path": entry.get("analysis_path"),
+            "analysis_sha256": entry.get("analysis_sha256"),
+            "input_fingerprint": input_fingerprint,
             "status": "ok",
         }
     )
@@ -142,7 +228,9 @@ def build_shards(
     timeout_seconds: int = 180,
     force: bool = False,
 ) -> dict[str, Any]:
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_bytes = manifest_path.read_bytes()
+    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    manifest = json.loads(manifest_bytes)
     if manifest.get("schema") != MANIFEST_SCHEMA:
         raise ValueError(
             f"Unsupported manifest schema: {manifest.get('schema')!r}; "
@@ -195,6 +283,8 @@ def build_shards(
         "schema": INDEX_SCHEMA,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "manifest_path": str(manifest_path),
+        "manifest_sha256": manifest_sha256,
+        "manifest_size_bytes": len(manifest_bytes),
         "manifest_schema": manifest.get("schema"),
         "analysis_version": manifest.get("analysis_version"),
         "split": split,
