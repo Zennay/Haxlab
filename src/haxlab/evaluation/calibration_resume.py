@@ -4,8 +4,9 @@ import argparse
 import hashlib
 import json
 import math
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 
 ARENA_SCHEMA = "haxlab-closed-loop-arena-v2"
@@ -219,6 +220,10 @@ def validate_reusable_result(
         plug_repeats=plug_repeats,
         seed=seed,
     )
+    if isinstance(partners, (str, bytes)) or not isinstance(partners, Sequence):
+        failures.append("request:partners:not_sequence")
+    elif not partners:
+        failures.append("request:partners:empty")
     if failures:
         return tuple(failures)
 
@@ -385,6 +390,8 @@ def reusable_result_or_reasons(
     result_path: Path,
     **kwargs: Any,
 ) -> tuple[bool, tuple[str, ...]]:
+    if not isinstance(result_path, Path):
+        return False, ("result:path:not_path",)
     try:
         payload = json.loads(result_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
