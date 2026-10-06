@@ -47,3 +47,34 @@ def test_sha256_file_rejects_non_positive_or_non_integer_chunk_size(
             assert "positive integer" in str(exc)
         else:
             raise AssertionError("expected ValueError")
+
+
+
+def test_discovery_rejects_source_changed_during_hash(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    replay = tmp_path / "changing.hbr2"
+    replay.write_bytes(b"HBR2-before")
+
+    from haxlab.ingestion import discovery as discovery_module
+
+    real_hash = discovery_module.sha256_file
+
+    def hash_then_mutate(path: Path) -> str:
+        digest = real_hash(path)
+        path.write_bytes(b"HBR2-after-with-different-size")
+        return digest
+
+    monkeypatch.setattr(
+        discovery_module,
+        "sha256_file",
+        hash_then_mutate,
+    )
+
+    try:
+        discover_replays(tmp_path)
+    except RuntimeError as exc:
+        assert "source_changed_during_hash" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
