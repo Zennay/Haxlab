@@ -95,6 +95,11 @@ function dense(input, weights, bias, relu = false) {
       output[j] += value * row[j];
     }
   }
+  for (let j = 0; j < output.length; j += 1) {
+    if (!Number.isFinite(output[j])) {
+      throw new Error(`dense output ${j} is non-finite`);
+    }
+  }
   if (relu) {
     for (let j = 0; j < output.length; j += 1) {
       if (output[j] < 0) output[j] = 0;
@@ -287,13 +292,16 @@ class ElitePolicyRuntime {
   }
 
   vectorize(features) {
+    if (!isPlainObject(features)) {
+      throw new Error("features must be an object");
+    }
     return this.inputColumns.map((name) => {
       if (!Object.prototype.hasOwnProperty.call(features, name)) {
         throw new Error(`missing model feature: ${name}`);
       }
-      const value = Number(features[name]);
-      if (!Number.isFinite(value)) {
-        throw new Error(`non-finite model feature ${name}: ${features[name]}`);
+      const value = features[name];
+      if (typeof value !== "number" || !Number.isFinite(value)) {
+        throw new Error(`model feature ${name} must be a finite native number`);
       }
       return value;
     });
@@ -302,7 +310,12 @@ class ElitePolicyRuntime {
   normalizeFrame(frame) {
     return frame.map((value, index) => {
       const std = this.std[index];
-      return (value - this.mean[index]) / (Math.abs(std) < 1e-12 ? 1 : std);
+      const normalized =
+        (value - this.mean[index]) / (Math.abs(std) < 1e-12 ? 1 : std);
+      if (!Number.isFinite(normalized)) {
+        throw new Error(`normalized model feature ${this.inputColumns[index]} is non-finite`);
+      }
+      return normalized;
     });
   }
 
