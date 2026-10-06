@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -63,13 +64,60 @@ def experiment_for_generation(generation: int) -> dict[str, Any]:
     return variant
 
 
+SNAPSHOT_RATE_FIELDS = ("direction_accuracy", "joint_accuracy", "kick_f1")
+
+
+def _snapshot_issues(snapshot: Any, label: str) -> list[str]:
+    if not isinstance(snapshot, dict):
+        return [f"invalid_{label}:not_object"]
+
+    issues: list[str] = []
+    for field in SNAPSHOT_RATE_FIELDS:
+        if field not in snapshot:
+            issues.append(f"missing_{label}.{field}")
+            continue
+        value = snapshot[field]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            issues.append(f"invalid_{label}.{field}:non_numeric")
+            continue
+        number = float(value)
+        if not math.isfinite(number):
+            issues.append(f"invalid_{label}.{field}:non_finite")
+        elif number < 0.0:
+            issues.append(f"invalid_{label}.{field}:below_minimum")
+        elif number > 1.0:
+            issues.append(f"invalid_{label}.{field}:above_maximum")
+
+    if "samples" not in snapshot:
+        issues.append(f"missing_{label}.samples")
+    else:
+        samples = snapshot["samples"]
+        if isinstance(samples, bool) or not isinstance(samples, (int, float)):
+            issues.append(f"invalid_{label}.samples:non_numeric")
+        else:
+            number = float(samples)
+            if not math.isfinite(number):
+                issues.append(f"invalid_{label}.samples:non_finite")
+            elif not number.is_integer():
+                issues.append(f"invalid_{label}.samples:not_integer")
+            elif number < 1.0:
+                issues.append(f"invalid_{label}.samples:below_minimum")
+    return issues
+
+
 def metric_snapshot(metrics: dict[str, Any]) -> dict[str, float]:
-    holdout = metrics.get("final_holdout") or {}
+    if not isinstance(metrics, dict):
+        raise ValueError("invalid_generation_metrics:not_object")
+    holdout = metrics.get("final_holdout")
+    issues = _snapshot_issues(holdout, "final_holdout")
+    if issues:
+        raise ValueError("invalid generation metric evidence: " + ", ".join(issues))
+    assert isinstance(holdout, dict)
     return {
-        "direction_accuracy": float(holdout.get("direction_accuracy", 0.0)),
-        "joint_accuracy": float(holdout.get("joint_accuracy", 0.0)),
-        "kick_f1": float(holdout.get("kick_f1", 0.0)),
-        "samples": float(holdout.get("samples", 0)),
+        "direction_accuracy": float(holdout["direction_accuracy"]),
+        "joint_accuracy": float(holdout["joint_accuracy"]),
+        "kick_f1": float(holdout["kick_f1"]),
+        "samples": float(holdout["samples"]),
     }
 
 
@@ -86,6 +134,35 @@ def evaluate_candidate(
     maximum_direction_regression: float = 0.02,
     maximum_kick_regression: float = 0.05,
 ) -> dict[str, Any]:
+    evidence_issues = [
+        *_snapshot_issues(candidate, "candidate"),
+        *_snapshot_issues(champion, "champion"),
+    ]
+    for label, value in (
+        ("minimum_improvement", minimum_improvement),
+        ("maximum_direction_regression", maximum_direction_regression),
+        ("maximum_kick_regression", maximum_kick_regression),
+    ):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            evidence_issues.append(f"invalid_policy.{label}:non_numeric")
+            continue
+        number = float(value)
+        if not math.isfinite(number):
+            evidence_issues.append(f"invalid_policy.{label}:non_finite")
+        elif number < 0.0:
+            evidence_issues.append(f"invalid_policy.{label}:below_minimum")
+        elif number > 1.0:
+            evidence_issues.append(f"invalid_policy.{label}:above_maximum")
+
+    if evidence_issues:
+        return {
+            "promote": False,
+            "candidate_score": None,
+            "champion_score": None,
+            "improvement": None,
+            "reasons": evidence_issues,
+        }
+
     candidate_score = composite_score(candidate)
     champion_score = composite_score(champion)
     regressions: list[str] = []
@@ -93,8 +170,6 @@ def evaluate_candidate(
         regressions.append("direction_accuracy_regression")
     if candidate["kick_f1"] < champion["kick_f1"] - maximum_kick_regression:
         regressions.append("kick_f1_regression")
-    if candidate["samples"] <= 0:
-        regressions.append("empty_holdout")
     improved = candidate_score >= champion_score + minimum_improvement
     promoted = improved and not regressions
     reasons = ["offline_holdout_gate_passed"] if promoted else []
