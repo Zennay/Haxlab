@@ -95,3 +95,30 @@ def test_calibration_workflow_uses_fail_closed_aggregate_gate() -> None:
     assert "decide_calibration_gate" in workflow
     assert '"threshold_freeze_ready": decision.passed' in workflow
     assert '"threshold_freeze_blocker": (' in workflow
+
+
+def test_behavior_passes_cannot_exceed_source_count() -> None:
+    for label in ("candidate-d", "weak-zero"):
+        aggregate = _aggregate()
+        aggregate[label]["behavior_passes"] = 4
+
+        decision = decide_calibration_gate(aggregate)
+
+        assert not decision.passed
+        assert (
+            "aggregate_count_exceeds_sources:"
+            f"{label}:behavior_passes:4>3"
+        ) in decision.reasons
+
+
+def test_promotion_eligible_count_cannot_exceed_source_count() -> None:
+    aggregate = _aggregate()
+    aggregate["candidate-d"]["promotion_eligible_sources"] = 4
+
+    decision = decide_calibration_gate(aggregate)
+
+    assert not decision.passed
+    assert (
+        "aggregate_count_exceeds_sources:"
+        "candidate-d:promotion_eligible_sources:4>3"
+    ) in decision.reasons
