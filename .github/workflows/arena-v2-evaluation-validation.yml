@@ -6,6 +6,8 @@ on:
       - validation/arena-v2-fail-closed-evidence-20261006
       - validation/duel-gate-fail-closed-20261006
       - validation/multisource-aggregate-integrity-20261006
+      - validation/arena-outcome-consistency-20261006
+      - validation/evaluation-resync-v3-outcome-20261006
   workflow_dispatch:
 
 permissions:
