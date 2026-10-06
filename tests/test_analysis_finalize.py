@@ -49,7 +49,12 @@ def test_finalize_writes_versioned_snapshot_and_manifest(tmp_path: Path) -> None
             {
                 "schemaVersion": 4,
                 "totalFrames": 600,
-                "simulation": {"sampleEveryTicks": 6},
+                "rawEventCount": 50,
+                "simulation": {
+                    "sampleEveryTicks": 6,
+                    "sampledStateCount": 100,
+                    "framesAdvanced": 600,
+                },
                 "players": [],
             }
         ),
@@ -103,6 +108,7 @@ def test_finalize_writes_versioned_snapshot_and_manifest(tmp_path: Path) -> None
     assert completion_payload["analysis_failed"] == 0
     assert completion_payload["analysis_pending"] == 0
     assert completion_payload["analysis_ticks_reconstructed"] == 600
+    assert completion_payload["analysis_artifact_audit"]["objects_with_issues"] == 0
 
 
 def test_finalize_refreshes_when_dataset_grows(tmp_path: Path) -> None:
@@ -189,7 +195,9 @@ def test_finalize_refreshes_stale_training_manifest_schema(tmp_path: Path) -> No
                 "simulation": {
                     "sampleEveryTicks": 6,
                     "sampledStateCount": 3000,
+                    "framesAdvanced": 18000,
                 },
+                "rawEventCount": 50,
                 "featureSummary": {"touches": 100},
                 "players": [],
             }
@@ -239,3 +247,65 @@ def test_finalize_refreshes_stale_training_manifest_schema(tmp_path: Path) -> No
     assert second["status"] == "finalized"
     refreshed = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert refreshed["schema"] == MANIFEST_SCHEMA
+
+
+def test_finalize_fails_closed_when_analysis_artifact_drifted(tmp_path: Path) -> None:
+    db = tmp_path / "state.sqlite3"
+    derived = tmp_path / "derived"
+    replay = tmp_path / "tampered.hbr2"
+    replay.write_bytes(b"x")
+    sha = "f" * 64
+
+    analysis_root = derived / CURRENT_ANALYZER_VERSION / sha[:2] / sha[2:4]
+    analysis_root.mkdir(parents=True)
+    output = analysis_root / f"{sha}.json"
+    output.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 4,
+                "totalFrames": 600,
+                "rawEventCount": 51,
+                "simulation": {
+                    "sampleEveryTicks": 6,
+                    "sampledStateCount": 100,
+                    "framesAdvanced": 600,
+                },
+                "players": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with RuntimeState(db) as state:
+        state.register_raw(
+            sha256=sha,
+            archive_path=str(replay),
+            size_bytes=1,
+        )
+        state.mark_replay_processing(
+            sha256=sha,
+            status="ok",
+            format_version=3,
+            total_frames=600,
+            duration_seconds=10.0,
+            decompressed_bytes=10,
+        )
+        state.mark_replay_analysis(
+            sha256=sha,
+            analyzer_version=CURRENT_ANALYZER_VERSION,
+            status="ok",
+            output_path=str(output),
+            sampled_state_count=100,
+            player_count=0,
+            raw_event_count=50,
+            tick_count=600,
+        )
+
+        result = finalize_analysis_if_ready(state, derived_root=derived)
+
+    assert result["status"] == "artifact_audit_failed"
+    assert result["artifact_audit"]["objects_with_issues"] == 1
+    assert not (derived / CURRENT_ANALYZER_VERSION / "_complete.json").exists()
+    assert not (
+        derived / "leaderboards" / f"{CURRENT_ANALYZER_VERSION}.json"
+    ).exists()
