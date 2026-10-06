@@ -45,21 +45,58 @@ function releaseKickoff(room, bots) {
   room.runSteps(2);
 }
 
-function transformDisc(source, mirror) {
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function requireFiniteNumber(value, label) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${label} must be a finite native number`);
+  }
+  return value;
+}
+
+function validateDiscState(source, label = "scenario disc") {
+  if (!isPlainObject(source)) {
+    throw new Error(`${label} must be an object`);
+  }
   return {
-    x: mirror ? -Number(source.x || 0) : Number(source.x || 0),
-    y: Number(source.y || 0),
-    xspeed: mirror ? -Number(source.vx || 0) : Number(source.vx || 0),
-    yspeed: Number(source.vy || 0),
+    x: requireFiniteNumber(source.x, `${label}.x`),
+    y: requireFiniteNumber(source.y, `${label}.y`),
+    vx: requireFiniteNumber(source.vx, `${label}.vx`),
+    vy: requireFiniteNumber(source.vy, `${label}.vy`),
+  };
+}
+
+function transformDisc(source, mirror, label = "scenario disc") {
+  if (typeof mirror !== "boolean") {
+    throw new Error("scenario mirror flag must be boolean");
+  }
+  const disc = validateDiscState(source, label);
+  return {
+    x: mirror ? -disc.x : disc.x,
+    y: disc.y,
+    xspeed: mirror ? -disc.vx : disc.vx,
+    yspeed: disc.vy,
   };
 }
 
 function applyReplayScenario(room, bots, scenario, eliteTeamId) {
-  if (!scenario?.teams?.["1"] || !scenario?.teams?.["2"]) {
+  if (!isPlainObject(scenario)) {
+    throw new Error("scenario must be an object");
+  }
+  if (!isPlainObject(scenario.teams?.["1"]) || !isPlainObject(scenario.teams?.["2"])) {
     throw new Error("scenario missing team states");
   }
+  if (
+    typeof eliteTeamId !== "number" ||
+    !Number.isInteger(eliteTeamId) ||
+    (eliteTeamId !== 1 && eliteTeamId !== 2)
+  ) {
+    throw new Error("eliteTeamId must be native team id 1 or 2");
+  }
 
-  const mirror = Number(eliteTeamId) === 2;
+  const mirror = eliteTeamId === 2;
   const baselineTeamId = mirror ? 1 : 2;
 
   for (const bot of bots) {
@@ -75,10 +112,14 @@ function applyReplayScenario(room, bots, scenario, eliteTeamId) {
         "scenario missing source role " + sourceTeamId + "/" + bot.role,
       );
     }
-    setPlayerDisc(room, bot.id, transformDisc(source, mirror));
+    setPlayerDisc(
+      room,
+      bot.id,
+      transformDisc(source, mirror, `scenario team ${sourceTeamId} role ${bot.role}`),
+    );
   }
 
-  setBallDisc(room, transformDisc(scenario.ball, mirror));
+  setBallDisc(room, transformDisc(scenario.ball, mirror, "scenario ball"));
   zeroInputs(room, bots);
   room.runSteps(2);
 }
@@ -113,6 +154,9 @@ module.exports = {
   setPlayerDisc,
   setBallDisc,
   releaseKickoff,
+  isPlainObject,
+  requireFiniteNumber,
+  validateDiscState,
   transformDisc,
   applyReplayScenario,
   prepareReplayScenario,
