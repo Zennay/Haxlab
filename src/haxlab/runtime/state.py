@@ -429,6 +429,50 @@ class RuntimeState:
             (CURRENT_ANALYZER_VERSION,),
         ).fetchone()
 
+        recent_ingest_events = {
+            str(row["event_type"]): int(row["count"])
+            for row in self.connection.execute(
+                """
+                SELECT event_type, COUNT(*) AS count
+                FROM runtime_events
+                WHERE created_at >= datetime('now', '-60 minutes')
+                  AND event_type IN (
+                      'replay_archived',
+                      'replay_duplicate',
+                      'replay_failed',
+                      'replay_disappeared'
+                  )
+                GROUP BY event_type
+                ORDER BY event_type
+                """
+            )
+        }
+        recent_ingest_events_1h = {
+            event_type: int(recent_ingest_events.get(event_type, 0))
+            for event_type in (
+                "replay_archived",
+                "replay_duplicate",
+                "replay_failed",
+                "replay_disappeared",
+            )
+        }
+        source_failure_examples = [
+            {
+                "source_path": str(row["source_path"]),
+                "error": row["error"],
+                "last_seen_at": str(row["last_seen_at"]),
+            }
+            for row in self.connection.execute(
+                """
+                SELECT source_path, error, last_seen_at
+                FROM source_files
+                WHERE status = 'failed'
+                ORDER BY last_seen_at DESC, source_path
+                LIMIT 5
+                """
+            )
+        ]
+
         def recent_rate(row: sqlite3.Row) -> float:
             count = int(row["count"] or 0)
             if count <= 0:
@@ -444,13 +488,21 @@ class RuntimeState:
         analysis_rate_per_minute = recent_rate(recent_analyzed)
 
         processing_ok = int(processed.get("ok", 0))
+        source_failed = int(source.get("failed", 0))
+        ingest_integrity_ok = (
+            source_failed == 0
+            and recent_ingest_events_1h["replay_failed"] == 0
+        )
 
         return {
             "analysis_version": CURRENT_ANALYZER_VERSION,
             "analysis_versions": analysis_versions,
             "source_archived": int(source.get("archived", 0)),
             "source_duplicates": int(source.get("duplicate", 0)),
-            "source_failed": int(source.get("failed", 0)),
+            "source_failed": source_failed,
+            "source_failure_examples": source_failure_examples,
+            "recent_ingest_events_1h": recent_ingest_events_1h,
+            "ingest_integrity_ok": ingest_integrity_ok,
             "raw_unique_replays": int(raw_count),
             "processing_ok": processing_ok,
             "processing_failed": int(processed.get("failed", 0)),
