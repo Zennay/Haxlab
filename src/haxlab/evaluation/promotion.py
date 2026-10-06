@@ -274,7 +274,8 @@ def decide_promotion(
     critical = [
         regression
         for regression in regressions
-        if regression.severity.strip().casefold() == "critical"
+        if isinstance(regression.severity, str)
+        and regression.severity.strip().casefold() == "critical"
     ]
     if critical and not allow_critical_regressions:
         failures.append(
