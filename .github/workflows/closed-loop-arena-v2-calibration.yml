@@ -80,9 +80,15 @@ jobs:
           fi
           OUT="/var/lib/haxlab/derived/evaluation/closed-loop-arena-v2-calibration-v1/${GITHUB_SHA:0:12}"
 
-          # A same-SHA rerun must never inherit artifacts or a "latest completed"
-          # receipt from an earlier attempt.
-          sudo -u haxlab rm -rf "$OUT"
+          # Preserve only source result files so interrupted same-SHA runs can
+          # reuse expensive Arena rollouts after strict provenance/config validation.
+          # Final receipts and per-attempt invariants are always regenerated.
+          sudo -u haxlab mkdir -p "$OUT"
+          sudo -u haxlab rm -f \
+            "$OUT/calibration-summary.json" \
+            "$OUT/pointer-invariant.json" \
+            "$OUT/frozen-inputs-before.json" \
+            "$OUT/ablated-zero-policy.json"
           rm -f \
             /tmp/haxlab-arena-v2-calibration-latest-summary.json \
             /tmp/haxlab-arena-v2-calibration-latest-status.json
@@ -353,6 +359,30 @@ jobs:
             local DECISION="$ARENA_OUT/$LABEL-source-$I-decision.json"
 
             echo "=== arena-v2 label=$LABEL source=$I scenarios=16 ==="
+            if sudo -u haxlab test -r "$RESULT" && \
+              sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+                /opt/haxlab/.venv/bin/python -m haxlab.evaluation.calibration_resume \
+                "$RESULT" \
+                --challenger "$CHALLENGER" \
+                --champion "$ARENA_LIVE" \
+                --partner-model "$ARENA_LIVE" \
+                --partner-model "$ARENA_PARTNER_B" \
+                --partner-model "$ARENA_PARTNER_C" \
+                --stadium "$SOURCE/stadium.hbs" \
+                --scenarios "$SOURCE/scenarios.json" \
+                --max-scenarios 16 \
+                --seconds 30 \
+                --sample-every 6 \
+                --plug-repeats 1 \
+                --seed 1337; then
+              echo "ARENA_CALIBRATION_SOURCE_REUSED label=$LABEL source=$I"
+              sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+                /opt/haxlab/.venv/bin/python -m haxlab.evaluation.closed_loop_arena \
+                "$RESULT" --calibrated --output "$DECISION" >/dev/null
+              return 0
+            fi
+
+            sudo -u haxlab rm -f "$RESULT" "$DECISION"
             sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node "$GITHUB_WORKSPACE/tools/elite_closed_loop_arena_v2.js" --challenger "$CHALLENGER" --champion "$ARENA_LIVE" --stadium "$SOURCE/stadium.hbs" --scenarios "$SOURCE/scenarios.json" --partner-model "$ARENA_LIVE" --partner-model "$ARENA_PARTNER_B" --partner-model "$ARENA_PARTNER_C" --max-scenarios 16 --seconds 30 --sample-every 6 --plug-repeats 1 --seed 1337 --output "$RESULT" >/dev/null
             sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" /opt/haxlab/.venv/bin/python -m haxlab.evaluation.closed_loop_arena "$RESULT" --calibrated --output "$DECISION" >/dev/null
           }
