@@ -9,6 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 from statistics import mean, median, pstdev
 
+from haxlab.atomic import atomic_json
 from haxlab.skill.estimator import estimate_player_skill_v0
 from haxlab.skill.models import PerformanceVector, SkillObservation
 
@@ -496,11 +497,7 @@ def main() -> int:
     }
 
     if args.output is not None:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(
-            json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        atomic_json(args.output, snapshot)
 
     if args.format == "json":
         print(json.dumps(snapshot, ensure_ascii=False, indent=2))
