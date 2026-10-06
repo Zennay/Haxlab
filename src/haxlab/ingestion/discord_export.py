@@ -54,9 +54,27 @@ def read_discord_exports(root: Path) -> tuple[list[MatchReport], list[ImportFail
 
         try:
             for message, channel_id in _walk_message_groups(payload):
-                if looks_like_match_report(message):
-                    reports.append(parse_match_report(message, channel_id=channel_id))
-        except Exception as exc:  # keep one malformed export from stopping the inventory
+                if not looks_like_match_report(message):
+                    continue
+                try:
+                    reports.append(
+                        parse_match_report(message, channel_id=channel_id)
+                    )
+                except Exception as exc:
+                    raw_message_id = message.get("id") or message.get("messageId")
+                    message_id = (
+                        str(raw_message_id).strip()
+                        if raw_message_id is not None
+                        else "unknown"
+                    )
+                    failures.append(
+                        ImportFailure(
+                            source=f"{path}#message:{message_id or 'unknown'}",
+                            stage="discord_message",
+                            error=str(exc),
+                        )
+                    )
+        except Exception as exc:
             failures.append(
                 ImportFailure(source=str(path), stage="discord_messages", error=str(exc))
             )
