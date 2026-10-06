@@ -160,6 +160,46 @@ def test_accepts_exact_same_input_contract(tmp_path: Path) -> None:
     assert reasons == ()
 
 
+def test_rejects_non_positive_reuse_runtime_contract(tmp_path: Path) -> None:
+    inputs = _inputs(tmp_path)
+    payload = _payload(inputs)
+    config = payload["config"]
+    assert isinstance(config, dict)
+
+    for key in ("seconds", "sample_every"):
+        mutated_inputs = dict(inputs)
+        mutated_inputs[key] = 0
+        mutated_payload = json.loads(json.dumps(payload))
+        mutated_config = mutated_payload["config"]
+        assert isinstance(mutated_config, dict)
+        mutated_config[key] = 0
+
+        reusable, reasons = reusable_result_or_reasons(
+            _write_result(tmp_path, mutated_payload),
+            **mutated_inputs,
+        )
+
+        assert reusable is False
+        assert f"request:{key}:below_minimum" in reasons
+
+
+def test_rejects_boolean_reuse_request_contract(tmp_path: Path) -> None:
+    inputs = _inputs(tmp_path)
+    payload = _payload(inputs)
+    config = payload["config"]
+    assert isinstance(config, dict)
+    config["seconds"] = True
+    inputs["seconds"] = True
+
+    reusable, reasons = reusable_result_or_reasons(
+        _write_result(tmp_path, payload),
+        **inputs,
+    )
+
+    assert reusable is False
+    assert "request:seconds:not_native_integer" in reasons
+
+
 def test_rejects_changed_model_bytes(tmp_path: Path) -> None:
     inputs = _inputs(tmp_path)
     result = _write_result(tmp_path, _payload(inputs))
