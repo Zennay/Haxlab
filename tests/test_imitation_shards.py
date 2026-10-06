@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -18,6 +19,22 @@ def test_extract_one_uses_cached_valid_shard(
     output_dir.mkdir()
     shard = output_dir / f"{sha}.f32.gz"
     meta = output_dir / f"{sha}.meta.json"
+    raw = tmp_path / "raw.hbr2"
+    raw.write_bytes(b"raw")
+    selected_players = [
+        {
+            "replay_player_id": 7,
+            "identity": "name:alpha",
+            "samples": 100,
+        }
+    ]
+    fingerprint = shards._extraction_input_fingerprint(
+        replay_sha256=sha,
+        selected_player_map={"7": "name:alpha"},
+        sample_every_ticks=6,
+        analysis_sha256=None,
+        example_weight=1.0,
+    )
     shard.write_bytes(b"cached")
     meta.write_text(
         json.dumps(
@@ -27,6 +44,7 @@ def test_extract_one_uses_cached_valid_shard(
                 "samples": 123,
                 "compressedBytes": 6,
                 "replay_sha256": sha,
+                "input_fingerprint": fingerprint,
             }
         ),
         encoding="utf-8",
@@ -40,15 +58,9 @@ def test_extract_one_uses_cached_valid_shard(
     result = shards._extract_one(
         {
             "replay_sha256": sha,
-            "raw_path": str(tmp_path / "missing.hbr2"),
+            "raw_path": str(raw),
             "selected_player_ids": ["name:alpha"],
-            "selected_players": [
-                {
-                    "replay_player_id": 7,
-                    "identity": "name:alpha",
-                    "samples": 100,
-                }
-            ],
+            "selected_players": selected_players,
         },
         node_script=tmp_path / "tools" / "extract_imitation.js",
         output_dir=output_dir,
@@ -167,3 +179,152 @@ def test_build_shards_honors_split_and_limit(
     )
     assert saved["split"] == "train"
     assert len(saved["entries"]) == 2
+    assert saved["manifest_sha256"] == hashlib.sha256(
+        manifest.read_bytes()
+    ).hexdigest()
+    assert saved["manifest_size_bytes"] == manifest.stat().st_size
+
+
+def test_extract_one_rejects_changed_analysis_artifact_before_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sha = "e" * 64
+    output_dir = tmp_path / "train"
+    output_dir.mkdir()
+    raw = tmp_path / "raw.hbr2"
+    raw.write_bytes(b"raw")
+    analysis = tmp_path / "analysis.json"
+    original = b'{"schemaVersion":4}'
+    analysis.write_bytes(original)
+
+    entry = {
+        "replay_sha256": sha,
+        "raw_path": str(raw),
+        "analysis_path": str(analysis),
+        "analysis_sha256": hashlib.sha256(original).hexdigest(),
+        "analysis_size_bytes": len(original),
+        "selected_players": [
+            {
+                "replay_player_id": 7,
+                "identity": "name:alpha",
+                "samples": 100,
+            }
+        ],
+        "example_weight": 1.0,
+    }
+    fingerprint = shards._extraction_input_fingerprint(
+        replay_sha256=sha,
+        selected_player_map={"7": "name:alpha"},
+        sample_every_ticks=6,
+        analysis_sha256=entry["analysis_sha256"],
+        example_weight=1.0,
+    )
+    (output_dir / f"{sha}.f32.gz").write_bytes(b"cached")
+    (output_dir / f"{sha}.meta.json").write_text(
+        json.dumps(
+            {
+                "schema": "haxlab-imitation-extract-summary-v2",
+                "sampleEveryTicks": 6,
+                "samples": 10,
+                "input_fingerprint": fingerprint,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    analysis.write_bytes(b'{"schemaVersion":4,"tampered":true}')
+
+    def fail_run(*args, **kwargs):
+        raise AssertionError("subprocess must not run after provenance failure")
+
+    monkeypatch.setattr(shards.subprocess, "run", fail_run)
+
+    with pytest.raises(ValueError, match="analysis artifact size mismatch|sha256 mismatch"):
+        shards._extract_one(
+            entry,
+            node_script=tmp_path / "tools" / "extract_imitation.js",
+            output_dir=output_dir,
+            sample_every_ticks=6,
+            timeout_seconds=60,
+            force=False,
+        )
+
+
+def test_extract_one_does_not_reuse_cache_for_changed_selection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sha = "f" * 64
+    output_dir = tmp_path / "train"
+    output_dir.mkdir()
+    raw = tmp_path / "raw.hbr2"
+    raw.write_bytes(b"raw")
+    shard = output_dir / f"{sha}.f32.gz"
+    meta = output_dir / f"{sha}.meta.json"
+    shard.write_bytes(b"old")
+
+    old_fingerprint = shards._extraction_input_fingerprint(
+        replay_sha256=sha,
+        selected_player_map={"7": "name:alpha"},
+        sample_every_ticks=6,
+        analysis_sha256=None,
+        example_weight=1.0,
+    )
+    meta.write_text(
+        json.dumps(
+            {
+                "schema": "haxlab-imitation-extract-summary-v2",
+                "sampleEveryTicks": 6,
+                "samples": 10,
+                "input_fingerprint": old_fingerprint,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class Completed:
+        returncode = 0
+        stderr = ""
+        stdout = json.dumps(
+            {
+                "schema": "haxlab-imitation-extract-summary-v2",
+                "sampleEveryTicks": 6,
+                "samples": 20,
+                "compressedBytes": 20,
+                "selectedPlayersSeen": 1,
+                "skippedUnknownInput": 0,
+            }
+        )
+
+    calls = []
+
+    def fake_run(*args, **kwargs):
+        calls.append(args)
+        return Completed()
+
+    monkeypatch.setattr(shards.subprocess, "run", fake_run)
+
+    result = shards._extract_one(
+        {
+            "replay_sha256": sha,
+            "raw_path": str(raw),
+            "selected_players": [
+                {
+                    "replay_player_id": 8,
+                    "identity": "name:beta",
+                    "samples": 100,
+                }
+            ],
+            "example_weight": 1.0,
+        },
+        node_script=tmp_path / "tools" / "extract_imitation.js",
+        output_dir=output_dir,
+        sample_every_ticks=6,
+        timeout_seconds=60,
+        force=False,
+    )
+
+    assert len(calls) == 1
+    assert result["status"] == "ok"
+    assert result["input_fingerprint"] != old_fingerprint
