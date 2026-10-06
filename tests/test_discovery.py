@@ -78,3 +78,34 @@ def test_discovery_rejects_source_changed_during_hash(
         assert "source_changed_during_hash" in str(exc)
     else:
         raise AssertionError("expected RuntimeError")
+
+
+
+def test_discovery_rejects_invalid_roots(tmp_path: Path) -> None:
+    missing = tmp_path / "missing"
+    try:
+        discover_replays(missing)
+    except FileNotFoundError as exc:
+        assert "replay_root_missing" in str(exc)
+    else:
+        raise AssertionError("expected FileNotFoundError")
+
+    regular_file = tmp_path / "not-a-directory"
+    regular_file.write_text("x", encoding="utf-8")
+    try:
+        discover_replays(regular_file)
+    except NotADirectoryError as exc:
+        assert "replay_root_not_directory" in str(exc)
+    else:
+        raise AssertionError("expected NotADirectoryError")
+
+    target = tmp_path / "target"
+    target.mkdir()
+    symlink_root = tmp_path / "linked-root"
+    symlink_root.symlink_to(target, target_is_directory=True)
+    try:
+        discover_replays(symlink_root)
+    except ValueError as exc:
+        assert str(exc) == "replay_root_must_not_be_symlink"
+    else:
+        raise AssertionError("expected ValueError")
