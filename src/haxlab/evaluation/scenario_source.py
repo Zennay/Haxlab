@@ -24,6 +24,22 @@ def _positive_native_int(value: Any, *, name: str) -> int:
     return value
 
 
+def _normalized_exclusions(values: set[str] | None) -> set[str]:
+    normalized: set[str] = set()
+    for value in values or set():
+        if not isinstance(value, str):
+            raise ValueError("exclude_sha256 values must be strings")
+        digest = value.strip().lower()
+        if len(digest) != 64 or any(
+            ch not in "0123456789abcdef" for ch in digest
+        ):
+            raise ValueError(
+                "exclude_sha256 values must be 64-character hexadecimal SHA-256"
+            )
+        normalized.add(digest)
+    return normalized
+
+
 def _finite_number(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -38,6 +54,10 @@ def _healthy_candidate(
     analysis_path: str,
     sampled_states: int,
 ) -> dict[str, Any] | None:
+    if not isinstance(sha256, str):
+        return None
+    if not isinstance(raw_path, str) or not isinstance(analysis_path, str):
+        return None
     raw = Path(raw_path)
     analysis_file = Path(analysis_path)
     if (
@@ -215,11 +235,7 @@ def select_scenario_source(
     exclude_sha256: set[str] | None = None,
 ) -> dict[str, Any]:
     candidate_limit = _positive_native_int(max_candidates, name="max_candidates")
-    excluded = {
-        str(value).strip().lower()
-        for value in (exclude_sha256 or set())
-        if str(value).strip()
-    }
+    excluded = _normalized_exclusions(exclude_sha256)
     db = sqlite3.connect(db_path)
     try:
         rows = db.execute(
@@ -246,8 +262,14 @@ def select_scenario_source(
         db.close()
 
     for sha256, raw_path, analysis_path, sampled_states in rows:
-        normalized_sha = str(sha256).lower()
-        if normalized_sha in excluded:
+        if not isinstance(sha256, str):
+            continue
+        normalized_sha = sha256.strip().lower()
+        if (
+            len(normalized_sha) != 64
+            or any(ch not in "0123456789abcdef" for ch in normalized_sha)
+            or normalized_sha in excluded
+        ):
             continue
         sampled_state_count = _native_int(sampled_states)
         if sampled_state_count is None:
@@ -291,11 +313,7 @@ def select_scenario_sources(
         max_candidates,
         name="max_candidates",
     )
-    initial_excluded = {
-        str(value).strip().lower()
-        for value in (exclude_sha256 or set())
-        if str(value).strip()
-    }
+    initial_excluded = _normalized_exclusions(exclude_sha256)
     excluded = set(initial_excluded)
     selected: list[dict[str, Any]] = []
 
