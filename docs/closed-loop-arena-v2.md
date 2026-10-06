@@ -136,7 +136,7 @@ Promotion evidence is fail-closed at the data-shape boundary as well as at the p
 
 These checks are regression-tested on the self-hosted HaxLab runner before calibrated three-source evidence is accepted.
 
-The Python Arena consumer also treats the producer contract itself as promotion evidence. It requires the exact Arena v2 evaluation mode, native schema/mode strings, exactly the fixed GK/DM/AM/ST role maps with no extra role keys, and raw `match_results` whose win/draw/loss tallies reconcile to the stored team, plug-and-play, and per-role summaries. A self-consistent summary is therefore not sufficient when the underlying rollout outcomes disagree.
+The Python Arena consumer also treats the producer contract itself as promotion evidence. It requires the exact Arena v2 evaluation mode, native schema/mode strings, exactly the fixed GK/DM/AM/ST role maps with no extra role keys, and raw `match_results` whose win/draw/loss tallies reconcile to the stored team, plug-and-play, and per-role summaries. The raw grid must also match the declared scenario count and plug-repeat configuration with unique scenario/side/repeat coordinates and the same scenario set across both evaluation tracks. A self-consistent summary is therefore not sufficient when the underlying rollout outcomes disagree or the requested evaluation grid was truncated/duplicated.
 
 These checks are deliberately consumer-side as well as producer-side: a valid producer run cannot make a later modified or relabeled result eligible for promotion merely because its aggregate metrics still look plausible.
 
