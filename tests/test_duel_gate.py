@@ -1,4 +1,4 @@
-from haxlab.evaluation.duel_gate import decide_duel_gate
+from haxlab.evaluation.duel_gate import DuelGatePolicy, decide_duel_gate
 
 
 def _duel() -> dict:
@@ -98,3 +98,92 @@ def test_non_numeric_match_count_does_not_raise() -> None:
 
     assert not decision.eligible_to_replace_champion
     assert "invalid_metric:wins:non_numeric" in decision.reasons
+
+
+
+def test_nan_policy_match_threshold_fails_closed() -> None:
+    decision = decide_duel_gate(
+        _duel(),
+        DuelGatePolicy(minimum_match_score=float("nan")),
+    )
+
+    assert not decision.eligible_to_replace_champion
+    assert "invalid_policy:minimum_match_score:non_finite" in decision.reasons
+
+
+def test_string_policy_rate_is_not_coerced() -> None:
+    decision = decide_duel_gate(
+        _duel(),
+        DuelGatePolicy(maximum_kick_action_rate="0.10"),
+    )
+
+    assert not decision.eligible_to_replace_champion
+    assert "invalid_policy:maximum_kick_action_rate:non_numeric" in decision.reasons
+
+
+def test_boolean_policy_match_count_is_rejected() -> None:
+    decision = decide_duel_gate(
+        _duel(),
+        DuelGatePolicy(minimum_matches=True),
+    )
+
+    assert not decision.eligible_to_replace_champion
+    assert "invalid_policy:minimum_matches:non_integer" in decision.reasons
+
+
+def test_nan_runtime_error_limit_cannot_fail_open() -> None:
+    payload = _duel()
+    payload["challenger_runtime_errors"] = 3
+
+    decision = decide_duel_gate(
+        payload,
+        DuelGatePolicy(maximum_runtime_errors=float("nan")),
+    )
+
+    assert not decision.eligible_to_replace_champion
+    assert "invalid_policy:maximum_runtime_errors:non_integer" in decision.reasons
+
+
+def test_out_of_range_policy_rate_fails_closed() -> None:
+    decision = decide_duel_gate(
+        _duel(),
+        DuelGatePolicy(maximum_side_territory_gap=1.01),
+    )
+
+    assert not decision.eligible_to_replace_champion
+    assert any(
+        reason.startswith(
+            "invalid_policy:maximum_side_territory_gap:above_maximum"
+        )
+        for reason in decision.reasons
+    )
+
+
+def test_non_boolean_kick_activity_policy_is_rejected() -> None:
+    payload = _duel()
+    payload["challenger_kick_action_rate"] = 0.0
+
+    decision = decide_duel_gate(
+        payload,
+        DuelGatePolicy(require_replay_kick_activity="false"),
+    )
+
+    assert not decision.eligible_to_replace_champion
+    assert (
+        "invalid_policy:require_replay_kick_activity:not_boolean"
+        in decision.reasons
+    )
+
+
+def test_non_policy_object_fails_closed() -> None:
+    decision = decide_duel_gate(_duel(), None)
+
+    assert not decision.eligible_to_replace_champion
+    assert decision.reasons == ("invalid_policy:object_type",)
+
+
+def test_non_object_duel_fails_closed() -> None:
+    decision = decide_duel_gate(None)
+
+    assert not decision.eligible_to_replace_champion
+    assert decision.reasons == ("invalid_duel:object_type",)
