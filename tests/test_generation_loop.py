@@ -17,6 +17,27 @@ from haxlab.research.generation_loop import (
 )
 
 
+@pytest.mark.parametrize("value", [True, 1.5, "2", 0, -1])
+def test_generation_loop_rejects_invalid_tick_budget(
+    tmp_path,
+    value: object,
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match="max_generations_per_tick must be a native positive integer",
+    ):
+        GenerationLoop(
+            app_dir=tmp_path,
+            state_dir=tmp_path / "state",
+            models_dir=tmp_path / "models",
+            derived_dir=tmp_path / "derived",
+            analysis_version="analysis-v4",
+            manifest=tmp_path / "manifest.json",
+            shard_root=tmp_path / "shards",
+            max_generations_per_tick=value,  # type: ignore[arg-type]
+        )
+
+
 def test_generation_experiments_are_deterministic_and_bounded() -> None:
     first = experiment_for_generation(1)
     again = experiment_for_generation(1)
