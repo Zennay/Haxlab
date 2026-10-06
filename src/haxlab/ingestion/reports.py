@@ -32,11 +32,18 @@ def _attachment_from_json(value: dict[str, Any]) -> AttachmentRef | None:
     if not file_name:
         return None
 
-    size = value.get("fileSizeBytes") or value.get("size") or value.get("size_bytes")
-    try:
-        size_bytes = int(size) if size is not None else None
-    except (TypeError, ValueError):
-        size_bytes = None
+    size = value.get("fileSizeBytes")
+    if size is None:
+        size = value.get("size")
+    if size is None:
+        size = value.get("size_bytes")
+    size_bytes = (
+        size
+        if isinstance(size, int)
+        and not isinstance(size, bool)
+        and size >= 0
+        else None
+    )
 
     return AttachmentRef(
         file_name=str(file_name),
@@ -87,8 +94,15 @@ def parse_match_report(
         or message.get("created_at")
     )
 
+    raw_message_id = message.get("id") or message.get("messageId")
+    if raw_message_id is None or isinstance(raw_message_id, bool):
+        raise ValueError("missing_message_id")
+    message_id = str(raw_message_id).strip()
+    if not message_id:
+        raise ValueError("missing_message_id")
+
     return MatchReport(
-        message_id=str(message.get("id") or message.get("messageId") or ""),
+        message_id=message_id,
         timestamp=str(timestamp) if timestamp else None,
         channel_id=channel_id,
         content=content,
