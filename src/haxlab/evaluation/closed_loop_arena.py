@@ -129,8 +129,8 @@ def _reject_unexpected_role_keys(
     label: str,
 ) -> None:
     for key in mapping:
-        if key not in ROLES:
-            failures.append(f"{label}:unexpected_role:{key!r}")
+        if type(key) is not str or key not in ROLES:
+            failures.append(f"{label}:unexpected_role")
 
 
 def _raw_outcome_tally(
@@ -159,7 +159,10 @@ def _raw_outcome_tally(
         if expected_role is _ANY_ROLE:
             if type(role) is not str or role not in ROLES:
                 failures.append(f"{label}:row:{index}:invalid_role")
-        elif role != expected_role:
+        elif expected_role is None:
+            if role is not None:
+                failures.append(f"{label}:row:{index}:invalid_role")
+        elif type(role) is not str or role != expected_role:
             failures.append(f"{label}:row:{index}:invalid_role")
 
         result = row.get("result")
@@ -734,7 +737,11 @@ def decide_closed_loop_arena(
             role_rows = [
                 row
                 for row in plug_rows
-                if isinstance(row, dict) and row.get("tested_role") == role
+                if (
+                    isinstance(row, dict)
+                    and type(row.get("tested_role")) is str
+                    and row.get("tested_role") == role
+                )
             ]
             raw_role = _raw_outcome_tally(
                 structural_failures,
