@@ -62,6 +62,17 @@ def decompress_replay_payload(path: Path) -> bytes:
         raise ReplayFormatError(f"unsupported_version:{version}")
 
     try:
-        return zlib.decompress(data[12:], -zlib.MAX_WBITS)
+        decompressor = zlib.decompressobj(-zlib.MAX_WBITS)
+        payload = decompressor.decompress(data[12:])
+        payload += decompressor.flush()
     except zlib.error as exc:
         raise ReplayFormatError(f"deflate_error:{exc}") from exc
+
+    if not decompressor.eof:
+        raise ReplayFormatError("deflate_incomplete_stream")
+    if decompressor.unused_data:
+        raise ReplayFormatError("deflate_trailing_data")
+    if decompressor.unconsumed_tail:
+        raise ReplayFormatError("deflate_unconsumed_tail")
+
+    return payload
