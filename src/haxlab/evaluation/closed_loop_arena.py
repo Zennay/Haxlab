@@ -110,6 +110,17 @@ def _require_numeric_field(
         )
 
 
+def _require_mapping(
+    failures: list[str],
+    value: Any,
+    label: str,
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        failures.append(f"invalid_object:{label}")
+        return {}
+    return value
+
+
 def _relative_max_check(
     failures: list[str],
     *,
@@ -147,6 +158,18 @@ def decide_closed_loop_arena(
 ) -> ClosedLoopArenaDecision:
     structural_failures: list[str] = []
     behavior_failures: list[str] = []
+    if not isinstance(payload, dict):
+        return ClosedLoopArenaDecision(
+            structurally_valid=False,
+            behavior_gate_passed=False,
+            eligible_for_live_promotion=False,
+            reasons=("invalid_arena_payload",),
+            checks={
+                "policy_version": policy.policy_version,
+                "policy_calibrated": policy.calibrated,
+            },
+        )
+
     checks: dict[str, Any] = {
         "policy_version": policy.policy_version,
         "policy_calibrated": policy.calibrated,
@@ -167,9 +190,21 @@ def decide_closed_loop_arena(
     if payload.get("paired_reference_design") is not True:
         structural_failures.append("paired_reference_design_required")
 
-    team_mode = payload.get("team_mode") or {}
-    team_summary = team_mode.get("summary") or {}
-    team_roles = team_mode.get("roles") or {}
+    team_mode = _require_mapping(
+        structural_failures,
+        payload.get("team_mode"),
+        "team_mode",
+    )
+    team_summary = _require_mapping(
+        structural_failures,
+        team_mode.get("summary"),
+        "team_mode:summary",
+    )
+    team_roles = _require_mapping(
+        structural_failures,
+        team_mode.get("roles"),
+        "team_mode:roles",
+    )
     _require_numeric_field(
         structural_failures,
         mapping=team_summary,
@@ -197,8 +232,16 @@ def decide_closed_loop_arena(
             f"{policy.minimum_team_matches}"
         )
 
-    candidate_team = team_summary.get("candidate") or {}
-    reference_team = team_summary.get("reference") or {}
+    candidate_team = _require_mapping(
+        structural_failures,
+        team_summary.get("candidate"),
+        "team:candidate",
+    )
+    reference_team = _require_mapping(
+        structural_failures,
+        team_summary.get("reference"),
+        "team:reference",
+    )
     for side, metrics in (
         ("candidate", candidate_team),
         ("reference", reference_team),
@@ -227,7 +270,11 @@ def decide_closed_loop_arena(
         tolerance=policy.max_shape_collapse_regression,
     )
 
-    plug = payload.get("plug_and_play") or {}
+    plug = _require_mapping(
+        structural_failures,
+        payload.get("plug_and_play"),
+        "plug_and_play",
+    )
     _require_numeric_field(
         structural_failures,
         mapping=plug,
@@ -236,7 +283,11 @@ def decide_closed_loop_arena(
         integer=True,
         minimum=0,
     )
-    plug_summary = plug.get("summary") or {}
+    plug_summary = _require_mapping(
+        structural_failures,
+        plug.get("summary"),
+        "plug_and_play:summary",
+    )
     _require_numeric_field(
         structural_failures,
         mapping=plug_summary,
@@ -256,14 +307,38 @@ def decide_closed_loop_arena(
             f"{policy.minimum_partner_models}"
         )
 
-    by_role = plug.get("by_role") or {}
+    by_role = _require_mapping(
+        structural_failures,
+        plug.get("by_role"),
+        "plug_and_play:by_role",
+    )
     role_checks: dict[str, Any] = {}
     for role in ROLES:
-        role_row = by_role.get(role) or {}
-        outcome = role_row.get("team_outcome") or {}
-        individual = role_row.get("individual") or {}
-        candidate = individual.get("candidate") or {}
-        reference = individual.get("reference") or {}
+        role_row = _require_mapping(
+            structural_failures,
+            by_role.get(role),
+            f"plug_and_play:by_role:{role}",
+        )
+        outcome = _require_mapping(
+            structural_failures,
+            role_row.get("team_outcome"),
+            f"{role}:team_outcome",
+        )
+        individual = _require_mapping(
+            structural_failures,
+            role_row.get("individual"),
+            f"{role}:individual",
+        )
+        candidate = _require_mapping(
+            structural_failures,
+            individual.get("candidate"),
+            f"{role}:individual:candidate",
+        )
+        reference = _require_mapping(
+            structural_failures,
+            individual.get("reference"),
+            f"{role}:individual:reference",
+        )
 
         _require_numeric_field(
             structural_failures,
