@@ -245,12 +245,11 @@ def decide_closed_loop_arena(
         "paired_reference_design": payload.get("paired_reference_design"),
     }
 
-    if payload.get("schema") != ARENA_SCHEMA:
-        structural_failures.append(
-            f"unsupported_schema:{payload.get('schema') or 'missing'}"
-        )
+    schema = payload.get("schema")
+    if type(schema) is not str or schema != ARENA_SCHEMA:
+        structural_failures.append("unsupported_schema")
     evaluation_mode = payload.get("evaluation_mode")
-    if not isinstance(evaluation_mode, str) or evaluation_mode != EVALUATION_MODE:
+    if type(evaluation_mode) is not str or evaluation_mode != EVALUATION_MODE:
         structural_failures.append("unsupported_evaluation_mode")
     if payload.get("raw_policy_only") is not True:
         structural_failures.append("arena_must_measure_raw_policy")
