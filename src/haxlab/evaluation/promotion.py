@@ -162,12 +162,18 @@ def decide_promotion(
         "allow_critical_regressions",
     )
 
-    challenger_id = str(evidence.challenger_id or "").strip()
-    champion_id = str(evidence.champion_id or "").strip()
-    if not challenger_id:
-        failures.append("missing_challenger_id")
-    if not champion_id:
-        failures.append("missing_champion_id")
+    challenger_id = evidence.challenger_id
+    champion_id = evidence.champion_id
+    if type(challenger_id) is not str or not challenger_id.strip():
+        failures.append("invalid_evidence:challenger_id")
+        challenger_id = ""
+    else:
+        challenger_id = challenger_id.strip()
+    if type(champion_id) is not str or not champion_id.strip():
+        failures.append("invalid_evidence:champion_id")
+        champion_id = ""
+    else:
+        champion_id = champion_id.strip()
     if challenger_id and challenger_id == champion_id:
         failures.append("challenger_matches_champion")
 
@@ -266,7 +272,7 @@ def decide_promotion(
     critical = [
         regression
         for regression in valid_regressions
-        if regression.severity.casefold() == "critical"
+        if regression.severity.strip().casefold() == "critical"
     ]
     if critical and not allow_critical_regressions:
         failures.append(
