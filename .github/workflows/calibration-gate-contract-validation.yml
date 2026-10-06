@@ -1,0 +1,58 @@
+name: Calibration gate contract validation
+
+on:
+  push:
+    branches:
+      - validation/calibration-gate-structural-validity-20261006
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-calibration-gate-contract-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .calibration-gate-venv
+          python3 -m venv .calibration-gate-venv
+          .calibration-gate-venv/bin/pip install --upgrade pip
+          .calibration-gate-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile calibration gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          .calibration-gate-venv/bin/python -m compileall -q \
+            src/haxlab/evaluation/calibration_gate.py \
+            tests/test_calibration_gate.py
+
+      - name: Run calibration gate regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .calibration-gate-venv/bin/pytest -q \
+              tests/test_calibration_gate.py \
+              tests/test_closed_loop_arena.py
+
+      - name: Record exact-head evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "CALIBRATION_GATE_VALIDATION_HEAD=$(git rev-parse HEAD)"
+          echo "CALIBRATION_GATE_VALIDATION_RESULT=green"
