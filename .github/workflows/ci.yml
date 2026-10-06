@@ -2,7 +2,9 @@ name: HaxLab CI
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - validation/evaluation-resync-v3-20261006
   pull_request:
     branches: [main]
     paths:
