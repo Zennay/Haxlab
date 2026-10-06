@@ -135,3 +135,18 @@ individually active policy that damages coordinated team play also fails.
 Promotion evidence is fail-closed at the data-shape boundary as well as at the policy thresholds. Required numeric Arena v2 metrics must be present, numeric, finite, and use integer counts where applicable; malformed evidence cannot fall back to permissive defaults. Multisource duel evidence additionally binds each wrapper scenario SHA and challenger/champion model path to the underlying duel payload, so duplicated or relabeled sources cannot satisfy source independence.
 
 These checks are regression-tested on the self-hosted HaxLab runner before calibrated three-source evidence is accepted.
+
+
+## 2026-10-06 evaluation-validation closure evidence
+
+The current-main integration now carries additional fail-closed evidence guards before the calibrated Arena v2 gate is trusted:
+
+- required Arena metrics reject missing, non-numeric and non-finite values instead of coercing them to permissive defaults;
+- multisource duel wrappers are bound to the underlying scenario SHA and challenger/champion model provenance;
+- replay-duel evidence rejects malformed counts, impossible win/draw/loss tallies, invalid replay provenance and out-of-range rates;
+- generic challenger promotion evidence rejects non-finite confidence values, impossible scenario counts, non-boolean reproducibility and challenger/champion identity collisions;
+- frozen source selection verifies archived replay bytes against the SQLite replay SHA and rejects sampled-state metadata drift.
+
+The current three frozen holdout replay archives were re-hashed on the self-hosted VPS and all three matched their recorded SHA-256 provenance. The source-integrity head also passed the real Multisource Suite v2 freeze pipeline. No live champion pointer was changed by these validation changes.
+
+This commit intentionally retriggers the calibrated three-source gate so that the combined integration head must earn fresh evidence rather than inheriting an older green result.
