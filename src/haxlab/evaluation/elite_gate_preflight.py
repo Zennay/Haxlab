@@ -40,8 +40,8 @@ def _validate_number(
     if not math.isfinite(number):
         issues.append(f"invalid_{label}:non_finite")
         return
-    if integer and not number.is_integer():
-        issues.append(f"invalid_{label}:not_integer")
+    if integer and not isinstance(value, int):
+        issues.append(f"invalid_{label}:not_native_integer")
         return
     if minimum is not None and number < minimum:
         issues.append(f"invalid_{label}:below_minimum")
@@ -71,7 +71,10 @@ def elite_gate_evidence_issues(
 
     if "kick_threshold_source" not in training:
         issues.append("missing_training.kick_threshold_source")
-    elif str(training["kick_threshold_source"]) != "validation_only":
+    elif (
+        not isinstance(training["kick_threshold_source"], str)
+        or training["kick_threshold_source"] != "validation_only"
+    ):
         issues.append("training.kick_threshold_source_must_be_validation_only")
 
     validation = metadata.get("final_validation")
@@ -141,6 +144,16 @@ def elite_gate_evidence_issues(
         if not isinstance(row, dict):
             issues.append(f"missing_{split_key}.by_role.{role}")
             continue
+        if "samples" not in row:
+            issues.append(f"missing_{split_key}.by_role.{role}.samples")
+        else:
+            _validate_number(
+                issues,
+                row["samples"],
+                f"{split_key}.by_role.{role}.samples",
+                minimum=1.0,
+                integer=True,
+            )
         if "direction_accuracy" not in row:
             issues.append(
                 f"missing_{split_key}.by_role.{role}.direction_accuracy"
