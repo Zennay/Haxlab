@@ -348,3 +348,43 @@ def test_numeric_one_cannot_claim_paired_reference_design() -> None:
     assert not decision.structurally_valid
     assert not decision.eligible_for_live_promotion
     assert "paired_reference_design_required" in decision.reasons
+
+
+def test_non_object_arena_payload_fails_closed_without_exception() -> None:
+    decision = decide_closed_loop_arena(  # type: ignore[arg-type]
+        ["not", "an", "object"],
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.behavior_gate_passed
+    assert not decision.eligible_for_live_promotion
+    assert decision.reasons == ("invalid_arena_payload",)
+
+
+def test_non_object_team_mode_fails_closed_without_exception() -> None:
+    payload = _payload()
+    payload["team_mode"] = ["malformed"]
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "invalid_object:team_mode" in decision.reasons
+
+
+def test_non_object_nested_individual_fails_closed_without_exception() -> None:
+    payload = _payload()
+    payload["plug_and_play"]["by_role"]["dm"]["individual"] = "malformed"
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "invalid_object:dm:individual" in decision.reasons
