@@ -7,6 +7,7 @@ from haxlab.evaluation.models import (
     EvaluationEvidence,
     PromotionDecision,
     PromotionPolicy,
+    Regression,
 )
 
 
@@ -240,10 +241,32 @@ def decide_promotion(
                 f"<{minimum_scenario_pass_rate:.4f}"
             )
 
+    regressions_value = evidence.regressions
+    valid_regressions: list[Regression] = []
+    if not isinstance(regressions_value, tuple):
+        failures.append("invalid_evidence:regressions:not_tuple")
+    else:
+        for index, regression in enumerate(regressions_value):
+            prefix = f"invalid_evidence:regressions:{index}"
+            if not isinstance(regression, Regression):
+                failures.append(f"{prefix}:object_type")
+                continue
+
+            if type(regression.scenario) is not str or not regression.scenario.strip():
+                failures.append(f"{prefix}:scenario:invalid")
+                continue
+            if type(regression.severity) is not str or not regression.severity.strip():
+                failures.append(f"{prefix}:severity:invalid")
+                continue
+            if type(regression.details) is not str:
+                failures.append(f"{prefix}:details:not_string")
+                continue
+            valid_regressions.append(regression)
+
     critical = [
         regression
-        for regression in evidence.regressions
-        if str(regression.severity).casefold() == "critical"
+        for regression in valid_regressions
+        if regression.severity.casefold() == "critical"
     ]
     if critical and not allow_critical_regressions:
         failures.append(
