@@ -52,7 +52,8 @@ def _healthy_candidate(
     feature_summary = payload.get("featureSummary") or {}
     if not isinstance(feature_summary, dict):
         return None
-    touches = _native_int(feature_summary.get("touches") or 0)
+    raw_touches = feature_summary.get("touches")
+    touches = _native_int(0 if raw_touches is None else raw_touches)
     if touches is None or touches < 100:
         return None
 
@@ -65,8 +66,10 @@ def _healthy_candidate(
         if not isinstance(player, dict):
             return None
         player_id = _native_int(player.get("id"))
-        team_id = _native_int(player.get("teamId") or 0)
-        samples = _native_int(player.get("samples") or 0)
+        raw_team_id = player.get("teamId")
+        raw_samples = player.get("samples")
+        team_id = _native_int(0 if raw_team_id is None else raw_team_id)
+        samples = _native_int(0 if raw_samples is None else raw_samples)
         if (
             player_id is None
             or team_id is None
@@ -85,12 +88,14 @@ def _healthy_candidate(
     if expected_sampled_states is None or expected_sampled_states <= 0:
         return None
     declared_sampled_states = simulation.get("sampledStateCount")
-    if declared_sampled_states in (None, 0):
+    if declared_sampled_states is None:
         sampled_state_count = expected_sampled_states
     else:
         sampled_state_count = _native_int(declared_sampled_states)
         if sampled_state_count is None:
             return None
+        if sampled_state_count == 0:
+            sampled_state_count = expected_sampled_states
     if sampled_state_count <= 0:
         return None
     if expected_sampled_states != sampled_state_count:
