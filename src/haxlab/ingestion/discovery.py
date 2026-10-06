@@ -17,7 +17,13 @@ class ReplayInventory:
 def discover_replays(root: Path) -> ReplayInventory:
     """Discover every .hbr2 file below root and deduplicate by content hash."""
     paths = sorted(
-        (path for path in root.rglob("*") if path.is_file() and path.suffix.lower() == ".hbr2"),
+        (
+            path
+            for path in root.rglob("*")
+            if path.is_file()
+            and not path.is_symlink()
+            and path.suffix.lower() == ".hbr2"
+        ),
         key=lambda path: str(path).casefold(),
     )
 
