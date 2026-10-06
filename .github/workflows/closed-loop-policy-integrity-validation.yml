@@ -1,0 +1,57 @@
+name: Closed-Loop Arena policy integrity validation
+
+on:
+  push:
+    branches:
+      - validation/closed-loop-policy-integrity-20261006
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-closed-loop-policy-integrity-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .closed-loop-policy-validation-venv
+          python3 -m venv .closed-loop-policy-validation-venv
+          .closed-loop-policy-validation-venv/bin/pip install --upgrade pip
+          .closed-loop-policy-validation-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile Arena policy gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          .closed-loop-policy-validation-venv/bin/python -m compileall -q \
+            src/haxlab/evaluation/closed_loop_arena.py \
+            tests/test_closed_loop_arena.py
+
+      - name: Run Arena policy regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .closed-loop-policy-validation-venv/bin/pytest -q \
+              tests/test_closed_loop_arena.py
+
+      - name: Record exact-head validation evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "CLOSED_LOOP_POLICY_VALIDATION_HEAD=$(git rev-parse HEAD)"
+          echo "CLOSED_LOOP_POLICY_VALIDATION_RESULT=green"
