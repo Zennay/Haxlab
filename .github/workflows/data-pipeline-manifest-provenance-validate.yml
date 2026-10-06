@@ -1,0 +1,47 @@
+name: HaxLab manifest provenance integrity
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/haxlab/learning/selector.py"
+      - "tests/test_training_selector.py"
+      - ".github/workflows/data-pipeline-manifest-provenance-validate.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-manifest-provenance-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate exact-byte manifest provenance
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Assert exact head
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Run focused provenance regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .manifest-provenance-venv
+          python3 -m venv .manifest-provenance-venv
+          .manifest-provenance-venv/bin/pip install -q --upgrade pip
+          .manifest-provenance-venv/bin/pip install -q -e '.[dev]'
+          .manifest-provenance-venv/bin/python -m compileall -q src/haxlab
+          .manifest-provenance-venv/bin/pytest -q             tests/test_training_selector.py             tests/test_imitation_shards.py

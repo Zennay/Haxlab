@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -146,6 +147,15 @@ def test_training_manifest_selects_quality_replays_and_freezes_split(
 
     assert len(first_selected) == 1
     assert first_selected[0]["replay_sha256"] == good_sha
+    good_path = analysis_dir / f"{good_sha}.json"
+    assert first_selected[0]["analysis_sha256"] == hashlib.sha256(
+        good_path.read_bytes()
+    ).hexdigest()
+    assert first_selected[0]["analysis_size_bytes"] == good_path.stat().st_size
+    assert first["leaderboard_sha256"] == hashlib.sha256(
+        leaderboard_path.read_bytes()
+    ).hexdigest()
+    assert first["leaderboard_size_bytes"] == leaderboard_path.stat().st_size
     assert first_selected[0]["selected_player_ids"] == ["name:alpha"]
     assert first_selected[0]["selected_players"] == [
         {
@@ -249,3 +259,82 @@ def test_training_manifest_excludes_selected_spectator(tmp_path: Path) -> None:
 
     assert manifest["train_replays"] == []
     assert manifest["holdout_replays"] == []
+
+
+def test_training_manifest_provenance_tracks_exact_input_bytes(
+    tmp_path: Path,
+) -> None:
+    analysis_root = tmp_path / "derived" / "state-pass-v4"
+    leaderboard_path = tmp_path / "derived" / "leaderboards" / "state-pass-v4.json"
+    raw_root = tmp_path / "raw"
+    analysis_root.mkdir(parents=True)
+    leaderboard_path.parent.mkdir(parents=True)
+
+    leaderboard = {
+        "analysis_version": "state-pass-v4",
+        "rows": [
+            {
+                "player_id": "name:alpha",
+                "name": "Alpha",
+                "role": "forward",
+                "rating": 56.0,
+                "rating_uncertainty": 0.8,
+                "matches": 80,
+                "minutes": 500.0,
+            }
+        ],
+    }
+    leaderboard_path.write_text(json.dumps(leaderboard), encoding="utf-8")
+
+    sha = "a" * 64
+    analysis_path = analysis_root / f"{sha}.json"
+    payload = {
+        "schemaVersion": 4,
+        "totalFrames": 18000,
+        "simulation": {"sampledStateCount": 1200},
+        "featureSummary": {"touches": 100},
+        "players": [
+            {"id": 7, "name": "Alpha", "teamId": 1, "samples": 900},
+            {"id": 8, "name": "Mate", "teamId": 1, "samples": 900},
+            {"id": 9, "name": "Opp A", "teamId": 2, "samples": 900},
+            {"id": 10, "name": "Opp B", "teamId": 2, "samples": 900},
+        ],
+    }
+    analysis_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    kwargs = dict(
+        analysis_root=analysis_root,
+        leaderboard_path=leaderboard_path,
+        raw_root=raw_root,
+        top_fraction_per_role=1.0,
+        min_players_per_role=1,
+        min_matches=1,
+        min_minutes=0.0,
+        max_uncertainty=10.0,
+        holdout_modulus=10,
+        holdout_bucket=0,
+    )
+    first = build_training_manifest(**kwargs)
+    first_entry = (first["train_replays"] + first["holdout_replays"])[0]
+
+    analysis_path.write_text(
+        json.dumps(payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    leaderboard_path.write_text(
+        json.dumps(leaderboard, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    second = build_training_manifest(**kwargs)
+    second_entry = (second["train_replays"] + second["holdout_replays"])[0]
+
+    assert first_entry["replay_sha256"] == second_entry["replay_sha256"]
+    assert first_entry["analysis_sha256"] != second_entry["analysis_sha256"]
+    assert first["leaderboard_sha256"] != second["leaderboard_sha256"]
+    assert second_entry["analysis_sha256"] == hashlib.sha256(
+        analysis_path.read_bytes()
+    ).hexdigest()
+    assert second["leaderboard_sha256"] == hashlib.sha256(
+        leaderboard_path.read_bytes()
+    ).hexdigest()

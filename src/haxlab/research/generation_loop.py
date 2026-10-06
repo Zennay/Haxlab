@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -63,19 +64,195 @@ def experiment_for_generation(generation: int) -> dict[str, Any]:
     return variant
 
 
+SNAPSHOT_RATE_FIELDS = ("direction_accuracy", "joint_accuracy", "kick_f1")
+
+
+def _snapshot_issues(snapshot: Any, label: str) -> list[str]:
+    if not isinstance(snapshot, dict):
+        return [f"invalid_{label}:not_object"]
+
+    issues: list[str] = []
+    for field in SNAPSHOT_RATE_FIELDS:
+        if field not in snapshot:
+            issues.append(f"missing_{label}.{field}")
+            continue
+        value = snapshot[field]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            issues.append(f"invalid_{label}.{field}:non_numeric")
+            continue
+        number = float(value)
+        if not math.isfinite(number):
+            issues.append(f"invalid_{label}.{field}:non_finite")
+        elif number < 0.0:
+            issues.append(f"invalid_{label}.{field}:below_minimum")
+        elif number > 1.0:
+            issues.append(f"invalid_{label}.{field}:above_maximum")
+
+    if "samples" not in snapshot:
+        issues.append(f"missing_{label}.samples")
+    else:
+        samples = snapshot["samples"]
+        if isinstance(samples, bool) or not isinstance(samples, (int, float)):
+            issues.append(f"invalid_{label}.samples:non_numeric")
+        else:
+            number = float(samples)
+            if not math.isfinite(number):
+                issues.append(f"invalid_{label}.samples:non_finite")
+            elif not number.is_integer():
+                issues.append(f"invalid_{label}.samples:not_integer")
+            elif number < 1.0:
+                issues.append(f"invalid_{label}.samples:below_minimum")
+    return issues
+
+
 def metric_snapshot(metrics: dict[str, Any]) -> dict[str, float]:
-    holdout = metrics.get("final_holdout") or {}
+    if not isinstance(metrics, dict):
+        raise ValueError("invalid_generation_metrics:not_object")
+    holdout = metrics.get("final_holdout")
+    issues = _snapshot_issues(holdout, "final_holdout")
+    if issues:
+        raise ValueError("invalid generation metric evidence: " + ", ".join(issues))
+    assert isinstance(holdout, dict)
     return {
-        "direction_accuracy": float(holdout.get("direction_accuracy", 0.0)),
-        "joint_accuracy": float(holdout.get("joint_accuracy", 0.0)),
-        "kick_f1": float(holdout.get("kick_f1", 0.0)),
-        "samples": float(holdout.get("samples", 0)),
+        "direction_accuracy": float(holdout["direction_accuracy"]),
+        "joint_accuracy": float(holdout["joint_accuracy"]),
+        "kick_f1": float(holdout["kick_f1"]),
+        "samples": float(holdout["samples"]),
     }
 
 
 def composite_score(snapshot: dict[str, float]) -> float:
     # Joint action accuracy is primary; kick F1 prevents movement-only regressions.
     return 0.70 * snapshot["joint_accuracy"] + 0.30 * snapshot["kick_f1"]
+
+
+def generation_state_issues(
+    state: Any,
+    *,
+    analysis_version: str,
+    manifest_sha256: str,
+) -> list[str]:
+    if not isinstance(state, dict):
+        return ["invalid_generation_state:not_object"]
+
+    issues: list[str] = []
+    if state.get("schema") != SCHEMA:
+        issues.append("generation_state.schema_mismatch")
+    if state.get("analysis_version") != analysis_version:
+        issues.append("generation_state.analysis_version_mismatch")
+
+    stored_manifest_sha256 = state.get("manifest_sha256")
+    if not isinstance(stored_manifest_sha256, str):
+        issues.append("generation_state.manifest_sha256_invalid")
+    elif stored_manifest_sha256 != manifest_sha256:
+        issues.append("generation_state.manifest_sha256_mismatch")
+
+    champion = state.get("champion")
+    if not isinstance(champion, dict):
+        issues.append("generation_state.champion_invalid")
+        return issues
+
+    champion_id = champion.get("id")
+    if not isinstance(champion_id, str) or not champion_id.strip():
+        issues.append("generation_state.champion_id_invalid")
+
+    champion_metrics = champion.get("metrics")
+    metric_issues = _snapshot_issues(
+        champion_metrics,
+        "generation_state.champion.metrics",
+    )
+    issues.extend(metric_issues)
+
+    score = champion.get("score")
+    if isinstance(score, bool) or not isinstance(score, (int, float)):
+        issues.append("generation_state.champion_score_invalid")
+    elif not math.isfinite(float(score)):
+        issues.append("generation_state.champion_score_non_finite")
+    elif not metric_issues and isinstance(champion_metrics, dict):
+        expected_score = composite_score(champion_metrics)
+        if not math.isclose(
+            float(score),
+            expected_score,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        ):
+            issues.append("generation_state.champion_score_mismatch")
+
+    return issues
+
+
+def preregistration_issues(
+    preregistration: Any,
+    *,
+    state: dict[str, Any],
+    generation: int,
+    analysis_version: str,
+    manifest_sha256: str,
+    shard_root: Path,
+) -> list[str]:
+    if not isinstance(preregistration, dict):
+        return ["invalid_preregistration:not_object"]
+
+    issues: list[str] = []
+    expected_experiment_id = f"gen-{generation:04d}"
+    expected_parent = state.get("champion", {}).get("id")
+    expected_hyperparameters = experiment_for_generation(generation)
+
+    if preregistration.get("schema") != PREREGISTRATION_SCHEMA:
+        issues.append("preregistration.schema_mismatch")
+    if type(preregistration.get("generation")) is not int:
+        issues.append("preregistration.generation_invalid")
+    elif preregistration["generation"] != generation:
+        issues.append("preregistration.generation_mismatch")
+    if preregistration.get("experiment_id") != expected_experiment_id:
+        issues.append("preregistration.experiment_id_mismatch")
+    if preregistration.get("parent_champion") != expected_parent:
+        issues.append("preregistration.parent_champion_mismatch")
+    if preregistration.get("analysis_version") != analysis_version:
+        issues.append("preregistration.analysis_version_mismatch")
+    if preregistration.get("dataset_manifest_sha256") != manifest_sha256:
+        issues.append("preregistration.manifest_sha256_mismatch")
+
+    split = preregistration.get("split")
+    if not isinstance(split, dict):
+        issues.append("preregistration.split_invalid")
+    else:
+        if split.get("train_index") != str(shard_root / "train" / "_index.json"):
+            issues.append("preregistration.train_index_mismatch")
+        if split.get("holdout_index") != str(shard_root / "holdout" / "_index.json"):
+            issues.append("preregistration.holdout_index_mismatch")
+        if split.get("holdout_is_frozen") is not True:
+            issues.append("preregistration.holdout_not_frozen")
+
+    budget = preregistration.get("budget")
+    if not isinstance(budget, dict):
+        issues.append("preregistration.budget_invalid")
+    else:
+        if budget.get("paper_or_offline_only") is not True:
+            issues.append("preregistration.paper_or_offline_only_required")
+        if budget.get("no_external_ai_calls") is not True:
+            issues.append("preregistration.no_external_ai_calls_required")
+        if budget.get("max_epochs") != 8:
+            issues.append("preregistration.max_epochs_mismatch")
+        if budget.get("max_hidden_dim") != 128:
+            issues.append("preregistration.max_hidden_dim_mismatch")
+
+    if preregistration.get("hyperparameters") != expected_hyperparameters:
+        issues.append("preregistration.hyperparameters_mismatch")
+    if preregistration.get("seed") != expected_hyperparameters["seed"]:
+        issues.append("preregistration.seed_mismatch")
+
+    stored_sha256 = preregistration.get("preregistration_sha256")
+    if not isinstance(stored_sha256, str):
+        issues.append("preregistration.sha256_invalid")
+    else:
+        unhashed = dict(preregistration)
+        unhashed.pop("preregistration_sha256", None)
+        expected_sha256 = hashlib.sha256(canonical_json(unhashed)).hexdigest()
+        if stored_sha256 != expected_sha256:
+            issues.append("preregistration.sha256_mismatch")
+
+    return issues
 
 
 def evaluate_candidate(
@@ -86,6 +263,35 @@ def evaluate_candidate(
     maximum_direction_regression: float = 0.02,
     maximum_kick_regression: float = 0.05,
 ) -> dict[str, Any]:
+    evidence_issues = [
+        *_snapshot_issues(candidate, "candidate"),
+        *_snapshot_issues(champion, "champion"),
+    ]
+    for label, value in (
+        ("minimum_improvement", minimum_improvement),
+        ("maximum_direction_regression", maximum_direction_regression),
+        ("maximum_kick_regression", maximum_kick_regression),
+    ):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            evidence_issues.append(f"invalid_policy.{label}:non_numeric")
+            continue
+        number = float(value)
+        if not math.isfinite(number):
+            evidence_issues.append(f"invalid_policy.{label}:non_finite")
+        elif number < 0.0:
+            evidence_issues.append(f"invalid_policy.{label}:below_minimum")
+        elif number > 1.0:
+            evidence_issues.append(f"invalid_policy.{label}:above_maximum")
+
+    if evidence_issues:
+        return {
+            "promote": False,
+            "candidate_score": None,
+            "champion_score": None,
+            "improvement": None,
+            "reasons": evidence_issues,
+        }
+
     candidate_score = composite_score(candidate)
     champion_score = composite_score(champion)
     regressions: list[str] = []
@@ -93,8 +299,6 @@ def evaluate_candidate(
         regressions.append("direction_accuracy_regression")
     if candidate["kick_f1"] < champion["kick_f1"] - maximum_kick_regression:
         regressions.append("kick_f1_regression")
-    if candidate["samples"] <= 0:
-        regressions.append("empty_holdout")
     improved = candidate_score >= champion_score + minimum_improvement
     promoted = improved and not regressions
     reasons = ["offline_holdout_gate_passed"] if promoted else []
@@ -177,7 +381,21 @@ class GenerationLoop:
 
     def initialize(self) -> dict[str, Any]:
         state = self.load_state()
+        if not isinstance(state, dict):
+            raise RuntimeError("generation state provenance validation failed: invalid_generation_state:not_object")
         if state.get("champion"):
+            if not self.manifest.is_file():
+                raise RuntimeError(f"dataset manifest is missing: {self.manifest}")
+            issues = generation_state_issues(
+                state,
+                analysis_version=self.analysis_version,
+                manifest_sha256=sha256_file(self.manifest),
+            )
+            if issues:
+                raise RuntimeError(
+                    "generation state provenance validation failed: "
+                    + ", ".join(issues)
+                )
             return state
 
         baseline_dir = self.models_dir / "challengers" / "autonomy-bc-baseline-v1"
@@ -223,8 +441,23 @@ class GenerationLoop:
         experiment = experiment_for_generation(generation)
         candidate_dir = self.generations_dir / f"gen-{generation:04d}"
         prereg_path = candidate_dir / "preregistration.json"
+        manifest_sha256 = sha256_file(self.manifest)
         if prereg_path.is_file():
-            return load_json(prereg_path)
+            cached = load_json(prereg_path)
+            issues = preregistration_issues(
+                cached,
+                state=state,
+                generation=generation,
+                analysis_version=self.analysis_version,
+                manifest_sha256=manifest_sha256,
+                shard_root=self.shard_root,
+            )
+            if issues:
+                raise RuntimeError(
+                    "generation preregistration validation failed: "
+                    + ", ".join(issues)
+                )
+            return cached
 
         revision = "unknown"
         try:
@@ -243,7 +476,7 @@ class GenerationLoop:
             "parent_champion": state["champion"]["id"],
             "analysis_version": self.analysis_version,
             "dataset_manifest": str(self.manifest),
-            "dataset_manifest_sha256": sha256_file(self.manifest),
+            "dataset_manifest_sha256": manifest_sha256,
             "split": {
                 "train_index": str(self.shard_root / "train" / "_index.json"),
                 "holdout_index": str(self.shard_root / "holdout" / "_index.json"),
@@ -262,6 +495,19 @@ class GenerationLoop:
             "created_at": utc_now(),
         }
         payload["preregistration_sha256"] = hashlib.sha256(canonical_json(payload)).hexdigest()
+        issues = preregistration_issues(
+            payload,
+            state=state,
+            generation=generation,
+            analysis_version=self.analysis_version,
+            manifest_sha256=manifest_sha256,
+            shard_root=self.shard_root,
+        )
+        if issues:
+            raise RuntimeError(
+                "generated preregistration failed validation: "
+                + ", ".join(issues)
+            )
         atomic_json(prereg_path, payload)
         return payload
 
