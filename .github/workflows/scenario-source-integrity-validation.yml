@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - validation/scenario-source-integrity-20261006
+      - validation/scenario-source-structural-integrity-20261006
   workflow_dispatch:
 
 permissions:

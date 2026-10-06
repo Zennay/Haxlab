@@ -39,6 +39,53 @@ function usage() {
   process.exit(2);
 }
 
+function requireOptionValue(key, value) {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.startsWith("--")
+  ) {
+    throw new Error("Missing value for " + key);
+  }
+  return value;
+}
+
+function parseFiniteNumberOption(
+  key,
+  value,
+  { minimum = -Infinity, maximum = Infinity } = {},
+) {
+  const raw = requireOptionValue(key, value);
+  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(raw)) {
+    throw new Error("Invalid numeric value for " + key + ": " + raw);
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error("Out-of-range value for " + key + ": " + raw);
+  }
+  return parsed;
+}
+
+function parseIntegerOption(
+  key,
+  value,
+  { minimum = Number.MIN_SAFE_INTEGER, maximum = Number.MAX_SAFE_INTEGER } = {},
+) {
+  const raw = requireOptionValue(key, value);
+  if (!/^[+-]?\d+$/.test(raw)) {
+    throw new Error("Invalid integer value for " + key + ": " + raw);
+  }
+  const parsed = Number(raw);
+  if (
+    !Number.isSafeInteger(parsed) ||
+    parsed < minimum ||
+    parsed > maximum
+  ) {
+    throw new Error("Out-of-range integer for " + key + ": " + raw);
+  }
+  return parsed;
+}
+
 function parseArgs(argv) {
   const args = {
     partnerModels: [],
@@ -52,26 +99,70 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     const key = argv[i];
     const value = argv[i + 1];
-    if (key === "--challenger") { args.challenger = value; i += 1; }
-    else if (key === "--champion") { args.champion = value; i += 1; }
-    else if (key === "--stadium") { args.stadium = value; i += 1; }
-    else if (key === "--scenarios") { args.scenarios = value; i += 1; }
-    else if (key === "--partner-model") {
-      args.partnerModels.push(value);
+    if (key === "--challenger") {
+      args.challenger = requireOptionValue(key, value);
       i += 1;
     }
-    else if (key === "--seconds") { args.seconds = Number(value); i += 1; }
+    else if (key === "--champion") {
+      args.champion = requireOptionValue(key, value);
+      i += 1;
+    }
+    else if (key === "--stadium") {
+      args.stadium = requireOptionValue(key, value);
+      i += 1;
+    }
+    else if (key === "--scenarios") {
+      args.scenarios = requireOptionValue(key, value);
+      i += 1;
+    }
+    else if (key === "--partner-model") {
+      args.partnerModels.push(requireOptionValue(key, value));
+      i += 1;
+    }
+    else if (key === "--seconds") {
+      args.seconds = parseFiniteNumberOption(
+        key,
+        value,
+        { minimum: 5 },
+      );
+      i += 1;
+    }
     else if (key === "--max-scenarios") {
-      args.maxScenarios = Number(value); i += 1;
+      args.maxScenarios = parseIntegerOption(
+        key,
+        value,
+        { minimum: 1 },
+      );
+      i += 1;
     }
     else if (key === "--sample-every") {
-      args.sampleEvery = Number(value); i += 1;
+      args.sampleEvery = parseIntegerOption(
+        key,
+        value,
+        { minimum: 1 },
+      );
+      i += 1;
     }
     else if (key === "--plug-repeats") {
-      args.plugRepeats = Number(value); i += 1;
+      args.plugRepeats = parseIntegerOption(
+        key,
+        value,
+        { minimum: 1 },
+      );
+      i += 1;
     }
-    else if (key === "--seed") { args.seed = Number(value); i += 1; }
-    else if (key === "--output") { args.output = value; i += 1; }
+    else if (key === "--seed") {
+      args.seed = parseIntegerOption(
+        key,
+        value,
+        { minimum: 1, maximum: 0xffffffff },
+      );
+      i += 1;
+    }
+    else if (key === "--output") {
+      args.output = requireOptionValue(key, value);
+      i += 1;
+    }
     else if (key === "--help" || key === "-h") usage();
     else throw new Error("Unknown argument: " + key);
   }
@@ -79,11 +170,6 @@ function parseArgs(argv) {
     usage();
   }
   if (!args.partnerModels.length) args.partnerModels = [args.champion];
-  args.seconds = Math.max(5, Number(args.seconds) || 30);
-  args.maxScenarios = Math.max(1, Math.floor(args.maxScenarios || 4));
-  args.sampleEvery = Math.max(1, Math.floor(args.sampleEvery || 6));
-  args.plugRepeats = Math.max(1, Math.floor(args.plugRepeats || 1));
-  args.seed = Number.isFinite(args.seed) ? Math.floor(args.seed) : 1337;
   return args;
 }
 
@@ -386,15 +472,49 @@ function nearestTeamToBall(players, ball) {
   return bestTeam;
 }
 
+function scenarioIndexForRow(scenario, scenarioOffset) {
+  if (!scenario || typeof scenario !== "object" || Array.isArray(scenario)) {
+    throw new Error(
+      "scenario " + (scenarioOffset + 1) + " must be an object",
+    );
+  }
+  const declared = scenario.scenario_index;
+  if (declared === undefined || declared === null) {
+    return scenarioOffset + 1;
+  }
+  if (!Number.isSafeInteger(declared) || declared < 1) {
+    throw new Error(
+      "scenario " + (scenarioOffset + 1) +
+      " has invalid scenario_index: " + String(declared),
+    );
+  }
+  return declared;
+}
+
 function loadScenarioRows(filePath, maxScenarios) {
+  if (!Number.isSafeInteger(maxScenarios) || maxScenarios < 1) {
+    throw new Error("maxScenarios must be a positive safe integer");
+  }
   const payload = JSON.parse(fs.readFileSync(filePath, "utf8"));
   const rows = Array.isArray(payload)
     ? payload
-    : Array.isArray(payload.scenarios)
+    : payload && typeof payload === "object" &&
+        !Array.isArray(payload) &&
+        Array.isArray(payload.scenarios)
       ? payload.scenarios
       : [];
   if (!rows.length) throw new Error("scenario file contains no scenarios");
-  return rows.slice(0, Math.max(1, maxScenarios));
+
+  const selected = rows.slice(0, maxScenarios);
+  const seenScenarioIndices = new Set();
+  for (let offset = 0; offset < selected.length; offset += 1) {
+    const scenarioIndex = scenarioIndexForRow(selected[offset], offset);
+    if (seenScenarioIndices.has(scenarioIndex)) {
+      throw new Error("duplicate scenario_index: " + scenarioIndex);
+    }
+    seenScenarioIndices.add(scenarioIndex);
+  }
+  return selected;
 }
 
 function createRuntimeMap(modelPaths) {
@@ -1000,8 +1120,9 @@ function main() {
 
   for (let scenarioOffset = 0; scenarioOffset < scenarios.length; scenarioOffset += 1) {
     const scenario = scenarios[scenarioOffset];
-    const scenarioIndex = Number(
-      scenario.scenario_index || scenarioOffset + 1,
+    const scenarioIndex = scenarioIndexForRow(
+      scenario,
+      scenarioOffset,
     );
     for (const side of [1, 2]) {
       const candidate = runArenaMatch({
@@ -1121,6 +1242,9 @@ if (require.main === module) {
 module.exports = {
   ARENA_SCHEMA,
   ROLES,
+  parseArgs,
+  scenarioIndexForRow,
+  loadScenarioRows,
   actionKey,
   angleDelta,
   contextShifted,

@@ -1,4 +1,8 @@
-from haxlab.evaluation.models import EvaluationEvidence, Regression
+from haxlab.evaluation.models import (
+    EvaluationEvidence,
+    PromotionPolicy,
+    Regression,
+)
 from haxlab.evaluation.promotion import decide_promotion
 
 
@@ -111,3 +115,85 @@ def test_non_integer_game_count_fails_closed() -> None:
 
     assert not decision.promote
     assert "invalid_evidence:games_vs_champion:not_integer" in decision.reasons
+
+
+def test_nan_policy_confidence_threshold_fails_closed() -> None:
+    decision = decide_promotion(
+        _good_evidence(),
+        PromotionPolicy(minimum_score_rate_lower_bound=float("nan")),
+    )
+
+    assert not decision.promote
+    assert (
+        "invalid_policy:minimum_score_rate_lower_bound:non_finite"
+        in decision.reasons
+    )
+
+
+def test_string_policy_threshold_is_not_coerced() -> None:
+    decision = decide_promotion(
+        _good_evidence(),
+        PromotionPolicy(minimum_scenario_pass_rate="0.50"),
+    )
+
+    assert not decision.promote
+    assert (
+        "invalid_policy:minimum_scenario_pass_rate:non_numeric"
+        in decision.reasons
+    )
+
+
+def test_boolean_minimum_games_is_rejected() -> None:
+    decision = decide_promotion(
+        _good_evidence(),
+        PromotionPolicy(minimum_games=True),
+    )
+
+    assert not decision.promote
+    assert "invalid_policy:minimum_games:non_integer" in decision.reasons
+
+
+def test_out_of_range_policy_rate_fails_closed() -> None:
+    decision = decide_promotion(
+        _good_evidence(),
+        PromotionPolicy(minimum_scenario_pass_rate=1.01),
+    )
+
+    assert not decision.promote
+    assert any(
+        reason.startswith(
+            "invalid_policy:minimum_scenario_pass_rate:above_maximum"
+        )
+        for reason in decision.reasons
+    )
+
+
+def test_truthy_string_cannot_allow_critical_regressions() -> None:
+    evidence = _good_evidence(
+        regressions=(
+            Regression(
+                scenario="kickoff",
+                severity="critical",
+                details="regressed",
+            ),
+        )
+    )
+
+    decision = decide_promotion(
+        evidence,
+        PromotionPolicy(allow_critical_regressions="false"),
+    )
+
+    assert not decision.promote
+    assert (
+        "invalid_policy:allow_critical_regressions:not_boolean"
+        in decision.reasons
+    )
+    assert any(reason.startswith("critical_regressions") for reason in decision.reasons)
+
+
+def test_non_policy_object_fails_closed() -> None:
+    decision = decide_promotion(_good_evidence(), None)
+
+    assert not decision.promote
+    assert decision.reasons == ("invalid_policy:object_type",)
