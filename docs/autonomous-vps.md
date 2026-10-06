@@ -132,6 +132,22 @@ CPU-heavy parsing/training runs are explicit jobs with concurrency limits. Train
 The runtime ledger is the source of truth for what has already been seen, archived, parsed, trained on and evaluated.
 
 
+## Integrity audits
+
+Two explicit read-only audits guard the storage boundaries without making the
+lightweight status loop hash or parse the full corpus on every tick:
+
+- `haxlab-audit-archive` verifies every immutable raw replay object against the
+  raw ledger (path, size and SHA-256).
+- `haxlab-audit-analysis` verifies every successful current-version analysis
+  row against its derived JSON artifact and the replay-processing ledger.
+
+The same actions are exposed through `haxlab-actions-control`, the manual HaxLab
+VPS workflow and the whitelisted zCloud runner bridge. Analysis finalization also
+runs the derived-artifact audit before publishing a fresh completion snapshot,
+leaderboard or training manifest.
+
+
 ## VPS autonomy reconciler
 
 The continuous ingest/worker/analyzer services are complemented by

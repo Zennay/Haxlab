@@ -225,7 +225,7 @@ class RuntimeState:
             SELECT r.sha256, r.archive_path, r.size_bytes
             FROM raw_replays AS r
             LEFT JOIN replay_processing AS p ON p.sha256 = r.sha256
-            WHERE p.sha256 IS NULL
+            WHERE p.sha256 IS NULL OR p.status = 'retry'
             ORDER BY r.first_archived_at, r.sha256
             LIMIT ?
             """,
