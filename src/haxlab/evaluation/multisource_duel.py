@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,38 @@ class MultisourceDuelDecision:
     eligible_to_replace_champion: bool
     reasons: tuple[str, ...]
     checks: dict[str, Any]
+
+
+def _declared_aggregate_integer(
+    failures: list[str],
+    payload: dict[str, Any],
+    key: str,
+) -> int:
+    value = payload.get(key)
+    if isinstance(value, bool) or not isinstance(value, int):
+        failures.append(f"invalid_aggregate:{key}:not_integer")
+        return 0
+    if value < 0:
+        failures.append(f"invalid_aggregate:{key}:negative")
+        return 0
+    return value
+
+
+def _declared_aggregate_score(
+    failures: list[str],
+    payload: dict[str, Any],
+) -> float:
+    value = payload.get("aggregate_match_score")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        failures.append("invalid_aggregate:aggregate_match_score:not_number")
+        return 0.0
+    number = float(value)
+    if not math.isfinite(number):
+        failures.append("invalid_aggregate:aggregate_match_score:non_finite")
+        return 0.0
+    if not 0.0 <= number <= 1.0:
+        failures.append("invalid_aggregate:aggregate_match_score:out_of_range")
+    return number
 
 
 def build_multisource_duel(duels: list[dict[str, Any]]) -> dict[str, Any]:
@@ -114,7 +147,12 @@ def decide_multisource_duel_gate(
             f"{payload.get('evaluation_mode') or 'missing'}"
         )
 
-    sources = list(payload.get("sources") or [])
+    raw_sources = payload.get("sources")
+    if not isinstance(raw_sources, list):
+        failures.append("invalid_sources_payload")
+        sources: list[Any] = []
+    else:
+        sources = raw_sources
     declared_source_count = payload.get("source_count")
     if declared_source_count != len(sources):
         failures.append(
@@ -136,8 +174,17 @@ def decide_multisource_duel_gate(
     scenario_hashes: list[str] = []
     source_results: list[dict[str, Any]] = []
     all_sources_passed = True
+    expected_matches = 0
+    expected_wins = 0
+    expected_draws = 0
+    expected_losses = 0
 
     for index, source in enumerate(sources, start=1):
+        if not isinstance(source, dict):
+            failures.append(f"source_{index}:invalid_source_payload")
+            all_sources_passed = False
+            continue
+
         scenario_sha = str(source.get("scenario_sha256") or "").lower()
         if (
             len(scenario_sha) != 64
@@ -166,6 +213,10 @@ def decide_multisource_duel_gate(
             duel,
             policy=duel_policy,
         )
+        expected_matches += int(decision.checks.get("matches", 0))
+        expected_wins += int(decision.checks.get("wins", 0))
+        expected_draws += int(decision.checks.get("draws", 0))
+        expected_losses += int(decision.checks.get("losses", 0))
         source_results.append(
             {
                 "source_index": index,
@@ -186,12 +237,81 @@ def decide_multisource_duel_gate(
     if len(set(scenario_hashes)) != len(scenario_hashes):
         failures.append("duplicate_scenario_sources")
 
+    declared_scenario_hashes_raw = payload.get("scenario_sha256s")
+    declared_scenario_hashes: list[str] = []
+    if not isinstance(declared_scenario_hashes_raw, list):
+        failures.append("invalid_scenario_sha256s_payload")
+    else:
+        for index, value in enumerate(declared_scenario_hashes_raw, start=1):
+            if not isinstance(value, str):
+                failures.append(
+                    f"declared_scenario_{index}:invalid_scenario_sha256"
+                )
+                declared_scenario_hashes.append("")
+                continue
+            normalized = value.lower()
+            if (
+                len(normalized) != 64
+                or any(ch not in "0123456789abcdef" for ch in normalized)
+            ):
+                failures.append(
+                    f"declared_scenario_{index}:invalid_scenario_sha256"
+                )
+            declared_scenario_hashes.append(normalized)
+    if declared_scenario_hashes != scenario_hashes:
+        failures.append("scenario_sha256s_mismatch")
+
     checks["source_results"] = source_results
     checks["all_sources_passed"] = all_sources_passed
-    checks["aggregate_matches"] = int(payload.get("matches") or 0)
-    checks["aggregate_match_score"] = float(
-        payload.get("aggregate_match_score") or 0.0
+    checks["scenario_sha256s"] = scenario_hashes
+    checks["declared_scenario_sha256s"] = declared_scenario_hashes
+
+    declared_aggregates = {
+        "matches": _declared_aggregate_integer(failures, payload, "matches"),
+        "wins": _declared_aggregate_integer(failures, payload, "wins"),
+        "draws": _declared_aggregate_integer(failures, payload, "draws"),
+        "losses": _declared_aggregate_integer(failures, payload, "losses"),
+    }
+    expected_aggregates = {
+        "matches": expected_matches,
+        "wins": expected_wins,
+        "draws": expected_draws,
+        "losses": expected_losses,
+    }
+    for key, expected in expected_aggregates.items():
+        declared = declared_aggregates[key]
+        if declared != expected:
+            failures.append(
+                f"aggregate_{key}_mismatch:{declared}!={expected}"
+            )
+
+    declared_match_score = _declared_aggregate_score(failures, payload)
+    expected_match_score = (
+        (expected_wins + 0.5 * expected_draws) / expected_matches
+        if expected_matches > 0
+        else 0.0
     )
+    if not math.isclose(
+        declared_match_score,
+        expected_match_score,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    ):
+        failures.append(
+            "aggregate_match_score_mismatch:"
+            f"{declared_match_score:.12f}!={expected_match_score:.12f}"
+        )
+
+    checks["aggregate_matches"] = declared_aggregates["matches"]
+    checks["aggregate_wins"] = declared_aggregates["wins"]
+    checks["aggregate_draws"] = declared_aggregates["draws"]
+    checks["aggregate_losses"] = declared_aggregates["losses"]
+    checks["aggregate_match_score"] = declared_match_score
+    checks["expected_aggregate_matches"] = expected_matches
+    checks["expected_aggregate_wins"] = expected_wins
+    checks["expected_aggregate_draws"] = expected_draws
+    checks["expected_aggregate_losses"] = expected_losses
+    checks["expected_aggregate_match_score"] = expected_match_score
 
     if failures:
         return MultisourceDuelDecision(

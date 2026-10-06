@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import math
 import unittest
 
 from haxlab.evaluation.elite_gate_preflight import (
@@ -114,6 +115,98 @@ class EliteGateEvidencePreflightTests(unittest.TestCase):
             validation_metrics=validation,
         )
         self.assertEqual(raw_proxy["final_validation"], validation)
+
+    def test_non_object_metadata_fails_closed(self) -> None:
+        issues = elite_gate_evidence_issues(["malformed"])  # type: ignore[arg-type]
+        self.assertEqual(issues, ["invalid_metadata:not_object"])
+
+    def test_non_finite_holdout_metric_fails_preflight(self) -> None:
+        split = complete_split()
+        split["direction_accuracy"] = math.nan
+        metadata = {
+            "training": {
+                "frozen_holdout_used_for_selection": False,
+                "kick_threshold_source": "validation_only",
+            },
+            "final_validation": complete_split(),
+            "final_holdout": split,
+        }
+
+        issues = elite_gate_evidence_issues(metadata)
+
+        self.assertIn(
+            "invalid_final_holdout.direction_accuracy:non_finite",
+            issues,
+        )
+
+    def test_out_of_range_role_accuracy_fails_preflight(self) -> None:
+        split = complete_split()
+        split["by_role"]["am"]["direction_accuracy"] = 1.01
+        metadata = {
+            "training": {
+                "frozen_holdout_used_for_selection": False,
+                "kick_threshold_source": "validation_only",
+            },
+            "final_validation": complete_split(),
+            "final_holdout": split,
+        }
+
+        issues = elite_gate_evidence_issues(metadata)
+
+        self.assertIn(
+            "invalid_final_holdout.by_role.am.direction_accuracy:above_maximum",
+            issues,
+        )
+
+    def test_string_sample_count_fails_preflight(self) -> None:
+        split = complete_split()
+        split["samples"] = "400"
+        metadata = {
+            "training": {
+                "frozen_holdout_used_for_selection": False,
+                "kick_threshold_source": "validation_only",
+            },
+            "final_validation": complete_split(),
+            "final_holdout": split,
+        }
+
+        issues = elite_gate_evidence_issues(metadata)
+
+        self.assertIn("invalid_final_holdout.samples:non_numeric", issues)
+
+    def test_fractional_sample_count_fails_preflight(self) -> None:
+        split = complete_split()
+        split["samples"] = 399.5
+        metadata = {
+            "training": {
+                "frozen_holdout_used_for_selection": False,
+                "kick_threshold_source": "validation_only",
+            },
+            "final_validation": complete_split(),
+            "final_holdout": split,
+        }
+
+        issues = elite_gate_evidence_issues(metadata)
+
+        self.assertIn("invalid_final_holdout.samples:not_integer", issues)
+
+    def test_validation_metric_is_numeric_and_bounded(self) -> None:
+        split = complete_split()
+        metadata = {
+            "training": {
+                "frozen_holdout_used_for_selection": False,
+                "kick_threshold_source": "validation_only",
+            },
+            "final_validation": {"direction_accuracy": float("inf")},
+            "final_holdout": split,
+        }
+
+        issues = elite_gate_evidence_issues(metadata)
+
+        self.assertIn(
+            "invalid_final_validation.direction_accuracy:non_finite",
+            issues,
+        )
 
 
 if __name__ == "__main__":

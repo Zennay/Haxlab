@@ -147,3 +147,83 @@ def test_frozen_suite_requires_at_least_three_sources(tmp_path: Path) -> None:
             roots,
             scenarios_per_source=4,
         )
+
+
+def test_frozen_suite_rejects_non_object_source_descriptor(tmp_path: Path) -> None:
+    root = _source(tmp_path / "a", "a")
+    (root / "source.json").write_text(
+        json.dumps(["not", "an", "object"]) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="source.json must contain a JSON object"):
+        build_frozen_multisource_suite(
+            [root, _source(tmp_path / "b", "b"), _source(tmp_path / "c", "c")],
+            scenarios_per_source=4,
+        )
+
+
+def test_frozen_suite_rejects_non_object_scenario_descriptor(tmp_path: Path) -> None:
+    root = _source(tmp_path / "a", "a")
+    (root / "scenarios.json").write_text(
+        json.dumps(["not", "an", "object"]) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="scenarios.json must contain a JSON object"):
+        build_frozen_multisource_suite(
+            [root, _source(tmp_path / "b", "b"), _source(tmp_path / "c", "c")],
+            scenarios_per_source=4,
+        )
+
+
+def test_frozen_suite_rejects_non_array_scenarios(tmp_path: Path) -> None:
+    root = _source(tmp_path / "a", "a")
+    payload = json.loads((root / "scenarios.json").read_text(encoding="utf-8"))
+    payload["scenarios"] = {"unexpected": "mapping"}
+    (root / "scenarios.json").write_text(
+        json.dumps(payload) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="scenarios must be a JSON array"):
+        build_frozen_multisource_suite(
+            [root, _source(tmp_path / "b", "b"), _source(tmp_path / "c", "c")],
+            scenarios_per_source=4,
+        )
+
+
+def test_frozen_suite_rejects_non_object_scenario_row(tmp_path: Path) -> None:
+    root = _source(tmp_path / "a", "a")
+    payload = json.loads((root / "scenarios.json").read_text(encoding="utf-8"))
+    payload["scenarios"][0] = "malformed"
+    (root / "scenarios.json").write_text(
+        json.dumps(payload) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="every scenario must be a JSON object"):
+        build_frozen_multisource_suite(
+            [root, _source(tmp_path / "b", "b"), _source(tmp_path / "c", "c")],
+            scenarios_per_source=4,
+        )
+
+
+@pytest.mark.parametrize("declared_count", [True, 4.0, "4"])
+def test_frozen_suite_requires_strict_integer_scenario_count(
+    tmp_path: Path,
+    declared_count: object,
+) -> None:
+    root = _source(tmp_path / "a", "a")
+    payload = json.loads((root / "scenarios.json").read_text(encoding="utf-8"))
+    payload["scenario_count"] = declared_count
+    (root / "scenarios.json").write_text(
+        json.dumps(payload) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="scenario_count must be an integer"):
+        build_frozen_multisource_suite(
+            [root, _source(tmp_path / "b", "b"), _source(tmp_path / "c", "c")],
+            scenarios_per_source=4,
+        )

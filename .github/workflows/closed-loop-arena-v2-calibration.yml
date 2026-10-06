@@ -60,10 +60,32 @@ jobs:
           CAND_D=/var/lib/haxlab/derived/training/elite-player-candidate-d/model/runtime-model.json
           PARTNER_B=/var/lib/haxlab/derived/training/elite-player-candidate-b/model/runtime-model.json
           PARTNER_C=/var/lib/haxlab/derived/training/elite-player-candidate-c/model/runtime-model.json
+          CURRENT_POINTER=/var/lib/haxlab/derived/champions/elite-player/current.json
+          LIVE_POINTER=/var/lib/haxlab/derived/champions/elite-player/live.json
+          CURRENT_POINTER_SHA_BEFORE="$(
+            sudo -u haxlab sha256sum "$CURRENT_POINTER" | awk '{print $1}'
+          )"
+          LIVE_POINTER_SHA_BEFORE="$(
+            sudo -u haxlab sha256sum "$LIVE_POINTER" | awk '{print $1}'
+          )"
           LIVE_RUNTIME="$(
             sudo -u haxlab /opt/haxlab/.venv/bin/python -c               'import json; print(json.load(open("/var/lib/haxlab/derived/champions/elite-player/current.json"))["runtime_model_path"])'
           )"
+          CURRENT_POINTER_SHA_AFTER_RESOLVE="$(
+            sudo -u haxlab sha256sum "$CURRENT_POINTER" | awk '{print $1}'
+          )"
+          if [ "$CURRENT_POINTER_SHA_BEFORE" != "$CURRENT_POINTER_SHA_AFTER_RESOLVE" ]; then
+            echo "::error title=Champion pointer race::current.json changed while resolving runtime_model_path"
+            exit 1
+          fi
           OUT="/var/lib/haxlab/derived/evaluation/closed-loop-arena-v2-calibration-v1/${GITHUB_SHA:0:12}"
+
+          # A same-SHA rerun must never inherit artifacts or a "latest completed"
+          # receipt from an earlier attempt.
+          sudo -u haxlab rm -rf "$OUT"
+          rm -f \
+            /tmp/haxlab-arena-v2-calibration-latest-summary.json \
+            /tmp/haxlab-arena-v2-calibration-latest-status.json
 
           require_readable() {
             local label="$1"
@@ -117,19 +139,6 @@ jobs:
                       "the exact historical Candidate D metrics before calibration can run"
                   )
 
-          frozen_manifest = Path(
-              "/var/lib/haxlab/derived/evaluation/candidate-d-multisource-holdout-v1/frozen-manifest.json"
-          )
-          frozen_manifest_hash = "541b635e34492e9409c5d0fbe2ffd6303c75a2cd10348aebee9e5df49669a609"
-          if not frozen_manifest.is_file():
-              raise SystemExit(f"missing frozen Candidate D evaluation manifest: {frozen_manifest}")
-          actual_manifest_hash = hashlib.sha256(frozen_manifest.read_bytes()).hexdigest()
-          if actual_manifest_hash != frozen_manifest_hash:
-              raise SystemExit(
-                  "frozen Candidate D evaluation manifest hash mismatch: "
-                  f"{actual_manifest_hash} != {frozen_manifest_hash}"
-              )
-          print("ARENA_CANDIDATE_D_INPUTS_PRESENT_EVAL_MANIFEST_VERIFIED")
           PY
 
             sudo -u haxlab rm -rf /var/lib/haxlab/derived/training/elite-player-candidate-d
@@ -156,6 +165,18 @@ jobs:
               > /tmp/haxlab-candidate-d-rehydrate.log
             echo "ARENA_CANDIDATE_D_REHYDRATE_END"
           fi
+
+          FROZEN_MANIFEST="$ROOT/frozen-manifest.json"
+          FROZEN_MANIFEST_EXPECTED_SHA="541b635e34492e9409c5d0fbe2ffd6303c75a2cd10348aebee9e5df49669a609"
+          require_readable frozen-manifest "$FROZEN_MANIFEST"
+          FROZEN_MANIFEST_ACTUAL_SHA="$(
+            sudo -u haxlab sha256sum "$FROZEN_MANIFEST" | awk '{print $1}'
+          )"
+          if [ "$FROZEN_MANIFEST_ACTUAL_SHA" != "$FROZEN_MANIFEST_EXPECTED_SHA" ]; then
+            echo "::error title=Frozen manifest provenance mismatch::actual=$FROZEN_MANIFEST_ACTUAL_SHA expected=$FROZEN_MANIFEST_EXPECTED_SHA"
+            exit 1
+          fi
+          echo "ARENA_FROZEN_MANIFEST_HASH_VERIFIED sha256=$FROZEN_MANIFEST_ACTUAL_SHA"
 
           require_readable candidate-d "$CAND_D"
           require_readable candidate-d-metrics /var/lib/haxlab/derived/training/elite-player-candidate-d/model/metrics.json
@@ -202,6 +223,48 @@ jobs:
           done
 
           sudo -u haxlab mkdir -p "$OUT"
+          FROZEN_INPUT_SNAPSHOT="$OUT/frozen-inputs-before.json"
+          sudo -u haxlab env \
+            ROOT="$ROOT" \
+            SNAPSHOT="$FROZEN_INPUT_SNAPSHOT" \
+            /opt/haxlab/.venv/bin/python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["ROOT"])
+          paths = [root / "frozen-manifest.json"]
+          for source in ("01", "02", "03"):
+              paths.extend(
+                  (
+                      root / f"source-{source}" / "stadium.hbs",
+                      root / f"source-{source}" / "scenarios.json",
+                  )
+              )
+
+          hashes = {
+              str(path): hashlib.sha256(path.read_bytes()).hexdigest()
+              for path in paths
+          }
+          Path(os.environ["SNAPSHOT"]).write_text(
+              json.dumps(
+                  {
+                      "schema": "haxlab-arena-v2-frozen-inputs-v1",
+                      "hashes": hashes,
+                  },
+                  indent=2,
+                  sort_keys=True,
+              ) + "\n",
+              encoding="utf-8",
+          )
+          print(
+              "ARENA_FROZEN_INPUT_SNAPSHOT_GREEN "
+              + hashlib.sha256(
+                  json.dumps(hashes, sort_keys=True).encode()
+              ).hexdigest()
+          )
+          PY
           sudo -u haxlab env LIVE_RUNTIME="$LIVE_RUNTIME" WEAK_MODEL="$OUT/ablated-zero-policy.json"             /opt/haxlab/.venv/bin/python - <<'PY'
           import json
           import os
@@ -240,6 +303,22 @@ jobs:
           print(json.dumps(model["arena_v2_ablation"], indent=2))
           PY
 
+          LIVE_RUNTIME_SHA_BEFORE="$(
+            sudo -u haxlab sha256sum "$LIVE_RUNTIME" | awk '{print $1}'
+          )"
+          CAND_D_SHA_BEFORE="$(
+            sudo -u haxlab sha256sum "$CAND_D" | awk '{print $1}'
+          )"
+          PARTNER_B_SHA_BEFORE="$(
+            sudo -u haxlab sha256sum "$PARTNER_B" | awk '{print $1}'
+          )"
+          PARTNER_C_SHA_BEFORE="$(
+            sudo -u haxlab sha256sum "$PARTNER_C" | awk '{print $1}'
+          )"
+          WEAK_SHA_BEFORE="$(
+            sudo -u haxlab sha256sum "$OUT/ablated-zero-policy.json" | awk '{print $1}'
+          )"
+
           {
             echo "ARENA_ROOT=$ROOT"
             echo "ARENA_CAND_D=$CAND_D"
@@ -248,6 +327,16 @@ jobs:
             echo "ARENA_LIVE=$LIVE_RUNTIME"
             echo "ARENA_OUT=$OUT"
             echo "ARENA_WEAK=$OUT/ablated-zero-policy.json"
+            echo "ARENA_CURRENT_POINTER=$CURRENT_POINTER"
+            echo "ARENA_LIVE_POINTER=$LIVE_POINTER"
+            echo "ARENA_CURRENT_POINTER_SHA_BEFORE=$CURRENT_POINTER_SHA_BEFORE"
+            echo "ARENA_LIVE_POINTER_SHA_BEFORE=$LIVE_POINTER_SHA_BEFORE"
+            echo "ARENA_LIVE_RUNTIME_SHA_BEFORE=$LIVE_RUNTIME_SHA_BEFORE"
+            echo "ARENA_CAND_D_SHA_BEFORE=$CAND_D_SHA_BEFORE"
+            echo "ARENA_PARTNER_B_SHA_BEFORE=$PARTNER_B_SHA_BEFORE"
+            echo "ARENA_PARTNER_C_SHA_BEFORE=$PARTNER_C_SHA_BEFORE"
+            echo "ARENA_WEAK_SHA_BEFORE=$WEAK_SHA_BEFORE"
+            echo "ARENA_FROZEN_INPUT_SNAPSHOT=$FROZEN_INPUT_SNAPSHOT"
           } >> "$GITHUB_ENV"
 
       - name: Run full frozen paired calibration batch
@@ -294,6 +383,8 @@ jobs:
           import os
           import statistics
           from pathlib import Path
+
+          from haxlab.evaluation.calibration_gate import decide_calibration_gate
 
           root = Path(os.environ["ARENA_OUT"])
           labels = ("champion-self", "candidate-d", "weak-zero")
@@ -356,6 +447,7 @@ jobs:
                   "mean_team_collapsed_shape_rate": statistics.mean(r["team_collapsed_shape_rate"] for r in selected),
               }
 
+          decision = decide_calibration_gate(aggregate)
           summary = {
               "schema": "haxlab-closed-loop-arena-v2-calibration-batch-v1",
               "code_sha": os.environ["GITHUB_SHA"],
@@ -369,34 +461,16 @@ jobs:
               },
               "aggregate": aggregate,
               "runs": rows,
-              "sanity": {
-                  "champion_identity_all_behavior_pass": aggregate["champion-self"]["behavior_passes"] == 3,
-                  "champion_identity_all_promotion_eligible": (
-                      aggregate["champion-self"]["promotion_eligible_sources"] == 3
-                  ),
-                  "negative_control_discriminated": (
-                      aggregate["weak-zero"]["promotion_eligible_sources"] == 0
-                  ),
-                  "candidate_d_rejected": (
-                      aggregate["candidate-d"]["promotion_eligible_sources"] == 0
-                  ),
-                  "candidate_d_behavior_passes": aggregate["candidate-d"]["behavior_passes"],
-              },
-              "threshold_freeze_ready": True,
-              "threshold_freeze_blocker": None,
+              "sanity": decision.sanity,
+              "threshold_freeze_ready": decision.passed,
+              "threshold_freeze_blocker": (
+                  None if decision.passed else list(decision.reasons)
+              ),
           }
-          sanity = summary["sanity"]
-          if not sanity["champion_identity_all_promotion_eligible"]:
+          if not decision.passed:
               raise SystemExit(
-                  "frozen policy validation failed: champion-self must pass 3/3 sources"
-              )
-          if not sanity["negative_control_discriminated"]:
-              raise SystemExit(
-                  "frozen policy validation failed: zero-policy control became promotion eligible"
-              )
-          if not sanity["candidate_d_rejected"]:
-              raise SystemExit(
-                  "frozen policy validation failed: known rejected Candidate D became promotion eligible"
+                  "frozen policy validation failed: "
+                  + ", ".join(decision.reasons)
               )
 
           (root / "calibration-summary.json").write_text(
@@ -408,6 +482,156 @@ jobs:
 
           sudo -u haxlab cat "$ARENA_OUT/calibration-summary.json"             > /tmp/haxlab-arena-v2-calibration-latest-summary.json
           printf '{"status":"completed","sha":"%s","output":"%s"}\n'             "$GITHUB_SHA" "$ARENA_OUT"             > /tmp/haxlab-arena-v2-calibration-latest-status.json
+
+      - name: Verify champion pointers unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          CURRENT_AFTER="$(
+            sudo -u haxlab sha256sum "$ARENA_CURRENT_POINTER" | awk '{print $1}'
+          )"
+          LIVE_AFTER="$(
+            sudo -u haxlab sha256sum "$ARENA_LIVE_POINTER" | awk '{print $1}'
+          )"
+          LIVE_RUNTIME_AFTER="$(
+            sudo -u haxlab sha256sum "$ARENA_LIVE" | awk '{print $1}'
+          )"
+          CAND_D_AFTER="$(
+            sudo -u haxlab sha256sum "$ARENA_CAND_D" | awk '{print $1}'
+          )"
+          PARTNER_B_AFTER="$(
+            sudo -u haxlab sha256sum "$ARENA_PARTNER_B" | awk '{print $1}'
+          )"
+          PARTNER_C_AFTER="$(
+            sudo -u haxlab sha256sum "$ARENA_PARTNER_C" | awk '{print $1}'
+          )"
+          WEAK_AFTER="$(
+            sudo -u haxlab sha256sum "$ARENA_WEAK" | awk '{print $1}'
+          )"
+          sudo -u haxlab env \
+            ARENA_OUT="$ARENA_OUT" \
+            CURRENT_PATH="$ARENA_CURRENT_POINTER" \
+            LIVE_PATH="$ARENA_LIVE_POINTER" \
+            LIVE_RUNTIME_PATH="$ARENA_LIVE" \
+            CAND_D_PATH="$ARENA_CAND_D" \
+            PARTNER_B_PATH="$ARENA_PARTNER_B" \
+            PARTNER_C_PATH="$ARENA_PARTNER_C" \
+            WEAK_PATH="$ARENA_WEAK" \
+            CURRENT_BEFORE="$ARENA_CURRENT_POINTER_SHA_BEFORE" \
+            CURRENT_AFTER="$CURRENT_AFTER" \
+            LIVE_BEFORE="$ARENA_LIVE_POINTER_SHA_BEFORE" \
+            LIVE_AFTER="$LIVE_AFTER" \
+            LIVE_RUNTIME_BEFORE="$ARENA_LIVE_RUNTIME_SHA_BEFORE" \
+            LIVE_RUNTIME_AFTER="$LIVE_RUNTIME_AFTER" \
+            CAND_D_BEFORE="$ARENA_CAND_D_SHA_BEFORE" \
+            CAND_D_AFTER="$CAND_D_AFTER" \
+            PARTNER_B_BEFORE="$ARENA_PARTNER_B_SHA_BEFORE" \
+            PARTNER_B_AFTER="$PARTNER_B_AFTER" \
+            PARTNER_C_BEFORE="$ARENA_PARTNER_C_SHA_BEFORE" \
+            PARTNER_C_AFTER="$PARTNER_C_AFTER" \
+            WEAK_BEFORE="$ARENA_WEAK_SHA_BEFORE" \
+            WEAK_AFTER="$WEAK_AFTER" \
+            FROZEN_INPUT_SNAPSHOT="$ARENA_FROZEN_INPUT_SNAPSHOT" \
+            /opt/haxlab/.venv/bin/python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          evidence = {
+              "schema": "haxlab-arena-v2-pointer-invariant-v1",
+              "current_pointer": os.environ["CURRENT_PATH"],
+              "live_pointer": os.environ["LIVE_PATH"],
+              "current_sha256_before": os.environ["CURRENT_BEFORE"],
+              "current_sha256_after": os.environ["CURRENT_AFTER"],
+              "live_sha256_before": os.environ["LIVE_BEFORE"],
+              "live_sha256_after": os.environ["LIVE_AFTER"],
+              "models": {
+                  "live_runtime": {
+                      "path": os.environ["LIVE_RUNTIME_PATH"],
+                      "sha256_before": os.environ["LIVE_RUNTIME_BEFORE"],
+                      "sha256_after": os.environ["LIVE_RUNTIME_AFTER"],
+                  },
+                  "candidate_d": {
+                      "path": os.environ["CAND_D_PATH"],
+                      "sha256_before": os.environ["CAND_D_BEFORE"],
+                      "sha256_after": os.environ["CAND_D_AFTER"],
+                  },
+                  "partner_b": {
+                      "path": os.environ["PARTNER_B_PATH"],
+                      "sha256_before": os.environ["PARTNER_B_BEFORE"],
+                      "sha256_after": os.environ["PARTNER_B_AFTER"],
+                  },
+                  "partner_c": {
+                      "path": os.environ["PARTNER_C_PATH"],
+                      "sha256_before": os.environ["PARTNER_C_BEFORE"],
+                      "sha256_after": os.environ["PARTNER_C_AFTER"],
+                  },
+                  "weak_zero": {
+                      "path": os.environ["WEAK_PATH"],
+                      "sha256_before": os.environ["WEAK_BEFORE"],
+                      "sha256_after": os.environ["WEAK_AFTER"],
+                  },
+              },
+          }
+          snapshot = json.loads(
+              Path(os.environ["FROZEN_INPUT_SNAPSHOT"]).read_text(
+                  encoding="utf-8"
+              )
+          )
+          before_frozen = dict(snapshot.get("hashes") or {})
+          after_frozen = {
+              path: hashlib.sha256(Path(path).read_bytes()).hexdigest()
+              for path in before_frozen
+          }
+          evidence["frozen_inputs"] = {
+              "before": before_frozen,
+              "after": after_frozen,
+          }
+          evidence["frozen_inputs_unchanged"] = (
+              before_frozen == after_frozen
+          )
+
+          evidence["current_unchanged"] = (
+              evidence["current_sha256_before"]
+              == evidence["current_sha256_after"]
+          )
+          evidence["live_unchanged"] = (
+              evidence["live_sha256_before"]
+              == evidence["live_sha256_after"]
+          )
+          evidence["models_unchanged"] = all(
+              row["sha256_before"] == row["sha256_after"]
+              for row in evidence["models"].values()
+          )
+          path = Path(os.environ["ARENA_OUT"]) / "pointer-invariant.json"
+          path.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
+          print(json.dumps(evidence, sort_keys=True))
+          if not evidence["current_unchanged"]:
+              raise SystemExit("current champion pointer changed during calibration")
+          if not evidence["live_unchanged"]:
+              raise SystemExit("live champion pointer changed during calibration")
+          if not evidence["models_unchanged"]:
+              changed = [
+                  name
+                  for name, row in evidence["models"].items()
+                  if row["sha256_before"] != row["sha256_after"]
+              ]
+              raise SystemExit(
+                  "calibration model bytes changed during run: "
+                  + ",".join(changed)
+              )
+          if not evidence["frozen_inputs_unchanged"]:
+              changed = [
+                  path
+                  for path, before in before_frozen.items()
+                  if after_frozen.get(path) != before
+              ]
+              raise SystemExit(
+                  "frozen calibration inputs changed during run: "
+                  + ",".join(changed)
+              )
+          PY
 
       - name: Collect calibration evidence
         if: always()

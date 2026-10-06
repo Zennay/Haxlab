@@ -51,6 +51,8 @@ def _load_source_root(root: Path) -> dict[str, Any]:
         )
 
     source = json.loads((root / "source.json").read_text(encoding="utf-8"))
+    if not isinstance(source, dict):
+        raise ValueError(f"{root}: source.json must contain a JSON object")
     if source.get("schema") != SOURCE_SCHEMA:
         raise ValueError(
             f"{root}: unsupported source schema {source.get('schema')!r}"
@@ -60,12 +62,25 @@ def _load_source_root(root: Path) -> dict[str, Any]:
         raise ValueError(f"{root}: invalid source replay SHA-256")
 
     scenarios = json.loads((root / "scenarios.json").read_text(encoding="utf-8"))
+    if not isinstance(scenarios, dict):
+        raise ValueError(f"{root}: scenarios.json must contain a JSON object")
     if scenarios.get("schema") != SCENARIO_SCHEMA:
         raise ValueError(
             f"{root}: unsupported scenario schema {scenarios.get('schema')!r}"
         )
-    scenario_rows = list(scenarios.get("scenarios") or [])
-    scenario_count = int(scenarios.get("scenario_count") or len(scenario_rows))
+
+    scenario_rows = scenarios.get("scenarios")
+    if not isinstance(scenario_rows, list):
+        raise ValueError(f"{root}: scenarios must be a JSON array")
+    if any(not isinstance(row, dict) for row in scenario_rows):
+        raise ValueError(f"{root}: every scenario must be a JSON object")
+
+    declared_count = scenarios.get("scenario_count")
+    if isinstance(declared_count, bool) or not isinstance(declared_count, int):
+        raise ValueError(f"{root}: scenario_count must be an integer")
+    if declared_count < 0:
+        raise ValueError(f"{root}: scenario_count cannot be negative")
+    scenario_count = declared_count
     if scenario_count != len(scenario_rows):
         raise ValueError(
             f"{root}: scenario_count does not match scenarios array"
