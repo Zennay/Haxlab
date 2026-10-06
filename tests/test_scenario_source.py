@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import sqlite3
 from pathlib import Path
 
@@ -112,3 +114,93 @@ def test_select_scenario_sources_returns_deterministic_disjoint_set(
         "excluded_sha256_count" not in source
         for source in result["sources"]
     )
+
+
+def _candidate_files(tmp_path: Path) -> tuple[Path, Path, str]:
+    raw = tmp_path / "replay.hbr2"
+    raw.write_bytes(b"haxlab-frozen-replay-bytes")
+    raw_sha = hashlib.sha256(raw.read_bytes()).hexdigest()
+
+    players = [
+        {"id": index + 1, "teamId": 1 if index < 4 else 2, "samples": 100}
+        for index in range(8)
+    ]
+    analysis = tmp_path / "analysis.json"
+    analysis.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 4,
+                "totalFrames": 10800,
+                "featureSummary": {"touches": 100},
+                "simulation": {"sampledStateCount": 100},
+                "players": players,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return raw, analysis, raw_sha
+
+
+def _fake_roles(players):
+    roles = ("gk", "dm", "am", "st")
+    return {
+        int(player["id"]): {
+            "role": roles[index % 4],
+            "confidence": 0.9,
+        }
+        for index, player in enumerate(players)
+    }
+
+
+def test_healthy_candidate_verifies_raw_replay_sha(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    raw, analysis, raw_sha = _candidate_files(tmp_path)
+    monkeypatch.setattr(scenario_source, "infer_roles_4v4", _fake_roles)
+
+    candidate = scenario_source._healthy_candidate(
+        sha256=raw_sha,
+        raw_path=str(raw),
+        analysis_path=str(analysis),
+        sampled_states=100,
+    )
+
+    assert candidate is not None
+    assert candidate["sha256"] == raw_sha
+    assert candidate["raw_file_sha256_verified"] is True
+    assert candidate["sampled_states"] == 100
+
+
+def test_healthy_candidate_rejects_raw_sha_mismatch(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    raw, analysis, _ = _candidate_files(tmp_path)
+    monkeypatch.setattr(scenario_source, "infer_roles_4v4", _fake_roles)
+
+    candidate = scenario_source._healthy_candidate(
+        sha256="a" * 64,
+        raw_path=str(raw),
+        analysis_path=str(analysis),
+        sampled_states=100,
+    )
+
+    assert candidate is None
+
+
+def test_healthy_candidate_rejects_sample_count_drift(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    raw, analysis, raw_sha = _candidate_files(tmp_path)
+    monkeypatch.setattr(scenario_source, "infer_roles_4v4", _fake_roles)
+
+    candidate = scenario_source._healthy_candidate(
+        sha256=raw_sha,
+        raw_path=str(raw),
+        analysis_path=str(analysis),
+        sampled_states=99,
+    )
+
+    assert candidate is None
