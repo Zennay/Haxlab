@@ -210,18 +210,21 @@ def test_disappearing_candidate_does_not_crash_ingest(
     replay = incoming / "vanishing.hbr2"
     replay.write_bytes(_valid_hbr2())
 
+    original_is_file = Path.is_file
     original_stat = Path.stat
-    replay_stat_calls = 0
 
-    def flaky_stat(self: Path, *args, **kwargs):
-        nonlocal replay_stat_calls
+    def visible_during_enumeration(self: Path) -> bool:
         if self == replay:
-            replay_stat_calls += 1
-            if replay_stat_calls >= 2:
-                raise FileNotFoundError(str(self))
+            return True
+        return original_is_file(self)
+
+    def missing_before_stat(self: Path, *args, **kwargs):
+        if self == replay:
+            raise FileNotFoundError(str(self))
         return original_stat(self, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "stat", flaky_stat)
+    monkeypatch.setattr(Path, "is_file", visible_during_enumeration)
+    monkeypatch.setattr(Path, "stat", missing_before_stat)
 
     with RuntimeState(db) as state:
         summary = scan_once(
