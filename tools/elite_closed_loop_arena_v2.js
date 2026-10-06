@@ -869,7 +869,68 @@ function runArenaMatch({
   return result;
 }
 
+function requireArenaPairRow(row, expectedKind, label) {
+  if (!row || typeof row !== "object" || Array.isArray(row)) {
+    throw new Error(label + " arena row must be an object");
+  }
+  if (row.tested_kind !== expectedKind) {
+    throw new Error(
+      label + " tested_kind must be " + expectedKind +
+      ", got " + String(row.tested_kind),
+    );
+  }
+  if (!(row.mode === "full_team" || row.mode === "plug_and_play")) {
+    throw new Error(label + " has invalid arena mode: " + String(row.mode));
+  }
+  if (row.mode === "full_team" && row.tested_role !== null) {
+    throw new Error(label + " full_team row must have tested_role=null");
+  }
+  if (
+    row.mode === "plug_and_play" &&
+    !ROLES.includes(row.tested_role)
+  ) {
+    throw new Error(
+      label + " plug_and_play row has invalid tested_role: " +
+      String(row.tested_role),
+    );
+  }
+  if (!Number.isSafeInteger(row.scenario_index) || row.scenario_index < 1) {
+    throw new Error(label + " has invalid scenario_index");
+  }
+  if (!(row.test_team_id === 1 || row.test_team_id === 2)) {
+    throw new Error(label + " has invalid test_team_id");
+  }
+  if (!Number.isSafeInteger(row.repeat_index) || row.repeat_index < 0) {
+    throw new Error(label + " has invalid repeat_index");
+  }
+  if (
+    !row.proxy ||
+    typeof row.proxy !== "object" ||
+    Array.isArray(row.proxy)
+  ) {
+    throw new Error(label + " proxy must be an object");
+  }
+  if (
+    typeof row.proxy.test_score !== "number" ||
+    !Number.isFinite(row.proxy.test_score) ||
+    row.proxy.test_score < 0 ||
+    row.proxy.test_score > 1
+  ) {
+    throw new Error(label + " proxy.test_score must be a finite rate");
+  }
+}
+
 function pairArenaRows(candidate, reference, tieMargin = 0.025) {
+  requireArenaPairRow(candidate, "challenger", "candidate");
+  requireArenaPairRow(reference, "reference", "reference");
+  if (
+    typeof tieMargin !== "number" ||
+    !Number.isFinite(tieMargin) ||
+    tieMargin < 0 ||
+    tieMargin > 1
+  ) {
+    throw new Error("arena tie margin must be a finite rate");
+  }
   if (
     candidate.mode !== reference.mode ||
     candidate.tested_role !== reference.tested_role ||
@@ -880,8 +941,8 @@ function pairArenaRows(candidate, reference, tieMargin = 0.025) {
     throw new Error("arena candidate/reference row mismatch");
   }
   const delta =
-    Number(candidate.proxy.test_score || 0) -
-    Number(reference.proxy.test_score || 0);
+    candidate.proxy.test_score -
+    reference.proxy.test_score;
   return {
     mode: candidate.mode,
     tested_role: candidate.tested_role,
