@@ -1,3 +1,4 @@
+import sqlite3
 from pathlib import Path
 
 from haxlab.runtime.state import RuntimeState
@@ -136,3 +137,54 @@ def test_recent_analysis_rate_uses_elapsed_window(tmp_path: Path) -> None:
 
     rate = float(snapshot["analysis_rate_per_minute_5m"])
     assert 0.95 <= rate <= 1.05
+
+
+def test_status_snapshot_is_consistent_during_concurrent_wal_commit(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "state.sqlite3"
+    replay = tmp_path / "first.hbr2"
+    replay.write_bytes(b"x")
+
+    with RuntimeState(db) as state:
+        state.register_raw(
+            sha256="d" * 64,
+            archive_path=str(replay),
+            size_bytes=1,
+        )
+
+        writer = sqlite3.connect(db)
+        writer.execute("PRAGMA journal_mode=WAL")
+        inserted = False
+        select_count = 0
+
+        def trace(statement: str) -> None:
+            nonlocal inserted, select_count
+            if not statement.lstrip().upper().startswith("SELECT"):
+                return
+            select_count += 1
+            if select_count == 2 and not inserted:
+                writer.execute(
+                    """
+                    INSERT INTO raw_replays (sha256, archive_path, size_bytes)
+                    VALUES (?, ?, ?)
+                    """,
+                    ("e" * 64, str(tmp_path / "second.hbr2"), 1),
+                )
+                writer.commit()
+                inserted = True
+
+        state.connection.set_trace_callback(trace)
+        try:
+            snapshot = state.status_snapshot()
+        finally:
+            state.connection.set_trace_callback(None)
+            writer.close()
+
+        after = state.connection.execute(
+            "SELECT COUNT(*) FROM raw_replays"
+        ).fetchone()[0]
+
+    assert inserted is True
+    assert snapshot["raw_unique_replays"] == 1
+    assert after == 2
