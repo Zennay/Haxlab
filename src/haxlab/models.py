@@ -72,7 +72,54 @@ class ImportManifest:
     unmatched_reports: list[str] = field(default_factory=list)
     failures: list[ImportFailure] = field(default_factory=list)
 
+    @staticmethod
+    def _require_native_non_negative_int(name: str, value: Any) -> int:
+        if type(value) is not int or value < 0:
+            raise ValueError(f"invalid import manifest {name}: expected native non-negative int")
+        return value
+
+    def _validate(self) -> None:
+        if type(self.schema_version) is not int or self.schema_version <= 0:
+            raise ValueError(
+                "invalid import manifest schema_version: expected native positive int"
+            )
+
+        replay_count = self._require_native_non_negative_int(
+            "replay_count", self.replay_count
+        )
+        unique_replay_count = self._require_native_non_negative_int(
+            "unique_replay_count", self.unique_replay_count
+        )
+        duplicate_replay_count = self._require_native_non_negative_int(
+            "duplicate_replay_count", self.duplicate_replay_count
+        )
+        report_count = self._require_native_non_negative_int(
+            "report_count", self.report_count
+        )
+        match_count = self._require_native_non_negative_int(
+            "match_count", self.match_count
+        )
+
+        if unique_replay_count > replay_count:
+            raise ValueError(
+                "invalid import manifest counts: unique_replay_count exceeds replay_count"
+            )
+        if duplicate_replay_count != replay_count - unique_replay_count:
+            raise ValueError(
+                "invalid import manifest counts: duplicate_replay_count does not "
+                "match replay_count - unique_replay_count"
+            )
+        if match_count > unique_replay_count:
+            raise ValueError(
+                "invalid import manifest counts: match_count exceeds unique_replay_count"
+            )
+        if match_count > report_count:
+            raise ValueError(
+                "invalid import manifest counts: match_count exceeds report_count"
+            )
+
     def as_dict(self) -> dict[str, Any]:
+        self._validate()
         data = asdict(self)
         data["failures"] = [asdict(item) for item in self.failures]
         return data
