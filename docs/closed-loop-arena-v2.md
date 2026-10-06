@@ -140,6 +140,8 @@ The Python Arena consumer also treats the producer contract itself as promotion 
 
 When the frozen calibrated policy is enabled, the consumer additionally requires a rollout duration of at least 30 seconds, the calibrated six-tick sampling cadence, and the frozen 0.025 pair-tie margin. This prevents the calibrated promotion thresholds from being reused against materially weaker or differently sampled runtime evidence.
 
+Plug-and-play partner diversity is also provenance-bound: the declared `partner_model_count` must equal the number of unique native model paths in `provenance.partner_models`. A stored result therefore cannot satisfy the minimum-partner gate by inflating only its aggregate count.
+
 These checks are deliberately consumer-side as well as producer-side: a valid producer run cannot make a later modified or relabeled result eligible for promotion merely because its aggregate metrics still look plausible.
 
 
