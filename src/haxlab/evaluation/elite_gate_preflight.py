@@ -139,6 +139,12 @@ def elite_gate_evidence_issues(
         issues.append(f"missing_{split_key}.by_role")
         by_role = {}
 
+    for role_key in by_role:
+        if not isinstance(role_key, str):
+            issues.append(f"invalid_{split_key}.by_role.role_key:non_string")
+        elif role_key not in EXPECTED_ROLES:
+            issues.append(f"unexpected_{split_key}.by_role.{role_key}")
+
     valid_role_samples: list[int] = []
     for role in EXPECTED_ROLES:
         row = by_role.get(role)
