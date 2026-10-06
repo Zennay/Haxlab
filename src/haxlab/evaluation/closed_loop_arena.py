@@ -161,6 +161,69 @@ def _validate_frozen_arena_config(
     return valid
 
 
+def _valid_sha256(value: Any) -> bool:
+    return (
+        type(value) is str
+        and len(value) == 64
+        and all(char in "0123456789abcdef" for char in value)
+    )
+
+
+def _validate_calibrated_provenance(
+    failures: list[str],
+    *,
+    payload: dict[str, Any],
+) -> int | None:
+    provenance = payload.get("provenance")
+    if type(provenance) is not dict:
+        failures.append("invalid_object:provenance")
+        return None
+
+    valid = True
+    for key in (
+        "challenger_model",
+        "champion_model",
+        "stadium",
+        "scenarios",
+    ):
+        value = provenance.get(key)
+        if type(value) is not str or not value:
+            failures.append(f"provenance:{key}:invalid")
+            valid = False
+
+    for key in (
+        "challenger_sha256",
+        "champion_sha256",
+        "stadium_sha256",
+        "scenarios_sha256",
+    ):
+        if not _valid_sha256(provenance.get(key)):
+            failures.append(f"provenance:{key}:invalid_sha256")
+            valid = False
+
+    partner_models = provenance.get("partner_models")
+    partner_sha256s = provenance.get("partner_sha256s")
+    if (
+        type(partner_models) is not list
+        or not partner_models
+        or any(type(path) is not str or not path for path in partner_models)
+    ):
+        failures.append("provenance:partner_models:invalid")
+        valid = False
+        partner_models = []
+    if (
+        type(partner_sha256s) is not list
+        or len(partner_sha256s) != len(partner_models)
+        or any(not _valid_sha256(value) for value in partner_sha256s)
+    ):
+        failures.append("provenance:partner_sha256s:invalid")
+        valid = False
+
+    if not valid:
+        return None
+    return len(set(partner_models))
+
+
 def _validate_outcome_summary(
     failures: list[str],
     *,
@@ -283,11 +346,17 @@ def decide_closed_loop_arena(
     if payload.get("paired_reference_design") is not True:
         structural_failures.append("paired_reference_design_required")
 
+    provenance_partner_count: int | None = None
     if policy.calibrated:
         checks["frozen_config_valid"] = _validate_frozen_arena_config(
             structural_failures,
             payload=payload,
         )
+        provenance_partner_count = _validate_calibrated_provenance(
+            structural_failures,
+            payload=payload,
+        )
+        checks["provenance_partner_model_count"] = provenance_partner_count
 
     team_mode = _require_mapping(
         structural_failures,
@@ -404,6 +473,15 @@ def decide_closed_loop_arena(
         structural_failures.append(
             f"insufficient_partner_models:{partner_model_count}<"
             f"{policy.minimum_partner_models}"
+        )
+    if (
+        policy.calibrated
+        and provenance_partner_count is not None
+        and partner_model_count != provenance_partner_count
+    ):
+        structural_failures.append(
+            "provenance:partner_model_count_mismatch:"
+            f"{provenance_partner_count}!={partner_model_count}"
         )
 
     by_role = _require_mapping(
