@@ -8,9 +8,8 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Git ref to validate (branch, tag, or commit SHA)
-        required: false
-        default: feature/arena-v2-current-main-20261004
+        description: Exact 40-character commit SHA to validate
+        required: true
 
 permissions:
   contents: read
@@ -20,11 +19,37 @@ jobs:
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 30
     steps:
+      - name: Validate immutable requested SHA
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          TARGET_SHA: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error title=Mutable Arena validation ref::workflow_dispatch requires an exact 40-character lowercase commit SHA"
+            exit 1
+          fi
+
       - name: Checkout requested Arena v2 ref
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
           fetch-depth: 1
+          clean: true
+
+      - name: Verify exact requested SHA
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "::error title=Arena validation provenance mismatch::checked out $ACTUAL_SHA, expected $EXPECTED_SHA"
+            exit 1
+          fi
+          echo "ARENA_VALIDATION_EXPECTED_SHA=$EXPECTED_SHA"
 
       - name: Create isolated Arena test environment
         shell: bash
