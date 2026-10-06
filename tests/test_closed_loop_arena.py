@@ -388,3 +388,86 @@ def test_non_object_nested_individual_fails_closed_without_exception() -> None:
     assert not decision.structurally_valid
     assert not decision.eligible_for_live_promotion
     assert "invalid_object:dm:individual" in decision.reasons
+
+
+def test_stringified_team_score_fails_closed() -> None:
+    payload = _payload()
+    payload["team_mode"]["summary"]["proxy_match_score"] = "0.5"
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert (
+        "invalid_metric:team:proxy_match_score:non_numeric"
+        in decision.reasons
+    )
+
+
+def test_stringified_match_count_fails_closed() -> None:
+    payload = _payload()
+    payload["plug_and_play"]["by_role"]["gk"]["team_outcome"][
+        "matches"
+    ] = "4"
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "invalid_metric:gk:matches:non_numeric" in decision.reasons
+
+
+def test_float_match_count_fails_closed_as_non_integer() -> None:
+    payload = _payload()
+    payload["team_mode"]["summary"]["matches"] = 8.0
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "invalid_metric:team:matches:not_integer" in decision.reasons
+
+
+def test_stringified_partner_model_count_fails_closed() -> None:
+    payload = _payload()
+    payload["plug_and_play"]["partner_model_count"] = "2"
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert (
+        "invalid_metric:plug:partner_model_count:non_numeric"
+        in decision.reasons
+    )
+
+
+def test_stringified_role_metric_fails_closed() -> None:
+    payload = _payload()
+    payload["plug_and_play"]["by_role"]["st"]["individual"]["candidate"][
+        "far_stall_rate"
+    ] = "0.05"
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert (
+        "invalid_metric:st:candidate:far_stall_rate:non_numeric"
+        in decision.reasons
+    )
