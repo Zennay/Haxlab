@@ -101,10 +101,11 @@ def _invalid_controller_reasons(
         snapshot.challenger_passed_evaluation,
         snapshot.rejected_challenger_needs_failure_mining,
     )
-    if all(type(value) is bool for value in challenger_states) and sum(
-        challenger_states
-    ) > 1:
-        reasons.append("snapshot:challenger_state:contradictory")
+    if all(type(value) is bool for value in challenger_states):
+        if sum(challenger_states) > 1:
+            reasons.append("snapshot:challenger_state:contradictory")
+        if snapshot.training_active and any(challenger_states):
+            reasons.append("snapshot:training_and_challenger_state:contradictory")
 
     return tuple(reasons)
 
