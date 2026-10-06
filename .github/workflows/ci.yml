@@ -37,8 +37,24 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - name: Checkout
+      - name: Checkout exact event source SHA
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Verify exact source checkout
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "::error title=CI provenance mismatch::checked out $ACTUAL_SHA, expected $EXPECTED_SHA"
+            exit 1
+          fi
+          echo "HAXLAB_CI_EXACT_SOURCE_SHA=$ACTUAL_SHA"
 
       - name: Create isolated test environment
         shell: bash
