@@ -43,3 +43,15 @@ def test_archive_audit_is_wired_into_vps_control_paths():
     assert "- audit-archive" in workflow
     assert "haxlab-actions-control audit-archive" in workflow
     assert '"audit-archive"' in bridge
+
+
+def test_analysis_audit_is_wired_into_vps_control_paths():
+    control = (ROOT / "deploy/haxlab-actions-control.sh").read_text()
+    workflow = (ROOT / ".github/workflows/vps-control.yml").read_text()
+    bridge = (ROOT / ".github/workflows/zcloud-runner-bridge.yml").read_text()
+
+    assert "audit-analysis)" in control
+    assert "haxlab-audit-analysis" in control
+    assert "- audit-analysis" in workflow
+    assert "haxlab-actions-control audit-analysis" in workflow
+    assert '"audit-analysis"' in bridge
