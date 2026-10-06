@@ -92,6 +92,27 @@ class EliteGateEvidencePreflightTests(unittest.TestCase):
             "training.kick_threshold_source_must_be_validation_only", issues
         )
 
+    def test_string_like_threshold_source_fails_preflight(self) -> None:
+        class ValidationOnlyLike:
+            def __str__(self) -> str:
+                return "validation_only"
+
+        split = complete_split()
+        metadata = {
+            "training": {
+                "frozen_holdout_used_for_selection": False,
+                "kick_threshold_source": ValidationOnlyLike(),
+            },
+            "final_validation": copy.deepcopy(split),
+            "final_holdout": copy.deepcopy(split),
+        }
+
+        issues = elite_gate_evidence_issues(metadata)
+
+        self.assertIn(
+            "training.kick_threshold_source_must_be_validation_only", issues
+        )
+
     def test_development_proxy_checks_shape_without_mutating_inputs(self) -> None:
         training = {
             "frozen_holdout_used_for_selection": False,
@@ -177,6 +198,22 @@ class EliteGateEvidencePreflightTests(unittest.TestCase):
     def test_fractional_sample_count_fails_preflight(self) -> None:
         split = complete_split()
         split["samples"] = 399.5
+        metadata = {
+            "training": {
+                "frozen_holdout_used_for_selection": False,
+                "kick_threshold_source": "validation_only",
+            },
+            "final_validation": complete_split(),
+            "final_holdout": split,
+        }
+
+        issues = elite_gate_evidence_issues(metadata)
+
+        self.assertIn("invalid_final_holdout.samples:not_integer", issues)
+
+    def test_integer_valued_float_sample_count_fails_preflight(self) -> None:
+        split = complete_split()
+        split["samples"] = 400.0
         metadata = {
             "training": {
                 "frozen_holdout_used_for_selection": False,
