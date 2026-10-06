@@ -90,10 +90,14 @@ def _payload() -> dict:
         "safety_recovery_enabled": False,
         "paired_reference_design": True,
         "config": {
+            "seconds": 30,
+            "sample_every": 6,
             "max_scenarios": 2,
             "scenario_count": 2,
             "plug_repeats": 1,
+            "seed": 1337,
             "roles": list(roles),
+            "pair_tie_margin": 0.025,
         },
         "team_mode": {
             "summary": team_summary,
@@ -850,4 +854,46 @@ def test_invalid_grid_config_fails_closed() -> None:
     assert not decision.eligible_for_live_promotion
     assert "invalid_metric:config:scenario_count:not_integer" in decision.reasons
     assert "invalid_config:roles" in decision.reasons
+
+
+def test_calibrated_gate_rejects_too_short_rollout_config() -> None:
+    payload = _payload()
+    payload["config"]["seconds"] = 5
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "calibrated_config:seconds_below_minimum" in decision.reasons
+
+
+def test_calibrated_gate_rejects_sampling_cadence_drift() -> None:
+    payload = _payload()
+    payload["config"]["sample_every"] = 12
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "calibrated_config:sample_every_mismatch" in decision.reasons
+
+
+def test_calibrated_gate_rejects_pair_tie_margin_drift() -> None:
+    payload = _payload()
+    payload["config"]["pair_tie_margin"] = 0.05
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "calibrated_config:pair_tie_margin_mismatch" in decision.reasons
 
