@@ -1,7 +1,12 @@
 "use strict";
 
 const assert = require("assert");
-const { ElitePolicyRuntime } = require("../tools/elite_policy_runtime");
+const {
+  ElitePolicyRuntime,
+  dense,
+  sigmoid,
+  softmax,
+} = require("../tools/elite_policy_runtime");
 
 function matrix(rows, columns, value = 0) {
   return Array.from({ length: rows }, () => Array(columns).fill(value));
@@ -56,6 +61,19 @@ assert.strictEqual(action.dir_x, 0);
 assert.strictEqual(action.dir_y, 0);
 
 assert.throws(
+  () => dense(["1"], [[0]], [0]),
+  /dense input\[0\] must be a finite native number/,
+);
+assert.throws(
+  () => softmax([0, Number.NaN]),
+  /softmax logits\[1\] must be a finite native number/,
+);
+assert.throws(
+  () => sigmoid("0"),
+  /sigmoid input must be a finite native number/,
+);
+
+assert.throws(
   () => runtime.act({
     agent_id: "coerced-feature",
     role: "am",
@@ -78,7 +96,11 @@ assert.throws(
 
 expectReject((model) => {
   model.window = "1";
-}, /window must be a native integer/);
+}, /window must be a native safe integer/);
+
+expectReject((model) => {
+  model.window = Number.MAX_SAFE_INTEGER + 1;
+}, /window must be a native safe integer/);
 
 expectReject((model) => {
   model.base_input_columns = ["ball_dx", "ball_dx"];
@@ -110,7 +132,7 @@ expectReject((model) => {
 
 expectReject((model) => {
   model.role_ids.st = true;
-}, /role_ids\.st must be a native integer/);
+}, /role_ids\.st must be a native safe integer/);
 
 expectReject((model) => {
   model.role_ids.st = 2;
