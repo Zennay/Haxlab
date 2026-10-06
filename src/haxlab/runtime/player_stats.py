@@ -73,8 +73,10 @@ def collect(root: Path) -> list[dict]:
         if int(payload.get("schemaVersion") or 0) not in (3, 4):
             continue
 
-        simulation = payload.get("simulation") or {}
-        if not isinstance(simulation, dict):
+        simulation = payload.get("simulation")
+        if simulation is None:
+            simulation = {}
+        elif not isinstance(simulation, dict):
             continue
         sample_every_ticks = simulation.get("sampleEveryTicks", 6)
         if (
