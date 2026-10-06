@@ -264,3 +264,30 @@ def test_malformed_regression_fields_fail_closed() -> None:
     assert "invalid_evidence:regressions:0:scenario:invalid" in bad_scenario.reasons
     assert not bad_details.promote
     assert "invalid_evidence:regressions:0:details:not_string" in bad_details.reasons
+
+
+def test_non_string_model_ids_fail_closed_without_coercion() -> None:
+    bad_challenger = decide_promotion(_good_evidence(challenger_id=123))
+    bad_champion = decide_promotion(_good_evidence(champion_id={"id": "model-1"}))
+
+    assert not bad_challenger.promote
+    assert "invalid_evidence:challenger_id" in bad_challenger.reasons
+    assert not bad_champion.promote
+    assert "invalid_evidence:champion_id" in bad_champion.reasons
+
+
+def test_whitespace_critical_severity_still_blocks_promotion() -> None:
+    decision = decide_promotion(
+        _good_evidence(
+            regressions=(
+                Regression(
+                    scenario="kickoff",
+                    severity="  CrItIcAl  ",
+                    details="regressed",
+                ),
+            )
+        )
+    )
+
+    assert not decision.promote
+    assert any(reason.startswith("critical_regressions") for reason in decision.reasons)
