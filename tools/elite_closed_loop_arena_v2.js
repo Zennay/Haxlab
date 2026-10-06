@@ -508,11 +508,33 @@ function loadScenarioRows(filePath, maxScenarios) {
   const selected = rows.slice(0, maxScenarios);
   const seenScenarioIndices = new Set();
   for (let offset = 0; offset < selected.length; offset += 1) {
-    const scenarioIndex = scenarioIndexForRow(selected[offset], offset);
+    const scenario = selected[offset];
+    const scenarioIndex = scenarioIndexForRow(scenario, offset);
     if (seenScenarioIndices.has(scenarioIndex)) {
       throw new Error("duplicate scenario_index: " + scenarioIndex);
     }
     seenScenarioIndices.add(scenarioIndex);
+
+    if (
+      scenario.history !== undefined &&
+      scenario.history !== null &&
+      !Array.isArray(scenario.history)
+    ) {
+      throw new Error(
+        "scenario " + scenarioIndex + " history must be an array",
+      );
+    }
+    if (Array.isArray(scenario.history)) {
+      for (let frameIndex = 0; frameIndex < scenario.history.length; frameIndex += 1) {
+        const frame = scenario.history[frameIndex];
+        if (!frame || typeof frame !== "object" || Array.isArray(frame)) {
+          throw new Error(
+            "scenario " + scenarioIndex +
+            " history frame " + frameIndex + " must be an object",
+          );
+        }
+      }
+    }
   }
   return selected;
 }
