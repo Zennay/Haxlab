@@ -128,3 +128,10 @@ A future live champion must eventually pass **both** tracks:
 
 A team-only specialist that collapses with unfamiliar teammates fails. An
 individually active policy that damages coordinated team play also fails.
+
+
+## Evidence integrity hardening
+
+Promotion evidence is fail-closed at the data-shape boundary as well as at the policy thresholds. Required numeric Arena v2 metrics must be present, numeric, finite, and use integer counts where applicable; malformed evidence cannot fall back to permissive defaults. Multisource duel evidence additionally binds each wrapper scenario SHA and challenger/champion model path to the underlying duel payload, so duplicated or relabeled sources cannot satisfy source independence.
+
+These checks are regression-tested on the self-hosted HaxLab runner before calibrated three-source evidence is accepted.
