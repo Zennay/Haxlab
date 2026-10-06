@@ -119,6 +119,59 @@ def _require_mapping(
     return value
 
 
+def _validate_outcome_summary(
+    failures: list[str],
+    *,
+    mapping: dict[str, Any],
+    label: str,
+) -> tuple[int, int, int, int, float]:
+    for key in ("matches", "wins", "draws", "losses"):
+        _require_numeric_field(
+            failures,
+            mapping=mapping,
+            key=key,
+            label=f"{label}:{key}",
+            integer=True,
+            minimum=0,
+        )
+    _require_numeric_field(
+        failures,
+        mapping=mapping,
+        key="proxy_match_score",
+        label=f"{label}:proxy_match_score",
+        minimum=0.0,
+        maximum=1.0,
+    )
+
+    matches = _integer(mapping.get("matches"))
+    wins = _integer(mapping.get("wins"))
+    draws = _integer(mapping.get("draws"))
+    losses = _integer(mapping.get("losses"))
+    proxy_match_score = _number(mapping.get("proxy_match_score"))
+
+    if wins + draws + losses != matches:
+        failures.append(
+            f"{label}:match_tally_mismatch:"
+            f"{wins}+{draws}+{losses}!={matches}"
+        )
+
+    expected_proxy_match_score = (
+        (wins + 0.5 * draws) / matches if matches > 0 else 0.0
+    )
+    if not math.isclose(
+        proxy_match_score,
+        expected_proxy_match_score,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    ):
+        failures.append(
+            f"{label}:proxy_match_score_mismatch:"
+            f"{proxy_match_score:.12f}!={expected_proxy_match_score:.12f}"
+        )
+
+    return matches, wins, draws, losses, proxy_match_score
+
+
 def _relative_max_check(
     failures: list[str],
     *,
@@ -203,27 +256,22 @@ def decide_closed_loop_arena(
         team_mode.get("roles"),
         "team_mode:roles",
     )
-    _require_numeric_field(
+    (
+        team_matches,
+        team_wins,
+        team_draws,
+        team_losses,
+        team_proxy_match_score,
+    ) = _validate_outcome_summary(
         structural_failures,
         mapping=team_summary,
-        key="matches",
-        label="team:matches",
-        integer=True,
-        minimum=0,
+        label="team",
     )
-    _require_numeric_field(
-        structural_failures,
-        mapping=team_summary,
-        key="proxy_match_score",
-        label="team:proxy_match_score",
-        minimum=0.0,
-        maximum=1.0,
-    )
-    team_matches = _integer(team_summary.get("matches"))
     checks["team_matches"] = team_matches
-    checks["team_proxy_match_score"] = _number(
-        team_summary.get("proxy_match_score")
-    )
+    checks["team_wins"] = team_wins
+    checks["team_draws"] = team_draws
+    checks["team_losses"] = team_losses
+    checks["team_proxy_match_score"] = team_proxy_match_score
     if team_matches < policy.minimum_team_matches:
         structural_failures.append(
             f"insufficient_team_matches:{team_matches}<"
@@ -286,19 +334,24 @@ def decide_closed_loop_arena(
         plug.get("summary"),
         "plug_and_play:summary",
     )
-    _require_numeric_field(
+    (
+        plug_matches,
+        plug_wins,
+        plug_draws,
+        plug_losses,
+        plug_proxy_match_score,
+    ) = _validate_outcome_summary(
         structural_failures,
         mapping=plug_summary,
-        key="proxy_match_score",
-        label="plug:proxy_match_score",
-        minimum=0.0,
-        maximum=1.0,
+        label="plug",
     )
     partner_model_count = _integer(plug.get("partner_model_count"))
     checks["partner_model_count"] = partner_model_count
-    checks["plug_proxy_match_score"] = _number(
-        plug_summary.get("proxy_match_score")
-    )
+    checks["plug_matches"] = plug_matches
+    checks["plug_wins"] = plug_wins
+    checks["plug_draws"] = plug_draws
+    checks["plug_losses"] = plug_losses
+    checks["plug_proxy_match_score"] = plug_proxy_match_score
     if partner_model_count < policy.minimum_partner_models:
         structural_failures.append(
             f"insufficient_partner_models:{partner_model_count}<"
@@ -338,21 +391,16 @@ def decide_closed_loop_arena(
             f"{role}:individual:reference",
         )
 
-        _require_numeric_field(
+        (
+            matches,
+            wins,
+            draws,
+            losses,
+            role_proxy_score,
+        ) = _validate_outcome_summary(
             structural_failures,
             mapping=outcome,
-            key="matches",
-            label=f"{role}:matches",
-            integer=True,
-            minimum=0,
-        )
-        _require_numeric_field(
-            structural_failures,
-            mapping=outcome,
-            key="proxy_match_score",
-            label=f"{role}:proxy_match_score",
-            minimum=0.0,
-            maximum=1.0,
+            label=role,
         )
         _require_numeric_field(
             structural_failures,
@@ -362,6 +410,18 @@ def decide_closed_loop_arena(
             integer=True,
             minimum=0,
         )
+        for side, metrics in (
+            ("candidate", candidate),
+            ("reference", reference),
+        ):
+            _require_numeric_field(
+                structural_failures,
+                mapping=metrics,
+                key="samples",
+                label=f"{role}:{side}:samples",
+                integer=True,
+                minimum=0,
+            )
         for side, metrics in (
             ("candidate", candidate),
             ("reference", reference),
@@ -392,9 +452,9 @@ def decide_closed_loop_arena(
                     minimum=0.0,
                 )
 
-        matches = _integer(outcome.get("matches"))
-        role_proxy_score = _number(outcome.get("proxy_match_score"))
         runtime_errors = _integer(candidate.get("runtime_errors"))
+        candidate_samples = _integer(candidate.get("samples"))
+        reference_samples = _integer(reference.get("samples"))
         candidate_boundary = _number(candidate.get("boundary_rate"))
         reference_boundary = _number(reference.get("boundary_rate"))
         candidate_ood = _number(candidate.get("ood_rate"))
@@ -420,10 +480,24 @@ def decide_closed_loop_arena(
 
         role_checks[role] = {
             "matches": matches,
+            "wins": wins,
+            "draws": draws,
+            "losses": losses,
             "proxy_match_score": role_proxy_score,
             "candidate": candidate,
             "reference": reference,
         }
+
+        if candidate_samples != matches:
+            structural_failures.append(
+                f"{role}:candidate_samples_mismatch:"
+                f"{candidate_samples}!={matches}"
+            )
+        if reference_samples != matches:
+            structural_failures.append(
+                f"{role}:reference_samples_mismatch:"
+                f"{reference_samples}!={matches}"
+            )
 
         if matches < policy.minimum_plug_matches_per_role:
             structural_failures.append(
@@ -510,14 +584,71 @@ def decide_closed_loop_arena(
 
     checks["roles"] = role_checks
 
+    total_plug_role_matches = sum(
+        int(row.get("matches", 0))
+        for row in role_checks.values()
+    )
+    checks["plug_role_matches_total"] = total_plug_role_matches
+    if total_plug_role_matches != plug_matches:
+        structural_failures.append(
+            "plug:role_match_total_mismatch:"
+            f"{total_plug_role_matches}!={plug_matches}"
+        )
+
+    team_role_checks: dict[str, Any] = {}
     for role in ROLES:
         if role not in team_roles:
             structural_failures.append(f"team_mode_missing_role:{role}")
         if role not in by_role:
             structural_failures.append(f"plug_and_play_missing_role:{role}")
 
+        team_role = _require_mapping(
+            structural_failures,
+            team_roles.get(role),
+            f"team_mode:roles:{role}",
+        )
+        team_candidate = _require_mapping(
+            structural_failures,
+            team_role.get("candidate"),
+            f"team_mode:{role}:candidate",
+        )
+        team_reference = _require_mapping(
+            structural_failures,
+            team_role.get("reference"),
+            f"team_mode:{role}:reference",
+        )
+        for side, metrics in (
+            ("candidate", team_candidate),
+            ("reference", team_reference),
+        ):
+            _require_numeric_field(
+                structural_failures,
+                mapping=metrics,
+                key="samples",
+                label=f"team:{role}:{side}:samples",
+                integer=True,
+                minimum=0,
+            )
+        candidate_samples = _integer(team_candidate.get("samples"))
+        reference_samples = _integer(team_reference.get("samples"))
+        if candidate_samples != team_matches:
+            structural_failures.append(
+                f"team:{role}:candidate_samples_mismatch:"
+                f"{candidate_samples}!={team_matches}"
+            )
+        if reference_samples != team_matches:
+            structural_failures.append(
+                f"team:{role}:reference_samples_mismatch:"
+                f"{reference_samples}!={team_matches}"
+            )
+        team_role_checks[role] = {
+            "candidate_samples": candidate_samples,
+            "reference_samples": reference_samples,
+        }
+    checks["team_roles"] = team_role_checks
+
     if policy.calibrated:
-        team_proxy_score = _number(team_summary.get("proxy_match_score"))
+        team_proxy_score = team_proxy_match_score
         if team_proxy_score < policy.minimum_team_proxy_match_score:
             behavior_failures.append(
                 "team:proxy_match_score:"
