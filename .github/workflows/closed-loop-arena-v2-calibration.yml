@@ -80,6 +80,13 @@ jobs:
           fi
           OUT="/var/lib/haxlab/derived/evaluation/closed-loop-arena-v2-calibration-v1/${GITHUB_SHA:0:12}"
 
+          # A same-SHA rerun must never inherit artifacts or a "latest completed"
+          # receipt from an earlier attempt.
+          sudo -u haxlab rm -rf "$OUT"
+          rm -f \
+            /tmp/haxlab-arena-v2-calibration-latest-summary.json \
+            /tmp/haxlab-arena-v2-calibration-latest-status.json
+
           require_readable() {
             local label="$1"
             local path="$2"
