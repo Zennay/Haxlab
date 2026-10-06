@@ -78,3 +78,59 @@ def test_duplicate_scenario_hash_is_rejected_during_build() -> None:
         assert "duplicate scenario_sha256" in str(exc)
     else:
         raise AssertionError("duplicate scenario sources must fail closed")
+
+
+def test_multisource_gate_rejects_wrapper_scenario_hash_mismatch() -> None:
+    payload = build_multisource_duel([
+        _duel("a"),
+        _duel("b"),
+        _duel("c"),
+    ])
+    payload["sources"][1]["scenario_sha256"] = "d" * 64
+
+    decision = decide_multisource_duel_gate(payload)
+
+    assert not decision.eligible_to_replace_champion
+    assert "source_2:scenario_sha256_mismatch" in decision.reasons
+
+
+def test_multisource_gate_rejects_invalid_wrapper_scenario_hash() -> None:
+    payload = build_multisource_duel([
+        _duel("a"),
+        _duel("b"),
+        _duel("c"),
+    ])
+    payload["sources"][2]["scenario_sha256"] = "not-a-sha"
+
+    decision = decide_multisource_duel_gate(payload)
+
+    assert not decision.eligible_to_replace_champion
+    assert "source_3:invalid_scenario_sha256" in decision.reasons
+
+
+def test_multisource_gate_rejects_model_provenance_mismatch() -> None:
+    payload = build_multisource_duel([
+        _duel("a"),
+        _duel("b"),
+        _duel("c"),
+    ])
+    payload["sources"][0]["duel"]["challenger_model"] = "/tmp/other/runtime-model.json"
+
+    decision = decide_multisource_duel_gate(payload)
+
+    assert not decision.eligible_to_replace_champion
+    assert "source_1:challenger_model_mismatch" in decision.reasons
+
+
+def test_multisource_gate_rejects_declared_source_count_mismatch() -> None:
+    payload = build_multisource_duel([
+        _duel("a"),
+        _duel("b"),
+        _duel("c"),
+    ])
+    payload["source_count"] = 4
+
+    decision = decide_multisource_duel_gate(payload)
+
+    assert not decision.eligible_to_replace_champion
+    assert "source_count_mismatch:4!=3" in decision.reasons

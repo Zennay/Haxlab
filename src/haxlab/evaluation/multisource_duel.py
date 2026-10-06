@@ -108,8 +108,25 @@ def decide_multisource_duel_gate(
         failures.append(
             f"unsupported_multisource_schema:{payload.get('schema') or 'missing'}"
         )
+    if payload.get("evaluation_mode") != "replay_multisource_all_sources_v1":
+        failures.append(
+            "unsupported_multisource_mode:"
+            f"{payload.get('evaluation_mode') or 'missing'}"
+        )
 
     sources = list(payload.get("sources") or [])
+    declared_source_count = payload.get("source_count")
+    if declared_source_count != len(sources):
+        failures.append(
+            f"source_count_mismatch:{declared_source_count!r}!={len(sources)}"
+        )
+
+    challenger_model = str(payload.get("challenger_model") or "")
+    champion_model = str(payload.get("champion_model") or "")
+    if not challenger_model:
+        failures.append("missing_challenger_model")
+    if not champion_model:
+        failures.append("missing_champion_model")
     checks["source_count"] = len(sources)
     if len(sources) < policy.minimum_sources:
         failures.append(
@@ -121,9 +138,30 @@ def decide_multisource_duel_gate(
     all_sources_passed = True
 
     for index, source in enumerate(sources, start=1):
-        scenario_sha = str(source.get("scenario_sha256") or "")
+        scenario_sha = str(source.get("scenario_sha256") or "").lower()
+        if (
+            len(scenario_sha) != 64
+            or any(ch not in "0123456789abcdef" for ch in scenario_sha)
+        ):
+            failures.append(f"source_{index}:invalid_scenario_sha256")
         scenario_hashes.append(scenario_sha)
+
+        declared_index = source.get("source_index")
+        if declared_index != index:
+            failures.append(
+                f"source_{index}:source_index_mismatch:"
+                f"{declared_index!r}!={index}"
+            )
+
         duel = source.get("duel") or {}
+        duel_scenario_sha = str(duel.get("scenario_sha256") or "").lower()
+        if duel_scenario_sha != scenario_sha:
+            failures.append(f"source_{index}:scenario_sha256_mismatch")
+        if str(duel.get("challenger_model") or "") != challenger_model:
+            failures.append(f"source_{index}:challenger_model_mismatch")
+        if str(duel.get("champion_model") or "") != champion_model:
+            failures.append(f"source_{index}:champion_model_mismatch")
+
         decision: DuelGateDecision = decide_duel_gate(
             duel,
             policy=duel_policy,

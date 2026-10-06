@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -68,6 +69,42 @@ def _integer(value: Any, default: int = 0) -> int:
         return default
 
 
+def _require_numeric_field(
+    failures: list[str],
+    *,
+    mapping: dict[str, Any],
+    key: str,
+    label: str,
+    integer: bool = False,
+    minimum: float | None = None,
+) -> None:
+    if key not in mapping:
+        failures.append(f"invalid_metric:{label}:missing")
+        return
+
+    value = mapping.get(key)
+    if isinstance(value, bool):
+        failures.append(f"invalid_metric:{label}:boolean")
+        return
+
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        failures.append(f"invalid_metric:{label}:non_numeric")
+        return
+
+    if not math.isfinite(number):
+        failures.append(f"invalid_metric:{label}:non_finite")
+        return
+    if integer and not number.is_integer():
+        failures.append(f"invalid_metric:{label}:not_integer")
+        return
+    if minimum is not None and number < minimum:
+        failures.append(
+            f"invalid_metric:{label}:below_minimum:{number:.6f}<{minimum:.6f}"
+        )
+
+
 def _relative_max_check(
     failures: list[str],
     *,
@@ -132,6 +169,20 @@ def decide_closed_loop_arena(
     team_mode = payload.get("team_mode") or {}
     team_summary = team_mode.get("summary") or {}
     team_roles = team_mode.get("roles") or {}
+    _require_numeric_field(
+        structural_failures,
+        mapping=team_summary,
+        key="matches",
+        label="team:matches",
+        integer=True,
+        minimum=0,
+    )
+    _require_numeric_field(
+        structural_failures,
+        mapping=team_summary,
+        key="proxy_match_score",
+        label="team:proxy_match_score",
+    )
     team_matches = _integer(team_summary.get("matches"))
     checks["team_matches"] = team_matches
     checks["team_proxy_match_score"] = _number(
@@ -145,6 +196,17 @@ def decide_closed_loop_arena(
 
     candidate_team = team_summary.get("candidate") or {}
     reference_team = team_summary.get("reference") or {}
+    for side, metrics in (
+        ("candidate", candidate_team),
+        ("reference", reference_team),
+    ):
+        for key in ("formation_order_rate", "collapsed_shape_rate"):
+            _require_numeric_field(
+                structural_failures,
+                mapping=metrics,
+                key=key,
+                label=f"team:{side}:{key}",
+            )
     _relative_min_check(
         behavior_failures,
         label="team:formation_order_rate",
@@ -161,10 +223,25 @@ def decide_closed_loop_arena(
     )
 
     plug = payload.get("plug_and_play") or {}
+    _require_numeric_field(
+        structural_failures,
+        mapping=plug,
+        key="partner_model_count",
+        label="plug:partner_model_count",
+        integer=True,
+        minimum=0,
+    )
+    plug_summary = plug.get("summary") or {}
+    _require_numeric_field(
+        structural_failures,
+        mapping=plug_summary,
+        key="proxy_match_score",
+        label="plug:proxy_match_score",
+    )
     partner_model_count = _integer(plug.get("partner_model_count"))
     checks["partner_model_count"] = partner_model_count
     checks["plug_proxy_match_score"] = _number(
-        (plug.get("summary") or {}).get("proxy_match_score")
+        plug_summary.get("proxy_match_score")
     )
     if partner_model_count < policy.minimum_partner_models:
         structural_failures.append(
@@ -180,6 +257,47 @@ def decide_closed_loop_arena(
         individual = role_row.get("individual") or {}
         candidate = individual.get("candidate") or {}
         reference = individual.get("reference") or {}
+
+        _require_numeric_field(
+            structural_failures,
+            mapping=outcome,
+            key="matches",
+            label=f"{role}:matches",
+            integer=True,
+            minimum=0,
+        )
+        _require_numeric_field(
+            structural_failures,
+            mapping=outcome,
+            key="proxy_match_score",
+            label=f"{role}:proxy_match_score",
+        )
+        _require_numeric_field(
+            structural_failures,
+            mapping=candidate,
+            key="runtime_errors",
+            label=f"{role}:candidate:runtime_errors",
+            integer=True,
+            minimum=0,
+        )
+        for side, metrics in (
+            ("candidate", candidate),
+            ("reference", reference),
+        ):
+            for key in (
+                "boundary_rate",
+                "ood_rate",
+                "far_stall_rate",
+                "max_held_action_seconds",
+                "context_adaptation_rate",
+                "average_role_deviation",
+            ):
+                _require_numeric_field(
+                    structural_failures,
+                    mapping=metrics,
+                    key=key,
+                    label=f"{role}:{side}:{key}",
+                )
 
         matches = _integer(outcome.get("matches"))
         role_proxy_score = _number(outcome.get("proxy_match_score"))

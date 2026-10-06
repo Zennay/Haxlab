@@ -1,0 +1,59 @@
+name: Arena v2 evaluation-validation
+
+on:
+  push:
+    branches:
+      - validation/arena-v2-fail-closed-evidence-20261006
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-arena-v2-evaluation-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .arena-validation-venv
+          python3 -m venv .arena-validation-venv
+          .arena-validation-venv/bin/pip install --upgrade pip
+          .arena-validation-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile evaluation code
+        shell: bash
+        run: |
+          set -euo pipefail
+          .arena-validation-venv/bin/python -m compileall -q             src/haxlab/evaluation/closed_loop_arena.py             src/haxlab/evaluation/multisource_duel.py             tests/test_closed_loop_arena.py             tests/test_multisource_duel.py
+
+      - name: Run Arena v2 evaluation regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src"             .arena-validation-venv/bin/pytest -q tests/test_closed_loop_arena.py
+
+      - name: Run adjacent evaluation contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src"             .arena-validation-venv/bin/pytest -q               tests/test_multisource_duel.py               tests/test_multisource_suite.py               tests/test_scenario_source.py               tests/test_roles_4v4.py               tests/test_promotion.py
+
+      - name: Record exact-head validation evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "ARENA_EVALUATION_VALIDATION_HEAD=$(git rev-parse HEAD)"
+          echo "ARENA_EVALUATION_VALIDATION_RESULT=green"
