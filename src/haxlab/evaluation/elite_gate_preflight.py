@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import math
 from typing import Any
 
 
@@ -12,6 +13,41 @@ REQUIRED_SPLIT_FIELDS = (
     "kick_true_rate",
     "kick_predicted_rate",
 )
+RATE_FIELDS = (
+    "direction_accuracy",
+    "kick_f1",
+    "kick_true_rate",
+    "kick_predicted_rate",
+)
+
+
+def _validate_number(
+    issues: list[str],
+    value: Any,
+    label: str,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+    integer: bool = False,
+) -> None:
+    if isinstance(value, bool):
+        issues.append(f"invalid_{label}:boolean")
+        return
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        issues.append(f"invalid_{label}:non_numeric")
+        return
+    if not math.isfinite(number):
+        issues.append(f"invalid_{label}:non_finite")
+        return
+    if integer and not number.is_integer():
+        issues.append(f"invalid_{label}:not_integer")
+        return
+    if minimum is not None and number < minimum:
+        issues.append(f"invalid_{label}:below_minimum")
+    if maximum is not None and number > maximum:
+        issues.append(f"invalid_{label}:above_maximum")
 
 
 def elite_gate_evidence_issues(
@@ -21,6 +57,9 @@ def elite_gate_evidence_issues(
 ) -> list[str]:
     """Return structural/provenance issues required by the frozen elite gate."""
     issues: list[str] = []
+    if not isinstance(metadata, dict):
+        return ["invalid_metadata:not_object"]
+
     training = metadata.get("training")
     if not isinstance(training, dict):
         issues.append("missing_training")
@@ -41,6 +80,14 @@ def elite_gate_evidence_issues(
         issues.append("missing_final_validation")
     elif "direction_accuracy" not in validation:
         issues.append("missing_final_validation.direction_accuracy")
+    else:
+        _validate_number(
+            issues,
+            validation["direction_accuracy"],
+            "final_validation.direction_accuracy",
+            minimum=0.0,
+            maximum=1.0,
+        )
 
     split = metadata.get(split_key)
     if not isinstance(split, dict):
@@ -51,12 +98,38 @@ def elite_gate_evidence_issues(
         if field not in split:
             issues.append(f"missing_{split_key}.{field}")
 
+    if "samples" in split:
+        _validate_number(
+            issues,
+            split["samples"],
+            f"{split_key}.samples",
+            minimum=1.0,
+            integer=True,
+        )
+    for field in RATE_FIELDS:
+        if field in split:
+            _validate_number(
+                issues,
+                split[field],
+                f"{split_key}.{field}",
+                minimum=0.0,
+                maximum=1.0,
+            )
+
     baselines = split.get("baselines")
     if not isinstance(baselines, dict):
         issues.append(f"missing_{split_key}.baselines")
     elif "majority_direction_accuracy" not in baselines:
         issues.append(
             f"missing_{split_key}.baselines.majority_direction_accuracy"
+        )
+    else:
+        _validate_number(
+            issues,
+            baselines["majority_direction_accuracy"],
+            f"{split_key}.baselines.majority_direction_accuracy",
+            minimum=0.0,
+            maximum=1.0,
         )
 
     by_role = split.get("by_role")
@@ -73,6 +146,14 @@ def elite_gate_evidence_issues(
             issues.append(
                 f"missing_{split_key}.by_role.{role}.direction_accuracy"
             )
+        else:
+            _validate_number(
+                issues,
+                row["direction_accuracy"],
+                f"{split_key}.by_role.{role}.direction_accuracy",
+                minimum=0.0,
+                maximum=1.0,
+            )
         role_baselines = row.get("baselines")
         if not isinstance(role_baselines, dict):
             issues.append(f"missing_{split_key}.by_role.{role}.baselines")
@@ -80,6 +161,15 @@ def elite_gate_evidence_issues(
             issues.append(
                 f"missing_{split_key}.by_role.{role}.baselines."
                 "majority_direction_accuracy"
+            )
+        else:
+            _validate_number(
+                issues,
+                role_baselines["majority_direction_accuracy"],
+                f"{split_key}.by_role.{role}.baselines."
+                "majority_direction_accuracy",
+                minimum=0.0,
+                maximum=1.0,
             )
 
     return issues
