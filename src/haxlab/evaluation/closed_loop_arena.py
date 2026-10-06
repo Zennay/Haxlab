@@ -201,6 +201,130 @@ def _require_raw_outcomes_match(
 _ANY_ROLE = object()
 
 
+def _native_integer_value(
+    failures: list[str],
+    value: Any,
+    label: str,
+    *,
+    minimum: int,
+) -> int | None:
+    if type(value) is not int:
+        failures.append(f"invalid_metric:{label}:not_integer")
+        return None
+    if value < minimum:
+        failures.append(f"invalid_metric:{label}:below_minimum")
+        return None
+    return value
+
+
+def _validate_raw_grid(
+    failures: list[str],
+    *,
+    team_rows: Any,
+    plug_rows: Any,
+    scenario_count: int,
+    plug_repeats: int,
+) -> None:
+    if not isinstance(team_rows, list) or not isinstance(plug_rows, list):
+        return
+
+    team_coordinates: set[tuple[int, int, int]] = set()
+    team_scenarios: set[int] = set()
+    for index, row in enumerate(team_rows):
+        if not isinstance(row, dict):
+            continue
+        scenario = _native_integer_value(
+            failures,
+            row.get("scenario_index"),
+            f"team:row:{index}:scenario_index",
+            minimum=1,
+        )
+        side = _native_integer_value(
+            failures,
+            row.get("test_team_id"),
+            f"team:row:{index}:test_team_id",
+            minimum=1,
+        )
+        repeat = _native_integer_value(
+            failures,
+            row.get("repeat_index"),
+            f"team:row:{index}:repeat_index",
+            minimum=0,
+        )
+        if side is not None and side not in (1, 2):
+            failures.append(f"team:row:{index}:invalid_side")
+            side = None
+        if repeat is not None and repeat != 0:
+            failures.append(f"team:row:{index}:invalid_repeat")
+            repeat = None
+        if scenario is None or side is None or repeat is None:
+            continue
+        coordinate = (scenario, side, repeat)
+        if coordinate in team_coordinates:
+            failures.append(f"team:row:{index}:duplicate_coordinate")
+        team_coordinates.add(coordinate)
+        team_scenarios.add(scenario)
+
+    expected_team_rows = scenario_count * 2
+    if len(team_rows) != expected_team_rows:
+        failures.append(
+            f"team:grid_count_mismatch:{len(team_rows)}!={expected_team_rows}"
+        )
+    if len(team_scenarios) != scenario_count:
+        failures.append(
+            "team:scenario_count_mismatch:"
+            f"{len(team_scenarios)}!={scenario_count}"
+        )
+
+    plug_coordinates: set[tuple[str, int, int, int]] = set()
+    plug_scenarios: set[int] = set()
+    for index, row in enumerate(plug_rows):
+        if not isinstance(row, dict):
+            continue
+        role = row.get("tested_role")
+        if type(role) is not str or role not in ROLES:
+            continue
+        scenario = _native_integer_value(
+            failures,
+            row.get("scenario_index"),
+            f"plug:row:{index}:scenario_index",
+            minimum=1,
+        )
+        side = _native_integer_value(
+            failures,
+            row.get("test_team_id"),
+            f"plug:row:{index}:test_team_id",
+            minimum=1,
+        )
+        repeat = _native_integer_value(
+            failures,
+            row.get("repeat_index"),
+            f"plug:row:{index}:repeat_index",
+            minimum=0,
+        )
+        if side is not None and side not in (1, 2):
+            failures.append(f"plug:row:{index}:invalid_side")
+            side = None
+        if repeat is not None and repeat >= plug_repeats:
+            failures.append(f"plug:row:{index}:invalid_repeat")
+            repeat = None
+        if scenario is None or side is None or repeat is None:
+            continue
+        coordinate = (role, scenario, side, repeat)
+        if coordinate in plug_coordinates:
+            failures.append(f"plug:row:{index}:duplicate_coordinate")
+        plug_coordinates.add(coordinate)
+        plug_scenarios.add(scenario)
+
+    expected_plug_rows = scenario_count * 2 * len(ROLES) * plug_repeats
+    if len(plug_rows) != expected_plug_rows:
+        failures.append(
+            f"plug:grid_count_mismatch:{len(plug_rows)}!={expected_plug_rows}"
+        )
+    if plug_scenarios != team_scenarios:
+        failures.append("plug:scenario_set_mismatch")
+
+
 def _validate_outcome_summary(
     failures: list[str],
     *,
@@ -687,6 +811,44 @@ def decide_closed_loop_arena(
 
     checks["roles"] = role_checks
 
+    config = _require_mapping(
+        structural_failures,
+        payload.get("config"),
+        "config",
+    )
+    scenario_count = _native_integer_value(
+        structural_failures,
+        config.get("scenario_count"),
+        "config:scenario_count",
+        minimum=1,
+    )
+    max_scenarios = _native_integer_value(
+        structural_failures,
+        config.get("max_scenarios"),
+        "config:max_scenarios",
+        minimum=1,
+    )
+    plug_repeats = _native_integer_value(
+        structural_failures,
+        config.get("plug_repeats"),
+        "config:plug_repeats",
+        minimum=1,
+    )
+    config_roles = config.get("roles")
+    if (
+        type(config_roles) is not list
+        or len(config_roles) != len(ROLES)
+        or any(type(role) is not str for role in config_roles)
+        or tuple(config_roles) != ROLES
+    ):
+        structural_failures.append("invalid_config:roles")
+    if (
+        scenario_count is not None
+        and max_scenarios is not None
+        and scenario_count > max_scenarios
+    ):
+        structural_failures.append("invalid_config:scenario_count_exceeds_max")
+
     match_results = _require_mapping(
         structural_failures,
         payload.get("match_results"),
@@ -732,6 +894,14 @@ def decide_closed_loop_arena(
             plug_proxy_match_score,
         ),
     )
+    if scenario_count is not None and plug_repeats is not None:
+        _validate_raw_grid(
+            structural_failures,
+            team_rows=team_rows,
+            plug_rows=plug_rows,
+            scenario_count=scenario_count,
+            plug_repeats=plug_repeats,
+        )
     if isinstance(plug_rows, list):
         for role in ROLES:
             role_rows = [
