@@ -70,7 +70,12 @@ def collect(root: Path) -> list[dict]:
         except (OSError, json.JSONDecodeError):
             continue
 
-        if int(payload.get("schemaVersion") or 0) not in (3, 4):
+        schema_version = payload.get("schemaVersion")
+        if (
+            isinstance(schema_version, bool)
+            or not isinstance(schema_version, int)
+            or schema_version not in (3, 4)
+        ):
             continue
 
         simulation = payload.get("simulation")
@@ -86,8 +91,15 @@ def collect(root: Path) -> list[dict]:
         ):
             continue
 
+        players = payload.get("players")
+        if (
+            not isinstance(players, list)
+            or any(not isinstance(player, dict) for player in players)
+        ):
+            continue
+
         seen: set[str] = set()
-        for player in payload.get("players") or []:
+        for player in players:
             key = _identity_key(player)
             if key is None:
                 continue
