@@ -1,0 +1,65 @@
+name: Calibration resume integration validation
+
+on:
+  pull_request:
+    branches:
+      - feature/arena-v2-current-main-20261004
+    paths:
+      - ".github/workflows/closed-loop-arena-v2-calibration.yml"
+      - ".github/workflows/calibration-resume-integration-validation.yml"
+      - "src/haxlab/evaluation/calibration_resume.py"
+      - "tests/test_calibration_resume.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Resume integration contract
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact integration head
+        uses: actions/checkout@v4
+
+      - name: Create isolated validation environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .resume-ci-venv
+          python3 -m venv .resume-ci-venv
+          .resume-ci-venv/bin/pip install --upgrade pip
+          .resume-ci-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile resume implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          .resume-ci-venv/bin/python -m compileall -q \
+            src/haxlab/evaluation/calibration_resume.py \
+            tests/test_calibration_resume.py
+
+      - name: Run resume and evaluator regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          .resume-ci-venv/bin/pytest -q \
+            tests/test_calibration_resume.py \
+            tests/test_closed_loop_arena.py \
+            tests/test_calibration_gate.py
+
+      - name: Verify current V5 workflow wiring
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow=.github/workflows/closed-loop-arena-v2-calibration.yml
+          grep -F 'python -m haxlab.evaluation.calibration_resume' "$workflow"
+          grep -F 'ARENA_CALIBRATION_SOURCE_REUSED' "$workflow"
+          grep -F 'sudo -u haxlab mkdir -p "$OUT"' "$workflow"
+          grep -F 'sudo -u haxlab rm -f "$RESULT" "$DECISION"' "$workflow"
+          if grep -F 'sudo -u haxlab rm -rf "$OUT"' "$workflow"; then
+            echo "Legacy destructive same-SHA cleanup remains present" >&2
+            exit 1
+          fi
+          echo "CALIBRATION_RESUME_INTEGRATION_WIRING=green"
