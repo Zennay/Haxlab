@@ -168,3 +168,65 @@ def test_frozen_absolute_context_gate_rejects_inert_policy() -> None:
         "absolute_context_adaptation_rate" in reason
         for reason in decision.reasons
     )
+
+
+def test_missing_candidate_metric_fails_closed_structurally() -> None:
+    payload = _payload()
+    del payload["plug_and_play"]["by_role"]["gk"]["individual"]["candidate"]["boundary_rate"]
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "invalid_metric:gk:candidate:boundary_rate:missing" in decision.reasons
+
+
+def test_missing_context_adaptation_cannot_default_to_pass() -> None:
+    payload = _payload()
+    del payload["plug_and_play"]["by_role"]["am"]["individual"]["candidate"]["context_adaptation_rate"]
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert (
+        "invalid_metric:am:candidate:context_adaptation_rate:missing"
+        in decision.reasons
+    )
+
+
+def test_non_finite_metric_fails_closed_structurally() -> None:
+    payload = _payload()
+    payload["plug_and_play"]["by_role"]["st"]["individual"]["candidate"]["ood_rate"] = float("nan")
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "invalid_metric:st:candidate:ood_rate:non_finite" in decision.reasons
+
+
+def test_runtime_error_count_must_be_numeric_integer() -> None:
+    payload = _payload()
+    payload["plug_and_play"]["by_role"]["dm"]["individual"]["candidate"]["runtime_errors"] = "unknown"
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert (
+        "invalid_metric:dm:candidate:runtime_errors:non_numeric"
+        in decision.reasons
+    )
