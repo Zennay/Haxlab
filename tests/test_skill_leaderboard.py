@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 import sys
 
 from haxlab.skill.leaderboard import (
     _bounded_match_contexts,
     _normalizers,
+    _normalize,
     _player_minutes,
     _raw_metrics,
     build_leaderboard,
@@ -498,3 +500,10 @@ def test_load_match_evidence_skips_malformed_artifact_structure(
     evidence = load_match_evidence(tmp_path)
 
     assert {row["name"] for row in evidence} == {"Valid"}
+
+def test_normalize_rejects_nonfinite_metric_evidence() -> None:
+    normalizers = {("midfield", "retention"): (0.5, 0.1)}
+
+    assert _normalize("midfield", "retention", math.nan, normalizers) is None
+    assert _normalize("midfield", "retention", math.inf, normalizers) is None
+    assert _normalize("midfield", "retention", -math.inf, normalizers) is None
