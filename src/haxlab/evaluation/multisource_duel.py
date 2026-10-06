@@ -61,40 +61,101 @@ def _declared_aggregate_score(
     return number
 
 
-def build_multisource_duel(duels: list[dict[str, Any]]) -> dict[str, Any]:
-    if not duels:
-        raise ValueError("at least one replay-seeded duel is required")
+def _builder_model_path(
+    duel: dict[str, Any],
+    key: str,
+    source_index: int,
+) -> str:
+    value = duel.get(key)
+    if type(value) is not str or not value.strip():
+        raise ValueError(
+            f"source {source_index}: {key} must be a non-empty string"
+        )
+    if value != value.strip():
+        raise ValueError(
+            f"source {source_index}: {key} must not contain outer whitespace"
+        )
+    return value
 
-    challenger_model = str(duels[0].get("challenger_model") or "")
-    champion_model = str(duels[0].get("champion_model") or "")
-    if not challenger_model or not champion_model:
-        raise ValueError("duel model paths are required")
+
+def _builder_count(
+    duel: dict[str, Any],
+    key: str,
+    source_index: int,
+) -> int:
+    value = duel.get(key)
+    if type(value) is not int or value < 0:
+        raise ValueError(
+            f"source {source_index}: {key} must be a non-negative integer"
+        )
+    return value
+
+
+def _builder_scenario_sha(duel: dict[str, Any], source_index: int) -> str:
+    value = duel.get("scenario_sha256")
+    if type(value) is not str:
+        raise ValueError(
+            f"source {source_index}: scenario_sha256 must be a string"
+        )
+    normalized = value.lower()
+    if (
+        len(normalized) != 64
+        or any(ch not in "0123456789abcdef" for ch in normalized)
+    ):
+        raise ValueError(f"source {source_index}: invalid scenario_sha256")
+    return normalized
+
+
+def build_multisource_duel(duels: list[dict[str, Any]]) -> dict[str, Any]:
+    if not isinstance(duels, list) or not duels:
+        raise ValueError("at least one replay-seeded duel list is required")
+    if not isinstance(duels[0], dict):
+        raise ValueError("source 1: duel payload must be an object")
+
+    challenger_model = _builder_model_path(
+        duels[0], "challenger_model", 1
+    )
+    champion_model = _builder_model_path(
+        duels[0], "champion_model", 1
+    )
 
     scenario_hashes: list[str] = []
     sources: list[dict[str, Any]] = []
     wins = draws = losses = matches = 0
 
     for index, duel in enumerate(duels, start=1):
+        if not isinstance(duel, dict):
+            raise ValueError(f"source {index}: duel payload must be an object")
         if duel.get("schema") != "haxlab-elite-replay-seeded-duel-v1":
             raise ValueError(
                 f"source {index}: unsupported duel schema {duel.get('schema')!r}"
             )
-        if str(duel.get("challenger_model") or "") != challenger_model:
+        if (
+            _builder_model_path(duel, "challenger_model", index)
+            != challenger_model
+        ):
             raise ValueError(f"source {index}: challenger model mismatch")
-        if str(duel.get("champion_model") or "") != champion_model:
+        if (
+            _builder_model_path(duel, "champion_model", index)
+            != champion_model
+        ):
             raise ValueError(f"source {index}: champion model mismatch")
 
-        scenario_sha = str(duel.get("scenario_sha256") or "")
-        if len(scenario_sha) != 64:
-            raise ValueError(f"source {index}: invalid scenario_sha256")
+        scenario_sha = _builder_scenario_sha(duel, index)
         if scenario_sha in scenario_hashes:
             raise ValueError(f"source {index}: duplicate scenario_sha256")
         scenario_hashes.append(scenario_sha)
 
-        source_matches = int(duel.get("matches") or 0)
-        source_wins = int(duel.get("wins") or 0)
-        source_draws = int(duel.get("draws") or 0)
-        source_losses = int(duel.get("losses") or 0)
+        source_matches = _builder_count(duel, "matches", index)
+        source_wins = _builder_count(duel, "wins", index)
+        source_draws = _builder_count(duel, "draws", index)
+        source_losses = _builder_count(duel, "losses", index)
+        if source_wins + source_draws + source_losses != source_matches:
+            raise ValueError(
+                f"source {index}: match tally mismatch:"
+                f"{source_wins}+{source_draws}+{source_losses}"
+                f"!={source_matches}"
+            )
         matches += source_matches
         wins += source_wins
         draws += source_draws
