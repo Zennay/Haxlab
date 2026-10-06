@@ -1,21 +1,13 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sqlite3
 from pathlib import Path
 from typing import Any
 
 from haxlab.analysis.roles import ROLES_4V4, infer_roles_4v4
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+from haxlab.hashing import sha256_file
 
 
 def _healthy_candidate(
@@ -105,7 +97,7 @@ def _healthy_candidate(
     ):
         return None
     try:
-        actual_raw_sha = _sha256_file(raw)
+        actual_raw_sha = sha256_file(raw)
     except OSError:
         return None
     if actual_raw_sha != normalized_sha:
