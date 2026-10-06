@@ -9,6 +9,66 @@ const ROLE_STARTS = Object.freeze({
   am: { x: 70, y: 58 },
   st: { x: 270, y: 0 },
 });
+const ROLE_NAMES = Object.freeze(Object.keys(ROLE_STARTS));
+
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function validateNeutralBots(bots) {
+  if (!Array.isArray(bots) || bots.length !== 8) {
+    throw new Error("neutral benchmark requires exactly 8 bots");
+  }
+  const ids = new Set();
+  const slots = new Set();
+  for (const bot of bots) {
+    if (!isPlainObject(bot)) {
+      throw new Error("neutral benchmark bot must be an object");
+    }
+    if (typeof bot.id !== "number" || !Number.isInteger(bot.id) || bot.id <= 0) {
+      throw new Error("neutral benchmark bot id must be a positive native integer");
+    }
+    if (ids.has(bot.id)) {
+      throw new Error("neutral benchmark bot ids must be unique");
+    }
+    ids.add(bot.id);
+    if (
+      typeof bot.teamId !== "number" ||
+      !Number.isInteger(bot.teamId) ||
+      (bot.teamId !== 1 && bot.teamId !== 2)
+    ) {
+      throw new Error("neutral benchmark teamId must be native team id 1 or 2");
+    }
+    if (
+      typeof bot.role !== "string" ||
+      !Object.prototype.hasOwnProperty.call(ROLE_STARTS, bot.role)
+    ) {
+      throw new Error("neutral benchmark bot has unknown role");
+    }
+    const slot = `${bot.teamId}:${bot.role}`;
+    if (slots.has(slot)) {
+      throw new Error("neutral benchmark requires one bot per team/role slot");
+    }
+    slots.add(slot);
+  }
+  for (const teamId of (1, 2)) {
+    for (const role of ROLE_NAMES) {
+      if (!slots.has(`${teamId}:${role}`)) {
+        throw new Error("neutral benchmark lineup is incomplete");
+      }
+    }
+  }
+}
+
+function validatePairIndex(pairIndex) {
+  if (
+    typeof pairIndex !== "number" ||
+    !Number.isInteger(pairIndex) ||
+    pairIndex < 0
+  ) {
+    throw new Error("pairIndex must be a non-negative native integer");
+  }
+}
 
 function rawSetPlayerDisc(room, playerId, properties) {
   if (typeof room.setPlayerDiscProperties === "function") {
@@ -37,6 +97,7 @@ function zeroInputs(room, bots) {
 }
 
 function releaseInitialKickoff(room, bots) {
+  validateNeutralBots(bots);
   const redSt = bots.find((bot) => bot.teamId === 1 && bot.role === "st");
   const blueSt = bots.find((bot) => bot.teamId === 2 && bot.role === "st");
   if (!redSt || !blueSt) {
@@ -72,6 +133,8 @@ function releaseInitialKickoff(room, bots) {
 }
 
 function resetNeutral4v4(room, bots, pairIndex = 0) {
+  validateNeutralBots(bots);
+  validatePairIndex(pairIndex);
   for (const bot of bots) {
     const start = ROLE_STARTS[bot.role];
     if (!start) throw new Error("unknown neutral-start role: " + bot.role);
