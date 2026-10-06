@@ -42,37 +42,43 @@ def _safe_version_dir(root: Path, version: Any) -> Path | None:
     return candidate
 
 
-def _candidate_version_from_pointer(root: Path) -> str | None:
-    versions_root = (root / "versions").resolve()
-    for name in ("current", "live", "champion"):
-        path = root / name
-        if path.is_symlink() or path.is_dir():
-            try:
-                resolved = path.resolve()
-                if (
-                    resolved.parent == versions_root
-                    and _safe_version_dir(root, resolved.name) is not None
-                ):
-                    return resolved.name
-            except OSError:
-                pass
-    for name in ("current.json", "live.json", "champion.json"):
-        path = root / name
-        if not path.is_file():
-            continue
+def _promoted_live_version_from_pointer(root: Path) -> str | None:
+    live_path = root / "live.json"
+    if not live_path.is_file():
+        return None
+    try:
+        payload = _load_json(live_path)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("schema") != "haxlab-champion-pointer-v1":
+        return None
+    if payload.get("validation_stage") != "live":
+        return None
+    if payload.get("source_validation_stage") not in {"canary", "live"}:
+        return None
+
+    version = payload.get("version_id")
+    version_dir = _safe_version_dir(root, version)
+    if version_dir is None:
+        return None
+
+    required_paths = {
+        "model_path": version_dir / "model.npz",
+        "metrics_path": version_dir / "metrics.json",
+    }
+    for key, expected in required_paths.items():
+        raw = payload.get(key)
+        if not isinstance(raw, str):
+            return None
         try:
-            payload = _load_json(path)
-        except Exception:
-            continue
-        for key in ("version", "version_id", "id", "champion"):
-            value = payload.get(key)
-            if isinstance(value, str) and _safe_version_dir(root, value) is not None:
-                return value
-            if isinstance(value, dict):
-                nested = value.get("version") or value.get("version_id") or value.get("id")
-                if _safe_version_dir(root, nested) is not None:
-                    return nested
-    return None
+            if Path(raw).resolve() != expected.resolve():
+                return None
+        except OSError:
+            return None
+
+    return version
 
 
 def resolve_version_dir(root: Path, explicit: str | None = None) -> Path:
@@ -83,16 +89,16 @@ def resolve_version_dir(root: Path, explicit: str | None = None) -> Path:
             return path
         raise FileNotFoundError(f"champion version not found or unsafe: {version}")
 
-    pointer = _candidate_version_from_pointer(root)
+    pointer = _promoted_live_version_from_pointer(root)
     if pointer:
         path = _safe_version_dir(root, pointer)
         if path is not None:
             return path
-        raise FileNotFoundError(f"promoted champion pointer is no longer loadable: {pointer}")
+        raise FileNotFoundError(f"promoted live pointer is no longer loadable: {pointer}")
 
     raise FileNotFoundError(
-        "no promoted live champion pointer found below "
-        f"{root}; refusing to select an unpromoted version by recency"
+        "no valid live-stage champion pointer found below "
+        f"{root}; refusing to select current/canary or unpromoted versions"
     )
 
 
