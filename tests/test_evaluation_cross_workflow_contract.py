@@ -156,3 +156,18 @@ def test_mandatory_validation_workflows_keep_runner_permission_and_source_contra
         )
         assert "github.ref" not in checkout
         assert "clean: true" in checkout
+
+
+def test_post_gate_resync_keeps_fresh_exact_head_revalidation_routes() -> None:
+    calibration = CALIBRATION.read_text(encoding="utf-8")
+    multisource = MULTISOURCE.read_text(encoding="utf-8")
+    ci = CI.read_text(encoding="utf-8")
+
+    assert "if: contains(github.event.head_commit.message, '[arena-v2-calibration]')" in calibration
+    assert f"- {CANONICAL_BRANCH}" in calibration
+
+    assert "workflow_dispatch:" in multisource
+    assert "ref: ${{ github.sha }}" in multisource
+
+    assert "workflow_dispatch:" in ci
+    assert "ref: ${{ github.event.pull_request.head.sha || github.sha }}" in ci
