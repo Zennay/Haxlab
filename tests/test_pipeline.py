@@ -179,3 +179,23 @@ def test_import_leaves_ambiguous_replay_report_evidence_unmatched(tmp_path: Path
         f"source-b/{replay_name}",
     ]
     assert (out / "matches.jsonl").read_text(encoding="utf-8") == ""
+
+def test_import_rejects_missing_export_root_without_publishing(tmp_path: Path) -> None:
+    missing = tmp_path / "missing"
+    out = tmp_path / "derived"
+
+    with pytest.raises(FileNotFoundError, match="export_root_missing"):
+        run_import(missing, out)
+
+    assert not out.exists()
+
+
+def test_import_rejects_non_directory_export_root_without_publishing(tmp_path: Path) -> None:
+    source = tmp_path / "export.json"
+    source.write_text("{}", encoding="utf-8")
+    out = tmp_path / "derived"
+
+    with pytest.raises(NotADirectoryError, match="export_root_not_directory"):
+        run_import(source, out)
+
+    assert not out.exists()
