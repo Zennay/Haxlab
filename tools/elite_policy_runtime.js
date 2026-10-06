@@ -10,22 +10,33 @@ function clamp(value, low, high) {
 }
 
 function sigmoid(value) {
-  const clipped = clamp(value, -30, 30);
+  const clipped = clamp(
+    requireFiniteNumber(value, "sigmoid input"),
+    -30,
+    30,
+  );
   return 1 / (1 + Math.exp(-clipped));
 }
 
 function softmax(logits) {
+  if (!Array.isArray(logits) || logits.length === 0) {
+    throw new Error("softmax logits must be a non-empty array");
+  }
+  const finiteLogits = logits.map((value, index) =>
+    requireFiniteNumber(value, `softmax logits[${index}]`),
+  );
   let maxValue = -Infinity;
-  for (const value of logits) {
+  for (const value of finiteLogits) {
     if (value > maxValue) maxValue = value;
   }
-  const exp = new Array(logits.length);
+  const exp = new Array(finiteLogits.length);
   let total = 0;
-  for (let i = 0; i < logits.length; i += 1) {
-    const value = Math.exp(logits[i] - maxValue);
+  for (let i = 0; i < finiteLogits.length; i += 1) {
+    const value = Math.exp(finiteLogits[i] - maxValue);
     exp[i] = value;
     total += value;
   }
+  requireFiniteNumber(total, "softmax total", { min: Number.MIN_VALUE });
   return exp.map((value) => value / total);
 }
 
@@ -44,8 +55,8 @@ function requireFiniteNumber(value, label, { min = -Infinity, max = Infinity } =
 }
 
 function requireNativeInteger(value, label, { min = -Infinity, max = Infinity } = {}) {
-  if (typeof value !== "number" || !Number.isInteger(value)) {
-    throw new Error(`${label} must be a native integer`);
+  if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+    throw new Error(`${label} must be a native safe integer`);
   }
   if (value < min || value > max) {
     throw new Error(`${label} must be within [${min}, ${max}]`);
@@ -75,13 +86,21 @@ function requireNumericMatrix(value, label, expectedRows, expectedColumns) {
 }
 
 function dense(input, weights, bias, relu = false) {
+  if (!Array.isArray(input)) {
+    throw new Error("dense input must be an array");
+  }
   if (!Array.isArray(weights) || weights.length !== input.length) {
     throw new Error(
       `dense shape mismatch: input=${input.length}, weights=${weights?.length}`,
     );
   }
+  if (!Array.isArray(bias) || bias.length === 0) {
+    throw new Error("dense bias must be a non-empty array");
+  }
   const outputDim = bias.length;
-  const output = bias.slice();
+  const output = bias.map((value, index) =>
+    requireFiniteNumber(value, `dense bias[${index}]`),
+  );
   for (let i = 0; i < input.length; i += 1) {
     const row = weights[i];
     if (!Array.isArray(row) || row.length !== outputDim) {
@@ -89,10 +108,17 @@ function dense(input, weights, bias, relu = false) {
         `dense weight row ${i} has ${row?.length} values; expected ${outputDim}`,
       );
     }
-    const value = input[i];
+    const value = requireFiniteNumber(input[i], `dense input[${i}]`);
     if (value === 0) continue;
     for (let j = 0; j < outputDim; j += 1) {
-      output[j] += value * row[j];
+      const weight = requireFiniteNumber(
+        row[j],
+        `dense weights[${i}][${j}]`,
+      );
+      output[j] += value * weight;
+      if (!Number.isFinite(output[j])) {
+        throw new Error(`dense output ${j} is non-finite`);
+      }
     }
   }
   for (let j = 0; j < output.length; j += 1) {
