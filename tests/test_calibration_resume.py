@@ -314,3 +314,35 @@ def test_rejects_corrupt_or_partial_result(tmp_path: Path) -> None:
     assert reusable is False
     assert len(reasons) == 1
     assert reasons[0].startswith("result:unreadable:")
+
+
+def test_rejects_missing_or_non_file_bound_inputs_without_raising(
+    tmp_path: Path,
+) -> None:
+    for key, as_directory in (("challenger", False), ("scenarios", True)):
+        case_dir = tmp_path / key
+        case_dir.mkdir()
+        inputs = _inputs(case_dir)
+        result = _write_result(case_dir, _payload(inputs))
+        bound_path = inputs[key]
+        assert isinstance(bound_path, Path)
+        bound_path.unlink()
+        if as_directory:
+            bound_path.mkdir()
+
+        reusable, reasons = reusable_result_or_reasons(result, **inputs)
+
+        assert reusable is False
+        assert f"provenance:{key}:path:not_regular_file" in reasons
+
+
+def test_rejects_non_path_bound_input_without_raising(tmp_path: Path) -> None:
+    inputs = _inputs(tmp_path)
+    result = _write_result(tmp_path, _payload(inputs))
+    inputs["stadium"] = "stadium.hbs"
+
+    reusable, reasons = reusable_result_or_reasons(result, **inputs)
+
+    assert reusable is False
+    assert "provenance:stadium:path:not_path" in reasons
+
