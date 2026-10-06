@@ -78,6 +78,29 @@ class ImportManifest:
             raise ValueError(f"invalid import manifest {name}: expected native non-negative int")
         return value
 
+    @staticmethod
+    def _require_string_list(name: str, value: Any) -> list[str]:
+        if type(value) is not list or any(type(item) is not str for item in value):
+            raise ValueError(
+                f"invalid import manifest {name}: expected list of native strings"
+            )
+        return value
+
+    @staticmethod
+    def _require_failures(value: Any) -> list[ImportFailure]:
+        if type(value) is not list or any(
+            type(item) is not ImportFailure for item in value
+        ):
+            raise ValueError(
+                "invalid import manifest failures: expected list of ImportFailure"
+            )
+        for item in value:
+            if any(type(field) is not str for field in (item.source, item.stage, item.error)):
+                raise ValueError(
+                    "invalid import manifest failures: fields must be native strings"
+                )
+        return value
+
     def _validate(self) -> None:
         if type(self.schema_version) is not int or self.schema_version != 1:
             raise ValueError(
@@ -99,6 +122,13 @@ class ImportManifest:
         match_count = self._require_native_non_negative_int(
             "match_count", self.match_count
         )
+        unmatched_replays = self._require_string_list(
+            "unmatched_replays", self.unmatched_replays
+        )
+        unmatched_reports = self._require_string_list(
+            "unmatched_reports", self.unmatched_reports
+        )
+        self._require_failures(self.failures)
 
         if unique_replay_count > replay_count:
             raise ValueError(
@@ -118,12 +148,12 @@ class ImportManifest:
                 "invalid import manifest counts: match_count exceeds report_count"
             )
 
-        if len(self.unmatched_replays) > unique_replay_count - match_count:
+        if len(unmatched_replays) > unique_replay_count - match_count:
             raise ValueError(
                 "invalid import manifest counts: unmatched_replays exceed remaining "
                 "unique replay capacity"
             )
-        if len(self.unmatched_reports) > report_count - match_count:
+        if len(unmatched_reports) > report_count - match_count:
             raise ValueError(
                 "invalid import manifest counts: unmatched_reports exceed remaining "
                 "report capacity"
