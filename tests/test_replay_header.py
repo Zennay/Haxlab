@@ -39,3 +39,36 @@ def test_rejects_unknown_version(tmp_path: Path) -> None:
         assert "unsupported_version" in str(exc)
     else:
         raise AssertionError("expected ReplayFormatError")
+
+
+
+def test_rejects_trailing_bytes_after_deflate_stream(tmp_path: Path) -> None:
+    path = tmp_path / "trailing.hbr2"
+    path.write_bytes(
+        struct.pack(">4sII", b"HBR2", 3, 120)
+        + _raw_deflate(b"payload")
+        + b"unexpected-trailer"
+    )
+
+    try:
+        decompress_replay_payload(path)
+    except ReplayFormatError as exc:
+        assert str(exc) == "deflate_trailing_data"
+    else:
+        raise AssertionError("expected ReplayFormatError")
+
+
+def test_rejects_incomplete_deflate_stream(tmp_path: Path) -> None:
+    compressed = _raw_deflate(b"payload that must finish cleanly")
+    path = tmp_path / "truncated.hbr2"
+    path.write_bytes(
+        struct.pack(">4sII", b"HBR2", 3, 120)
+        + compressed[:-1]
+    )
+
+    try:
+        decompress_replay_payload(path)
+    except ReplayFormatError as exc:
+        assert str(exc) == "deflate_incomplete_stream"
+    else:
+        raise AssertionError("expected ReplayFormatError")
