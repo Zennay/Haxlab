@@ -126,6 +126,61 @@ def composite_score(snapshot: dict[str, float]) -> float:
     return 0.70 * snapshot["joint_accuracy"] + 0.30 * snapshot["kick_f1"]
 
 
+def generation_state_issues(
+    state: Any,
+    *,
+    analysis_version: str,
+    manifest_sha256: str,
+) -> list[str]:
+    if not isinstance(state, dict):
+        return ["invalid_generation_state:not_object"]
+
+    issues: list[str] = []
+    if state.get("schema") != SCHEMA:
+        issues.append("generation_state.schema_mismatch")
+    if state.get("analysis_version") != analysis_version:
+        issues.append("generation_state.analysis_version_mismatch")
+
+    stored_manifest_sha256 = state.get("manifest_sha256")
+    if not isinstance(stored_manifest_sha256, str):
+        issues.append("generation_state.manifest_sha256_invalid")
+    elif stored_manifest_sha256 != manifest_sha256:
+        issues.append("generation_state.manifest_sha256_mismatch")
+
+    champion = state.get("champion")
+    if not isinstance(champion, dict):
+        issues.append("generation_state.champion_invalid")
+        return issues
+
+    champion_id = champion.get("id")
+    if not isinstance(champion_id, str) or not champion_id.strip():
+        issues.append("generation_state.champion_id_invalid")
+
+    champion_metrics = champion.get("metrics")
+    metric_issues = _snapshot_issues(
+        champion_metrics,
+        "generation_state.champion.metrics",
+    )
+    issues.extend(metric_issues)
+
+    score = champion.get("score")
+    if isinstance(score, bool) or not isinstance(score, (int, float)):
+        issues.append("generation_state.champion_score_invalid")
+    elif not math.isfinite(float(score)):
+        issues.append("generation_state.champion_score_non_finite")
+    elif not metric_issues and isinstance(champion_metrics, dict):
+        expected_score = composite_score(champion_metrics)
+        if not math.isclose(
+            float(score),
+            expected_score,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        ):
+            issues.append("generation_state.champion_score_mismatch")
+
+    return issues
+
+
 def evaluate_candidate(
     candidate: dict[str, float],
     champion: dict[str, float],
@@ -252,7 +307,21 @@ class GenerationLoop:
 
     def initialize(self) -> dict[str, Any]:
         state = self.load_state()
+        if not isinstance(state, dict):
+            raise RuntimeError("generation state provenance validation failed: invalid_generation_state:not_object")
         if state.get("champion"):
+            if not self.manifest.is_file():
+                raise RuntimeError(f"dataset manifest is missing: {self.manifest}")
+            issues = generation_state_issues(
+                state,
+                analysis_version=self.analysis_version,
+                manifest_sha256=sha256_file(self.manifest),
+            )
+            if issues:
+                raise RuntimeError(
+                    "generation state provenance validation failed: "
+                    + ", ".join(issues)
+                )
             return state
 
         baseline_dir = self.models_dir / "challengers" / "autonomy-bc-baseline-v1"
