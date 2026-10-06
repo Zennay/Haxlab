@@ -134,3 +134,149 @@ def test_multisource_gate_rejects_declared_source_count_mismatch() -> None:
 
     assert not decision.eligible_to_replace_champion
     assert "source_count_mismatch:4!=3" in decision.reasons
+
+def test_multisource_gate_rejects_tampered_aggregate_tallies() -> None:
+    expected_reasons = {
+        "matches": "aggregate_matches_mismatch:",
+        "wins": "aggregate_wins_mismatch:",
+        "draws": "aggregate_draws_mismatch:",
+        "losses": "aggregate_losses_mismatch:",
+    }
+    for key, reason_prefix in expected_reasons.items():
+        payload = build_multisource_duel([
+            _duel("a"),
+            _duel("b"),
+            _duel("c"),
+        ])
+        payload[key] += 1
+
+        decision = decide_multisource_duel_gate(payload)
+
+        assert not decision.eligible_to_replace_champion
+        assert any(
+            reason.startswith(reason_prefix)
+            for reason in decision.reasons
+        )
+
+
+def test_multisource_gate_rejects_tampered_aggregate_match_score() -> None:
+    payload = build_multisource_duel([
+        _duel("a"),
+        _duel("b"),
+        _duel("c"),
+    ])
+    payload["aggregate_match_score"] = 0.5
+
+    decision = decide_multisource_duel_gate(payload)
+
+    assert not decision.eligible_to_replace_champion
+    assert any(
+        reason.startswith("aggregate_match_score_mismatch:")
+        for reason in decision.reasons
+    )
+
+
+def test_multisource_gate_rejects_malformed_aggregate_types() -> None:
+    payload = build_multisource_duel([
+        _duel("a"),
+        _duel("b"),
+        _duel("c"),
+    ])
+    payload["matches"] = "36"
+    payload["aggregate_match_score"] = "0.6666666667"
+
+    decision = decide_multisource_duel_gate(payload)
+
+    assert not decision.eligible_to_replace_champion
+    assert "invalid_aggregate:matches:not_integer" in decision.reasons
+    assert (
+        "invalid_aggregate:aggregate_match_score:not_number"
+        in decision.reasons
+    )
+
+def test_multisource_gate_rejects_tampered_declared_scenario_hashes() -> None:
+    payload = build_multisource_duel([
+        _duel("a"),
+        _duel("b"),
+        _duel("c"),
+    ])
+    payload["scenario_sha256s"][1] = "d" * 64
+
+    decision = decide_multisource_duel_gate(payload)
+
+    assert not decision.eligible_to_replace_champion
+    assert "scenario_sha256s_mismatch" in decision.reasons
+
+
+def test_multisource_gate_rejects_malformed_wrapper_collections() -> None:
+    payload = build_multisource_duel([
+        _duel("a"),
+        _duel("b"),
+        _duel("c"),
+    ])
+    payload["scenario_sha256s"] = "not-a-list"
+    payload["sources"] = {"not": "a-list"}
+
+    decision = decide_multisource_duel_gate(payload)
+
+    assert not decision.eligible_to_replace_champion
+    assert "invalid_sources_payload" in decision.reasons
+    assert "invalid_scenario_sha256s_payload" in decision.reasons
+
+def test_multisource_gate_rejects_declared_scenario_hash_list_drift() -> None:
+    payload = build_multisource_duel([
+        _duel("a"),
+        _duel("b"),
+        _duel("c"),
+    ])
+    payload["scenario_sha256s"][1] = "d" * 64
+
+    decision = decide_multisource_duel_gate(payload)
+
+    assert not decision.eligible_to_replace_champion
+    assert "scenario_sha256s_mismatch" in decision.reasons
+
+
+def test_multisource_gate_rejects_malformed_declared_scenario_hash_list() -> None:
+    payload = build_multisource_duel([
+        _duel("a"),
+        _duel("b"),
+        _duel("c"),
+    ])
+    payload["scenario_sha256s"] = "not-a-list"
+
+    decision = decide_multisource_duel_gate(payload)
+
+    assert not decision.eligible_to_replace_champion
+    assert "invalid_scenario_sha256s_payload" in decision.reasons
+    assert "scenario_sha256s_mismatch" in decision.reasons
+
+
+def test_multisource_gate_rejects_non_object_source_rows() -> None:
+    payload = build_multisource_duel([
+        _duel("a"),
+        _duel("b"),
+        _duel("c"),
+    ])
+    payload["sources"][1] = "not-an-object"
+
+    decision = decide_multisource_duel_gate(payload)
+
+    assert not decision.eligible_to_replace_champion
+    assert "source_2:invalid_source_payload" in decision.reasons
+    assert "scenario_sha256s_mismatch" in decision.reasons
+
+
+def test_multisource_gate_rejects_non_list_sources_payload() -> None:
+    payload = build_multisource_duel([
+        _duel("a"),
+        _duel("b"),
+        _duel("c"),
+    ])
+    payload["sources"] = {"unexpected": "mapping"}
+
+    decision = decide_multisource_duel_gate(payload)
+
+    assert not decision.eligible_to_replace_champion
+    assert "invalid_sources_payload" in decision.reasons
+
