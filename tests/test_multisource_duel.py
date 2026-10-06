@@ -1,4 +1,5 @@
 from haxlab.evaluation.multisource_duel import (
+    MultisourceDuelPolicy,
     build_multisource_duel,
     decide_multisource_duel_gate,
 )
@@ -360,12 +361,7 @@ def test_multisource_gate_rejects_malformed_minimum_sources_policy() -> None:
     for invalid in (True, "3", 0):
         decision = decide_multisource_duel_gate(
             payload,
-            policy=type("Policy", (), {})()
-            if invalid == "object"
-            else __import__(
-                "haxlab.evaluation.multisource_duel",
-                fromlist=["MultisourceDuelPolicy"],
-            ).MultisourceDuelPolicy(minimum_sources=invalid),
+            policy=MultisourceDuelPolicy(minimum_sources=invalid),
         )
         assert not decision.eligible_to_replace_champion
         assert any(
