@@ -5,6 +5,8 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const zlib = require("zlib");
+const { parseSampleEveryTicks } = require("./sample_cadence");
+const { parseSelectedPlayerMapJson } = require("./imitation_selection");
 const initAPI = require("node-haxball");
 
 const API = initAPI();
@@ -21,21 +23,27 @@ function usage() {
 const replayPath = process.argv[2];
 const outputPath = process.argv[3];
 const selectedPlayerMapJson = process.argv[4];
-const sampleEvery = Math.max(
-  1,
-  Number.parseInt(process.argv[5] || "6", 10) || 6,
-);
 
 if (!replayPath || !outputPath || !selectedPlayerMapJson) usage();
+
+let sampleEvery;
+try {
+  sampleEvery = parseSampleEveryTicks(process.argv[5]);
+} catch (error) {
+  console.error(`Invalid sampleEveryTicks: ${error.message}`);
+  usage();
+}
 if (os.endianness() !== "LE") {
   throw new Error("haxlab imitation shards currently require little-endian host");
 }
 
-const selectedByReplayId = new Map(
-  Object.entries(JSON.parse(selectedPlayerMapJson)).map(
-    ([playerId, identity]) => [Number(playerId), String(identity)],
-  ),
-);
+let selectedByReplayId;
+try {
+  selectedByReplayId = parseSelectedPlayerMapJson(selectedPlayerMapJson);
+} catch (error) {
+  console.error(`Invalid selectedPlayerMapJson: ${error.message}`);
+  usage();
+}
 const selectedIdentities = Array.from(
   new Set(selectedByReplayId.values()),
 ).sort();
