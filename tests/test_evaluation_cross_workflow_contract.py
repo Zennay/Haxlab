@@ -192,3 +192,20 @@ def test_canonical_evaluation_workflows_have_bounded_runner_timeouts() -> None:
             workflow,
             timeouts,
         )
+
+
+def test_canonical_evaluation_workflows_do_not_request_write_permissions() -> None:
+    workflows = (
+        *MANDATORY_VALIDATION_WORKFLOWS,
+        str(CALIBRATION),
+        str(MULTISOURCE),
+        str(CI),
+    )
+    for workflow in workflows:
+        text = Path(workflow).read_text(encoding="utf-8")
+        permissions_start = text.index("permissions:")
+        jobs_start = text.index("\njobs:", permissions_start)
+        permissions = text[permissions_start:jobs_start]
+
+        assert "contents: read" in permissions, workflow
+        assert "write" not in permissions, (workflow, permissions)
