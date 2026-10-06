@@ -6,7 +6,7 @@ STATE_DB="${HAXLAB_STATE_DB:-/var/lib/haxlab/state/haxlab.sqlite3}"
 CURRENT_ANALYZER_VERSION="$("${APP_DIR}/.venv/bin/python" -c 'from haxlab.runtime.state import CURRENT_ANALYZER_VERSION; print(CURRENT_ANALYZER_VERSION)')"
 
 usage() {
-  echo "Usage: haxlab-actions-control {status|deploy|champion-info|champion-runtime|live-play-probe|live-play-start ROOM_ID|live-play-stop|live-play-status|live-host-prereq|live-host-keygen|live-host-install-token CIPHERTEXT|live-host-start|live-host-status|restart-analyzer|retry-failed-analysis|feature-smoke|player-stats|skill-leaderboard|training-manifest|analyzer-logs|failed-analysis}" >&2
+  echo "Usage: haxlab-actions-control {status|archive-audit|deploy|champion-info|champion-runtime|live-play-probe|live-play-start ROOM_ID|live-play-stop|live-play-status|live-host-prereq|live-host-keygen|live-host-install-token CIPHERTEXT|live-host-start|live-host-status|restart-analyzer|retry-failed-analysis|feature-smoke|player-stats|skill-leaderboard|training-manifest|analyzer-logs|failed-analysis}" >&2
   exit 2
 }
 
@@ -20,6 +20,22 @@ case "${action}" in
     echo
     echo "=== haxlab-status ==="
     haxlab-status
+    ;;
+
+  archive-audit)
+    max_issues="${2:-100}"
+    if [[ ! "${max_issues}" =~ ^[0-9]+$ ]]; then
+      echo "invalid max issues: ${max_issues}" >&2
+      exit 2
+    fi
+    if command -v ionice >/dev/null 2>&1; then
+      exec ionice -c 3 nice -n 10 haxlab-audit-archive \
+        --state-db "${STATE_DB}" \
+        --max-issues "${max_issues}"
+    fi
+    exec nice -n 10 haxlab-audit-archive \
+      --state-db "${STATE_DB}" \
+      --max-issues "${max_issues}"
     ;;
 
   deploy)
