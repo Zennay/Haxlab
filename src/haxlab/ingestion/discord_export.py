@@ -34,6 +34,13 @@ def _walk_message_groups(value: Any, inherited_channel_id: str | None = None) ->
 
 def read_discord_exports(root: Path) -> tuple[list[MatchReport], list[ImportFailure]]:
     """Read DiscordChatExporter-like JSON files without depending on one exact schema."""
+    if root.is_symlink():
+        raise ValueError("discord_export_root_must_not_be_symlink")
+    if not root.exists():
+        raise FileNotFoundError(f"discord_export_root_missing:{root}")
+    if not root.is_dir():
+        raise NotADirectoryError(f"discord_export_root_not_directory:{root}")
+
     reports: list[MatchReport] = []
     failures: list[ImportFailure] = []
 
