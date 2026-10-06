@@ -29,6 +29,11 @@ def _attachment_from_json(value: dict[str, Any]) -> AttachmentRef | None:
         or value.get("name")
         or value.get("file_name")
     )
+    if file_name is None:
+        return None
+    if not isinstance(file_name, str):
+        raise ValueError("invalid_attachment_filename")
+    file_name = file_name.strip()
     if not file_name:
         return None
 
@@ -45,9 +50,16 @@ def _attachment_from_json(value: dict[str, Any]) -> AttachmentRef | None:
         else None
     )
 
+    raw_url = value.get("url")
+    if raw_url is not None and not isinstance(raw_url, str):
+        raise ValueError("invalid_attachment_url")
+    url = raw_url.strip() if isinstance(raw_url, str) else None
+    if url == "":
+        url = None
+
     return AttachmentRef(
-        file_name=str(file_name),
-        url=str(value.get("url")) if value.get("url") else None,
+        file_name=file_name,
+        url=url,
         size_bytes=size_bytes,
     )
 
@@ -75,12 +87,25 @@ def parse_match_report(
     *,
     channel_id: str | None = None,
 ) -> MatchReport:
-    content = str(message.get("content") or "")
-    attachment_values = message.get("attachments") or []
+    raw_content = message.get("content")
+    if raw_content is None:
+        content = ""
+    elif not isinstance(raw_content, str):
+        raise ValueError("invalid_message_content")
+    else:
+        content = raw_content
+
+    attachment_values = message.get("attachments")
+    if attachment_values is None:
+        attachment_values = []
+    if not isinstance(attachment_values, list):
+        raise ValueError("invalid_attachments")
+    if any(not isinstance(item, dict) for item in attachment_values):
+        raise ValueError("invalid_attachment")
+
     attachments = tuple(
         attachment
         for item in attachment_values
-        if isinstance(item, dict)
         if (attachment := _attachment_from_json(item)) is not None
     )
 
@@ -93,6 +118,10 @@ def parse_match_report(
         or message.get("createdAt")
         or message.get("created_at")
     )
+    if timestamp is not None and not isinstance(timestamp, str):
+        raise ValueError("invalid_timestamp")
+    if isinstance(timestamp, str):
+        timestamp = timestamp.strip() or None
 
     raw_message_id = message.get("id") or message.get("messageId")
     if raw_message_id is None or isinstance(raw_message_id, bool):
