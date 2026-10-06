@@ -207,7 +207,43 @@ def test_healthy_candidate_verifies_raw_replay_sha(
     assert candidate is not None
     assert candidate["sha256"] == raw_sha
     assert candidate["raw_file_sha256_verified"] is True
+    assert candidate["analysis_sha256"] == hashlib.sha256(
+        analysis.read_bytes()
+    ).hexdigest()
     assert candidate["sampled_states"] == 100
+
+
+def test_healthy_candidate_analysis_fingerprint_tracks_exact_bytes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    raw, analysis, raw_sha = _candidate_files(tmp_path)
+    monkeypatch.setattr(scenario_source, "infer_roles_4v4", _fake_roles)
+
+    first = scenario_source._healthy_candidate(
+        sha256=raw_sha,
+        raw_path=str(raw),
+        analysis_path=str(analysis),
+        sampled_states=100,
+    )
+    assert first is not None
+
+    payload = json.loads(analysis.read_text(encoding="utf-8"))
+    analysis.write_text(
+        json.dumps(payload, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    second = scenario_source._healthy_candidate(
+        sha256=raw_sha,
+        raw_path=str(raw),
+        analysis_path=str(analysis),
+        sampled_states=100,
+    )
+    assert second is not None
+    assert second["analysis_sha256"] == hashlib.sha256(
+        analysis.read_bytes()
+    ).hexdigest()
+    assert second["analysis_sha256"] != first["analysis_sha256"]
 
 
 def test_healthy_candidate_rejects_symlinked_source_artifacts(
