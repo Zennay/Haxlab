@@ -247,6 +247,26 @@ assert.ok(finished.context_adaptation_rate <= 1);
 
 
 
+function pairRoleMetrics() {
+  return {
+    near_ball_rate: 0.2,
+    boundary_rate: 0.0,
+    ood_rate: 0.01,
+    far_stall_rate: 0.05,
+    context_adaptation_rate: 0.75,
+    average_ball_distance: 200,
+    average_role_deviation: 120,
+    max_held_action_seconds: 1.5,
+    runtime_errors: 0,
+  };
+}
+
+function pairTeamRoles() {
+  return Object.fromEntries(
+    ["gk", "dm", "am", "st"].map((role) => [role, pairRoleMetrics()]),
+  );
+}
+
 const candidateIdentityRow = {
   mode: "full_team",
   tested_kind: "challenger",
@@ -255,10 +275,20 @@ const candidateIdentityRow = {
   test_team_id: 1,
   repeat_index: 0,
   proxy: { test_score: 0.123 },
+  goals: { differential: 0 },
+  progression: { test_share: 0.5 },
+  possession_proxy: { test_rate: 0.5 },
+  team_shape: {
+    formation_order_rate: 0.8,
+    collapsed_rate: 0.1,
+    overstretched_rate: 0.05,
+  },
+  test_team: { roles: pairTeamRoles() },
 };
 const referenceIdentityRow = {
   ...candidateIdentityRow,
   tested_kind: "reference",
+  test_team: { roles: pairTeamRoles() },
 };
 const identityPair = pairArenaRows(
   candidateIdentityRow,
@@ -289,7 +319,7 @@ assert.throws(
     },
     referenceIdentityRow,
   ),
-  /candidate proxy\.test_score must be a finite rate/,
+  /candidate proxy\.test_score must be a finite number/,
 );
 assert.throws(
   () => pairArenaRows(
@@ -299,7 +329,48 @@ assert.throws(
     },
     referenceIdentityRow,
   ),
-  /candidate proxy\.test_score must be a finite rate/,
+  /candidate proxy\.test_score must be a finite number/,
+);
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      possession_proxy: { test_rate: "0.5" },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate possession_proxy\.test_rate must be a finite number/,
+);
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      team_shape: {
+        ...candidateIdentityRow.team_shape,
+        collapsed_rate: 1.01,
+      },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate team_shape\.collapsed_rate is out of range/,
+);
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      test_team: {
+        roles: {
+          ...candidateIdentityRow.test_team.roles,
+          gk: {
+            ...candidateIdentityRow.test_team.roles.gk,
+            runtime_errors: 0.5,
+          },
+        },
+      },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate gk\.runtime_errors must be a safe integer/,
 );
 assert.throws(
   () => pairArenaRows(
