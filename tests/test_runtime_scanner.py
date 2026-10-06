@@ -196,3 +196,54 @@ def test_existing_corrupt_object_at_content_address_fails_closed(
     assert row is not None
     assert row["status"] == "failed"
     assert row["error"] == f"raw_archive_hash_mismatch:{digest}"
+
+
+def test_disappearing_candidate_does_not_crash_ingest(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    incoming = tmp_path / "incoming"
+    raw = tmp_path / "raw"
+    db = tmp_path / "state.sqlite3"
+    incoming.mkdir()
+
+    replay = incoming / "vanishing.hbr2"
+    replay.write_bytes(_valid_hbr2())
+
+    original_stat = Path.stat
+    replay_stat_calls = 0
+
+    def flaky_stat(self: Path, *args, **kwargs):
+        nonlocal replay_stat_calls
+        if self == replay:
+            replay_stat_calls += 1
+            if replay_stat_calls >= 2:
+                raise FileNotFoundError(str(self))
+        return original_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", flaky_stat)
+
+    with RuntimeState(db) as state:
+        summary = scan_once(
+            incoming,
+            raw,
+            state,
+            minimum_file_age_seconds=0,
+            now=time.time() + 10,
+        )
+        event = state.connection.execute(
+            """
+            SELECT event_type, subject, detail
+            FROM runtime_events
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+
+    assert summary.discovered == 1
+    assert summary.disappeared == 1
+    assert summary.failed == 0
+    assert summary.archived == 0
+    assert event is not None
+    assert event["event_type"] == "replay_disappeared"
+    assert event["detail"] == "disappeared_before_stat"
