@@ -34,9 +34,16 @@ jobs:
           PARTNER_B=/var/lib/haxlab/derived/training/elite-player-candidate-b/model/runtime-model.json
           PARTNER_C=/var/lib/haxlab/derived/training/elite-player-candidate-c/model/runtime-model.json
           ROOT=/var/lib/haxlab/derived/evaluation/candidate-d-multisource-holdout-v1
+          CURRENT_RESOLVE_A="$(
+            sudo -u haxlab sha256sum "$CURRENT" | awk '{print $1}'
+          )"
           LIVE_RUNTIME="$(
             sudo -u haxlab /opt/haxlab/.venv/bin/python -c               'import json; print(json.load(open("/var/lib/haxlab/derived/champions/elite-player/current.json"))["runtime_model_path"])'
           )"
+          CURRENT_RESOLVE_B="$(
+            sudo -u haxlab sha256sum "$CURRENT" | awk '{print $1}'
+          )"
+          test "$CURRENT_RESOLVE_A" = "$CURRENT_RESOLVE_B"
 
           INPUTS=(
             "$CURRENT"
