@@ -1,0 +1,59 @@
+name: Resync stale evaluation lanes
+
+on:
+  push:
+    branches:
+      - validation/evaluation-stale-resync-20261006
+
+permissions:
+  contents: write
+
+concurrency:
+  group: haxlab-evaluation-stale-resync
+  cancel-in-progress: true
+
+jobs:
+  merge:
+    if: github.event.head_commit.message == 'Run stale evaluation resync merge'
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact staging head with history
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          clean: true
+
+      - name: Merge exact stale lane heads
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "HaxLab Evaluation Integrator"
+          git config user.email "112865109+Zennay@users.noreply.github.com"
+
+          merge_lane() {
+            local label="$1"
+            local sha="$2"
+            echo "=== MERGE_BEGIN $label $sha ==="
+            if ! git merge --no-ff --no-edit "$sha"; then
+              echo "=== MERGE_CONFLICT $label $sha ==="
+              git status --short || true
+              git diff --name-only --diff-filter=U || true
+              git diff --cc || true
+              exit 1
+            fi
+            echo "=== MERGE_OK $label $(git rev-parse HEAD) ==="
+          }
+
+          git fetch origin             validation/multisource-suite-integrity-20261006             validation/calibration-gate-structural-validity-20261006             validation/calibration-pointer-invariant-20261006             validation/elite-gate-preflight-numeric-integrity-20261006             validation/multisource-aggregate-integrity-20261006             validation/arena-outcome-consistency-20261006
+
+          merge_lane "#31" "a58f33b48a6402d3376dad24b9ba1eab58d6c484"
+          merge_lane "#32" "bbb2ba71e6c142cec56b4302b1c29d33808c62fe"
+          merge_lane "#33" "e6829095ea30c3390013c719b70490a3bc8066ce"
+          merge_lane "#34" "ab3fc127df3b43d8f2ec9c3134b380390c4e6fb5"
+          merge_lane "#35" "3ccfb1b6270ca454a3850f7d6e9f64e411c80a22"
+          merge_lane "#36" "8489262dfcc4a9a1b65187d2b4e7439fa43783ca"
+
+          echo "STALE_RESYNC_MERGED_HEAD=$(git rev-parse HEAD)"
+          git push origin HEAD:validation/evaluation-stale-resync-20261006
