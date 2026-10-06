@@ -71,6 +71,18 @@ def _payload() -> dict:
             "roles": ["gk", "dm", "am", "st"],
             "pair_tie_margin": 0.025,
         },
+        "provenance": {
+            "challenger_model": "challenger.json",
+            "challenger_sha256": "a" * 64,
+            "champion_model": "champion.json",
+            "champion_sha256": "b" * 64,
+            "partner_models": ["champion.json", "partner-b.json"],
+            "partner_sha256s": ["b" * 64, "c" * 64],
+            "stadium": "stadium.hbs",
+            "stadium_sha256": "d" * 64,
+            "scenarios": "scenarios.json",
+            "scenarios_sha256": "e" * 64,
+        },
         "team_mode": {
             "summary": team_summary,
             "roles": {role: _role_pair(samples=8) for role in roles},
@@ -647,4 +659,61 @@ def test_uncalibrated_relative_gate_does_not_require_frozen_config() -> None:
     assert decision.behavior_gate_passed
     assert not decision.eligible_for_live_promotion
     assert "thresholds_not_calibrated" in decision.reasons
+
+
+def test_calibrated_policy_requires_provenance_object() -> None:
+    payload = _payload()
+    del payload["provenance"]
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "invalid_object:provenance" in decision.reasons
+
+
+def test_calibrated_policy_rejects_invalid_provenance_hash() -> None:
+    payload = _payload()
+    payload["provenance"]["challenger_sha256"] = "not-a-sha"
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "provenance:challenger_sha256:invalid_sha256" in decision.reasons
+
+
+def test_calibrated_policy_rejects_partner_provenance_count_drift() -> None:
+    payload = _payload()
+    payload["provenance"]["partner_models"] = ["champion.json"]
+    payload["provenance"]["partner_sha256s"] = ["b" * 64]
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "provenance:partner_model_count_mismatch:1!=2" in decision.reasons
+
+
+def test_calibrated_policy_rejects_non_native_partner_paths() -> None:
+    payload = _payload()
+    payload["provenance"]["partner_models"] = ["champion.json", 7]
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "provenance:partner_models:invalid" in decision.reasons
 
