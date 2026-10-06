@@ -24,3 +24,12 @@ def test_controlled_live_start_does_not_override_promoted_version() -> None:
 
     assert "HAXLAB_CHAMPION_VERSION" not in block
     assert "systemctl restart haxlab-live-bot.service" in block
+
+
+def test_controlled_live_host_does_not_override_promoted_version() -> None:
+    text = CONTROL.read_text(encoding="utf-8")
+    block = _case_block(text, "  live-host-start)", "  live-host-status)")
+
+    assert "HAXLAB_CHAMPION_VERSION" not in block
+    assert "systemctl restart haxlab-live-bot.service" in block
+
