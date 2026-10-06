@@ -204,12 +204,55 @@ jobs:
           require_readable live-runtime "$LIVE_RUNTIME"
           require_readable partner-b "$PARTNER_B"
           require_readable partner-c "$PARTNER_C"
+          require_readable frozen-manifest "$ROOT/frozen-manifest.json"
           for I in 01 02 03; do
             require_readable "source-$I-stadium" "$ROOT/source-$I/stadium.hbs"
             require_readable "source-$I-scenarios" "$ROOT/source-$I/scenarios.json"
           done
 
           sudo -u haxlab mkdir -p "$OUT"
+          FROZEN_INPUT_SNAPSHOT="$OUT/frozen-inputs-before.json"
+          sudo -u haxlab env \
+            ROOT="$ROOT" \
+            SNAPSHOT="$FROZEN_INPUT_SNAPSHOT" \
+            /opt/haxlab/.venv/bin/python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["ROOT"])
+          paths = [root / "frozen-manifest.json"]
+          for source in ("01", "02", "03"):
+              paths.extend(
+                  (
+                      root / f"source-{source}" / "stadium.hbs",
+                      root / f"source-{source}" / "scenarios.json",
+                  )
+              )
+
+          hashes = {
+              str(path): hashlib.sha256(path.read_bytes()).hexdigest()
+              for path in paths
+          }
+          Path(os.environ["SNAPSHOT"]).write_text(
+              json.dumps(
+                  {
+                      "schema": "haxlab-arena-v2-frozen-inputs-v1",
+                      "hashes": hashes,
+                  },
+                  indent=2,
+                  sort_keys=True,
+              ) + "\n",
+              encoding="utf-8",
+          )
+          print(
+              "ARENA_FROZEN_INPUT_SNAPSHOT_GREEN "
+              + hashlib.sha256(
+                  json.dumps(hashes, sort_keys=True).encode()
+              ).hexdigest()
+          )
+          PY
           sudo -u haxlab env LIVE_RUNTIME="$LIVE_RUNTIME" WEAK_MODEL="$OUT/ablated-zero-policy.json"             /opt/haxlab/.venv/bin/python - <<'PY'
           import json
           import os
@@ -281,6 +324,7 @@ jobs:
             echo "ARENA_PARTNER_B_SHA_BEFORE=$PARTNER_B_SHA_BEFORE"
             echo "ARENA_PARTNER_C_SHA_BEFORE=$PARTNER_C_SHA_BEFORE"
             echo "ARENA_WEAK_SHA_BEFORE=$WEAK_SHA_BEFORE"
+            echo "ARENA_FROZEN_INPUT_SNAPSHOT=$FROZEN_INPUT_SNAPSHOT"
           } >> "$GITHUB_ENV"
 
       - name: Run full frozen paired calibration batch
@@ -490,6 +534,7 @@ jobs:
             PARTNER_C_AFTER="$PARTNER_C_AFTER" \
             WEAK_BEFORE="$ARENA_WEAK_SHA_BEFORE" \
             WEAK_AFTER="$WEAK_AFTER" \
+            FROZEN_INPUT_SNAPSHOT="$ARENA_FROZEN_INPUT_SNAPSHOT" \
             /opt/haxlab/.venv/bin/python - <<'PY'
           import json
           import os
@@ -531,6 +576,26 @@ jobs:
                   },
               },
           }
+          snapshot = json.loads(
+              Path(os.environ["FROZEN_INPUT_SNAPSHOT"]).read_text(
+                  encoding="utf-8"
+              )
+          )
+          before_frozen = dict(snapshot.get("hashes") or {})
+          after_frozen = {
+              path: __import__("hashlib").sha256(
+                  Path(path).read_bytes()
+              ).hexdigest()
+              for path in before_frozen
+          }
+          evidence["frozen_inputs"] = {
+              "before": before_frozen,
+              "after": after_frozen,
+          }
+          evidence["frozen_inputs_unchanged"] = (
+              before_frozen == after_frozen
+          )
+
           evidence["current_unchanged"] = (
               evidence["current_sha256_before"]
               == evidence["current_sha256_after"]
@@ -558,6 +623,16 @@ jobs:
               ]
               raise SystemExit(
                   "calibration model bytes changed during run: "
+                  + ",".join(changed)
+              )
+          if not evidence["frozen_inputs_unchanged"]:
+              changed = [
+                  path
+                  for path, before in before_frozen.items()
+                  if after_frozen.get(path) != before
+              ]
+              raise SystemExit(
+                  "frozen calibration inputs changed during run: "
                   + ",".join(changed)
               )
           PY
