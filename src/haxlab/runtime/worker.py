@@ -5,6 +5,7 @@ import json
 import time
 from pathlib import Path
 
+from haxlab.hashing import sha256_file
 from haxlab.replay.header import (
     ReplayFormatError,
     decompress_replay_payload,
@@ -20,6 +21,21 @@ def process_batch(state: RuntimeState, *, batch_size: int = 50) -> dict[str, int
     for replay in pending:
         path = Path(replay.archive_path)
         try:
+            if path.is_symlink() or not path.is_file():
+                raise ValueError(f"raw_archive_not_regular:{replay.sha256}")
+            actual_size = path.stat().st_size
+            if actual_size != replay.size_bytes:
+                raise ValueError(
+                    f"raw_archive_size_mismatch:{replay.sha256}:"
+                    f"expected={replay.size_bytes}:actual={actual_size}"
+                )
+            actual_sha256 = sha256_file(path)
+            if actual_sha256 != replay.sha256:
+                raise ValueError(
+                    f"raw_archive_hash_mismatch:{replay.sha256}:"
+                    f"actual={actual_sha256}"
+                )
+
             header = read_replay_header(path)
             payload = decompress_replay_payload(path)
 
