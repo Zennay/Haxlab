@@ -18,6 +18,7 @@ jobs:
     # A full calibrated 3-source batch can exceed three hours on the
     # single HaxLab VPS runner. Keep a hard upper bound, but do not cancel
     # otherwise healthy exact-head evidence at the previous 180-minute limit.
+    # Exact-head calibration evidence is rebound by marker commits after gate changes.
     timeout-minutes: 360
 
     steps:
