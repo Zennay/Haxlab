@@ -188,7 +188,68 @@ class EliteGateEvidencePreflightTests(unittest.TestCase):
 
         issues = elite_gate_evidence_issues(metadata)
 
-        self.assertIn("invalid_final_holdout.samples:not_integer", issues)
+        self.assertIn("invalid_final_holdout.samples:not_native_integer", issues)
+
+    def test_integer_valued_float_sample_count_fails_preflight(self) -> None:
+        split = complete_split()
+        split["samples"] = 400.0
+        metadata = {
+            "training": {
+                "frozen_holdout_used_for_selection": False,
+                "kick_threshold_source": "validation_only",
+            },
+            "final_validation": complete_split(),
+            "final_holdout": split,
+        }
+
+        issues = elite_gate_evidence_issues(metadata)
+
+        self.assertIn(
+            "invalid_final_holdout.samples:not_native_integer",
+            issues,
+        )
+
+    def test_role_samples_are_required_positive_native_integers(self) -> None:
+        for bad_value, expected_issue in (
+            (None, "missing_final_holdout.by_role.gk.samples"),
+            (0, "invalid_final_holdout.by_role.gk.samples:below_minimum"),
+            (100.0, "invalid_final_holdout.by_role.gk.samples:not_native_integer"),
+        ):
+            split = complete_split()
+            if bad_value is None:
+                split["by_role"]["gk"].pop("samples")
+            else:
+                split["by_role"]["gk"]["samples"] = bad_value
+            metadata = {
+                "training": {
+                    "frozen_holdout_used_for_selection": False,
+                    "kick_threshold_source": "validation_only",
+                },
+                "final_validation": complete_split(),
+                "final_holdout": split,
+            }
+
+            issues = elite_gate_evidence_issues(metadata)
+
+            self.assertIn(expected_issue, issues)
+
+    def test_kick_threshold_source_requires_native_string(self) -> None:
+        split = complete_split()
+        metadata = {
+            "training": {
+                "frozen_holdout_used_for_selection": False,
+                "kick_threshold_source": ["validation_only"],
+            },
+            "final_validation": complete_split(),
+            "final_holdout": split,
+        }
+
+        issues = elite_gate_evidence_issues(metadata)
+
+        self.assertIn(
+            "training.kick_threshold_source_must_be_validation_only",
+            issues,
+        )
 
     def test_validation_metric_is_numeric_and_bounded(self) -> None:
         split = complete_split()
