@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import sqlite3
@@ -17,6 +18,28 @@ def _native_int(value: Any) -> int | None:
     return value
 
 
+def _positive_native_int(value: Any, *, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"{name} must be a native positive integer")
+    return value
+
+
+def _normalized_exclusions(values: set[str] | None) -> set[str]:
+    normalized: set[str] = set()
+    for value in values or set():
+        if not isinstance(value, str):
+            raise ValueError("exclude_sha256 values must be strings")
+        digest = value.strip().lower()
+        if len(digest) != 64 or any(
+            ch not in "0123456789abcdef" for ch in digest
+        ):
+            raise ValueError(
+                "exclude_sha256 values must be 64-character hexadecimal SHA-256"
+            )
+        normalized.add(digest)
+    return normalized
+
+
 def _finite_number(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -31,14 +54,25 @@ def _healthy_candidate(
     analysis_path: str,
     sampled_states: int,
 ) -> dict[str, Any] | None:
+    if not isinstance(sha256, str):
+        return None
+    if not isinstance(raw_path, str) or not isinstance(analysis_path, str):
+        return None
     raw = Path(raw_path)
     analysis_file = Path(analysis_path)
-    if not raw.exists() or not analysis_file.exists():
+    if (
+        raw.is_symlink()
+        or analysis_file.is_symlink()
+        or not raw.is_file()
+        or not analysis_file.is_file()
+    ):
         return None
     try:
-        payload = json.loads(analysis_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        analysis_bytes = analysis_file.read_bytes()
+        payload = json.loads(analysis_bytes)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
+    analysis_sha256 = hashlib.sha256(analysis_bytes).hexdigest()
     if not isinstance(payload, dict):
         return None
 
@@ -144,12 +178,13 @@ def _healthy_candidate(
             role_row = roles.get(player_id) or {}
             if not isinstance(role_row, dict):
                 return None
-            role = str(role_row.get("role") or "unknown")
-            confidence = _finite_number(role_row.get("confidence") or 0.0)
+            role = role_row.get("role")
+            confidence = _finite_number(role_row.get("confidence"))
             if (
-                confidence is None
+                not isinstance(role, str)
+                or confidence is None
                 or role not in ROLES_4V4
-                or confidence < 0.55
+                or not 0.55 <= confidence <= 1.0
                 or role in seen
             ):
                 return None
@@ -177,6 +212,7 @@ def _healthy_candidate(
         "sha256": normalized_sha,
         "raw_path": str(raw),
         "analysis_path": str(analysis_file),
+        "analysis_sha256": analysis_sha256,
         "duration_seconds": total_frames / 60.0,
         "sampled_states": sampled_state_count,
         "raw_file_sha256_verified": True,
@@ -198,11 +234,8 @@ def select_scenario_source(
     max_candidates: int = 1000,
     exclude_sha256: set[str] | None = None,
 ) -> dict[str, Any]:
-    excluded = {
-        str(value).strip().lower()
-        for value in (exclude_sha256 or set())
-        if str(value).strip()
-    }
+    candidate_limit = _positive_native_int(max_candidates, name="max_candidates")
+    excluded = _normalized_exclusions(exclude_sha256)
     db = sqlite3.connect(db_path)
     try:
         rows = db.execute(
@@ -223,14 +256,20 @@ def select_scenario_source(
                 a.sha256 ASC
             LIMIT ?
             """,
-            (max(1, max_candidates),),
+            (candidate_limit,),
         ).fetchall()
     finally:
         db.close()
 
     for sha256, raw_path, analysis_path, sampled_states in rows:
-        normalized_sha = str(sha256).lower()
-        if normalized_sha in excluded:
+        if not isinstance(sha256, str):
+            continue
+        normalized_sha = sha256.strip().lower()
+        if (
+            len(normalized_sha) != 64
+            or any(ch not in "0123456789abcdef" for ch in normalized_sha)
+            or normalized_sha in excluded
+        ):
             continue
         sampled_state_count = _native_int(sampled_states)
         if sampled_state_count is None:
@@ -249,7 +288,7 @@ def select_scenario_source(
 
     raise RuntimeError(
         "No healthy role-resolved 4v4 replay found among "
-        f"{min(len(rows), max_candidates)} candidates "
+        f"{min(len(rows), candidate_limit)} candidates "
         f"after excluding {len(excluded)} replay(s)"
     )
 
@@ -269,19 +308,19 @@ def select_scenario_sources(
     contract (sampled states descending, SHA-256 ascending) while guaranteeing
     that no replay can appear twice in one frozen evaluation suite.
     """
-    requested = max(1, int(count))
-    initial_excluded = {
-        str(value).strip().lower()
-        for value in (exclude_sha256 or set())
-        if str(value).strip()
-    }
+    requested = _positive_native_int(count, name="count")
+    candidate_limit = _positive_native_int(
+        max_candidates,
+        name="max_candidates",
+    )
+    initial_excluded = _normalized_exclusions(exclude_sha256)
     excluded = set(initial_excluded)
     selected: list[dict[str, Any]] = []
 
     for _ in range(requested):
         candidate = select_scenario_source(
             db_path,
-            max_candidates=max_candidates,
+            max_candidates=candidate_limit,
             exclude_sha256=excluded,
         )
         replay_sha = str(candidate.get("sha256") or "").strip().lower()
@@ -344,19 +383,22 @@ def main() -> int:
             if line.strip()
         )
 
-    if max(1, args.count) == 1:
-        result = select_scenario_source(
-            args.state_db,
-            max_candidates=max(1, args.max_candidates),
-            exclude_sha256=excluded,
-        )
-    else:
-        result = select_scenario_sources(
-            args.state_db,
-            count=max(1, args.count),
-            max_candidates=max(1, args.max_candidates),
-            exclude_sha256=excluded,
-        )
+    try:
+        if args.count == 1:
+            result = select_scenario_source(
+                args.state_db,
+                max_candidates=args.max_candidates,
+                exclude_sha256=excluded,
+            )
+        else:
+            result = select_scenario_sources(
+                args.state_db,
+                count=args.count,
+                max_candidates=args.max_candidates,
+                exclude_sha256=excluded,
+            )
+    except ValueError as exc:
+        parser.error(str(exc))
     rendered = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
