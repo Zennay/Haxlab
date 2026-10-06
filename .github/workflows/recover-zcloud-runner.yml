@@ -1,3 +1,4 @@
+# emergency zCloud restore trigger 2026-10-06T06:16Z
 name: Recover zCloud Actions Runner
 
 on:
@@ -23,9 +24,40 @@ jobs:
           # This cross-runner recovery is intentionally outside that deploy and
           # restores the control plane before touching the zCloud Actions listener.
           sudo -n rm -f /home/ubuntu/zennay-cloud/.disable-self-heal
-          sudo -n systemctl reset-failed zennay-cloud.service || true
-          sudo -n systemctl restart zennay-cloud.service
-          systemctl is-active zennay-cloud.service
+          service="zennay-cloud.service"
+          root="/home/ubuntu/zennay-cloud"
+          db="$root/history.db"
+          service_user="$(systemctl show "$service" -p User --value 2>/dev/null || true)"
+          [[ -n "$service_user" ]] || service_user="root"
+          service_group="$(systemctl show "$service" -p Group --value 2>/dev/null || true)"
+          [[ -n "$service_group" ]] || service_group="$(id -gn "$service_user")"
+
+          sudo -n systemctl stop "$service" || true
+          sudo -n chown "$service_user:$service_group" "$root" "$db"
+          sudo -n chmod u+rwx "$root"
+          sudo -n chmod u+rw "$db"
+          for candidate in "$db-wal" "$db-shm"; do
+            [[ -e "$candidate" ]] || continue
+            attrs="$(lsattr -d "$candidate" 2>/dev/null | awk '{print $1}' || true)"
+            [[ "$attrs" != *i* ]] || sudo -n chattr -i "$candidate"
+            sudo -n chown "$service_user:$service_group" "$candidate"
+            sudo -n chmod u+rw "$candidate"
+          done
+          sudo -n -u "$service_user" python3 - <<'PY'
+          import sqlite3
+          db="/home/ubuntu/zennay-cloud/history.db"
+          conn=sqlite3.connect(db, timeout=10)
+          try:
+              conn.execute("BEGIN IMMEDIATE")
+              conn.rollback()
+          finally:
+              conn.close()
+          print("ZCLOUD_SQLITE_WRITE_PROBE_GREEN")
+          PY
+
+          sudo -n systemctl reset-failed "$service" || true
+          sudo -n systemctl restart "$service"
+          systemctl is-active "$service"
           for i in {1..20}; do
             if curl -fsS --max-time 3 http://127.0.0.1:8765/api/status >/tmp/zcloud-status.json; then
               python3 -c 'import json; s=json.load(open("/tmp/zcloud-status.json")); print(json.dumps({"time":s.get("time"),"errors":s.get("errors"),"dynamic_workers":s.get("dynamic_workers"),"firefox":s.get("chatgpt_firefox")}, indent=2))'
@@ -90,3 +122,44 @@ jobs:
           echo "=== recovered status ==="
           for unit in "${system_units[@]}"; do sudo -n systemctl --no-pager --full status "$unit" || true; done
           for unit in "${user_units[@]}"; do systemctl --user --no-pager --full status "$unit" || true; done
+
+
+      - name: Restore seven zCloud workers
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import urllib.request
+
+          base="http://127.0.0.1:8765"
+
+          def call(method,path,payload=None):
+              data=None
+              headers={"User-Agent":"haxlab-zcloud-recovery/2"}
+              if payload is not None:
+                  data=json.dumps(payload).encode("utf-8")
+                  headers["Content-Type"]="application/json"
+              req=urllib.request.Request(base+path,data=data,headers=headers,method=method)
+              with urllib.request.urlopen(req,timeout=20) as r:
+                  return json.load(r)
+
+          current=(call("GET","/api/dynamic-workers").get("dynamic_workers") or {})
+          desired={
+              key: current.get(key)
+              for key in (
+                  "chatgpt_count","claude_count",
+                  "chatgpt_cooldown_seconds","claude_cooldown_seconds",
+                  "check_interval_ms","tick_interval_ms","heartbeat_interval_ms",
+                  "generation_start_timeout_ms","scheduler_interval_seconds",
+              )
+              if current.get(key) is not None
+          }
+          desired["chatgpt_count"]=7
+          reconciled=call("POST","/api/dynamic-workers",desired)
+          pushed=call("POST","/api/dynamic-workers/force-push",{})
+          print("WORKER_CAPACITY_RECONCILED="+json.dumps(reconciled,sort_keys=True))
+          print("WORKERS_FORCE_PUSHED="+json.dumps(pushed,sort_keys=True))
+          if not reconciled.get("ok") or not pushed.get("ok"):
+              raise SystemExit("worker restore failed")
+          PY
