@@ -43,6 +43,28 @@ Every derived pass is keyed by:
 
 Older analysis versions stay queryable for comparison and rollback.
 
+
+### Derived artifact integrity
+
+An analysis row with status `ok` is not sufficient evidence by itself. Before a
+completed analysis pass is finalized into leaderboard and training-manifest
+artifacts, HaxLab reconciles the current-version ledger against every derived JSON
+artifact.
+
+The integrity contract requires:
+
+- the ledger output path to equal the deterministic content-addressed path for
+  replay SHA-256 + analyzer version;
+- a regular, non-symlink JSON file at that path;
+- the payload schema version to match the analyzer version;
+- `totalFrames` to equal the successful replay-probe ledger;
+- `rawEventCount`, player count, sampled-state count and reconstructed-frame
+  count to equal the successful analysis ledger.
+
+`haxlab-audit-analysis` reports this contract in machine-readable form. Any
+mismatch is fail-closed and prevents a fresh analysis completion snapshot from
+being published.
+
 ## Match
 
 - match_id
