@@ -35,3 +35,69 @@ def test_worker_probes_unprocessed_replay(tmp_path: Path) -> None:
     assert status["processing_ok"] == 1
     assert status["processing_pending"] == 0
     assert status["total_frames_probed"] == 3600
+
+
+
+def test_worker_rejects_same_size_raw_content_drift(tmp_path: Path) -> None:
+    replay = tmp_path / "raw" / "drift.hbr2"
+    replay.parent.mkdir()
+    original = _valid_hbr2()
+    replay.write_bytes(original)
+
+    sha = sha256_file(replay)
+    db = tmp_path / "state.sqlite3"
+
+    with RuntimeState(db) as state:
+        state.register_raw(
+            sha256=sha,
+            archive_path=str(replay),
+            size_bytes=len(original),
+        )
+
+        mutated = bytearray(original)
+        mutated[-1] ^= 0x01
+        replay.write_bytes(mutated)
+        assert replay.stat().st_size == len(original)
+        assert sha256_file(replay) != sha
+
+        result = process_batch(state, batch_size=10)
+        row = state.connection.execute(
+            """
+            SELECT status, error
+            FROM replay_processing
+            WHERE sha256 = ?
+            """,
+            (sha,),
+        ).fetchone()
+
+    assert result == {"selected": 1, "ok": 0, "failed": 1}
+    assert row["status"] == "failed"
+    assert str(row["error"]).startswith(f"raw_archive_hash_mismatch:{sha}:")
+
+
+def test_worker_rejects_raw_size_drift_before_probe(tmp_path: Path) -> None:
+    replay = tmp_path / "raw" / "size-drift.hbr2"
+    replay.parent.mkdir()
+    original = _valid_hbr2()
+    replay.write_bytes(original)
+
+    sha = sha256_file(replay)
+    db = tmp_path / "state.sqlite3"
+
+    with RuntimeState(db) as state:
+        state.register_raw(
+            sha256=sha,
+            archive_path=str(replay),
+            size_bytes=len(original),
+        )
+
+        replay.write_bytes(original + b"x")
+        result = process_batch(state, batch_size=10)
+        row = state.connection.execute(
+            "SELECT status, error FROM replay_processing WHERE sha256 = ?",
+            (sha,),
+        ).fetchone()
+
+    assert result == {"selected": 1, "ok": 0, "failed": 1}
+    assert row["status"] == "failed"
+    assert str(row["error"]).startswith(f"raw_archive_size_mismatch:{sha}:")
