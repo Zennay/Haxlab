@@ -31,3 +31,15 @@ def test_vps_update_enables_autonomy_timer_and_generation_cli():
     text = (ROOT / "deploy/update-vps.sh").read_text()
     assert "haxlab-autonomy.timer" in text
     assert "haxlab-generation-loop" in text
+
+
+def test_archive_audit_is_wired_into_vps_control_paths():
+    control = (ROOT / "deploy/haxlab-actions-control.sh").read_text()
+    workflow = (ROOT / ".github/workflows/vps-control.yml").read_text()
+    bridge = (ROOT / ".github/workflows/zcloud-runner-bridge.yml").read_text()
+
+    assert "audit-archive)" in control
+    assert "haxlab-audit-archive" in control
+    assert "- audit-archive" in workflow
+    assert "haxlab-actions-control audit-archive" in workflow
+    assert '"audit-archive"' in bridge
