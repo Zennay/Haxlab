@@ -117,3 +117,21 @@ def test_pointer_requires_complete_loadable_version(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         resolve_version_dir(tmp_path)
 
+
+def test_explicit_version_rejects_redirected_versions_root(
+    tmp_path: Path,
+) -> None:
+    external_registry = tmp_path / "external-registry"
+    external_versions = external_registry / "versions"
+    external_version = external_versions / "candidate-v1"
+    external_version.mkdir(parents=True)
+    (external_version / "metrics.json").write_text("{}\n", encoding="utf-8")
+    (external_version / "model.npz").write_bytes(b"model-placeholder")
+
+    root = tmp_path / "live-root"
+    root.mkdir()
+    (root / "versions").symlink_to(external_versions, target_is_directory=True)
+
+    with pytest.raises(FileNotFoundError, match="not found or unsafe"):
+        resolve_version_dir(root, "candidate-v1")
+
