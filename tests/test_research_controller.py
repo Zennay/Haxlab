@@ -136,3 +136,27 @@ def test_non_snapshot_or_policy_objects_fail_closed() -> None:
         "policy:not_research_policy",
     )
 
+
+def test_training_cannot_overlap_challenger_evaluation_state() -> None:
+    for snapshot in (
+        ResearchSnapshot(
+            training_active=True,
+            challenger_waiting_evaluation=True,
+        ),
+        ResearchSnapshot(
+            training_active=True,
+            challenger_passed_evaluation=True,
+        ),
+        ResearchSnapshot(
+            training_active=True,
+            rejected_challenger_needs_failure_mining=True,
+        ),
+    ):
+        decision = choose_next_action(snapshot)
+
+        assert decision.action == ResearchAction.IDLE
+        assert (
+            "snapshot:training_and_challenger_state:contradictory"
+            in decision.reasons
+        )
+
