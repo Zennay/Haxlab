@@ -16,8 +16,21 @@ class ReplayInventory:
 
 def discover_replays(root: Path) -> ReplayInventory:
     """Discover every .hbr2 file below root and deduplicate by content hash."""
+    if root.is_symlink():
+        raise ValueError("replay_root_must_not_be_symlink")
+    if not root.exists():
+        raise FileNotFoundError(f"replay_root_missing:{root}")
+    if not root.is_dir():
+        raise NotADirectoryError(f"replay_root_not_directory:{root}")
+
     paths = sorted(
-        (path for path in root.rglob("*") if path.is_file() and path.suffix.lower() == ".hbr2"),
+        (
+            path
+            for path in root.rglob("*")
+            if path.is_file()
+            and not path.is_symlink()
+            and path.suffix.lower() == ".hbr2"
+        ),
         key=lambda path: str(path).casefold(),
     )
 
@@ -25,8 +38,28 @@ def discover_replays(root: Path) -> ReplayInventory:
     by_hash: dict[str, list[ReplayFile]] = {}
 
     for path in paths:
+        before = path.stat()
         digest = sha256_file(path)
-        replay = ReplayFile.from_path(path, digest)
+        after = path.stat()
+        if path.is_symlink() or (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+        ):
+            raise RuntimeError(f"source_changed_during_hash:{path}")
+
+        replay = ReplayFile(
+            path=str(path),
+            file_name=path.name,
+            size_bytes=after.st_size,
+            sha256=digest,
+        )
         files.append(replay)
         by_hash.setdefault(digest, []).append(replay)
 
