@@ -77,6 +77,7 @@ def _require_numeric_field(
     label: str,
     integer: bool = False,
     minimum: float | None = None,
+    maximum: float | None = None,
 ) -> None:
     if key not in mapping:
         failures.append(f"invalid_metric:{label}:missing")
@@ -102,6 +103,10 @@ def _require_numeric_field(
     if minimum is not None and number < minimum:
         failures.append(
             f"invalid_metric:{label}:below_minimum:{number:.6f}<{minimum:.6f}"
+        )
+    if maximum is not None and number > maximum:
+        failures.append(
+            f"invalid_metric:{label}:above_maximum:{number:.6f}>{maximum:.6f}"
         )
 
 
@@ -182,6 +187,8 @@ def decide_closed_loop_arena(
         mapping=team_summary,
         key="proxy_match_score",
         label="team:proxy_match_score",
+        minimum=0.0,
+        maximum=1.0,
     )
     team_matches = _integer(team_summary.get("matches"))
     checks["team_matches"] = team_matches
@@ -206,6 +213,8 @@ def decide_closed_loop_arena(
                 mapping=metrics,
                 key=key,
                 label=f"team:{side}:{key}",
+                minimum=0.0,
+                maximum=1.0,
             )
     _relative_min_check(
         behavior_failures,
@@ -237,6 +246,8 @@ def decide_closed_loop_arena(
         mapping=plug_summary,
         key="proxy_match_score",
         label="plug:proxy_match_score",
+        minimum=0.0,
+        maximum=1.0,
     )
     partner_model_count = _integer(plug.get("partner_model_count"))
     checks["partner_model_count"] = partner_model_count
@@ -271,6 +282,8 @@ def decide_closed_loop_arena(
             mapping=outcome,
             key="proxy_match_score",
             label=f"{role}:proxy_match_score",
+            minimum=0.0,
+            maximum=1.0,
         )
         _require_numeric_field(
             structural_failures,
@@ -288,8 +301,18 @@ def decide_closed_loop_arena(
                 "boundary_rate",
                 "ood_rate",
                 "far_stall_rate",
-                "max_held_action_seconds",
                 "context_adaptation_rate",
+            ):
+                _require_numeric_field(
+                    structural_failures,
+                    mapping=metrics,
+                    key=key,
+                    label=f"{role}:{side}:{key}",
+                    minimum=0.0,
+                    maximum=1.0,
+                )
+            for key in (
+                "max_held_action_seconds",
                 "average_role_deviation",
             ):
                 _require_numeric_field(
@@ -297,6 +320,7 @@ def decide_closed_loop_arena(
                     mapping=metrics,
                     key=key,
                     label=f"{role}:{side}:{key}",
+                    minimum=0.0,
                 )
 
         matches = _integer(outcome.get("matches"))
