@@ -305,6 +305,7 @@ def test_rejects_duplicate_match_grid_even_when_count_matches(tmp_path: Path) ->
     assert reusable is False
     assert "match_results:plug_and_play:grid_mismatch" in reasons
 
+
 def test_rejects_corrupt_or_partial_result(tmp_path: Path) -> None:
     inputs = _inputs(tmp_path)
     result = tmp_path / "result.json"
@@ -387,4 +388,21 @@ def test_rejects_malformed_partner_container_without_raising(tmp_path: Path) -> 
 
         assert reusable is False
         assert expected in reasons
+
+
+def test_invalid_bound_input_never_stringifies_untrusted_object(
+    tmp_path: Path,
+) -> None:
+    class BrokenString:
+        def __str__(self) -> str:
+            raise RuntimeError("must not stringify invalid bound input")
+
+    inputs = _inputs(tmp_path)
+    result = _write_result(tmp_path, _payload(inputs))
+    inputs["stadium"] = BrokenString()
+
+    reusable, reasons = reusable_result_or_reasons(result, **inputs)
+
+    assert reusable is False
+    assert "provenance:stadium:path:not_path" in reasons
 
