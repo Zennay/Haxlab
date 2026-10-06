@@ -1009,8 +1009,23 @@ function requireArenaPairRow(row, expectedKind, label) {
       roles[role],
       label + " test_team.roles." + role,
     );
+    const policySamples = requireArenaMetric(
+      metrics.policy_samples,
+      label + " " + role + ".policy_samples",
+      { minimum: 1, integer: true },
+    );
+    const kicks = requireArenaMetric(
+      metrics.kicks,
+      label + " " + role + ".kicks",
+      { minimum: 0, integer: true },
+    );
+    if (kicks > policySamples) {
+      throw new Error(label + " " + role + ".kicks exceeds policy_samples");
+    }
+
     for (const key of [
       "near_ball_rate",
+      "close_ball_rate",
       "boundary_rate",
       "ood_rate",
       "far_stall_rate",
@@ -1022,9 +1037,17 @@ function requireArenaPairRow(row, expectedKind, label) {
         { minimum: 0, maximum: 1 },
       );
     }
+    if (metrics.close_ball_rate > metrics.near_ball_rate) {
+      throw new Error(
+        label + " " + role + ".close_ball_rate exceeds near_ball_rate",
+      );
+    }
+
     for (const key of [
       "average_ball_distance",
       "average_role_deviation",
+      "ood_max_abs_z",
+      "max_far_stall_seconds",
       "max_held_action_seconds",
     ]) {
       requireArenaMetric(
@@ -1033,6 +1056,24 @@ function requireArenaPairRow(row, expectedKind, label) {
         { minimum: 0 },
       );
     }
+
+    const adaptations = requireArenaMetric(
+      metrics.context_adaptations,
+      label + " " + role + ".context_adaptations",
+      { minimum: 0, integer: true },
+    );
+    const misses = requireArenaMetric(
+      metrics.context_misses,
+      label + " " + role + ".context_misses",
+      { minimum: 0, integer: true },
+    );
+    if (adaptations + misses > policySamples) {
+      throw new Error(
+        label + " " + role +
+        ".context event count exceeds policy_samples",
+      );
+    }
+
     requireArenaMetric(
       metrics.runtime_errors,
       label + " " + role + ".runtime_errors",
