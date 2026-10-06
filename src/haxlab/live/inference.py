@@ -30,16 +30,29 @@ def _safe_version_dir(root: Path, version: Any) -> Path | None:
         return None
 
     registry_root = root.resolve()
-    versions_root = (root / "versions").resolve()
+    versions_path = root / "versions"
+    if versions_path.is_symlink():
+        return None
+    versions_root = versions_path.resolve()
     if versions_root.parent != registry_root or versions_root.name != "versions":
         return None
-    candidate = (versions_root / version).resolve()
-    if candidate.parent != versions_root:
+
+    raw_candidate = versions_root / version
+    if raw_candidate.is_symlink():
         return None
-    if not (candidate / "metrics.json").is_file():
+    candidate = raw_candidate.resolve()
+    if candidate.parent != versions_root or candidate.name != version:
         return None
-    if not (candidate / "model.npz").is_file():
-        return None
+
+    for filename in ("metrics.json", "model.npz"):
+        artifact = candidate / filename
+        if artifact.is_symlink() or not artifact.is_file():
+            return None
+        try:
+            if artifact.resolve().parent != candidate:
+                return None
+        except OSError:
+            return None
     return candidate
 
 
@@ -63,10 +76,26 @@ def _live_validation_evidence_matches(
     if not isinstance(raw_path, str) or not isinstance(expected_sha, str):
         return False
     try:
+        registry_root = root.resolve()
+        validations_path = root / "validations"
+        if validations_path.is_symlink():
+            return False
+        validations_root = validations_path.resolve()
+        if (
+            validations_root.parent != registry_root
+            or validations_root.name != "validations"
+        ):
+            return False
         evidence_root = (
-            root.resolve() / "validations" / version / source_stage
+            validations_root / version / source_stage
         ).resolve()
-        evidence_path = Path(raw_path).resolve()
+        if evidence_root.parent.parent != validations_root:
+            return False
+
+        raw_evidence_path = Path(raw_path)
+        if not raw_evidence_path.is_absolute() or raw_evidence_path.is_symlink():
+            return False
+        evidence_path = raw_evidence_path.resolve()
         if evidence_path.parent != evidence_root or not evidence_path.is_file():
             return False
         if _sha256_file(evidence_path) != expected_sha:
@@ -116,7 +145,10 @@ def _promoted_live_version_from_pointer(root: Path) -> str | None:
         if not isinstance(raw, str):
             return None
         try:
-            if Path(raw).resolve() != expected.resolve():
+            raw_path = Path(raw)
+            if not raw_path.is_absolute():
+                return None
+            if raw_path.resolve() != expected.resolve():
                 return None
         except OSError:
             return None
