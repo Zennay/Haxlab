@@ -16,6 +16,13 @@ class ReplayInventory:
 
 def discover_replays(root: Path) -> ReplayInventory:
     """Discover every .hbr2 file below root and deduplicate by content hash."""
+    if root.is_symlink():
+        raise ValueError("replay_root_must_not_be_symlink")
+    if not root.exists():
+        raise FileNotFoundError(f"replay_root_missing:{root}")
+    if not root.is_dir():
+        raise NotADirectoryError(f"replay_root_not_directory:{root}")
+
     paths = sorted(
         (
             path
