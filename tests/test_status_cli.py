@@ -95,10 +95,8 @@ def test_status_surfaces_ingest_integrity_evidence(
     assert payload["recent_ingest_events_1h"]["replay_disappeared"] == 1
     assert payload["recent_ingest_events_1h"]["replay_archived"] == 0
     assert payload["recent_ingest_events_1h"]["replay_duplicate"] == 0
-    assert payload["source_failure_examples"] == [
-        {
-            "source_path": str(failed_source),
-            "error": "invalid_hbr2:bad_header",
-            "last_seen_at": payload["source_failure_examples"][0]["last_seen_at"],
-        }
-    ]
+    examples = payload["source_failure_examples"]
+    assert len(examples) == 1
+    assert examples[0]["source_path"] == str(failed_source)
+    assert examples[0]["error"] == "invalid_hbr2:bad_header"
+    assert examples[0]["last_seen_at"]
