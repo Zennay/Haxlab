@@ -1,0 +1,98 @@
+name: HaxLab analysis artifact integrity
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/haxlab/runtime/analysis_audit.py"
+      - "src/haxlab/runtime/finalize.py"
+      - "tests/test_analysis_audit.py"
+      - "tests/test_analysis_finalize.py"
+      - "pyproject.toml"
+      - ".github/workflows/data-pipeline-analysis-artifact-validate.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-analysis-artifact-integrity-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate ledger to derived-artifact integrity
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Assert exact head
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Run focused regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .analysis-audit-venv
+          python3 -m venv .analysis-audit-venv
+          .analysis-audit-venv/bin/pip install -q --upgrade pip
+          .analysis-audit-venv/bin/pip install -q -e '.[dev]'
+          .analysis-audit-venv/bin/python -m compileall -q src/haxlab
+          .analysis-audit-venv/bin/pytest -q             tests/test_analysis_audit.py             tests/test_analysis_finalize.py
+
+      - name: Audit current VPS analysis artifacts with PR code
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPORT="$(mktemp)"
+          trap 'rm -f "$REPORT"' EXIT
+
+          sudo env PYTHONPATH="$GITHUB_WORKSPACE/src"             /opt/haxlab/.venv/bin/python -m haxlab.runtime.analysis_audit             --state-db /var/lib/haxlab/state/haxlab.sqlite3             --derived-root /var/lib/haxlab/derived             --max-issues 20 | tee "$REPORT"
+
+          python3 - "$REPORT" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          if report.get("schema") != "haxlab-analysis-artifact-audit-v1":
+              raise SystemExit(f"unexpected audit schema: {report.get('schema')!r}")
+          if report.get("ok") is not True:
+              raise SystemExit(f"analysis artifact integrity failed: {report}")
+
+          checked = int(report.get("checked_records") or 0)
+          existing = int(report.get("existing_files") or 0)
+          valid = int(report.get("valid_objects") or 0)
+          if checked <= 0:
+              raise SystemExit("analysis artifact audit checked zero records")
+          if existing != checked or valid != checked:
+              raise SystemExit(
+                  f"incomplete audit evidence: checked={checked} "
+                  f"existing={existing} valid={valid}"
+              )
+
+          for field in (
+              "missing_files",
+              "path_mismatches",
+              "symlink_entries",
+              "invalid_json",
+              "payload_mismatches",
+              "objects_with_issues",
+          ):
+              if int(report.get(field) or 0) != 0:
+                  raise SystemExit(f"{field} must be zero: {report.get(field)!r}")
+
+          print(
+              "analysis_artifact_integrity=green "
+              f"checked_records={checked} existing_files={existing}"
+          )
+          PY
