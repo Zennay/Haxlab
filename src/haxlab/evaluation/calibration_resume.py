@@ -148,6 +148,30 @@ def _validate_raw_match_grid(
         failures.append("match_results:plug_and_play:grid_mismatch")
 
 
+def _validate_reuse_request(
+    failures: list[str],
+    *,
+    seconds: Any,
+    sample_every: Any,
+    max_scenarios: Any,
+    plug_repeats: Any,
+    seed: Any,
+) -> None:
+    for key, value in (
+        ("seconds", seconds),
+        ("sample_every", sample_every),
+        ("max_scenarios", max_scenarios),
+        ("plug_repeats", plug_repeats),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int):
+            failures.append(f"request:{key}:not_native_integer")
+        elif value < 1:
+            failures.append(f"request:{key}:below_minimum")
+
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        failures.append("request:seed:not_native_integer")
+
+
 def validate_reusable_result(
     payload: Any,
     *,
@@ -165,6 +189,17 @@ def validate_reusable_result(
     failures: list[str] = []
     if not isinstance(payload, dict):
         return ("result:not_object",)
+
+    _validate_reuse_request(
+        failures,
+        seconds=seconds,
+        sample_every=sample_every,
+        max_scenarios=max_scenarios,
+        plug_repeats=plug_repeats,
+        seed=seed,
+    )
+    if failures:
+        return tuple(failures)
 
     _expect_exact(failures, payload, "schema", ARENA_SCHEMA, "schema")
     _expect_exact(
