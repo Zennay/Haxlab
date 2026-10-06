@@ -1,0 +1,59 @@
+name: Promotion regression evidence validation
+
+on:
+  push:
+    branches:
+      - validation/promotion-regression-structure-20261006
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-promotion-regression-evidence-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .promotion-regression-validation-venv
+          python3 -m venv .promotion-regression-validation-venv
+          .promotion-regression-validation-venv/bin/pip install --upgrade pip
+          .promotion-regression-validation-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile promotion evidence gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          .promotion-regression-validation-venv/bin/python -m compileall -q             src/haxlab/evaluation/promotion.py             src/haxlab/evaluation/models.py             tests/test_promotion.py
+
+      - name: Run promotion evidence regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src"             .promotion-regression-validation-venv/bin/pytest -q tests/test_promotion.py
+
+      - name: Run promotion-adjacent evaluation regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src"             .promotion-regression-validation-venv/bin/pytest -q               tests/test_closed_loop_arena.py               tests/test_multisource_duel.py               tests/test_multisource_suite.py
+
+      - name: Record exact-head validation evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "PROMOTION_REGRESSION_VALIDATION_HEAD=$(git rev-parse HEAD)"
+          echo "PROMOTION_REGRESSION_VALIDATION_RESULT=green"
