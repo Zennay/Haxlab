@@ -248,6 +248,22 @@ jobs:
           print(json.dumps(model["arena_v2_ablation"], indent=2))
           PY
 
+          LIVE_RUNTIME_SHA_BEFORE="$(
+            sudo -u haxlab sha256sum "$LIVE_RUNTIME" | awk '{print $1}'
+          )"
+          CAND_D_SHA_BEFORE="$(
+            sudo -u haxlab sha256sum "$CAND_D" | awk '{print $1}'
+          )"
+          PARTNER_B_SHA_BEFORE="$(
+            sudo -u haxlab sha256sum "$PARTNER_B" | awk '{print $1}'
+          )"
+          PARTNER_C_SHA_BEFORE="$(
+            sudo -u haxlab sha256sum "$PARTNER_C" | awk '{print $1}'
+          )"
+          WEAK_SHA_BEFORE="$(
+            sudo -u haxlab sha256sum "$OUT/ablated-zero-policy.json" | awk '{print $1}'
+          )"
+
           {
             echo "ARENA_ROOT=$ROOT"
             echo "ARENA_CAND_D=$CAND_D"
@@ -260,6 +276,11 @@ jobs:
             echo "ARENA_LIVE_POINTER=$LIVE_POINTER"
             echo "ARENA_CURRENT_POINTER_SHA_BEFORE=$CURRENT_POINTER_SHA_BEFORE"
             echo "ARENA_LIVE_POINTER_SHA_BEFORE=$LIVE_POINTER_SHA_BEFORE"
+            echo "ARENA_LIVE_RUNTIME_SHA_BEFORE=$LIVE_RUNTIME_SHA_BEFORE"
+            echo "ARENA_CAND_D_SHA_BEFORE=$CAND_D_SHA_BEFORE"
+            echo "ARENA_PARTNER_B_SHA_BEFORE=$PARTNER_B_SHA_BEFORE"
+            echo "ARENA_PARTNER_C_SHA_BEFORE=$PARTNER_C_SHA_BEFORE"
+            echo "ARENA_WEAK_SHA_BEFORE=$WEAK_SHA_BEFORE"
           } >> "$GITHUB_ENV"
 
       - name: Run full frozen paired calibration batch
@@ -431,14 +452,44 @@ jobs:
           LIVE_AFTER="$(
             sudo -u haxlab sha256sum "$ARENA_LIVE_POINTER" | awk '{print $1}'
           )"
+          LIVE_RUNTIME_AFTER="$(
+            sudo -u haxlab sha256sum "$ARENA_LIVE" | awk '{print $1}'
+          )"
+          CAND_D_AFTER="$(
+            sudo -u haxlab sha256sum "$ARENA_CAND_D" | awk '{print $1}'
+          )"
+          PARTNER_B_AFTER="$(
+            sudo -u haxlab sha256sum "$ARENA_PARTNER_B" | awk '{print $1}'
+          )"
+          PARTNER_C_AFTER="$(
+            sudo -u haxlab sha256sum "$ARENA_PARTNER_C" | awk '{print $1}'
+          )"
+          WEAK_AFTER="$(
+            sudo -u haxlab sha256sum "$ARENA_WEAK" | awk '{print $1}'
+          )"
           sudo -u haxlab env \
             ARENA_OUT="$ARENA_OUT" \
             CURRENT_PATH="$ARENA_CURRENT_POINTER" \
             LIVE_PATH="$ARENA_LIVE_POINTER" \
+            LIVE_RUNTIME_PATH="$ARENA_LIVE" \
+            CAND_D_PATH="$ARENA_CAND_D" \
+            PARTNER_B_PATH="$ARENA_PARTNER_B" \
+            PARTNER_C_PATH="$ARENA_PARTNER_C" \
+            WEAK_PATH="$ARENA_WEAK" \
             CURRENT_BEFORE="$ARENA_CURRENT_POINTER_SHA_BEFORE" \
             CURRENT_AFTER="$CURRENT_AFTER" \
             LIVE_BEFORE="$ARENA_LIVE_POINTER_SHA_BEFORE" \
             LIVE_AFTER="$LIVE_AFTER" \
+            LIVE_RUNTIME_BEFORE="$ARENA_LIVE_RUNTIME_SHA_BEFORE" \
+            LIVE_RUNTIME_AFTER="$LIVE_RUNTIME_AFTER" \
+            CAND_D_BEFORE="$ARENA_CAND_D_SHA_BEFORE" \
+            CAND_D_AFTER="$CAND_D_AFTER" \
+            PARTNER_B_BEFORE="$ARENA_PARTNER_B_SHA_BEFORE" \
+            PARTNER_B_AFTER="$PARTNER_B_AFTER" \
+            PARTNER_C_BEFORE="$ARENA_PARTNER_C_SHA_BEFORE" \
+            PARTNER_C_AFTER="$PARTNER_C_AFTER" \
+            WEAK_BEFORE="$ARENA_WEAK_SHA_BEFORE" \
+            WEAK_AFTER="$WEAK_AFTER" \
             /opt/haxlab/.venv/bin/python - <<'PY'
           import json
           import os
@@ -452,6 +503,33 @@ jobs:
               "current_sha256_after": os.environ["CURRENT_AFTER"],
               "live_sha256_before": os.environ["LIVE_BEFORE"],
               "live_sha256_after": os.environ["LIVE_AFTER"],
+              "models": {
+                  "live_runtime": {
+                      "path": os.environ["LIVE_RUNTIME_PATH"],
+                      "sha256_before": os.environ["LIVE_RUNTIME_BEFORE"],
+                      "sha256_after": os.environ["LIVE_RUNTIME_AFTER"],
+                  },
+                  "candidate_d": {
+                      "path": os.environ["CAND_D_PATH"],
+                      "sha256_before": os.environ["CAND_D_BEFORE"],
+                      "sha256_after": os.environ["CAND_D_AFTER"],
+                  },
+                  "partner_b": {
+                      "path": os.environ["PARTNER_B_PATH"],
+                      "sha256_before": os.environ["PARTNER_B_BEFORE"],
+                      "sha256_after": os.environ["PARTNER_B_AFTER"],
+                  },
+                  "partner_c": {
+                      "path": os.environ["PARTNER_C_PATH"],
+                      "sha256_before": os.environ["PARTNER_C_BEFORE"],
+                      "sha256_after": os.environ["PARTNER_C_AFTER"],
+                  },
+                  "weak_zero": {
+                      "path": os.environ["WEAK_PATH"],
+                      "sha256_before": os.environ["WEAK_BEFORE"],
+                      "sha256_after": os.environ["WEAK_AFTER"],
+                  },
+              },
           }
           evidence["current_unchanged"] = (
               evidence["current_sha256_before"]
@@ -461,6 +539,10 @@ jobs:
               evidence["live_sha256_before"]
               == evidence["live_sha256_after"]
           )
+          evidence["models_unchanged"] = all(
+              row["sha256_before"] == row["sha256_after"]
+              for row in evidence["models"].values()
+          )
           path = Path(os.environ["ARENA_OUT"]) / "pointer-invariant.json"
           path.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
           print(json.dumps(evidence, sort_keys=True))
@@ -468,6 +550,16 @@ jobs:
               raise SystemExit("current champion pointer changed during calibration")
           if not evidence["live_unchanged"]:
               raise SystemExit("live champion pointer changed during calibration")
+          if not evidence["models_unchanged"]:
+              changed = [
+                  name
+                  for name, row in evidence["models"].items()
+                  if row["sha256_before"] != row["sha256_after"]
+              ]
+              raise SystemExit(
+                  "calibration model bytes changed during run: "
+                  + ",".join(changed)
+              )
           PY
 
       - name: Collect calibration evidence
