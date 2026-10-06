@@ -4,6 +4,13 @@ on:
   push:
     branches:
       - validation/arena-pair-evidence-integrity-20261006
+  pull_request:
+    branches:
+      - feature/arena-v2-current-main-20261004
+    paths:
+      - tools/elite_closed_loop_arena_v2.js
+      - tests/test_closed_loop_arena_v2.js
+      - .github/workflows/arena-pair-evidence-integrity.yml
   workflow_dispatch:
 
 permissions:
