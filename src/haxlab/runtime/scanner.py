@@ -15,6 +15,7 @@ class ScanSummary:
     archived: int = 0
     duplicates: int = 0
     failed: int = 0
+    disappeared: int = 0
 
 
 def scan_once(
@@ -26,7 +27,7 @@ def scan_once(
     now: float | None = None,
 ) -> ScanSummary:
     now = time.time() if now is None else now
-    discovered = unchanged = archived = duplicates = failed = 0
+    discovered = unchanged = archived = duplicates = failed = disappeared = 0
 
     paths = sorted(
         (
@@ -39,7 +40,19 @@ def scan_once(
 
     for path in paths:
         discovered += 1
-        stat = path.stat()
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            # Uploaders may atomically rename/remove a file after rglob has
+            # yielded it. That is not corrupt replay evidence and must not take
+            # down the long-running ingest daemon.
+            state.event(
+                "replay_disappeared",
+                subject=str(path),
+                detail="disappeared_before_stat",
+            )
+            disappeared += 1
+            continue
 
         # Ignore files which may still be uploading.
         if now - stat.st_mtime < minimum_file_age_seconds:
@@ -93,4 +106,5 @@ def scan_once(
         archived=archived,
         duplicates=duplicates,
         failed=failed,
+        disappeared=disappeared,
     )

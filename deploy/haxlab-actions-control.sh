@@ -6,7 +6,7 @@ STATE_DB="${HAXLAB_STATE_DB:-/var/lib/haxlab/state/haxlab.sqlite3}"
 CURRENT_ANALYZER_VERSION="$("${APP_DIR}/.venv/bin/python" -c 'from haxlab.runtime.state import CURRENT_ANALYZER_VERSION; print(CURRENT_ANALYZER_VERSION)')"
 
 usage() {
-  echo "Usage: haxlab-actions-control {status|deploy|champion-info|champion-runtime|live-play-probe|live-play-start ROOM_ID|live-play-stop|live-play-status|live-host-prereq|live-host-keygen|live-host-install-token CIPHERTEXT|live-host-start|live-host-status|restart-analyzer|retry-failed-analysis|feature-smoke|player-stats|skill-leaderboard|training-manifest|analyzer-logs|failed-analysis}" >&2
+  echo "Usage: haxlab-actions-control {status|deploy|audit-archive|champion-info|champion-runtime|live-play-probe|live-play-start ROOM_ID|live-play-stop|live-play-status|live-host-prereq|live-host-keygen|live-host-install-token CIPHERTEXT|live-host-start|live-host-status|restart-analyzer|retry-failed-analysis|feature-smoke|player-stats|skill-leaderboard|training-manifest|analyzer-logs|failed-analysis}" >&2
   exit 2
 }
 
@@ -48,6 +48,11 @@ case "${action}" in
       ORDER BY count DESC
       LIMIT 15;
     " || true
+    ;;
+
+  audit-archive)
+    echo "=== raw archive integrity audit ==="
+    "${APP_DIR}/.venv/bin/haxlab-audit-archive" --state-db "${STATE_DB}" --max-issues 100
     ;;
 
   champion-info)

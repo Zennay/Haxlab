@@ -11,6 +11,7 @@ on:
         options:
           - status
           - deploy
+          - audit-archive
           - restart-analyzer
           - retry-failed-analysis
           - feature-smoke
@@ -43,6 +44,9 @@ jobs:
               ;;
             deploy)
               sudo /usr/local/sbin/haxlab-actions-control deploy
+              ;;
+            audit-archive)
+              sudo /usr/local/sbin/haxlab-actions-control audit-archive
               ;;
             restart-analyzer)
               sudo /usr/local/sbin/haxlab-actions-control restart-analyzer
