@@ -42,6 +42,7 @@ def read_discord_exports(root: Path) -> tuple[list[MatchReport], list[ImportFail
         raise NotADirectoryError(f"discord_export_root_not_directory:{root}")
 
     reports_by_id: dict[str, MatchReport] = {}
+    message_id_by_report_id: dict[str, str] = {}
     failures: list[ImportFailure] = []
 
     paths = (
@@ -69,18 +70,39 @@ def read_discord_exports(root: Path) -> tuple[list[MatchReport], list[ImportFail
                         channel_id=channel_id,
                     )
                     existing = reports_by_id.get(report.message_id)
-                    if existing is None:
-                        reports_by_id[report.message_id] = report
-                    elif existing != report:
-                        failures.append(
-                            ImportFailure(
-                                source=(
-                                    f"{path}#message:{report.message_id}"
-                                ),
-                                stage="discord_message_duplicate",
-                                error="conflicting_duplicate_message_id",
+                    if existing is not None:
+                        if existing != report:
+                            failures.append(
+                                ImportFailure(
+                                    source=(
+                                        f"{path}#message:{report.message_id}"
+                                    ),
+                                    stage="discord_message_duplicate",
+                                    error="conflicting_duplicate_message_id",
+                                )
                             )
-                        )
+                        continue
+
+                    if report.report_id is not None:
+                        report_key = report.report_id.casefold()
+                        owner = message_id_by_report_id.get(report_key)
+                        if owner is not None and owner != report.message_id:
+                            failures.append(
+                                ImportFailure(
+                                    source=(
+                                        f"{path}#message:{report.message_id}"
+                                    ),
+                                    stage="discord_report_id_duplicate",
+                                    error=(
+                                        "conflicting_duplicate_report_id:"
+                                        f"{report.report_id}"
+                                    ),
+                                )
+                            )
+                            continue
+                        message_id_by_report_id[report_key] = report.message_id
+
+                    reports_by_id[report.message_id] = report
                 except Exception as exc:
                     raw_message_id = message.get("id") or message.get("messageId")
                     message_id = (
