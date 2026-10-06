@@ -869,10 +869,32 @@ function runArenaMatch({
   return result;
 }
 
-function requireArenaPairRow(row, expectedKind, label) {
-  if (!row || typeof row !== "object" || Array.isArray(row)) {
-    throw new Error(label + " arena row must be an object");
+function requireArenaMetric(
+  value,
+  label,
+  { minimum = -Infinity, maximum = Infinity, integer = false } = {},
+) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(label + " must be a finite number");
   }
+  if (integer && !Number.isSafeInteger(value)) {
+    throw new Error(label + " must be a safe integer");
+  }
+  if (value < minimum || value > maximum) {
+    throw new Error(label + " is out of range");
+  }
+  return value;
+}
+
+function requireArenaObject(value, label) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(label + " must be an object");
+  }
+  return value;
+}
+
+function requireArenaPairRow(row, expectedKind, label) {
+  requireArenaObject(row, label + " arena row");
   if (row.tested_kind !== expectedKind) {
     throw new Error(
       label + " tested_kind must be " + expectedKind +
@@ -903,20 +925,90 @@ function requireArenaPairRow(row, expectedKind, label) {
   if (!Number.isSafeInteger(row.repeat_index) || row.repeat_index < 0) {
     throw new Error(label + " has invalid repeat_index");
   }
-  if (
-    !row.proxy ||
-    typeof row.proxy !== "object" ||
-    Array.isArray(row.proxy)
-  ) {
-    throw new Error(label + " proxy must be an object");
+
+  const proxy = requireArenaObject(row.proxy, label + " proxy");
+  requireArenaMetric(
+    proxy.test_score,
+    label + " proxy.test_score",
+    { minimum: 0, maximum: 1 },
+  );
+
+  const goals = requireArenaObject(row.goals, label + " goals");
+  requireArenaMetric(
+    goals.differential,
+    label + " goals.differential",
+    { integer: true },
+  );
+
+  const progression = requireArenaObject(
+    row.progression,
+    label + " progression",
+  );
+  requireArenaMetric(
+    progression.test_share,
+    label + " progression.test_share",
+    { minimum: 0, maximum: 1 },
+  );
+
+  const possession = requireArenaObject(
+    row.possession_proxy,
+    label + " possession_proxy",
+  );
+  requireArenaMetric(
+    possession.test_rate,
+    label + " possession_proxy.test_rate",
+    { minimum: 0, maximum: 1 },
+  );
+
+  const shape = requireArenaObject(row.team_shape, label + " team_shape");
+  for (const key of [
+    "formation_order_rate",
+    "collapsed_rate",
+    "overstretched_rate",
+  ]) {
+    requireArenaMetric(
+      shape[key],
+      label + " team_shape." + key,
+      { minimum: 0, maximum: 1 },
+    );
   }
-  if (
-    typeof row.proxy.test_score !== "number" ||
-    !Number.isFinite(row.proxy.test_score) ||
-    row.proxy.test_score < 0 ||
-    row.proxy.test_score > 1
-  ) {
-    throw new Error(label + " proxy.test_score must be a finite rate");
+
+  const team = requireArenaObject(row.test_team, label + " test_team");
+  const roles = requireArenaObject(team.roles, label + " test_team.roles");
+  for (const role of ROLES) {
+    const metrics = requireArenaObject(
+      roles[role],
+      label + " test_team.roles." + role,
+    );
+    for (const key of [
+      "near_ball_rate",
+      "boundary_rate",
+      "ood_rate",
+      "far_stall_rate",
+      "context_adaptation_rate",
+    ]) {
+      requireArenaMetric(
+        metrics[key],
+        label + " " + role + "." + key,
+        { minimum: 0, maximum: 1 },
+      );
+    }
+    for (const key of [
+      "average_ball_distance",
+      "average_role_deviation",
+      "max_held_action_seconds",
+    ]) {
+      requireArenaMetric(
+        metrics[key],
+        label + " " + role + "." + key,
+        { minimum: 0 },
+      );
+    }
+    requireArenaMetric(
+      metrics.runtime_errors,
+      label + " " + role + ".runtime_errors",
+      { minimum: 0, integer: true },
+    );
   }
 }
 
