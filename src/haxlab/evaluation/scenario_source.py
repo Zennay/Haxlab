@@ -17,6 +17,12 @@ def _native_int(value: Any) -> int | None:
     return value
 
 
+def _positive_native_int(value: Any, *, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"{name} must be a native positive integer")
+    return value
+
+
 def _finite_number(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -198,6 +204,7 @@ def select_scenario_source(
     max_candidates: int = 1000,
     exclude_sha256: set[str] | None = None,
 ) -> dict[str, Any]:
+    candidate_limit = _positive_native_int(max_candidates, name="max_candidates")
     excluded = {
         str(value).strip().lower()
         for value in (exclude_sha256 or set())
@@ -223,7 +230,7 @@ def select_scenario_source(
                 a.sha256 ASC
             LIMIT ?
             """,
-            (max(1, max_candidates),),
+            (candidate_limit,),
         ).fetchall()
     finally:
         db.close()
@@ -249,7 +256,7 @@ def select_scenario_source(
 
     raise RuntimeError(
         "No healthy role-resolved 4v4 replay found among "
-        f"{min(len(rows), max_candidates)} candidates "
+        f"{min(len(rows), candidate_limit)} candidates "
         f"after excluding {len(excluded)} replay(s)"
     )
 
@@ -269,7 +276,11 @@ def select_scenario_sources(
     contract (sampled states descending, SHA-256 ascending) while guaranteeing
     that no replay can appear twice in one frozen evaluation suite.
     """
-    requested = max(1, int(count))
+    requested = _positive_native_int(count, name="count")
+    candidate_limit = _positive_native_int(
+        max_candidates,
+        name="max_candidates",
+    )
     initial_excluded = {
         str(value).strip().lower()
         for value in (exclude_sha256 or set())
@@ -281,7 +292,7 @@ def select_scenario_sources(
     for _ in range(requested):
         candidate = select_scenario_source(
             db_path,
-            max_candidates=max_candidates,
+            max_candidates=candidate_limit,
             exclude_sha256=excluded,
         )
         replay_sha = str(candidate.get("sha256") or "").strip().lower()
@@ -344,19 +355,22 @@ def main() -> int:
             if line.strip()
         )
 
-    if max(1, args.count) == 1:
-        result = select_scenario_source(
-            args.state_db,
-            max_candidates=max(1, args.max_candidates),
-            exclude_sha256=excluded,
-        )
-    else:
-        result = select_scenario_sources(
-            args.state_db,
-            count=max(1, args.count),
-            max_candidates=max(1, args.max_candidates),
-            exclude_sha256=excluded,
-        )
+    try:
+        if args.count == 1:
+            result = select_scenario_source(
+                args.state_db,
+                max_candidates=args.max_candidates,
+                exclude_sha256=excluded,
+            )
+        else:
+            result = select_scenario_sources(
+                args.state_db,
+                count=args.count,
+                max_candidates=args.max_candidates,
+                exclude_sha256=excluded,
+            )
+    except ValueError as exc:
+        parser.error(str(exc))
     rendered = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
