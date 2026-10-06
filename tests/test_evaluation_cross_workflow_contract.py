@@ -171,3 +171,24 @@ def test_post_gate_resync_keeps_fresh_exact_head_revalidation_routes() -> None:
 
     assert "workflow_dispatch:" in ci
     assert "ref: ${{ github.event.pull_request.head.sha || github.sha }}" in ci
+
+
+def test_canonical_evaluation_workflows_have_bounded_runner_timeouts() -> None:
+    workflows = (
+        *MANDATORY_VALIDATION_WORKFLOWS,
+        str(CALIBRATION),
+        str(MULTISOURCE),
+        str(CI),
+    )
+    for workflow in workflows:
+        text = Path(workflow).read_text(encoding="utf-8")
+        timeouts = [
+            int(line.split(":", 1)[1].strip())
+            for line in text.splitlines()
+            if line.strip().startswith("timeout-minutes:")
+        ]
+        assert timeouts, workflow
+        assert all(1 <= timeout <= 360 for timeout in timeouts), (
+            workflow,
+            timeouts,
+        )
