@@ -636,3 +636,47 @@ def test_wrong_typed_evaluation_mode_fails_closed() -> None:
     assert not decision.eligible_for_live_promotion
     assert "unsupported_evaluation_mode" in decision.reasons
 
+
+def test_non_native_schema_fails_closed_without_invoking_object_protocols() -> None:
+    class HostileSchema:
+        def __eq__(self, other: object) -> bool:
+            raise RuntimeError("must not compare hostile schema")
+
+        def __bool__(self) -> bool:
+            raise RuntimeError("must not coerce hostile schema")
+
+        def __str__(self) -> str:
+            raise RuntimeError("must not stringify hostile schema")
+
+    payload = _payload()
+    payload["schema"] = HostileSchema()
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "unsupported_schema" in decision.reasons
+
+
+def test_string_subclass_evaluation_mode_fails_closed() -> None:
+    class PretendMode(str):
+        def __eq__(self, other: object) -> bool:
+            raise RuntimeError("must not compare non-native mode")
+
+    payload = _payload()
+    payload["evaluation_mode"] = PretendMode(
+        "paired_raw_policy_full_team_plus_plug_and_play_context_generalization_v2"
+    )
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "unsupported_evaluation_mode" in decision.reasons
+
