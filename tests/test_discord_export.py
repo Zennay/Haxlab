@@ -106,3 +106,51 @@ def test_read_discord_exports_reports_conflicting_duplicate_message_id(
     assert len(failures) == 1
     assert failures[0].stage == "discord_message_duplicate"
     assert failures[0].error == "conflicting_duplicate_message_id"
+
+
+
+def test_read_discord_exports_rejects_duplicate_report_id(
+    tmp_path: Path,
+) -> None:
+    first = _export_payload()
+    second = {
+        "messages": [
+            {
+                "id": "message-2",
+                "content": "MATCH REPORT #m1 Red Team 3 - 0 Blue Team",
+                "attachments": [],
+            }
+        ]
+    }
+    (tmp_path / "a.json").write_text(json.dumps(first), encoding="utf-8")
+    (tmp_path / "b.json").write_text(json.dumps(second), encoding="utf-8")
+
+    reports, failures = read_discord_exports(tmp_path)
+
+    assert [report.message_id for report in reports] == ["message-1"]
+    assert len(failures) == 1
+    assert failures[0].stage == "discord_report_id_duplicate"
+    assert failures[0].error == "conflicting_duplicate_report_id:m1"
+
+
+def test_report_id_duplicate_check_is_case_insensitive(
+    tmp_path: Path,
+) -> None:
+    first = _export_payload()
+    second = {
+        "messages": [
+            {
+                "id": "message-2",
+                "content": "MATCH REPORT #M1 Red Team 3 - 0 Blue Team",
+                "attachments": [],
+            }
+        ]
+    }
+    (tmp_path / "a.json").write_text(json.dumps(first), encoding="utf-8")
+    (tmp_path / "b.json").write_text(json.dumps(second), encoding="utf-8")
+
+    reports, failures = read_discord_exports(tmp_path)
+
+    assert len(reports) == 1
+    assert len(failures) == 1
+    assert failures[0].stage == "discord_report_id_duplicate"
