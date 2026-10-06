@@ -31,12 +31,14 @@ PROTECTED_EXACT_PATHS = frozenset(
         "tools/elite_features.js",
         "tools/elite_policy_runtime.js",
         "tools/elite_tactics.js",
+        "tools/sandbox_neutral_start.js",
         "tools/sandbox_replay_start.js",
     }
 )
 
-PROTECTED_TEST_TOKENS = (
+PROTECTED_VALIDATION_TOKENS = (
     "arena_v2",
+    "arena",
     "calibration",
     "closed_loop",
     "duel",
@@ -44,6 +46,9 @@ PROTECTED_TEST_TOKENS = (
     "evaluation",
     "multisource",
     "promotion",
+    "roles_4v4",
+    "runtime-model",
+    "ci_workflow_exact_head",
     "scenario_source",
 )
 
@@ -79,9 +84,11 @@ def is_evaluation_owned_path(path: str) -> bool:
     if any(normalized.startswith(prefix) for prefix in PROTECTED_PREFIXES):
         return True
 
-    if normalized.startswith("tests/test_") and normalized.endswith(".py"):
-        filename = PurePosixPath(normalized).name.casefold()
-        return any(token in filename for token in PROTECTED_TEST_TOKENS)
+    filename = PurePosixPath(normalized).name.casefold()
+    if normalized.startswith("tests/test_") and normalized.endswith((".py", ".js")):
+        return any(token in filename for token in PROTECTED_VALIDATION_TOKENS)
+    if normalized.startswith(".github/workflows/") and normalized.endswith((".yml", ".yaml")):
+        return any(token in filename for token in PROTECTED_VALIDATION_TOKENS)
 
     return False
 
