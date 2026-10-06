@@ -1,0 +1,108 @@
+name: Cancel superseded HaxLab calibration only
+
+on:
+  push:
+    branches:
+      - ops/haxlab-cancel-superseded-calibration-20261006
+    paths:
+      - ".github/workflows/haxlab-cancel-superseded-calibration-20261006.yml"
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cancel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      TARGET_RUN_ID: "37486999853"
+      EXPECTED_HEAD_SHA: "7a8689a875474ad3d4114967ae35e015472ea8b5"
+      EXPECTED_WORKFLOW_NAME: "Closed-Loop Arena v2 Frozen Policy Validation"
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Cancel exact superseded calibration run
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import time
+          import urllib.error
+          import urllib.request
+
+          repo = os.environ["REPO"]
+          token = os.environ["GH_TOKEN"]
+          run_id = int(os.environ["TARGET_RUN_ID"])
+          expected_sha = os.environ["EXPECTED_HEAD_SHA"]
+          expected_name = os.environ["EXPECTED_WORKFLOW_NAME"]
+          headers = {
+              "Authorization": f"Bearer {token}",
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "User-Agent": "haxlab-targeted-calibration-cancel/1",
+          }
+
+          def request(path, method="GET"):
+              req = urllib.request.Request(
+                  "https://api.github.com" + path,
+                  method=method,
+                  headers=headers,
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as response:
+                      raw = response.read()
+                      return json.loads(raw) if raw else {}
+              except urllib.error.HTTPError as exc:
+                  body = exc.read().decode("utf-8", "replace")
+                  raise SystemExit(
+                      f"GitHub API {method} {path} failed: {exc.code} {body}"
+                  )
+
+          run = request(f"/repos/{repo}/actions/runs/{run_id}")
+          actual = {
+              "id": int(run["id"]),
+              "name": str(run.get("name") or ""),
+              "head_sha": str(run.get("head_sha") or ""),
+              "status": str(run.get("status") or ""),
+              "conclusion": run.get("conclusion"),
+          }
+          print("TARGET_STATE=" + json.dumps(actual, sort_keys=True))
+
+          if actual["id"] != run_id:
+              raise SystemExit("target run id mismatch")
+          if actual["name"] != expected_name:
+              raise SystemExit(
+                  f"workflow name mismatch: {actual['name']!r} != {expected_name!r}"
+              )
+          if actual["head_sha"] != expected_sha:
+              raise SystemExit(
+                  f"head sha mismatch: {actual['head_sha']} != {expected_sha}"
+              )
+          if actual["status"] == "completed":
+              print("TARGET_ALREADY_TERMINAL")
+              raise SystemExit(0)
+          if actual["status"] not in {"queued", "in_progress", "pending", "waiting"}:
+              raise SystemExit(f"unexpected target status: {actual['status']}")
+
+          request(f"/repos/{repo}/actions/runs/{run_id}/cancel", method="POST")
+          print("TARGET_CANCEL_REQUESTED")
+
+          for _ in range(12):
+              time.sleep(5)
+              current = request(f"/repos/{repo}/actions/runs/{run_id}")
+              status = str(current.get("status") or "")
+              conclusion = current.get("conclusion")
+              print(f"TARGET_POLL status={status} conclusion={conclusion}")
+              if status == "completed":
+                  if conclusion != "cancelled":
+                      raise SystemExit(
+                          f"target became terminal with unexpected conclusion={conclusion}"
+                      )
+                  print("TARGET_CANCELLED_EXACT")
+                  raise SystemExit(0)
+
+          raise SystemExit("target did not become cancelled within 60 seconds")
+          PY
