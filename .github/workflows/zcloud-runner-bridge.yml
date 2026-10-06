@@ -49,6 +49,7 @@ jobs:
           ALLOWED_HAXLAB_ACTIONS = {
               "status",
               "deploy",
+              "audit-archive",
               "champion-info",
               "champion-runtime",
               "live-play-probe",

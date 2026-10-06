@@ -51,3 +51,52 @@ def test_status_reports_analysis_progress_and_completion(
     assert payload["processing_progress_percent"] == 100.0
     assert payload["analysis_progress_percent"] == 100.0
     assert payload["analysis_complete"] is True
+
+
+def test_status_surfaces_ingest_integrity_evidence(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    db = tmp_path / "state.sqlite3"
+    failed_source = tmp_path / "incoming" / "broken.hbr2"
+
+    with RuntimeState(db) as state:
+        state.mark_seen(
+            source_path=str(failed_source),
+            size_bytes=123,
+            mtime_ns=456,
+            sha256=None,
+            status="failed",
+            error="invalid_hbr2:bad_header",
+        )
+        state.event(
+            "replay_failed",
+            subject=str(failed_source),
+            detail="invalid_hbr2:bad_header",
+        )
+        state.event(
+            "replay_disappeared",
+            subject=str(tmp_path / "incoming" / "moving.hbr2"),
+            detail="disappeared_before_stat",
+        )
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["haxlab-status", "--state-db", str(db)],
+    )
+    assert main() == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["source_failed"] == 1
+    assert payload["ingest_integrity_ok"] is False
+    assert payload["recent_ingest_events_1h"]["replay_failed"] == 1
+    assert payload["recent_ingest_events_1h"]["replay_disappeared"] == 1
+    assert payload["recent_ingest_events_1h"]["replay_archived"] == 0
+    assert payload["recent_ingest_events_1h"]["replay_duplicate"] == 0
+    examples = payload["source_failure_examples"]
+    assert len(examples) == 1
+    assert examples[0]["source_path"] == str(failed_source)
+    assert examples[0]["error"] == "invalid_hbr2:bad_header"
+    assert examples[0]["last_seen_at"]
