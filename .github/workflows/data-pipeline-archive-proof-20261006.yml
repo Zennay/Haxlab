@@ -1,0 +1,73 @@
+name: HaxLab data-pipeline archive proof
+
+on:
+  push:
+    branches:
+      - validation/data-pipeline-archive-proof-20261006
+    paths:
+      - ".github/workflows/data-pipeline-archive-proof-20261006.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-data-pipeline-archive-proof-20261006
+  cancel-in-progress: true
+
+jobs:
+  proof:
+    name: Verify immutable raw replay archive on VPS
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 30
+
+    steps:
+      - name: Capture ingest status
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo /usr/local/sbin/haxlab-actions-control status
+
+      - name: Audit every raw replay object
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="$(mktemp)"
+          trap 'rm -f "$OUT"' EXIT
+          sudo /usr/local/sbin/haxlab-actions-control audit-archive | tee "$OUT"
+          python3 - "$OUT" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          text = Path(sys.argv[1]).read_text(encoding="utf-8")
+          start = text.find("{")
+          if start < 0:
+              raise SystemExit("archive audit did not emit JSON evidence")
+          report = json.loads(text[start:])
+
+          if report.get("schema") != "haxlab-raw-archive-audit-v1":
+              raise SystemExit(f"unexpected audit schema: {report.get('schema')!r}")
+          if report.get("ok") is not True:
+              raise SystemExit(f"raw archive integrity failed: {report}")
+
+          checked = int(report.get("checked_records") or 0)
+          existing = int(report.get("existing_files") or 0)
+          if checked < 7775:
+              raise SystemExit(f"archive audit checked only {checked} records; expected at least 7775")
+          if existing != checked:
+              raise SystemExit(f"existing file count {existing} does not match checked records {checked}")
+
+          for field in (
+              "missing_files",
+              "size_mismatches",
+              "hash_mismatches",
+              "path_mismatches",
+              "symlink_entries",
+              "objects_with_issues",
+          ):
+              if int(report.get(field) or 0) != 0:
+                  raise SystemExit(f"{field} must be zero: {report.get(field)!r}")
+
+          print(f"archive_integrity=green checked_records={checked} existing_files={existing}")
+          PY
