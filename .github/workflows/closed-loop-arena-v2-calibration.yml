@@ -536,6 +536,7 @@ jobs:
             WEAK_AFTER="$WEAK_AFTER" \
             FROZEN_INPUT_SNAPSHOT="$ARENA_FROZEN_INPUT_SNAPSHOT" \
             /opt/haxlab/.venv/bin/python - <<'PY'
+          import hashlib
           import json
           import os
           from pathlib import Path
@@ -583,9 +584,7 @@ jobs:
           )
           before_frozen = dict(snapshot.get("hashes") or {})
           after_frozen = {
-              path: __import__("hashlib").sha256(
-                  Path(path).read_bytes()
-              ).hexdigest()
+              path: hashlib.sha256(Path(path).read_bytes()).hexdigest()
               for path in before_frozen
           }
           evidence["frozen_inputs"] = {
