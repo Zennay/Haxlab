@@ -89,6 +89,9 @@ def _payload() -> dict:
         "raw_policy_only": True,
         "safety_recovery_enabled": False,
         "paired_reference_design": True,
+        "provenance": {
+            "partner_models": ["partner-a.json", "partner-b.json"],
+        },
         "config": {
             "seconds": 30,
             "sample_every": 6,
@@ -781,7 +784,7 @@ def test_hostile_role_key_fails_closed_without_object_protocols() -> None:
             raise RuntimeError("must not repr hostile role")
 
     payload = _payload()
-    payload["team_mode"]["roles"][HostileRole()] = _role_pair(samples=8)
+    payload["team_mode"]["roles"][HostileRole()] = _role_pair(samples=4)
 
     decision = decide_closed_loop_arena(
         payload,
@@ -896,4 +899,32 @@ def test_calibrated_gate_rejects_pair_tie_margin_drift() -> None:
     assert not decision.structurally_valid
     assert not decision.eligible_for_live_promotion
     assert "calibrated_config:pair_tie_margin_mismatch" in decision.reasons
+
+
+def test_partner_model_count_must_match_provenance() -> None:
+    payload = _payload()
+    payload["provenance"]["partner_models"] = ["partner-a.json"]
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "partner_model_count_provenance_mismatch:2!=1" in decision.reasons
+
+
+def test_partner_model_provenance_requires_native_paths() -> None:
+    payload = _payload()
+    payload["provenance"]["partner_models"][1] = 7
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "invalid_provenance:partner_models:invalid_path" in decision.reasons
 
