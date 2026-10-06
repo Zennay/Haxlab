@@ -290,3 +290,62 @@ def test_collect_ignores_malformed_simulation_container(
     assert rows[0]["matches"] == 1
     assert rows[0]["samples"] == 600
     assert rows[0]["active_minutes"] == 1.0
+
+
+
+def test_collect_skips_malformed_artifact_structure(tmp_path: Path) -> None:
+    _write_replay(
+        tmp_path,
+        "valid",
+        [
+            {
+                "name": "Valid",
+                "samples": 600,
+                "nearestBallSamples": 120,
+                "closeBallSamples": 60,
+                "inputEvents": 30,
+                "kickEvents": 12,
+                "kickPressedInputs": 10,
+            }
+        ],
+    )
+    (tmp_path / "string-schema.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": "4",
+                "players": [
+                    {
+                        "name": "Wrong schema",
+                        "samples": 6000,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "bad-players.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 4,
+                "simulation": {"sampleEveryTicks": 6},
+                "players": {"not": "a-list"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "bad-player-row.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 4,
+                "simulation": {"sampleEveryTicks": 6},
+                "players": ["not-an-object"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rows = collect(tmp_path)
+
+    assert len(rows) == 1
+    assert rows[0]["name"] == "Valid"
+    assert rows[0]["matches"] == 1
