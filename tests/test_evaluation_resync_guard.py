@@ -76,6 +76,21 @@ def test_repository_path_escape_is_rejected(path: str) -> None:
         resync_guard.is_evaluation_owned_path(path)
 
 
+@pytest.mark.parametrize(
+    ("base", "head"),
+    (
+        ("main", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+        ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "refs/heads/main"),
+        ("--output=/tmp/guard", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+        ("A".repeat(40), "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+        ("deadbeef", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+    ),
+)
+def test_git_diff_requires_exact_immutable_commit_shas(base: str, head: str) -> None:
+    with pytest.raises(ValueError, match="exact lowercase 40-character commit SHA"):
+        resync_guard.changed_paths_from_git(base, head)
+
+
 def test_git_diff_failure_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_run(*args, **kwargs):
         return SimpleNamespace(
@@ -87,7 +102,7 @@ def test_git_diff_failure_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(resync_guard.subprocess, "run", fake_run)
 
     with pytest.raises(RuntimeError, match="git diff failed"):
-        resync_guard.changed_paths_from_git("deadbeef", "main")
+        resync_guard.changed_paths_from_git("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 
 
 def test_git_diff_uses_three_dot_main_side_drift(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -107,7 +122,7 @@ def test_git_diff_uses_three_dot_main_side_drift(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(resync_guard.subprocess, "run", fake_run)
 
-    paths = resync_guard.changed_paths_from_git("staging-sha", "main-sha")
+    paths = resync_guard.changed_paths_from_git("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 
     assert captured["command"] == [
         "git",
@@ -117,7 +132,7 @@ def test_git_diff_uses_three_dot_main_side_drift(monkeypatch: pytest.MonkeyPatch
         "--find-renames",
         "--find-copies",
         "--diff-filter=ACDMRTUXB",
-        "staging-sha...main-sha",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     ]
     assert paths == (
         "README.md",
@@ -141,7 +156,7 @@ def test_rename_keeps_old_protected_path_in_guard_scope(
 
     monkeypatch.setattr(resync_guard.subprocess, "run", fake_run)
 
-    report = resync_guard.build_report("staging-sha", "main-sha")
+    report = resync_guard.build_report("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 
     assert not report.safe
     assert "src/haxlab/evaluation/promotion.py" in report.protected_paths
