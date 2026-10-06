@@ -345,3 +345,40 @@ def test_selector_skips_corrupt_db_sample_count(
     result = scenario_source.select_scenario_source(db_path)
 
     assert result["sha256"] == "b" * 64
+
+
+
+def test_healthy_candidate_rejects_boolean_player_integer(
+    tmp_path: Path,
+) -> None:
+    raw, analysis, raw_sha = _candidate_files(tmp_path)
+    payload = json.loads(analysis.read_text(encoding="utf-8"))
+    payload["players"][0]["teamId"] = False
+    analysis.write_text(json.dumps(payload), encoding="utf-8")
+
+    candidate = scenario_source._healthy_candidate(
+        sha256=raw_sha,
+        raw_path=str(raw),
+        analysis_path=str(analysis),
+        sampled_states=100,
+    )
+
+    assert candidate is None
+
+
+def test_healthy_candidate_rejects_boolean_sample_count(
+    tmp_path: Path,
+) -> None:
+    raw, analysis, raw_sha = _candidate_files(tmp_path)
+    payload = json.loads(analysis.read_text(encoding="utf-8"))
+    payload["simulation"]["sampledStateCount"] = False
+    analysis.write_text(json.dumps(payload), encoding="utf-8")
+
+    candidate = scenario_source._healthy_candidate(
+        sha256=raw_sha,
+        raw_path=str(raw),
+        analysis_path=str(analysis),
+        sampled_states=100,
+    )
+
+    assert candidate is None
