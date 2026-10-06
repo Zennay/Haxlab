@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -22,8 +23,27 @@ def _live_pointer(
     *,
     validation_stage: str = "live",
     source_validation_stage: str = "canary",
-) -> None:
+    evidence_validated: bool = True,
+    evidence_version: str | None = None,
+) -> Path:
     version_dir = root / "versions" / version
+    evidence_dir = (
+        root / "validations" / version / source_validation_stage
+    )
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    evidence = {
+        "validated": evidence_validated,
+        "candidate": {
+            "version_id": version if evidence_version is None else evidence_version
+        },
+    }
+    evidence_bytes = (
+        json.dumps(evidence, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    evidence_sha = hashlib.sha256(evidence_bytes).hexdigest()
+    evidence_path = evidence_dir / f"{evidence_sha}.json"
+    evidence_path.write_bytes(evidence_bytes)
+
     payload = {
         "schema": "haxlab-champion-pointer-v1",
         "version_id": version,
@@ -31,11 +51,14 @@ def _live_pointer(
         "metrics_path": str(version_dir / "metrics.json"),
         "validation_stage": validation_stage,
         "source_validation_stage": source_validation_stage,
+        "validation_evidence_path": str(evidence_path),
+        "validation_evidence_sha256": evidence_sha,
     }
     (root / "live.json").write_text(
         json.dumps(payload) + "\n",
         encoding="utf-8",
     )
+    return evidence_path
 
 
 def test_resolve_version_uses_activated_live_pointer(tmp_path: Path) -> None:
@@ -234,3 +257,85 @@ def test_explicit_version_rejects_redirected_versions_root(
 
     with pytest.raises(FileNotFoundError, match="not found or unsafe"):
         resolve_version_dir(root, "candidate-v1")
+
+
+def test_live_pointer_rejects_tampered_validation_evidence(
+    tmp_path: Path,
+) -> None:
+    _version(tmp_path, "champion-v1")
+    evidence_path = _live_pointer(tmp_path, "champion-v1")
+    evidence_path.write_text(
+        json.dumps(
+            {
+                "validated": True,
+                "candidate": {"version_id": "champion-v1"},
+                "tampered": True,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(FileNotFoundError):
+        resolve_version_dir(tmp_path)
+
+
+def test_live_pointer_rejects_failed_validation_evidence(
+    tmp_path: Path,
+) -> None:
+    _version(tmp_path, "champion-v1")
+    _live_pointer(
+        tmp_path,
+        "champion-v1",
+        evidence_validated=False,
+    )
+
+    with pytest.raises(FileNotFoundError):
+        resolve_version_dir(tmp_path)
+
+
+def test_live_pointer_rejects_validation_version_mismatch(
+    tmp_path: Path,
+) -> None:
+    _version(tmp_path, "champion-v1")
+    _live_pointer(
+        tmp_path,
+        "champion-v1",
+        evidence_version="different-v2",
+    )
+
+    with pytest.raises(FileNotFoundError):
+        resolve_version_dir(tmp_path)
+
+
+def test_live_pointer_rejects_validation_evidence_outside_registry(
+    tmp_path: Path,
+) -> None:
+    _version(tmp_path, "champion-v1")
+    _live_pointer(tmp_path, "champion-v1")
+    payload = json.loads((tmp_path / "live.json").read_text(encoding="utf-8"))
+
+    outside = tmp_path / "outside-evidence.json"
+    outside_bytes = (
+        json.dumps(
+            {
+                "validated": True,
+                "candidate": {"version_id": "champion-v1"},
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("utf-8")
+    outside.write_bytes(outside_bytes)
+    payload["validation_evidence_path"] = str(outside)
+    payload["validation_evidence_sha256"] = hashlib.sha256(
+        outside_bytes
+    ).hexdigest()
+    (tmp_path / "live.json").write_text(
+        json.dumps(payload) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(FileNotFoundError):
+        resolve_version_dir(tmp_path)
+
