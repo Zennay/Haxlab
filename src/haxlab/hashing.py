@@ -5,6 +5,9 @@ from pathlib import Path
 
 
 def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
+    if type(chunk_size) is not int or chunk_size <= 0:
+        raise ValueError("chunk_size_must_be_positive_int")
+
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         while chunk := handle.read(chunk_size):
