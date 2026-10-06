@@ -1,0 +1,45 @@
+name: Sync Arena v2 with current main
+
+on:
+  push:
+    branches:
+      - sync/arena-v2-main-20261006-2
+
+permissions:
+  contents: write
+
+concurrency:
+  group: haxlab-arena-v2-main-sync
+  cancel-in-progress: true
+
+jobs:
+  merge-main:
+    if: github.event.head_commit.message == 'Run Arena v2 main sync merge'
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact sync staging head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          clean: true
+
+      - name: Merge current main fail-closed
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "HaxLab Arena Integrator"
+          git config user.email "112865109+Zennay@users.noreply.github.com"
+          git fetch origin main
+          EXPECTED_MAIN=695d450c34cfbd5ab9c43fdd0badb36f36963e7b
+          test "$(git rev-parse origin/main)" = "$EXPECTED_MAIN"
+          if ! git merge --no-ff --no-edit "$EXPECTED_MAIN"; then
+            echo "=== MAIN_SYNC_CONFLICT ==="
+            git status --short || true
+            git diff --name-only --diff-filter=U || true
+            git diff --cc || true
+            exit 1
+          fi
+          echo "ARENA_MAIN_SYNC_HEAD=$(git rev-parse HEAD)"
+          git push origin HEAD:sync/arena-v2-main-20261006-2
