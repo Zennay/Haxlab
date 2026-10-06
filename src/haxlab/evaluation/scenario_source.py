@@ -158,12 +158,13 @@ def _healthy_candidate(
             role_row = roles.get(player_id) or {}
             if not isinstance(role_row, dict):
                 return None
-            role = str(role_row.get("role") or "unknown")
-            confidence = _finite_number(role_row.get("confidence") or 0.0)
+            role = role_row.get("role")
+            confidence = _finite_number(role_row.get("confidence"))
             if (
-                confidence is None
+                not isinstance(role, str)
+                or confidence is None
                 or role not in ROLES_4V4
-                or confidence < 0.55
+                or not 0.55 <= confidence <= 1.0
                 or role in seen
             ):
                 return None
