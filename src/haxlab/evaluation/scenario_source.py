@@ -39,7 +39,12 @@ def _healthy_candidate(
 ) -> dict[str, Any] | None:
     raw = Path(raw_path)
     analysis_file = Path(analysis_path)
-    if not raw.exists() or not analysis_file.exists():
+    if (
+        raw.is_symlink()
+        or analysis_file.is_symlink()
+        or not raw.is_file()
+        or not analysis_file.is_file()
+    ):
         return None
     try:
         payload = json.loads(analysis_file.read_text(encoding="utf-8"))
