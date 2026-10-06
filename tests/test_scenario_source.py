@@ -5,6 +5,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 import haxlab.evaluation.scenario_source as scenario_source
 
 
@@ -44,6 +46,42 @@ def _db(path: Path) -> None:
         db.commit()
     finally:
         db.close()
+
+
+@pytest.mark.parametrize("bad_value", [True, 1.5, "2", 0, -1])
+def test_select_scenario_source_rejects_invalid_max_candidates(
+    tmp_path: Path,
+    bad_value,
+) -> None:
+    db_path = tmp_path / "state.sqlite3"
+    _db(db_path)
+
+    with pytest.raises(
+        ValueError,
+        match="max_candidates must be a native positive integer",
+    ):
+        scenario_source.select_scenario_source(
+            db_path,
+            max_candidates=bad_value,
+        )
+
+
+@pytest.mark.parametrize("bad_value", [True, 1.5, "2", 0, -1])
+def test_select_scenario_sources_rejects_invalid_count(
+    tmp_path: Path,
+    bad_value,
+) -> None:
+    db_path = tmp_path / "state.sqlite3"
+    _db(db_path)
+
+    with pytest.raises(
+        ValueError,
+        match="count must be a native positive integer",
+    ):
+        scenario_source.select_scenario_sources(
+            db_path,
+            count=bad_value,
+        )
 
 
 def test_select_scenario_source_skips_excluded_sha(
