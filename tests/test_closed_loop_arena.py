@@ -567,3 +567,41 @@ def test_stringified_role_metric_fails_closed() -> None:
         "invalid_metric:st:candidate:far_stall_rate:non_numeric"
         in decision.reasons
     )
+
+
+def test_unexpected_string_role_fails_closed() -> None:
+    payload = _payload()
+    payload["plug_and_play"]["by_role"]["coach"] = {
+        "team_outcome": {
+            "matches": 0,
+            "wins": 0,
+            "draws": 0,
+            "losses": 0,
+            "proxy_match_score": 0.0,
+        },
+        "individual": _role_pair(samples=0),
+    }
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "plug_and_play:by_role:unexpected_role:'coach'" in decision.reasons
+
+
+def test_unexpected_non_string_team_role_fails_closed() -> None:
+    payload = _payload()
+    payload["team_mode"]["roles"][99] = _role_pair(samples=8)
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "team_mode:roles:unexpected_role:99" in decision.reasons
+
