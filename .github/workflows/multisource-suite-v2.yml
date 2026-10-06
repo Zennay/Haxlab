@@ -76,8 +76,31 @@ jobs:
           old_manifest_sha = hashlib.sha256(old_manifest_bytes).hexdigest()
           old_manifest = json.loads(old_manifest_bytes)
 
+          expected_config = {
+              "schema": "haxlab-multisource-evaluation-config-v2",
+              "mirror_sides": True,
+              "raw_policy_only": True,
+              "selection_algorithm": "state-pass-v4-sampled-states-desc-sha256-asc",
+          }
+          for key, expected in expected_config.items():
+              if config.get(key) != expected or type(config.get(key)) is not type(expected):
+                  raise SystemExit(
+                      f"invalid multisource config {key}: "
+                      f"{config.get(key)!r} != {expected!r}"
+                  )
+
           entries = list(old_manifest.get("sources") or [])
-          wanted = int(config["source_count"])
+          wanted = config["source_count"]
+          if type(wanted) is not int or wanted < 1:
+              raise SystemExit("source_count must be a native positive integer")
+          minimum_sources = config["minimum_sources"]
+          if type(minimum_sources) is not int or minimum_sources < 1:
+              raise SystemExit("minimum_sources must be a native positive integer")
+          if minimum_sources != wanted:
+              raise SystemExit(
+                  f"minimum_sources/source_count mismatch: "
+                  f"{minimum_sources}!={wanted}"
+              )
           if len(entries) != wanted:
               raise SystemExit(
                   f"expected {wanted} frozen sources, found {len(entries)}"
