@@ -90,3 +90,62 @@ def test_malformed_report_does_not_drop_later_valid_messages(
     assert len(failures) == 1
     assert failures[0].stage == "discord_message"
     assert "missing_message_id" in failures[0].error
+
+
+
+def test_report_metadata_structures_fail_closed() -> None:
+    base = {
+        "id": "message-1",
+        "content": "MATCH REPORT #m1 Red Team 1 - 0 Blue Team",
+        "attachments": [],
+    }
+    cases = [
+        ({**base, "content": ["not", "text"]}, "invalid_message_content"),
+        ({**base, "attachments": {}}, "invalid_attachments"),
+        ({**base, "attachments": ["bad"]}, "invalid_attachment"),
+        (
+            {
+                **base,
+                "attachments": [{"fileName": 123}],
+            },
+            "invalid_attachment_filename",
+        ),
+        (
+            {
+                **base,
+                "attachments": [
+                    {"fileName": "replay.hbr2", "url": {"bad": "url"}}
+                ],
+            },
+            "invalid_attachment_url",
+        ),
+        ({**base, "timestamp": 123}, "invalid_timestamp"),
+    ]
+
+    for message, reason in cases:
+        try:
+            parse_match_report(message)
+        except ValueError as exc:
+            assert str(exc) == reason
+        else:
+            raise AssertionError(f"expected ValueError: {reason}")
+
+
+def test_attachment_strings_are_trimmed_without_type_coercion() -> None:
+    message = {
+        "id": "message-1",
+        "content": "MATCH REPORT #m1 Red Team 1 - 0 Blue Team",
+        "attachments": [
+            {
+                "fileName": " replay.hbr2 ",
+                "url": " https://cdn.discordapp.com/replay ",
+                "fileSizeBytes": 44237,
+            }
+        ],
+    }
+
+    report = parse_match_report(message)
+
+    assert report.attachments[0].file_name == "replay.hbr2"
+    assert report.attachments[0].url == "https://cdn.discordapp.com/replay"
+    assert report.attachments[0].size_bytes == 44237
