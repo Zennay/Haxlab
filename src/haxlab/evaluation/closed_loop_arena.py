@@ -202,11 +202,143 @@ def _relative_min_check(
         )
 
 
+def _policy_issues(policy: ClosedLoopArenaPolicy) -> list[str]:
+    issues: list[str] = []
+
+    if type(policy.policy_version) is not str or not policy.policy_version.strip():
+        issues.append("invalid_policy:policy_version")
+    if type(policy.calibrated) is not bool:
+        issues.append("invalid_policy:calibrated:not_boolean")
+
+    integer_fields = {
+        "minimum_team_matches": (policy.minimum_team_matches, 1),
+        "minimum_plug_matches_per_role": (
+            policy.minimum_plug_matches_per_role,
+            1,
+        ),
+        "minimum_partner_models": (policy.minimum_partner_models, 1),
+        "max_runtime_errors": (policy.max_runtime_errors, 0),
+    }
+    for label, (value, minimum) in integer_fields.items():
+        if type(value) is not int:
+            issues.append(f"invalid_policy:{label}:not_integer")
+        elif value < minimum:
+            issues.append(
+                f"invalid_policy:{label}:below_minimum:{value}<{minimum}"
+            )
+
+    numeric_fields = {
+        "max_boundary_regression": (
+            policy.max_boundary_regression,
+            0.0,
+            1.0,
+        ),
+        "max_ood_regression": (policy.max_ood_regression, 0.0, 1.0),
+        "max_far_stall_regression": (
+            policy.max_far_stall_regression,
+            0.0,
+            1.0,
+        ),
+        "max_role_deviation_regression": (
+            policy.max_role_deviation_regression,
+            0.0,
+            None,
+        ),
+        "max_held_action_regression_seconds": (
+            policy.max_held_action_regression_seconds,
+            0.0,
+            None,
+        ),
+        "max_context_adaptation_regression": (
+            policy.max_context_adaptation_regression,
+            0.0,
+            1.0,
+        ),
+        "max_formation_order_regression": (
+            policy.max_formation_order_regression,
+            0.0,
+            1.0,
+        ),
+        "max_shape_collapse_regression": (
+            policy.max_shape_collapse_regression,
+            0.0,
+            1.0,
+        ),
+        "minimum_team_proxy_match_score": (
+            policy.minimum_team_proxy_match_score,
+            0.0,
+            1.0,
+        ),
+        "minimum_plug_proxy_match_score": (
+            policy.minimum_plug_proxy_match_score,
+            0.0,
+            1.0,
+        ),
+        "max_absolute_far_stall_rate": (
+            policy.max_absolute_far_stall_rate,
+            0.0,
+            1.0,
+        ),
+        "max_absolute_held_action_seconds": (
+            policy.max_absolute_held_action_seconds,
+            0.0,
+            None,
+        ),
+        "minimum_absolute_context_adaptation_rate": (
+            policy.minimum_absolute_context_adaptation_rate,
+            0.0,
+            1.0,
+        ),
+    }
+    for label, (value, minimum, maximum) in numeric_fields.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            issues.append(f"invalid_policy:{label}:non_numeric")
+            continue
+        number = float(value)
+        if not math.isfinite(number):
+            issues.append(f"invalid_policy:{label}:non_finite")
+            continue
+        if number < minimum:
+            issues.append(
+                f"invalid_policy:{label}:below_minimum:"
+                f"{number:.6f}<{minimum:.6f}"
+            )
+        if maximum is not None and number > maximum:
+            issues.append(
+                f"invalid_policy:{label}:above_maximum:"
+                f"{number:.6f}>{maximum:.6f}"
+            )
+
+    return issues
+
+
 def decide_closed_loop_arena(
     payload: dict[str, Any],
     *,
     policy: ClosedLoopArenaPolicy = ClosedLoopArenaPolicy(),
 ) -> ClosedLoopArenaDecision:
+    if not isinstance(policy, ClosedLoopArenaPolicy):
+        return ClosedLoopArenaDecision(
+            structurally_valid=False,
+            behavior_gate_passed=False,
+            eligible_for_live_promotion=False,
+            reasons=("invalid_policy:object_type",),
+            checks={},
+        )
+
+    policy_failures = _policy_issues(policy)
+    if policy_failures:
+        return ClosedLoopArenaDecision(
+            structurally_valid=False,
+            behavior_gate_passed=False,
+            eligible_for_live_promotion=False,
+            reasons=tuple(policy_failures),
+            checks={
+                "policy_version": policy.policy_version,
+                "policy_calibrated": policy.calibrated,
+            },
+        )
+
     structural_failures: list[str] = []
     behavior_failures: list[str] = []
     if not isinstance(payload, dict):
