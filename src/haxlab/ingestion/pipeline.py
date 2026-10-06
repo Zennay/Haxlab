@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import math
+import os
+import tempfile
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TextIO
 
 from haxlab.ingestion.discovery import discover_replays
 from haxlab.ingestion.discord_export import read_discord_exports
@@ -12,19 +15,46 @@ from haxlab.models import ImportFailure, ImportManifest, MatchReport, ReplayFile
 from haxlab.replay.validation import validate_replay_basic
 
 
-def _write_json(path: Path, value: Any) -> None:
+def _atomic_write(path: Path, writer: Callable[[TextIO], None]) -> None:
+    """Publish one derived artifact without exposing a partial replacement."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+            writer(handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+
+        os.replace(temp_path, path)
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+
+
+def _write_json(path: Path, value: Any) -> None:
+    def write(handle: TextIO) -> None:
         json.dump(value, handle, ensure_ascii=False, indent=2, sort_keys=True)
         handle.write("\n")
 
+    _atomic_write(path, write)
+
 
 def _write_jsonl(path: Path, values: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
+    def write(handle: TextIO) -> None:
         for value in values:
             handle.write(json.dumps(value, ensure_ascii=False, sort_keys=True))
             handle.write("\n")
+
+    _atomic_write(path, write)
 
 
 def _relative(path: str, root: Path) -> str:
@@ -55,6 +85,19 @@ def _replay_dict(replay: ReplayFile, root: Path) -> dict[str, Any]:
     }
 
 
+def _validated_minimum_match_confidence(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(
+            "minimum_match_confidence must be a finite native number in [0, 1]"
+        )
+    number = float(value)
+    if not math.isfinite(number) or not 0.0 <= number <= 1.0:
+        raise ValueError(
+            "minimum_match_confidence must be a finite native number in [0, 1]"
+        )
+    return number
+
+
 def run_import(
     export_root: Path,
     output_root: Path,
@@ -62,6 +105,9 @@ def run_import(
     minimum_match_confidence: float = 0.65,
 ) -> ImportManifest:
     """Build deterministic derived inventory from an immutable raw export."""
+    minimum_match_confidence = _validated_minimum_match_confidence(
+        minimum_match_confidence
+    )
     export_root = export_root.resolve()
     output_root = output_root.resolve()
 
