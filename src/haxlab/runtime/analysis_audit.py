@@ -73,8 +73,10 @@ def audit_analysis_artifacts(
     symlink_entries = 0
     invalid_json = 0
     payload_mismatches = 0
-    objects_with_issues = 0
+    row_objects_with_issues = 0
+    untracked_artifacts = 0
     issues: list[dict[str, object]] = []
+    expected_paths: set[Path] = set()
     expected_schema_version = _expected_schema_version(analyzer_version)
 
     for row in rows:
@@ -82,6 +84,7 @@ def audit_analysis_artifacts(
         sha256 = str(row["sha256"])
         output_path = row["output_path"]
         expected_path = _expected_output_path(derived_root, analyzer_version, sha256)
+        expected_paths.add(expected_path)
         reasons: list[str] = []
         payload: dict[str, Any] | None = None
 
@@ -207,7 +210,7 @@ def audit_analysis_artifacts(
                 reasons.extend(payload_reasons)
 
         if reasons:
-            objects_with_issues += 1
+            row_objects_with_issues += 1
             if len(issues) < max(0, max_issues):
                 issues.append(
                     {
@@ -217,19 +220,39 @@ def audit_analysis_artifacts(
                     }
                 )
 
+    analysis_root = derived_root / analyzer_version
+    if analysis_root.is_dir():
+        for artifact_path in sorted(analysis_root.rglob("*.json")):
+            if artifact_path.name.startswith("_"):
+                continue
+            if artifact_path not in expected_paths:
+                untracked_artifacts += 1
+                if len(issues) < max(0, max_issues):
+                    issues.append(
+                        {
+                            "sha256": None,
+                            "output_path": str(artifact_path),
+                            "reasons": ["untracked_analysis_artifact"],
+                        }
+                    )
+
+    objects_with_issues = row_objects_with_issues + untracked_artifacts
+
     return {
         "schema": AUDIT_SCHEMA,
         "audited_at": datetime.now(timezone.utc).isoformat(),
         "analyzer_version": analyzer_version,
         "ok": objects_with_issues == 0,
         "checked_records": checked_records,
-        "valid_objects": checked_records - objects_with_issues,
+        "valid_objects": checked_records - row_objects_with_issues,
         "existing_files": existing_files,
         "missing_files": missing_files,
         "path_mismatches": path_mismatches,
         "symlink_entries": symlink_entries,
         "invalid_json": invalid_json,
         "payload_mismatches": payload_mismatches,
+        "row_objects_with_issues": row_objects_with_issues,
+        "untracked_artifacts": untracked_artifacts,
         "objects_with_issues": objects_with_issues,
         "issues": issues,
         "issues_truncated": objects_with_issues > len(issues),
