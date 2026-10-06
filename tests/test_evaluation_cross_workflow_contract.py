@@ -106,3 +106,53 @@ def test_full_ci_uses_exact_source_sha_and_verifies_it_before_tests() -> None:
     assert text.index("name: Verify exact source checkout") < text.index(
         "name: Test"
     )
+
+
+MANDATORY_VALIDATION_WORKFLOWS = (
+    ".github/workflows/arena-runner-config-integrity-validation.yml",
+    ".github/workflows/arena-v2-evaluation-validation.yml",
+    ".github/workflows/arena-v2-integration-validate.yml",
+    ".github/workflows/arena-v2-metric-bounds-validation.yml",
+    ".github/workflows/calibration-gate-contract-validation.yml",
+    ".github/workflows/calibration-pointer-invariant-validation.yml",
+    ".github/workflows/closed-loop-native-numeric-validation.yml",
+    ".github/workflows/duel-policy-integrity-validation.yml",
+    ".github/workflows/elite-gate-preflight-integrity-validation.yml",
+    ".github/workflows/evaluation-green-integration-validation.yml",
+    ".github/workflows/multisource-suite-integrity-validation.yml",
+    ".github/workflows/promotion-evidence-validation.yml",
+    ".github/workflows/promotion-policy-integrity-validation.yml",
+    ".github/workflows/replay-scenario-state-integrity-validation.yml",
+    ".github/workflows/runtime-model-integrity-validation.yml",
+    ".github/workflows/scenario-source-integrity-validation.yml",
+)
+
+
+def _first_checkout_block(text: str) -> str:
+    checkout = text.index("uses: actions/checkout@v4")
+    start = text.rfind("- name:", 0, checkout)
+    if start == -1:
+        start = checkout
+    end = text.find("\n      - name:", checkout)
+    if end == -1:
+        end = len(text)
+    return text[start:end]
+
+
+def test_mandatory_validation_workflows_keep_runner_permission_and_source_contracts() -> None:
+    for workflow in MANDATORY_VALIDATION_WORKFLOWS:
+        text = Path(workflow).read_text(encoding="utf-8")
+        _assert_read_only_self_hosted(text)
+
+        checkout = _first_checkout_block(text)
+        assert "ref:" in checkout
+        assert any(
+            marker in checkout
+            for marker in (
+                "github.sha",
+                "github.event.pull_request.head.sha",
+                "inputs.ref",
+            )
+        )
+        assert "github.ref" not in checkout
+        assert "clean: true" in checkout
