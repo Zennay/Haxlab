@@ -131,7 +131,12 @@ def test_finalize_refreshes_when_dataset_grows(tmp_path: Path) -> None:
                     {
                         "schemaVersion": 4,
                         "totalFrames": 600,
-                        "simulation": {"sampleEveryTicks": 6},
+                        "rawEventCount": 50,
+                        "simulation": {
+                            "sampleEveryTicks": 6,
+                            "sampledStateCount": 100,
+                            "framesAdvanced": 600,
+                        },
                         "players": [],
                     }
                 ),
