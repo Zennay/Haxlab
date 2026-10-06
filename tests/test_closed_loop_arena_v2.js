@@ -267,6 +267,22 @@ function pairTeamRoles() {
   );
 }
 
+function pairLineup(kind, testedRole = null) {
+  return Object.fromEntries(
+    ["gk", "dm", "am", "st"].map((role) => [
+      role,
+      {
+        model_kind:
+          testedRole && role !== testedRole ? "partner" : kind,
+        model_path:
+          testedRole && role !== testedRole
+            ? "partner-" + role + ".json"
+            : kind + ".json",
+      },
+    ]),
+  );
+}
+
 const candidateIdentityRow = {
   mode: "full_team",
   tested_kind: "challenger",
@@ -274,6 +290,7 @@ const candidateIdentityRow = {
   scenario_index: 1,
   test_team_id: 1,
   repeat_index: 0,
+  lineup: pairLineup("challenger"),
   proxy: { test_score: 0.123 },
   goals: { differential: 0 },
   progression: { test_share: 0.5 },
@@ -288,6 +305,7 @@ const candidateIdentityRow = {
 const referenceIdentityRow = {
   ...candidateIdentityRow,
   tested_kind: "reference",
+  lineup: pairLineup("reference"),
   test_team: { roles: pairTeamRoles() },
 };
 const identityPair = pairArenaRows(
@@ -379,6 +397,58 @@ assert.throws(
   ),
   /candidate has invalid test_team_id/,
 );
+const candidatePlugRow = {
+  ...candidateIdentityRow,
+  mode: "plug_and_play",
+  tested_role: "am",
+  lineup: pairLineup("challenger", "am"),
+};
+const referencePlugRow = {
+  ...referenceIdentityRow,
+  mode: "plug_and_play",
+  tested_role: "am",
+  lineup: pairLineup("reference", "am"),
+};
+const plugIdentityPair = pairArenaRows(
+  candidatePlugRow,
+  referencePlugRow,
+);
+assert.strictEqual(plugIdentityPair.result, "draw");
+
+assert.throws(
+  () => pairArenaRows(
+    candidatePlugRow,
+    {
+      ...referencePlugRow,
+      lineup: {
+        ...referencePlugRow.lineup,
+        gk: {
+          ...referencePlugRow.lineup.gk,
+          model_path: "different-partner.json",
+        },
+      },
+    },
+  ),
+  /arena paired partner lineup mismatch for role gk/,
+);
+
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      lineup: {
+        ...candidateIdentityRow.lineup,
+        st: {
+          ...candidateIdentityRow.lineup.st,
+          model_kind: "partner",
+        },
+      },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate lineup\.st model_kind must be challenger/,
+);
+
 assert.throws(
   () => pairArenaRows(
     {
