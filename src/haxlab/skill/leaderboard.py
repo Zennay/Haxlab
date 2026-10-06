@@ -170,11 +170,20 @@ def load_match_evidence(root: Path) -> list[dict]:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        schema_version = int(payload.get("schemaVersion") or 0)
-        if schema_version not in (3, 4):
+        schema_version = payload.get("schemaVersion")
+        if (
+            isinstance(schema_version, bool)
+            or not isinstance(schema_version, int)
+            or schema_version not in (3, 4)
+        ):
             continue
 
-        players = list(payload.get("players") or [])
+        players = payload.get("players")
+        if (
+            not isinstance(players, list)
+            or any(not isinstance(player, dict) for player in players)
+        ):
+            continue
         roles = _role_map(players)
         total_frames = int(payload.get("totalFrames") or 0)
         match_minutes = total_frames / 3600.0
