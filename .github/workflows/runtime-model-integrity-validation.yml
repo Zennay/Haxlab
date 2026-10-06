@@ -1,0 +1,90 @@
+name: Runtime model integrity validation
+
+on:
+  push:
+    branches:
+      - validation/runtime-model-integrity-20261006
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-runtime-model-integrity-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Validate runtime Node syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check tools/elite_policy_runtime.js
+          node --check tests/test_elite_policy_runtime_integrity.js
+
+      - name: Run runtime model integrity regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tests/test_elite_policy_runtime_integrity.js
+
+      - name: Validate live champion runtime artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          LIVE_RUNTIME="$(
+            sudo -u haxlab /opt/haxlab/.venv/bin/python -c               'import json; print(json.load(open("/var/lib/haxlab/derived/champions/elite-player/current.json"))["runtime_model_path"])'
+          )"
+          test -n "$LIVE_RUNTIME"
+          echo "Validating live runtime model path: $LIVE_RUNTIME"
+          sudo -u haxlab env LIVE_RUNTIME="$LIVE_RUNTIME" node - <<'NODE'
+          "use strict";
+          const fs = require("fs");
+          const { ElitePolicyRuntime } = require("./tools/elite_policy_runtime");
+          const model = JSON.parse(fs.readFileSync(process.env.LIVE_RUNTIME, "utf8"));
+          const runtime = new ElitePolicyRuntime(model);
+          const features = Object.fromEntries(
+            runtime.inputColumns.map((name) => [name, 0]),
+          );
+          const action = runtime.act({
+            agent_id: "integrity-proof",
+            role: "am",
+            features,
+          });
+          for (const key of [
+            "dir_x",
+            "dir_y",
+            "kick_probability",
+            "kick_threshold",
+            "direction_probability",
+            "ood_mean_abs_z",
+            "ood_max_abs_z",
+          ]) {
+            if (!Number.isFinite(action[key])) {
+              throw new Error(`live runtime emitted non-finite ${key}: ${action[key]}`);
+            }
+          }
+          console.log(JSON.stringify({
+            schema: runtime.info().schema,
+            window: runtime.info().window,
+            input_columns: runtime.info().input_columns.length,
+            direction_class: action.direction_class,
+            live_runtime_integrity: "green",
+          }));
+          NODE
+
+      - name: Record exact-head validation evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "RUNTIME_MODEL_INTEGRITY_HEAD=$(git rev-parse HEAD)"
+          echo "RUNTIME_MODEL_INTEGRITY_RESULT=green"
