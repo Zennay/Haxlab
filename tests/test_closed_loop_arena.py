@@ -9,9 +9,10 @@ def _individual(
     far_stall: float = 0.05,
     held: float = 1.5,
     adapt: float = 0.7,
+    samples: int = 4,
 ) -> dict:
     return {
-        "samples": 4,
+        "samples": samples,
         "runtime_errors": 0,
         "boundary_rate": 0.0,
         "ood_rate": 0.02,
@@ -24,9 +25,9 @@ def _individual(
     }
 
 
-def _role_pair() -> dict:
-    candidate = _individual()
-    reference = _individual()
+def _role_pair(*, samples: int = 4) -> dict:
+    candidate = _individual(samples=samples)
+    reference = _individual(samples=samples)
     return {
         "candidate": candidate,
         "reference": reference,
@@ -62,18 +63,24 @@ def _payload() -> dict:
         "paired_reference_design": True,
         "team_mode": {
             "summary": team_summary,
-            "roles": {role: _role_pair() for role in roles},
+            "roles": {role: _role_pair(samples=8) for role in roles},
         },
         "plug_and_play": {
             "partner_model_count": 2,
             "summary": {
                 "matches": 16,
+                "wins": 0,
+                "draws": 16,
+                "losses": 0,
                 "proxy_match_score": 0.5,
             },
             "by_role": {
                 role: {
                     "team_outcome": {
                         "matches": 4,
+                        "wins": 0,
+                        "draws": 4,
+                        "losses": 0,
                         "proxy_match_score": 0.5,
                         "candidate": {},
                         "reference": {},
@@ -388,3 +395,92 @@ def test_non_object_nested_individual_fails_closed_without_exception() -> None:
     assert not decision.structurally_valid
     assert not decision.eligible_for_live_promotion
     assert "invalid_object:dm:individual" in decision.reasons
+
+def test_team_match_tally_must_equal_declared_matches() -> None:
+    payload = _payload()
+    payload["team_mode"]["summary"]["wins"] = 1
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert "team:match_tally_mismatch:1+8+0!=8" in decision.reasons
+
+
+def test_team_proxy_match_score_must_match_tally() -> None:
+    payload = _payload()
+    payload["team_mode"]["summary"]["proxy_match_score"] = 0.75
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert any(
+        reason.startswith("team:proxy_match_score_mismatch:")
+        for reason in decision.reasons
+    )
+
+
+def test_plug_summary_must_equal_sum_of_role_matches() -> None:
+    payload = _payload()
+    payload["plug_and_play"]["summary"].update({
+        "matches": 20,
+        "wins": 0,
+        "draws": 20,
+        "losses": 0,
+        "proxy_match_score": 0.5,
+    })
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert "plug:role_match_total_mismatch:16!=20" in decision.reasons
+
+
+def test_role_outcome_tally_must_match_role_matches() -> None:
+    payload = _payload()
+    payload["plug_and_play"]["by_role"]["st"]["team_outcome"]["losses"] = 1
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert "st:match_tally_mismatch:0+4+1!=4" in decision.reasons
+
+
+def test_plug_role_sample_counts_must_match_role_outcomes() -> None:
+    payload = _payload()
+    payload["plug_and_play"]["by_role"]["dm"]["individual"]["candidate"][
+        "samples"
+    ] = 3
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert "dm:candidate_samples_mismatch:3!=4" in decision.reasons
+
+
+def test_team_role_sample_counts_must_match_team_outcomes() -> None:
+    payload = _payload()
+    payload["team_mode"]["roles"]["am"]["reference"]["samples"] = 7
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert "team:am:reference_samples_mismatch:7!=8" in decision.reasons
+
