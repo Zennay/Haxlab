@@ -51,12 +51,13 @@ def read_discord_exports(root: Path) -> tuple[list[MatchReport], list[ImportFail
         if path.is_file() and not path.is_symlink()
     )
     for path in sorted(paths, key=lambda p: str(p).casefold()):
+        source_path = str(path.relative_to(root))
         try:
             with path.open("r", encoding="utf-8-sig") as handle:
                 payload = json.load(handle)
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             failures.append(
-                ImportFailure(source=str(path), stage="discord_json", error=str(exc))
+                ImportFailure(source=source_path, stage="discord_json", error=str(exc))
             )
             continue
 
@@ -75,7 +76,7 @@ def read_discord_exports(root: Path) -> tuple[list[MatchReport], list[ImportFail
                             failures.append(
                                 ImportFailure(
                                     source=(
-                                        f"{path}#message:{report.message_id}"
+                                        f"{source_path}#message:{report.message_id}"
                                     ),
                                     stage="discord_message_duplicate",
                                     error="conflicting_duplicate_message_id",
@@ -90,7 +91,7 @@ def read_discord_exports(root: Path) -> tuple[list[MatchReport], list[ImportFail
                             failures.append(
                                 ImportFailure(
                                     source=(
-                                        f"{path}#message:{report.message_id}"
+                                        f"{source_path}#message:{report.message_id}"
                                     ),
                                     stage="discord_report_id_duplicate",
                                     error=(
@@ -112,14 +113,14 @@ def read_discord_exports(root: Path) -> tuple[list[MatchReport], list[ImportFail
                     )
                     failures.append(
                         ImportFailure(
-                            source=f"{path}#message:{message_id or 'unknown'}",
+                            source=f"{source_path}#message:{message_id or 'unknown'}",
                             stage="discord_message",
                             error=str(exc),
                         )
                     )
         except Exception as exc:
             failures.append(
-                ImportFailure(source=str(path), stage="discord_messages", error=str(exc))
+                ImportFailure(source=source_path, stage="discord_messages", error=str(exc))
             )
 
     reports = sorted(
