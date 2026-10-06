@@ -613,7 +613,7 @@ def test_unexpected_string_role_fails_closed() -> None:
 
     assert not decision.structurally_valid
     assert not decision.eligible_for_live_promotion
-    assert "plug_and_play:by_role:unexpected_role:'coach'" in decision.reasons
+    assert "plug_and_play:by_role:unexpected_role" in decision.reasons
 
 
 def test_unexpected_non_string_team_role_fails_closed() -> None:
@@ -627,7 +627,7 @@ def test_unexpected_non_string_team_role_fails_closed() -> None:
 
     assert not decision.structurally_valid
     assert not decision.eligible_for_live_promotion
-    assert "team_mode:roles:unexpected_role:99" in decision.reasons
+    assert "team_mode:roles:unexpected_role" in decision.reasons
 
 
 def test_missing_evaluation_mode_fails_closed() -> None:
@@ -749,4 +749,28 @@ def test_malformed_raw_outcome_row_fails_closed() -> None:
     assert not decision.eligible_for_live_promotion
     assert "invalid_object:team:row:0" in decision.reasons
     assert "team:raw_outcome_mismatch" in decision.reasons
+
+
+def test_hostile_role_key_fails_closed_without_object_protocols() -> None:
+    class HostileRole:
+        def __hash__(self) -> int:
+            return 7
+
+        def __eq__(self, other: object) -> bool:
+            raise RuntimeError("must not compare hostile role")
+
+        def __repr__(self) -> str:
+            raise RuntimeError("must not repr hostile role")
+
+    payload = _payload()
+    payload["team_mode"]["roles"][HostileRole()] = _role_pair(samples=8)
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "team_mode:roles:unexpected_role" in decision.reasons
 
