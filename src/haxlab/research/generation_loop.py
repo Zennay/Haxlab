@@ -395,7 +395,11 @@ class GenerationLoop:
         self.analysis_version = analysis_version
         self.manifest = manifest
         self.shard_root = shard_root
-        self.max_generations_per_tick = max(1, max_generations_per_tick)
+        if type(max_generations_per_tick) is not int or max_generations_per_tick < 1:
+            raise ValueError(
+                "max_generations_per_tick must be a native positive integer"
+            )
+        self.max_generations_per_tick = max_generations_per_tick
         self.generations_dir = models_dir / "generations"
         self.champions_dir = models_dir / "champions"
         self.state_path = state_dir / "generation-state.json"
