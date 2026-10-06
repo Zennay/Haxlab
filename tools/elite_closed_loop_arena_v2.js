@@ -56,7 +56,7 @@ function parseFiniteNumberOption(
   { minimum = -Infinity, maximum = Infinity } = {},
 ) {
   const raw = requireOptionValue(key, value);
-  if (!/^[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?$/.test(raw)) {
+  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(raw)) {
     throw new Error("Invalid numeric value for " + key + ": " + raw);
   }
   const parsed = Number(raw);
@@ -72,7 +72,7 @@ function parseIntegerOption(
   { minimum = Number.MIN_SAFE_INTEGER, maximum = Number.MAX_SAFE_INTEGER } = {},
 ) {
   const raw = requireOptionValue(key, value);
-  if (!/^[+-]?\\d+$/.test(raw)) {
+  if (!/^[+-]?\d+$/.test(raw)) {
     throw new Error("Invalid integer value for " + key + ": " + raw);
   }
   const parsed = Number(raw);
