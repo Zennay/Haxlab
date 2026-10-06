@@ -151,14 +151,26 @@ def _extract_one(
             previous = json.loads(meta_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             previous = {}
-        if (
+        cache_matches = (
             previous.get("schema") == "haxlab-imitation-extract-summary-v2"
             and int(previous.get("sampleEveryTicks", 0))
             == sample_every_ticks
             and int(previous.get("samples", 0)) > 0
             and previous.get("input_fingerprint") == input_fingerprint
-        ):
-            return {**previous, "status": "cached"}
+        )
+        if cache_matches:
+            expected_shard_sha = previous.get("shard_sha256")
+            expected_shard_size = previous.get("shard_size_bytes")
+            if (
+                isinstance(expected_shard_sha, str)
+                and len(expected_shard_sha) == 64
+                and _native_nonnegative_int(expected_shard_size)
+                and shard_path.is_file()
+                and not shard_path.is_symlink()
+                and shard_path.stat().st_size == expected_shard_size
+                and sha256_file(shard_path) == expected_shard_sha
+            ):
+                return {**previous, "status": "cached"}
 
     output_dir.mkdir(parents=True, exist_ok=True)
     command = [
@@ -198,11 +210,20 @@ def _extract_one(
             f"stderr={completed.stderr[-1000:]!r}"
         ) from exc
 
+    if shard_path.is_symlink() or not shard_path.is_file():
+        raise RuntimeError(
+            f"{replay_sha256}: extractor did not produce a regular shard file"
+        )
+    shard_size_bytes = shard_path.stat().st_size
+    shard_sha256 = sha256_file(shard_path)
+
     summary.update(
         {
             "replay_sha256": replay_sha256,
             "raw_path": str(raw_path),
             "shard_path": str(shard_path),
+            "shard_sha256": shard_sha256,
+            "shard_size_bytes": shard_size_bytes,
             "selected_player_ids": sorted(set(selected_player_map.values())),
             "selected_players": selected_players,
             "example_weight": example_weight,
