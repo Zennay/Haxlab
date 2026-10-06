@@ -15,6 +15,77 @@ from haxlab.runtime.state import CURRENT_ANALYZER_VERSION, RawReplayRecord, Runt
 
 
 ANALYZER_VERSION = CURRENT_ANALYZER_VERSION
+EXPECTED_SCHEMA_VERSION = 4
+EXPECTED_FEATURE_VERSION = "touch-chain-v1"
+
+
+def _native_nonnegative_int(value: object) -> bool:
+    return type(value) is int and value >= 0
+
+
+def _validate_analysis_payload(
+    payload: object,
+    *,
+    sample_every_ticks: int,
+) -> list[str]:
+    reasons: list[str] = []
+    if not isinstance(payload, dict):
+        return ["payload_not_object"]
+
+    if payload.get("schemaVersion") != EXPECTED_SCHEMA_VERSION:
+        reasons.append(
+            "schema_version_mismatch:"
+            f"expected={EXPECTED_SCHEMA_VERSION}:actual={payload.get('schemaVersion')!r}"
+        )
+    if payload.get("featureVersion") != EXPECTED_FEATURE_VERSION:
+        reasons.append(
+            "feature_version_mismatch:"
+            f"expected={EXPECTED_FEATURE_VERSION!r}:"
+            f"actual={payload.get('featureVersion')!r}"
+        )
+
+    for field in ("totalFrames", "rawEventCount"):
+        if not _native_nonnegative_int(payload.get(field)):
+            reasons.append(f"{field}_invalid:{payload.get(field)!r}")
+
+    players = payload.get("players")
+    if not isinstance(players, list):
+        reasons.append("players_not_list")
+
+    simulation = payload.get("simulation")
+    if not isinstance(simulation, dict):
+        reasons.append("simulation_not_object")
+        return reasons
+
+    sample_every = simulation.get("sampleEveryTicks")
+    if (
+        not _native_nonnegative_int(sample_every)
+        or sample_every <= 0
+        or sample_every != sample_every_ticks
+    ):
+        reasons.append(
+            "sample_every_ticks_mismatch:"
+            f"expected={sample_every_ticks}:actual={sample_every!r}"
+        )
+
+    for field in ("framesAdvanced", "sampledStateCount"):
+        if not _native_nonnegative_int(simulation.get(field)):
+            reasons.append(f"{field}_invalid:{simulation.get(field)!r}")
+
+    total_frames = payload.get("totalFrames")
+    frames_advanced = simulation.get("framesAdvanced")
+    if (
+        _native_nonnegative_int(total_frames)
+        and _native_nonnegative_int(frames_advanced)
+        and total_frames > 0
+        and frames_advanced < max(0, total_frames - 1)
+    ):
+        reasons.append(
+            "incomplete_state_reconstruction:"
+            f"{frames_advanced}/{total_frames}"
+        )
+
+    return reasons
 
 
 def _analyze_one(
@@ -29,11 +100,18 @@ def _analyze_one(
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{replay.sha256}.json"
 
-    if output_path.exists():
+    if output_path.exists() and not output_path.is_symlink():
         try:
-            return replay, json.loads(output_path.read_text(encoding="utf-8")), None, output_path
+            cached_payload = json.loads(output_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            pass
+            cached_payload = None
+        if cached_payload is not None:
+            cached_reasons = _validate_analysis_payload(
+                cached_payload,
+                sample_every_ticks=sample_every_ticks,
+            )
+            if not cached_reasons:
+                return replay, cached_payload, None, output_path
 
     command = [
         "node",
@@ -71,6 +149,19 @@ def _analyze_one(
             f"decoder_json_error:{exc};stdout={stdout_tail!r};stderr={stderr_tail!r}",
             None,
         )
+
+    payload_reasons = _validate_analysis_payload(
+        payload,
+        sample_every_ticks=sample_every_ticks,
+    )
+    if payload_reasons:
+        return (
+            replay,
+            None,
+            "decoder_payload_invalid:" + "|".join(payload_reasons),
+            None,
+        )
+    assert isinstance(payload, dict)
 
     fd, temporary_name = tempfile.mkstemp(
         prefix=f".{replay.sha256}.",
@@ -143,29 +234,10 @@ def analyze_batch(
                 failed += 1
                 continue
 
-            simulation = payload.get("simulation") or {}
-            total_frames = int(payload.get("totalFrames") or 0)
-            frames_advanced = int(simulation.get("framesAdvanced") or 0)
-            sampled_states = int(simulation.get("sampledStateCount") or 0)
-
-            if total_frames > 0 and frames_advanced < max(0, total_frames - 1):
-                error = (
-                    f"incomplete_state_reconstruction:"
-                    f"{frames_advanced}/{total_frames}"
-                )
-                state.mark_replay_analysis(
-                    sha256=replay.sha256,
-                    status="failed",
-                    analyzer_version=ANALYZER_VERSION,
-                    error=error,
-                )
-                state.event(
-                    "replay_analysis_failed",
-                    subject=replay.sha256,
-                    detail=error,
-                )
-                failed += 1
-                continue
+            simulation = payload["simulation"]
+            total_frames = int(payload["totalFrames"])
+            frames_advanced = int(simulation["framesAdvanced"])
+            sampled_states = int(simulation["sampledStateCount"])
 
             state.mark_replay_analysis(
                 sha256=replay.sha256,
