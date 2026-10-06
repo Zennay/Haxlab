@@ -339,3 +339,92 @@ def test_live_pointer_rejects_validation_evidence_outside_registry(
     with pytest.raises(FileNotFoundError):
         resolve_version_dir(tmp_path)
 
+
+def test_explicit_version_rejects_sibling_version_alias(
+    tmp_path: Path,
+) -> None:
+    target = _version(tmp_path, "champion-v1")
+    (tmp_path / "versions" / "alias-v2").symlink_to(
+        target,
+        target_is_directory=True,
+    )
+
+    with pytest.raises(FileNotFoundError, match="not found or unsafe"):
+        resolve_version_dir(tmp_path, "alias-v2")
+
+
+@pytest.mark.parametrize("filename", ["model.npz", "metrics.json"])
+def test_explicit_version_rejects_symlinked_version_artifact(
+    tmp_path: Path,
+    filename: str,
+) -> None:
+    version = _version(tmp_path, "candidate-v1")
+    artifact = version / filename
+    artifact.unlink()
+    outside = tmp_path / f"outside-{filename}"
+    if filename.endswith(".json"):
+        outside.write_text("{}\n", encoding="utf-8")
+    else:
+        outside.write_bytes(b"model-placeholder")
+    artifact.symlink_to(outside)
+
+    with pytest.raises(FileNotFoundError, match="not found or unsafe"):
+        resolve_version_dir(tmp_path, "candidate-v1")
+
+
+def test_live_pointer_rejects_redirected_validations_root(
+    tmp_path: Path,
+) -> None:
+    _version(tmp_path, "champion-v1")
+    external = tmp_path / "external-validations"
+    stage = external / "champion-v1" / "canary"
+    stage.mkdir(parents=True)
+    evidence_bytes = (
+        json.dumps(
+            {
+                "validated": True,
+                "candidate": {"version_id": "champion-v1"},
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("utf-8")
+    evidence_sha = hashlib.sha256(evidence_bytes).hexdigest()
+    evidence_path = stage / f"{evidence_sha}.json"
+    evidence_path.write_bytes(evidence_bytes)
+    (tmp_path / "validations").symlink_to(external, target_is_directory=True)
+    version_dir = tmp_path / "versions" / "champion-v1"
+    payload = {
+        "schema": "haxlab-champion-pointer-v1",
+        "version_id": "champion-v1",
+        "model_path": str(version_dir / "model.npz"),
+        "metrics_path": str(version_dir / "metrics.json"),
+        "validation_stage": "live",
+        "source_validation_stage": "canary",
+        "validation_evidence_path": str(evidence_path),
+        "validation_evidence_sha256": evidence_sha,
+    }
+    (tmp_path / "live.json").write_text(
+        json.dumps(payload) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(FileNotFoundError):
+        resolve_version_dir(tmp_path)
+
+
+def test_live_pointer_rejects_relative_artifact_paths(
+    tmp_path: Path,
+) -> None:
+    _version(tmp_path, "champion-v1")
+    _live_pointer(tmp_path, "champion-v1")
+    payload = json.loads((tmp_path / "live.json").read_text(encoding="utf-8"))
+    payload["model_path"] = "versions/champion-v1/model.npz"
+    (tmp_path / "live.json").write_text(
+        json.dumps(payload) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(FileNotFoundError):
+        resolve_version_dir(tmp_path)
+
