@@ -5,38 +5,129 @@ const readline = require("readline");
 
 const ROLE_IDS = Object.freeze({ gk: 0, dm: 1, am: 2, st: 3 });
 
+function requireFiniteNumber(
+  value,
+  label,
+  { minimum = -Infinity, maximum = Infinity } = {},
+) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${label} must be a finite number`);
+  }
+  if (value < minimum || value > maximum) {
+    throw new Error(
+      `${label} out of range: ${value} not in [${minimum}, ${maximum}]`,
+    );
+  }
+  return value;
+}
+
+function requireInteger(
+  value,
+  label,
+  { minimum = Number.MIN_SAFE_INTEGER, maximum = Number.MAX_SAFE_INTEGER } = {},
+) {
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(`${label} must be a safe integer`);
+  }
+  if (value < minimum || value > maximum) {
+    throw new Error(
+      `${label} out of range: ${value} not in [${minimum}, ${maximum}]`,
+    );
+  }
+  return value;
+}
+
+function requireStringArray(value, label) {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${label} must be a non-empty array`);
+  }
+  const result = value.map((item, index) => {
+    if (typeof item !== "string" || item.trim() === "") {
+      throw new Error(`${label}[${index}] must be a non-empty string`);
+    }
+    return item;
+  });
+  if (new Set(result).size !== result.length) {
+    throw new Error(`${label} contains duplicate values`);
+  }
+  return result;
+}
+
+function requireFiniteVector(value, label) {
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array`);
+  }
+  return value.map((item, index) =>
+    requireFiniteNumber(item, `${label}[${index}]`),
+  );
+}
+
+function validateNumericArrayTree(value, label) {
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array`);
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    const item = value[index];
+    if (Array.isArray(item)) {
+      validateNumericArrayTree(item, `${label}[${index}]`);
+    } else {
+      requireFiniteNumber(item, `${label}[${index}]`);
+    }
+  }
+  return value;
+}
+
 function clamp(value, low, high) {
   return Math.max(low, Math.min(high, value));
 }
 
 function sigmoid(value) {
-  const clipped = clamp(value, -30, 30);
+  const clipped = clamp(
+    requireFiniteNumber(value, "sigmoid input"),
+    -30,
+    30,
+  );
   return 1 / (1 + Math.exp(-clipped));
 }
 
 function softmax(logits) {
+  if (!Array.isArray(logits) || logits.length === 0) {
+    throw new Error("softmax logits must be a non-empty array");
+  }
+  const finiteLogits = logits.map((value, index) =>
+    requireFiniteNumber(value, `softmax logits[${index}]`),
+  );
   let maxValue = -Infinity;
-  for (const value of logits) {
+  for (const value of finiteLogits) {
     if (value > maxValue) maxValue = value;
   }
-  const exp = new Array(logits.length);
+  const exp = new Array(finiteLogits.length);
   let total = 0;
-  for (let i = 0; i < logits.length; i += 1) {
-    const value = Math.exp(logits[i] - maxValue);
+  for (let i = 0; i < finiteLogits.length; i += 1) {
+    const value = Math.exp(finiteLogits[i] - maxValue);
     exp[i] = value;
     total += value;
   }
+  requireFiniteNumber(total, "softmax total", { minimum: Number.MIN_VALUE });
   return exp.map((value) => value / total);
 }
 
 function dense(input, weights, bias, relu = false) {
+  if (!Array.isArray(input)) {
+    throw new Error("dense input must be an array");
+  }
   if (!Array.isArray(weights) || weights.length !== input.length) {
     throw new Error(
       `dense shape mismatch: input=${input.length}, weights=${weights?.length}`,
     );
   }
+  if (!Array.isArray(bias) || bias.length === 0) {
+    throw new Error("dense bias must be a non-empty array");
+  }
   const outputDim = bias.length;
-  const output = bias.slice();
+  const output = bias.map((value, index) =>
+    requireFiniteNumber(value, `dense bias[${index}]`),
+  );
   for (let i = 0; i < input.length; i += 1) {
     const row = weights[i];
     if (!Array.isArray(row) || row.length !== outputDim) {
@@ -44,10 +135,15 @@ function dense(input, weights, bias, relu = false) {
         `dense weight row ${i} has ${row?.length} values; expected ${outputDim}`,
       );
     }
-    const value = input[i];
+    const value = requireFiniteNumber(input[i], `dense input[${i}]`);
     if (value === 0) continue;
     for (let j = 0; j < outputDim; j += 1) {
-      output[j] += value * row[j];
+      const weight = requireFiniteNumber(
+        row[j],
+        `dense weights[${i}][${j}]`,
+      );
+      output[j] += value * weight;
+      requireFiniteNumber(output[j], `dense output[${j}]`);
     }
   }
   if (relu) {
@@ -65,37 +161,134 @@ class ElitePolicyRuntime {
         `unsupported runtime model schema: ${model?.schema || "missing"}`,
       );
     }
-    this.model = model;
-    this.window = Number(model.window);
-    this.inputColumns = model.base_input_columns.slice();
-    this.featureOrdering = String(
-      model.feature_ordering || "nearest-distance-v1",
-    );
-    this.mean = model.mean.map(Number);
-    this.std = model.std.map(Number);
-    this.roleIds = { ...ROLE_IDS, ...(model.role_ids || {}) };
-    this.directionClasses = model.direction_classes.slice();
-    this.kickThreshold = Number(model.kick_threshold);
-    this.kickThresholdsByRole = Object.fromEntries(
-      Object.entries(model.kick_thresholds_by_role || {}).map(
-        ([role, value]) => [role, Number(value)],
-      ),
-    );
-    this.kickMaxDistance = Number(model.kick_max_distance ?? 31.0);
-    this.weights = model.weights;
-    this.futureHeadAvailable =
-      Array.isArray(this.weights.wf) && Array.isArray(this.weights.bf);
-    this.history = new Map();
-
-    if (!Number.isInteger(this.window) || this.window < 1) {
-      throw new Error(`invalid window: ${model.window}`);
+    if (typeof model !== "object" || Array.isArray(model)) {
+      throw new Error("runtime model must be an object");
     }
+
+    this.model = model;
+    this.window = requireInteger(
+      model.window,
+      "window",
+      { minimum: 1 },
+    );
+    this.inputColumns = requireStringArray(
+      model.base_input_columns,
+      "base_input_columns",
+    );
+    this.featureOrdering =
+      model.feature_ordering == null
+        ? "nearest-distance-v1"
+        : (() => {
+            if (
+              typeof model.feature_ordering !== "string" ||
+              model.feature_ordering.trim() === ""
+            ) {
+              throw new Error("feature_ordering must be a non-empty string");
+            }
+            return model.feature_ordering;
+          })();
+
+    this.mean = requireFiniteVector(model.mean, "mean");
+    this.std = requireFiniteVector(model.std, "std");
     if (this.mean.length !== this.inputColumns.length) {
       throw new Error("mean/input column length mismatch");
     }
     if (this.std.length !== this.inputColumns.length) {
       throw new Error("std/input column length mismatch");
     }
+
+    const configuredRoleIds = model.role_ids ?? {};
+    if (
+      typeof configuredRoleIds !== "object" ||
+      configuredRoleIds === null ||
+      Array.isArray(configuredRoleIds)
+    ) {
+      throw new Error("role_ids must be an object");
+    }
+    this.roleIds = { ...ROLE_IDS, ...configuredRoleIds };
+    for (const [role, value] of Object.entries(this.roleIds)) {
+      requireInteger(
+        value,
+        `role_ids.${role}`,
+        { minimum: 0, maximum: 3 },
+      );
+    }
+
+    if (
+      !Array.isArray(model.direction_classes) ||
+      model.direction_classes.length === 0
+    ) {
+      throw new Error("direction_classes must be a non-empty array");
+    }
+    this.directionClasses = model.direction_classes.map((row, index) => {
+      if (!row || typeof row !== "object" || Array.isArray(row)) {
+        throw new Error(`direction_classes[${index}] must be an object`);
+      }
+      return {
+        ...row,
+        dir_x: requireFiniteNumber(
+          row.dir_x,
+          `direction_classes[${index}].dir_x`,
+        ),
+        dir_y: requireFiniteNumber(
+          row.dir_y,
+          `direction_classes[${index}].dir_y`,
+        ),
+      };
+    });
+
+    this.kickThreshold = requireFiniteNumber(
+      model.kick_threshold,
+      "kick_threshold",
+      { minimum: 0, maximum: 1 },
+    );
+
+    const configuredKickThresholds = model.kick_thresholds_by_role ?? {};
+    if (
+      typeof configuredKickThresholds !== "object" ||
+      configuredKickThresholds === null ||
+      Array.isArray(configuredKickThresholds)
+    ) {
+      throw new Error("kick_thresholds_by_role must be an object");
+    }
+    this.kickThresholdsByRole = Object.fromEntries(
+      Object.entries(configuredKickThresholds).map(([role, value]) => [
+        role,
+        requireFiniteNumber(
+          value,
+          `kick_thresholds_by_role.${role}`,
+          { minimum: 0, maximum: 1 },
+        ),
+      ]),
+    );
+    this.kickMaxDistance = requireFiniteNumber(
+      model.kick_max_distance ?? 31.0,
+      "kick_max_distance",
+      { minimum: 0 },
+    );
+
+    if (
+      !model.weights ||
+      typeof model.weights !== "object" ||
+      Array.isArray(model.weights)
+    ) {
+      throw new Error("weights must be an object");
+    }
+    this.weights = model.weights;
+    for (const key of ["w1", "b1", "w2", "b2", "wd", "bd", "wk", "bk"]) {
+      validateNumericArrayTree(this.weights[key], `weights.${key}`);
+    }
+    const hasFutureWeights = this.weights.wf != null;
+    const hasFutureBias = this.weights.bf != null;
+    if (hasFutureWeights !== hasFutureBias) {
+      throw new Error("future head requires both weights.wf and weights.bf");
+    }
+    if (hasFutureWeights) {
+      validateNumericArrayTree(this.weights.wf, "weights.wf");
+      validateNumericArrayTree(this.weights.bf, "weights.bf");
+    }
+    this.futureHeadAvailable = hasFutureWeights && hasFutureBias;
+    this.history = new Map();
   }
 
   static fromFile(path) {
@@ -121,10 +314,12 @@ class ElitePolicyRuntime {
     if (!Object.prototype.hasOwnProperty.call(this.roleIds, key)) {
       throw new Error(`unknown role: ${role}`);
     }
-    const value = Number(this.roleIds[key]);
-    if (!Number.isInteger(value) || value < 0 || value > 3) {
-      throw new Error(`invalid configured role id: ${value}`);
-    }
+    const value = this.roleIds[key];
+    requireInteger(
+      value,
+      `role_ids.${key}`,
+      { minimum: 0, maximum: 3 },
+    );
     return value;
   }
 
@@ -133,11 +328,10 @@ class ElitePolicyRuntime {
       if (!Object.prototype.hasOwnProperty.call(features, name)) {
         throw new Error(`missing model feature: ${name}`);
       }
-      const value = Number(features[name]);
-      if (!Number.isFinite(value)) {
-        throw new Error(`non-finite model feature ${name}: ${features[name]}`);
-      }
-      return value;
+      return requireFiniteNumber(
+        features[name],
+        `model feature ${name}`,
+      );
     });
   }
 
@@ -237,13 +431,24 @@ class ElitePolicyRuntime {
     )[0];
     const kickProbability = sigmoid(kickLogit);
     const roleKey = Object.entries(this.roleIds).find(
-      ([, value]) => Number(value) === roleId,
+      ([, value]) => value === roleId,
     )?.[0];
-    const roleKickThreshold = Number(
-      this.kickThresholdsByRole[roleKey] ?? this.kickThreshold,
+    const roleKickThreshold =
+      this.kickThresholdsByRole[roleKey] ?? this.kickThreshold;
+    if (!Object.prototype.hasOwnProperty.call(features, "ball_dx")) {
+      throw new Error("missing model feature: ball_dx");
+    }
+    if (!Object.prototype.hasOwnProperty.call(features, "ball_dy")) {
+      throw new Error("missing model feature: ball_dy");
+    }
+    const ballDx = requireFiniteNumber(
+      features.ball_dx,
+      "model feature ball_dx",
     );
-    const ballDx = Number(features.ball_dx || 0);
-    const ballDy = Number(features.ball_dy || 0);
+    const ballDy = requireFiniteNumber(
+      features.ball_dy,
+      "model feature ball_dy",
+    );
     const ballDistance = Math.hypot(ballDx, ballDy);
     const kickInRange = ballDistance <= this.kickMaxDistance;
     const kickRequested = kickProbability >= roleKickThreshold;
@@ -257,8 +462,8 @@ class ElitePolicyRuntime {
       agent_id: agentId,
       role: String(role).toLowerCase(),
       role_id: roleId,
-      dir_x: Number(direction.dir_x),
-      dir_y: Number(direction.dir_y),
+      dir_x: direction.dir_x,
+      dir_y: direction.dir_y,
       kick: kickRequested && kickInRange,
       kick_probability: kickProbability,
       kick_threshold: roleKickThreshold,
@@ -271,8 +476,8 @@ class ElitePolicyRuntime {
       direction_probability: directionProbabilities[directionClass],
       future_head_available: this.futureHeadAvailable,
       future_direction_class: futureDirectionClass,
-      future_dir_x: Number(futureDirection.dir_x),
-      future_dir_y: Number(futureDirection.dir_y),
+      future_dir_x: futureDirection.dir_x,
+      future_dir_y: futureDirection.dir_y,
       future_direction_probability:
         futureProbabilities[futureDirectionClass],
       history_frames: frames.length,
