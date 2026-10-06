@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import json
 import math
 import os
@@ -11,6 +12,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+from haxlab.learning.shards import INDEX_SCHEMA
 
 
 MODEL_SCHEMA = "haxlab-bc-baseline-v1"
@@ -57,22 +60,67 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _load_index(index_path: Path, limit: int | None = None) -> dict[str, Any]:
-    payload = json.loads(index_path.read_text(encoding="utf-8"))
+    if index_path.is_symlink() or not index_path.is_file():
+        raise ValueError(f"invalid shard index path: {index_path}")
+
+    index_bytes = index_path.read_bytes()
+    payload = json.loads(index_bytes)
+    if payload.get("schema") != INDEX_SCHEMA:
+        raise ValueError(
+            f"Unsupported shard index schema: {payload.get('schema')!r}; "
+            f"expected {INDEX_SCHEMA!r}"
+        )
+
     entries = list(payload.get("entries") or [])
     if limit is not None:
         entries = entries[: max(0, limit)]
-    return {**payload, "entries": entries}
+    return {
+        **payload,
+        "entries": entries,
+        "_index_sha256": hashlib.sha256(index_bytes).hexdigest(),
+        "_index_size_bytes": len(index_bytes),
+    }
 
 
 def _load_shard(entry: dict[str, Any]) -> tuple[np.ndarray, list[str]]:
     shard_path = Path(str(entry["shard_path"]))
+    if shard_path.is_symlink() or not shard_path.is_file():
+        raise ValueError(f"invalid shard path: {shard_path}")
+
     meta_path = shard_path.with_suffix("").with_suffix(".meta.json")
     if not meta_path.exists():
         # .f32.gz -> .meta.json
         meta_path = shard_path.parent / (
             shard_path.name.removesuffix(".f32.gz") + ".meta.json"
         )
+    if meta_path.is_symlink() or not meta_path.is_file():
+        raise ValueError(f"invalid shard metadata path: {meta_path}")
+
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
+    expected_replay = entry.get("replay_sha256")
+    meta_replay = meta.get("replay_sha256")
+    if (
+        expected_replay is not None
+        and meta_replay is not None
+        and str(meta_replay) != str(expected_replay)
+    ):
+        raise ValueError(
+            f"{shard_path}: replay identity mismatch: "
+            f"index={expected_replay!r}:meta={meta_replay!r}"
+        )
+
+    for field in ("input_fingerprint", "analysis_sha256"):
+        expected = entry.get(field)
+        if expected is None:
+            continue
+        actual = meta.get(field)
+        if actual != expected:
+            raise ValueError(
+                f"{shard_path}: {field} mismatch: "
+                f"index={expected!r}:meta={actual!r}"
+            )
+
     row_width = int(meta["rowWidth"])
     columns = list(meta["columns"])
 
@@ -425,6 +473,18 @@ def train_baseline(
 ) -> dict[str, Any]:
     train_index = _load_index(train_index_path, train_limit)
     holdout_index = _load_index(holdout_index_path, holdout_limit)
+
+    train_manifest_sha = train_index.get("manifest_sha256")
+    holdout_manifest_sha = holdout_index.get("manifest_sha256")
+    if (
+        train_manifest_sha is not None
+        and holdout_manifest_sha is not None
+        and train_manifest_sha != holdout_manifest_sha
+    ):
+        raise ValueError(
+            "train/holdout shard indexes reference different manifest provenance"
+        )
+
     mean, std, input_columns, train_stats = _normalization(train_index)
 
     rng = np.random.default_rng(seed)
@@ -528,6 +588,13 @@ def train_baseline(
         "model_path": str(model_path),
         "train_index": str(train_index_path),
         "holdout_index": str(holdout_index_path),
+        "data_provenance": {
+            "train_index_sha256": train_index["_index_sha256"],
+            "train_index_size_bytes": train_index["_index_size_bytes"],
+            "holdout_index_sha256": holdout_index["_index_sha256"],
+            "holdout_index_size_bytes": holdout_index["_index_size_bytes"],
+            "manifest_sha256": train_manifest_sha or holdout_manifest_sha,
+        },
         "input_columns": input_columns,
         "excluded_input_columns": list(EXCLUDED_INPUT_COLUMNS),
         "direction_classes": [
