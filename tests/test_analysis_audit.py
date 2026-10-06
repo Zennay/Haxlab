@@ -210,3 +210,46 @@ def test_analysis_artifact_audit_cli_fails_closed_and_truncates_details(
     assert report["objects_with_issues"] == 1
     assert report["issues"] == []
     assert report["issues_truncated"] is True
+
+
+def test_analysis_artifact_audit_rejects_untracked_derived_json(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "state.sqlite3"
+    derived = tmp_path / "derived"
+    tracked_sha = "6" * 64
+    orphan_sha = "7" * 64
+
+    with RuntimeState(db) as state:
+        _register_ok_analysis(
+            state,
+            derived_root=derived,
+            sha256=tracked_sha,
+            payload=_artifact_payload(),
+        )
+
+        orphan = (
+            derived
+            / CURRENT_ANALYZER_VERSION
+            / orphan_sha[:2]
+            / orphan_sha[2:4]
+            / f"{orphan_sha}.json"
+        )
+        orphan.parent.mkdir(parents=True, exist_ok=True)
+        orphan.write_text(json.dumps(_artifact_payload()), encoding="utf-8")
+
+        report = audit_analysis_artifacts(state, derived_root=derived)
+
+    assert report["ok"] is False
+    assert report["checked_records"] == 1
+    assert report["valid_objects"] == 1
+    assert report["row_objects_with_issues"] == 0
+    assert report["untracked_artifacts"] == 1
+    assert report["objects_with_issues"] == 1
+    assert report["issues"] == [
+        {
+            "sha256": None,
+            "output_path": str(orphan),
+            "reasons": ["untracked_analysis_artifact"],
+        }
+    ]
