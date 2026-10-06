@@ -31,8 +31,28 @@ def discover_replays(root: Path) -> ReplayInventory:
     by_hash: dict[str, list[ReplayFile]] = {}
 
     for path in paths:
+        before = path.stat()
         digest = sha256_file(path)
-        replay = ReplayFile.from_path(path, digest)
+        after = path.stat()
+        if path.is_symlink() or (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+        ):
+            raise RuntimeError(f"source_changed_during_hash:{path}")
+
+        replay = ReplayFile(
+            path=str(path),
+            file_name=path.name,
+            size_bytes=after.st_size,
+            sha256=digest,
+        )
         files.append(replay)
         by_hash.setdefault(digest, []).append(replay)
 
