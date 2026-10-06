@@ -567,3 +567,76 @@ def test_stringified_role_metric_fails_closed() -> None:
         "invalid_metric:st:candidate:far_stall_rate:non_numeric"
         in decision.reasons
     )
+
+
+def test_non_policy_object_fails_closed_without_exception() -> None:
+    decision = decide_closed_loop_arena(_payload(), policy=None)
+
+    assert not decision.structurally_valid
+    assert not decision.behavior_gate_passed
+    assert not decision.eligible_for_live_promotion
+    assert decision.reasons == ("invalid_policy:object_type",)
+
+
+def test_truthy_string_cannot_enable_calibrated_policy() -> None:
+    decision = decide_closed_loop_arena(
+        _payload(),
+        policy=ClosedLoopArenaPolicy(calibrated="true"),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "invalid_policy:calibrated:not_boolean" in decision.reasons
+
+
+def test_policy_integer_fields_reject_bool_and_float() -> None:
+    bool_decision = decide_closed_loop_arena(
+        _payload(),
+        policy=ClosedLoopArenaPolicy(minimum_team_matches=True),
+    )
+    float_decision = decide_closed_loop_arena(
+        _payload(),
+        policy=ClosedLoopArenaPolicy(minimum_partner_models=1.0),
+    )
+
+    assert not bool_decision.structurally_valid
+    assert "invalid_policy:minimum_team_matches:not_integer" in bool_decision.reasons
+    assert not float_decision.structurally_valid
+    assert "invalid_policy:minimum_partner_models:not_integer" in float_decision.reasons
+
+
+def test_policy_numeric_thresholds_reject_strings_and_non_finite_values() -> None:
+    string_decision = decide_closed_loop_arena(
+        _payload(),
+        policy=ClosedLoopArenaPolicy(max_boundary_regression="0.01"),
+    )
+    nan_decision = decide_closed_loop_arena(
+        _payload(),
+        policy=ClosedLoopArenaPolicy(minimum_team_proxy_match_score=float("nan")),
+    )
+
+    assert not string_decision.structurally_valid
+    assert (
+        "invalid_policy:max_boundary_regression:non_numeric"
+        in string_decision.reasons
+    )
+    assert not nan_decision.structurally_valid
+    assert (
+        "invalid_policy:minimum_team_proxy_match_score:non_finite"
+        in nan_decision.reasons
+    )
+
+
+def test_policy_rate_thresholds_are_bounded() -> None:
+    decision = decide_closed_loop_arena(
+        _payload(),
+        policy=ClosedLoopArenaPolicy(max_absolute_far_stall_rate=1.01),
+    )
+
+    assert not decision.structurally_valid
+    assert any(
+        reason.startswith(
+            "invalid_policy:max_absolute_far_stall_rate:above_maximum"
+        )
+        for reason in decision.reasons
+    )
