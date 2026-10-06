@@ -76,7 +76,10 @@ jobs:
 
                   created=datetime.fromisoformat(str(run["created_at"]).replace("Z","+00:00"))
                   age_s=int((now-created).total_seconds())
-                  if age_s < 90:
+                  # Queued non-recovery work is always safe to preempt for this
+                  # bounded control-plane incident. In-progress work gets a short
+                  # grace period so we do not interrupt a job that is just finishing.
+                  if status == "in_progress" and age_s < 60:
                       preserved.append({"id":rid,"status":status,"age_s":age_s,"name":name})
                       continue
 
