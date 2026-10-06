@@ -42,9 +42,9 @@ def _role_pair(*, samples: int = 4) -> dict:
 def _payload() -> dict:
     roles = ("gk", "dm", "am", "st")
     team_summary = {
-        "matches": 8,
+        "matches": 4,
         "wins": 0,
-        "draws": 8,
+        "draws": 4,
         "losses": 0,
         "proxy_match_score": 0.5,
         "candidate": {
@@ -60,18 +60,26 @@ def _payload() -> dict:
         {
             "mode": "full_team",
             "tested_role": None,
+            "scenario_index": scenario,
+            "test_team_id": side,
+            "repeat_index": 0,
             "result": "draw",
         }
-        for _ in range(8)
+        for scenario in (1, 2)
+        for side in (1, 2)
     ]
     plug_rows = [
         {
             "mode": "plug_and_play",
             "tested_role": role,
+            "scenario_index": scenario,
+            "test_team_id": side,
+            "repeat_index": 0,
             "result": "draw",
         }
         for role in roles
-        for _ in range(4)
+        for scenario in (1, 2)
+        for side in (1, 2)
     ]
     return {
         "schema": "haxlab-closed-loop-arena-v2",
@@ -81,9 +89,15 @@ def _payload() -> dict:
         "raw_policy_only": True,
         "safety_recovery_enabled": False,
         "paired_reference_design": True,
+        "config": {
+            "max_scenarios": 2,
+            "scenario_count": 2,
+            "plug_repeats": 1,
+            "roles": list(roles),
+        },
         "team_mode": {
             "summary": team_summary,
-            "roles": {role: _role_pair(samples=8) for role in roles},
+            "roles": {role: _role_pair(samples=4) for role in roles},
         },
         "plug_and_play": {
             "partner_model_count": 2,
@@ -430,7 +444,7 @@ def test_team_match_tally_must_equal_declared_matches() -> None:
     )
 
     assert not decision.structurally_valid
-    assert "team:match_tally_mismatch:1+8+0!=8" in decision.reasons
+    assert "team:match_tally_mismatch:1+4+0!=4" in decision.reasons
 
 
 def test_team_proxy_match_score_must_match_tally() -> None:
@@ -506,7 +520,7 @@ def test_team_role_sample_counts_must_match_team_outcomes() -> None:
     )
 
     assert not decision.structurally_valid
-    assert "team:am:reference_samples_mismatch:7!=8" in decision.reasons
+    assert "team:am:reference_samples_mismatch:7!=4" in decision.reasons
 
 
 
@@ -545,7 +559,7 @@ def test_stringified_match_count_fails_closed() -> None:
 
 def test_float_match_count_fails_closed_as_non_integer() -> None:
     payload = _payload()
-    payload["team_mode"]["summary"]["matches"] = 8.0
+    payload["team_mode"]["summary"]["matches"] = 4.0
 
     decision = decide_closed_loop_arena(
         payload,
@@ -618,7 +632,7 @@ def test_unexpected_string_role_fails_closed() -> None:
 
 def test_unexpected_non_string_team_role_fails_closed() -> None:
     payload = _payload()
-    payload["team_mode"]["roles"][99] = _role_pair(samples=8)
+    payload["team_mode"]["roles"][99] = _role_pair(samples=4)
 
     decision = decide_closed_loop_arena(
         payload,
@@ -773,4 +787,67 @@ def test_hostile_role_key_fails_closed_without_object_protocols() -> None:
     assert not decision.structurally_valid
     assert not decision.eligible_for_live_promotion
     assert "team_mode:roles:unexpected_role" in decision.reasons
+
+
+def test_duplicate_raw_team_coordinate_fails_closed() -> None:
+    payload = _payload()
+    payload["match_results"]["team_mode"][3] = dict(
+        payload["match_results"]["team_mode"][0]
+    )
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert any(
+        reason.endswith("duplicate_coordinate")
+        for reason in decision.reasons
+    )
+
+
+def test_raw_grid_count_is_bound_to_config() -> None:
+    payload = _payload()
+    payload["match_results"]["plug_and_play"].pop()
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "plug:grid_count_mismatch:15!=16" in decision.reasons
+
+
+def test_raw_plug_scenarios_must_match_team_scenarios() -> None:
+    payload = _payload()
+    payload["match_results"]["plug_and_play"][0]["scenario_index"] = 3
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "plug:scenario_set_mismatch" in decision.reasons
+
+
+def test_invalid_grid_config_fails_closed() -> None:
+    payload = _payload()
+    payload["config"]["scenario_count"] = "2"
+    payload["config"]["roles"] = ["gk", "dm", "am", "coach"]
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "invalid_metric:config:scenario_count:not_integer" in decision.reasons
+    assert "invalid_config:roles" in decision.reasons
 
