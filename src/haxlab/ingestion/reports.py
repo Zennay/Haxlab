@@ -112,6 +112,23 @@ def parse_match_report(
     report_id_match = _REPORT_ID_RE.search(content)
     score_match = _SCORE_RE.search(content)
     possession_match = _POSSESSION_RE.search(content)
+    possession_red = (
+        float(possession_match.group("red"))
+        if possession_match
+        else None
+    )
+    possession_blue = (
+        float(possession_match.group("blue"))
+        if possession_match
+        else None
+    )
+    if possession_red is not None and possession_blue is not None:
+        if not (
+            0.0 <= possession_red <= 100.0
+            and 0.0 <= possession_blue <= 100.0
+            and abs((possession_red + possession_blue) - 100.0) <= 0.5
+        ):
+            raise ValueError("invalid_possession_percentages")
 
     timestamp = (
         message.get("timestamp")
@@ -139,6 +156,6 @@ def parse_match_report(
         report_id=report_id_match.group("id") if report_id_match else None,
         red_score=int(score_match.group("red")) if score_match else None,
         blue_score=int(score_match.group("blue")) if score_match else None,
-        possession_red=float(possession_match.group("red")) if possession_match else None,
-        possession_blue=float(possession_match.group("blue")) if possession_match else None,
+        possession_red=possession_red,
+        possession_blue=possession_blue,
     )
