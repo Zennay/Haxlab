@@ -58,6 +58,9 @@ def _payload() -> dict:
     }
     return {
         "schema": "haxlab-closed-loop-arena-v2",
+        "evaluation_mode": (
+            "paired_raw_policy_full_team_plus_plug_and_play_context_generalization_v2"
+        ),
         "raw_policy_only": True,
         "safety_recovery_enabled": False,
         "paired_reference_design": True,
@@ -604,4 +607,32 @@ def test_unexpected_non_string_team_role_fails_closed() -> None:
     assert not decision.structurally_valid
     assert not decision.eligible_for_live_promotion
     assert "team_mode:roles:unexpected_role:99" in decision.reasons
+
+
+def test_missing_evaluation_mode_fails_closed() -> None:
+    payload = _payload()
+    del payload["evaluation_mode"]
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "unsupported_evaluation_mode" in decision.reasons
+
+
+def test_wrong_typed_evaluation_mode_fails_closed() -> None:
+    payload = _payload()
+    payload["evaluation_mode"] = 1
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "unsupported_evaluation_mode" in decision.reasons
 
