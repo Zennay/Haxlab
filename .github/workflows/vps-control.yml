@@ -10,6 +10,7 @@ on:
         type: choice
         options:
           - status
+          - archive-audit
           - deploy
           - restart-analyzer
           - retry-failed-analysis
@@ -40,6 +41,9 @@ jobs:
           case "${{ inputs.action }}" in
             status)
               sudo /usr/local/sbin/haxlab-actions-control status
+              ;;
+            archive-audit)
+              sudo /usr/local/sbin/haxlab-actions-control archive-audit 25
               ;;
             deploy)
               sudo /usr/local/sbin/haxlab-actions-control deploy
