@@ -1,0 +1,118 @@
+name: Elite runtime integrity validation
+
+on:
+  push:
+    branches:
+      - validation/elite-runtime-integrity-20261006
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-elite-runtime-integrity-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Validate runtime syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check tools/elite_policy_runtime.js
+          node --check tests/test_elite_policy_runtime.js
+
+      - name: Run runtime integrity regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tests/test_elite_policy_runtime.js
+
+      - name: Smoke current runtime models on VPS
+        shell: bash
+        run: |
+          set -euo pipefail
+          LIVE_RUNTIME="$(
+            sudo -u haxlab /opt/haxlab/.venv/bin/python -c \
+              'import json; print(json.load(open("/var/lib/haxlab/derived/champions/elite-player/current.json"))["runtime_model_path"])'
+          )"
+          MODELS=(
+            "$LIVE_RUNTIME"
+            "/var/lib/haxlab/derived/training/elite-player-candidate-b/model/runtime-model.json"
+            "/var/lib/haxlab/derived/training/elite-player-candidate-c/model/runtime-model.json"
+          )
+          for MODEL in "${MODELS[@]}"; do
+            sudo -u haxlab test -r "$MODEL"
+            sudo -u haxlab env \
+              MODEL="$MODEL" \
+              GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+              node - <<'NODE'
+          const fs = require("fs");
+          const path = require("path");
+          const { ElitePolicyRuntime } = require(
+            path.join(
+              process.env.GITHUB_WORKSPACE,
+              "tools",
+              "elite_policy_runtime.js",
+            ),
+          );
+
+          const model = JSON.parse(
+            fs.readFileSync(process.env.MODEL, "utf8"),
+          );
+          const runtime = new ElitePolicyRuntime(model);
+          const features = Object.fromEntries(
+            runtime.inputColumns.map((name) => [name, 0]),
+          );
+          features.ball_dx = 0;
+          features.ball_dy = 0;
+          const action = runtime.act({
+            agent_id: "integrity-smoke",
+            role: "gk",
+            features,
+          });
+          for (const key of [
+            "dir_x",
+            "dir_y",
+            "kick_probability",
+            "direction_probability",
+            "future_direction_probability",
+            "ood_mean_abs_z",
+            "ood_max_abs_z",
+          ]) {
+            if (!Number.isFinite(action[key])) {
+              throw new Error(
+                `non-finite live runtime output ${key}: ${action[key]}`,
+              );
+            }
+          }
+          console.log(
+            "ELITE_RUNTIME_MODEL_GREEN " +
+            process.env.MODEL +
+            " window=" + runtime.window +
+            " inputs=" + runtime.inputColumns.length,
+          );
+          NODE
+          done
+
+      - name: Run Arena-v2 Node regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          NODE_PATH=/opt/haxlab/node_modules node tests/test_closed_loop_arena_v2.js
+
+      - name: Record exact-head validation evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "ELITE_RUNTIME_VALIDATION_HEAD=$(git rev-parse HEAD)"
+          echo "ELITE_RUNTIME_VALIDATION_RESULT=green"
