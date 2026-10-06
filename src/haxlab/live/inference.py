@@ -28,7 +28,10 @@ def _safe_version_dir(root: Path, version: Any) -> Path | None:
     if Path(version).name != version or version in {".", ".."}:
         return None
 
+    registry_root = root.resolve()
     versions_root = (root / "versions").resolve()
+    if versions_root.parent != registry_root or versions_root.name != "versions":
+        return None
     candidate = (versions_root / version).resolve()
     if candidate.parent != versions_root:
         return None
