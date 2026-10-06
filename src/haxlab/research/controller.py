@@ -43,6 +43,72 @@ class ResearchDecision:
     reasons: tuple[str, ...]
 
 
+_SNAPSHOT_COUNT_FIELDS = (
+    "unparsed_replays",
+    "matches_needing_features",
+    "new_usable_matches_since_dataset",
+    "new_gold_elite_matches_since_training",
+)
+_SNAPSHOT_BOOLEAN_FIELDS = (
+    "dataset_dirty",
+    "dataset_ready",
+    "training_active",
+    "challenger_waiting_evaluation",
+    "challenger_passed_evaluation",
+    "rejected_challenger_needs_failure_mining",
+)
+_POLICY_COUNT_FIELDS = (
+    "minimum_new_usable_matches_for_dataset",
+    "minimum_new_usable_matches_for_training",
+    "minimum_new_gold_elite_matches_for_training",
+)
+
+
+def _invalid_controller_reasons(
+    snapshot: object,
+    policy: object,
+) -> tuple[str, ...]:
+    if not isinstance(snapshot, ResearchSnapshot):
+        return ("snapshot:not_research_snapshot",)
+    if not isinstance(policy, ResearchPolicy):
+        return ("policy:not_research_policy",)
+
+    reasons: list[str] = []
+    for field in _SNAPSHOT_COUNT_FIELDS:
+        value = getattr(snapshot, field)
+        if type(value) is not int:
+            reasons.append(f"snapshot:{field}:not_native_integer")
+        elif value < 0:
+            reasons.append(f"snapshot:{field}:negative")
+
+    for field in _SNAPSHOT_BOOLEAN_FIELDS:
+        value = getattr(snapshot, field)
+        if type(value) is not bool:
+            reasons.append(f"snapshot:{field}:not_boolean")
+
+    for field in _POLICY_COUNT_FIELDS:
+        value = getattr(policy, field)
+        if type(value) is not int:
+            reasons.append(f"policy:{field}:not_native_integer")
+        elif value < 0:
+            reasons.append(f"policy:{field}:negative")
+
+    if type(policy.automatic_training_enabled) is not bool:
+        reasons.append("policy:automatic_training_enabled:not_boolean")
+
+    challenger_states = (
+        snapshot.challenger_waiting_evaluation,
+        snapshot.challenger_passed_evaluation,
+        snapshot.rejected_challenger_needs_failure_mining,
+    )
+    if all(type(value) is bool for value in challenger_states) and sum(
+        challenger_states
+    ) > 1:
+        reasons.append("snapshot:challenger_state:contradictory")
+
+    return tuple(reasons)
+
+
 def choose_next_action(
     snapshot: ResearchSnapshot,
     policy: ResearchPolicy = ResearchPolicy(),
@@ -52,6 +118,13 @@ def choose_next_action(
     Ordering matters: finish cheap deterministic evidence work before expensive
     training, and evaluate/promote a pending challenger before starting another.
     """
+    invalid_reasons = _invalid_controller_reasons(snapshot, policy)
+    if invalid_reasons:
+        return ResearchDecision(
+            ResearchAction.IDLE,
+            ("invalid_research_state", *invalid_reasons),
+        )
+
     if snapshot.challenger_passed_evaluation:
         return ResearchDecision(
             ResearchAction.PROMOTE_CHALLENGER,
