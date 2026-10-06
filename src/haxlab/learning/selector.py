@@ -138,7 +138,9 @@ def build_training_manifest(
     holdout_modulus: int = 10,
     holdout_bucket: int = 0,
 ) -> dict[str, Any]:
-    leaderboard = json.loads(leaderboard_path.read_text(encoding="utf-8"))
+    leaderboard_bytes = leaderboard_path.read_bytes()
+    leaderboard_sha256 = hashlib.sha256(leaderboard_bytes).hexdigest()
+    leaderboard = json.loads(leaderboard_bytes)
     selected_players = select_players(
         list(leaderboard.get("rows") or []),
         top_fraction_per_role=top_fraction_per_role,
@@ -163,7 +165,9 @@ def build_training_manifest(
             continue
         scanned += 1
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            analysis_bytes = path.read_bytes()
+            analysis_sha256 = hashlib.sha256(analysis_bytes).hexdigest()
+            payload = json.loads(analysis_bytes)
         except (OSError, json.JSONDecodeError):
             rejected += 1
             continue
@@ -218,6 +222,8 @@ def build_training_manifest(
             "replay_sha256": replay_sha256,
             "raw_path": str(raw_path),
             "analysis_path": str(path),
+            "analysis_sha256": analysis_sha256,
+            "analysis_size_bytes": len(analysis_bytes),
             "total_frames": int(payload.get("totalFrames") or 0),
             "duration_seconds": round(
                 int(payload.get("totalFrames") or 0) / 60.0,
@@ -247,6 +253,8 @@ def build_training_manifest(
         "analysis_version": leaderboard.get("analysis_version"),
         "analysis_root": str(analysis_root),
         "leaderboard_path": str(leaderboard_path),
+        "leaderboard_sha256": leaderboard_sha256,
+        "leaderboard_size_bytes": len(leaderboard_bytes),
         "raw_root": str(raw_root),
         "selection": {
             "top_fraction_per_role": top_fraction_per_role,
