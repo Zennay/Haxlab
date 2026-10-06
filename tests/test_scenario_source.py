@@ -84,6 +84,24 @@ def test_select_scenario_sources_rejects_invalid_count(
         )
 
 
+@pytest.mark.parametrize(
+    "bad_value",
+    ["not-a-sha", "a" * 63, "g" * 64, 123],
+)
+def test_selector_rejects_malformed_exclusion_provenance(
+    tmp_path: Path,
+    bad_value,
+) -> None:
+    db_path = tmp_path / "state.sqlite3"
+    _db(db_path)
+
+    with pytest.raises(ValueError, match="exclude_sha256"):
+        scenario_source.select_scenario_source(
+            db_path,
+            exclude_sha256={bad_value},  # type: ignore[arg-type]
+        )
+
+
 def test_select_scenario_source_skips_excluded_sha(
     tmp_path: Path,
     monkeypatch,
