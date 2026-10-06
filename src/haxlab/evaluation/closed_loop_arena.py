@@ -133,6 +133,71 @@ def _reject_unexpected_role_keys(
             failures.append(f"{label}:unexpected_role:{key!r}")
 
 
+def _raw_outcome_tally(
+    failures: list[str],
+    *,
+    rows: Any,
+    label: str,
+    expected_mode: str,
+    expected_role: str | None | object,
+) -> tuple[int, int, int, int, float]:
+    if not isinstance(rows, list):
+        failures.append(f"invalid_object:{label}:rows")
+        return 0, 0, 0, 0, 0.0
+
+    outcomes = {"win": 0, "draw": 0, "loss": 0}
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            failures.append(f"invalid_object:{label}:row:{index}")
+            continue
+
+        mode = row.get("mode")
+        if type(mode) is not str or mode != expected_mode:
+            failures.append(f"{label}:row:{index}:invalid_mode")
+
+        role = row.get("tested_role")
+        if expected_role is _ANY_ROLE:
+            if type(role) is not str or role not in ROLES:
+                failures.append(f"{label}:row:{index}:invalid_role")
+        elif role != expected_role:
+            failures.append(f"{label}:row:{index}:invalid_role")
+
+        result = row.get("result")
+        if type(result) is not str or result not in outcomes:
+            failures.append(f"{label}:row:{index}:invalid_result")
+            continue
+        outcomes[result] += 1
+
+    matches = len(rows)
+    score = (
+        (outcomes["win"] + 0.5 * outcomes["draw"]) / matches
+        if matches
+        else 0.0
+    )
+    return matches, outcomes["win"], outcomes["draw"], outcomes["loss"], score
+
+
+def _require_raw_outcomes_match(
+    failures: list[str],
+    *,
+    label: str,
+    raw: tuple[int, int, int, int, float],
+    declared: tuple[int, int, int, int, float],
+) -> None:
+    raw_counts = raw[:4]
+    declared_counts = declared[:4]
+    if raw_counts != declared_counts or not math.isclose(
+        raw[4],
+        declared[4],
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    ):
+        failures.append(f"{label}:raw_outcome_mismatch")
+
+
+_ANY_ROLE = object()
+
+
 def _validate_outcome_summary(
     failures: list[str],
     *,
@@ -391,6 +456,7 @@ def decide_closed_loop_arena(
         label="plug_and_play:by_role",
     )
     role_checks: dict[str, Any] = {}
+    role_outcomes: dict[str, tuple[int, int, int, int, float]] = {}
     for role in ROLES:
         role_row = _require_mapping(
             structural_failures,
@@ -428,6 +494,13 @@ def decide_closed_loop_arena(
             structural_failures,
             mapping=outcome,
             label=role,
+        )
+        role_outcomes[role] = (
+            matches,
+            wins,
+            draws,
+            losses,
+            role_proxy_score,
         )
         _require_numeric_field(
             structural_failures,
@@ -610,6 +683,72 @@ def decide_closed_loop_arena(
                 )
 
     checks["roles"] = role_checks
+
+    match_results = _require_mapping(
+        structural_failures,
+        payload.get("match_results"),
+        "match_results",
+    )
+    team_rows = match_results.get("team_mode")
+    plug_rows = match_results.get("plug_and_play")
+    raw_team = _raw_outcome_tally(
+        structural_failures,
+        rows=team_rows,
+        label="team",
+        expected_mode="full_team",
+        expected_role=None,
+    )
+    _require_raw_outcomes_match(
+        structural_failures,
+        label="team",
+        raw=raw_team,
+        declared=(
+            team_matches,
+            team_wins,
+            team_draws,
+            team_losses,
+            team_proxy_match_score,
+        ),
+    )
+    raw_plug = _raw_outcome_tally(
+        structural_failures,
+        rows=plug_rows,
+        label="plug",
+        expected_mode="plug_and_play",
+        expected_role=_ANY_ROLE,
+    )
+    _require_raw_outcomes_match(
+        structural_failures,
+        label="plug",
+        raw=raw_plug,
+        declared=(
+            plug_matches,
+            plug_wins,
+            plug_draws,
+            plug_losses,
+            plug_proxy_match_score,
+        ),
+    )
+    if isinstance(plug_rows, list):
+        for role in ROLES:
+            role_rows = [
+                row
+                for row in plug_rows
+                if isinstance(row, dict) and row.get("tested_role") == role
+            ]
+            raw_role = _raw_outcome_tally(
+                structural_failures,
+                rows=role_rows,
+                label=role,
+                expected_mode="plug_and_play",
+                expected_role=role,
+            )
+            _require_raw_outcomes_match(
+                structural_failures,
+                label=role,
+                raw=raw_role,
+                declared=role_outcomes[role],
+            )
 
     total_plug_role_matches = sum(
         int(row.get("matches", 0))
