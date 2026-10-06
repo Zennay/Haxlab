@@ -113,6 +113,18 @@ expectReject((model) => {
 }, /role_ids\.st must be a native integer/);
 
 expectReject((model) => {
+  model.role_ids.st = 2;
+}, /canonical role_ids must map gk\/dm\/am\/st to unique ids/);
+
+expectReject((model) => {
+  model.std[0] = -1;
+}, /std\[0\] may not be negative/);
+
+expectReject((model) => {
+  model.kick_thresholds_by_role.striker = 0.4;
+}, /unknown kick threshold role: striker/);
+
+expectReject((model) => {
   model.weights.w1[0][0] = Number.POSITIVE_INFINITY;
 }, /weights\.w1\[0\]\[0\] must be a finite native number/);
 
