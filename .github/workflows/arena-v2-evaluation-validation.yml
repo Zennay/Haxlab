@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - validation/arena-v2-fail-closed-evidence-20261006
+      - validation/duel-gate-fail-closed-20261006
   workflow_dispatch:
 
 permissions:
