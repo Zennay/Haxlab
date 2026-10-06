@@ -37,7 +37,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          .arena-validation-venv/bin/python -m compileall -q             src/haxlab/evaluation/closed_loop_arena.py             tests/test_closed_loop_arena.py
+          .arena-validation-venv/bin/python -m compileall -q             src/haxlab/evaluation/closed_loop_arena.py             src/haxlab/evaluation/multisource_duel.py             tests/test_closed_loop_arena.py             tests/test_multisource_duel.py
 
       - name: Run Arena v2 evaluation regressions
         shell: bash
@@ -49,7 +49,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          PYTHONPATH="$GITHUB_WORKSPACE/src"             .arena-validation-venv/bin/pytest -q               tests/test_duel_gate.py               tests/test_multisource_duel.py               tests/test_multisource_suite.py               tests/test_sandbox_gate.py
+          PYTHONPATH="$GITHUB_WORKSPACE/src"             .arena-validation-venv/bin/pytest -q               tests/test_multisource_duel.py               tests/test_multisource_suite.py               tests/test_scenario_source.py               tests/test_roles_4v4.py               tests/test_promotion.py
 
       - name: Record exact-head validation evidence
         shell: bash
