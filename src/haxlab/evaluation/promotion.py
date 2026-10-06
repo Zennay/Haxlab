@@ -7,6 +7,7 @@ from haxlab.evaluation.models import (
     EvaluationEvidence,
     PromotionDecision,
     PromotionPolicy,
+    Regression,
 )
 
 
@@ -115,6 +116,35 @@ def _policy_bool(
         failures.append(f"invalid_policy:{label}:not_boolean")
         return False
     return value
+
+
+def _validate_regressions(
+    failures: list[str],
+    value: Any,
+) -> tuple[Regression, ...]:
+    if not isinstance(value, (tuple, list)):
+        failures.append("invalid_evidence:regressions:not_sequence")
+        return ()
+
+    validated: list[Regression] = []
+    for index, regression in enumerate(value):
+        label = f"regressions:{index}"
+        if not isinstance(regression, Regression):
+            failures.append(f"invalid_evidence:{label}:object_type")
+            continue
+        if not isinstance(regression.scenario, str):
+            failures.append(f"invalid_evidence:{label}:scenario:not_string")
+        elif not regression.scenario.strip():
+            failures.append(f"invalid_evidence:{label}:scenario:empty")
+        if not isinstance(regression.severity, str):
+            failures.append(f"invalid_evidence:{label}:severity:not_string")
+        elif not regression.severity.strip():
+            failures.append(f"invalid_evidence:{label}:severity:empty")
+        if not isinstance(regression.details, str):
+            failures.append(f"invalid_evidence:{label}:details:not_string")
+        validated.append(regression)
+
+    return tuple(validated)
 
 
 def decide_promotion(
@@ -240,10 +270,11 @@ def decide_promotion(
                 f"<{minimum_scenario_pass_rate:.4f}"
             )
 
+    regressions = _validate_regressions(failures, evidence.regressions)
     critical = [
         regression
-        for regression in evidence.regressions
-        if str(regression.severity).casefold() == "critical"
+        for regression in regressions
+        if regression.severity.strip().casefold() == "critical"
     ]
     if critical and not allow_critical_regressions:
         failures.append(
