@@ -2,9 +2,31 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 from haxlab.ingestion.pipeline import run_import
+
+
+def _existing_directory(value: str) -> Path:
+    path = Path(value)
+    if not path.exists():
+        raise argparse.ArgumentTypeError(f"directory does not exist: {value}")
+    if not path.is_dir():
+        raise argparse.ArgumentTypeError(f"not a directory: {value}")
+    return path
+
+
+def _bounded_confidence(value: str) -> float:
+    try:
+        number = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "must be a finite number in [0, 1]"
+        ) from exc
+    if not math.isfinite(number) or not 0.0 <= number <= 1.0:
+        raise argparse.ArgumentTypeError("must be a finite number in [0, 1]")
+    return number
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -15,7 +37,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "ingest",
         help="Build a deterministic M0 dataset inventory from a Discord export.",
     )
-    ingest.add_argument("export_root", type=Path)
+    ingest.add_argument("export_root", type=_existing_directory)
     ingest.add_argument(
         "--output",
         type=Path,
@@ -24,7 +46,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     ingest.add_argument(
         "--minimum-match-confidence",
-        type=float,
+        type=_bounded_confidence,
         default=0.65,
     )
 
