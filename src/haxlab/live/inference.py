@@ -63,15 +63,10 @@ def resolve_version_dir(root: Path, explicit: str | None = None) -> Path:
     if pointer:
         return root / "versions" / pointer
 
-    candidates = [
-        path.parent
-        for path in root.glob("versions/*/metrics.json")
-        if (path.parent / "model.npz").is_file()
-    ]
-    if not candidates:
-        raise FileNotFoundError(f"no live champion versions below {root}")
-    candidates.sort(key=lambda p: (p / "metrics.json").stat().st_mtime, reverse=True)
-    return candidates[0]
+    raise FileNotFoundError(
+        "no promoted live champion pointer found below "
+        f"{root}; refusing to select an unpromoted version by recency"
+    )
 
 
 def _extract_role_order(payload: Any) -> list[str] | None:
