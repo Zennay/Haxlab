@@ -197,3 +197,70 @@ def test_non_policy_object_fails_closed() -> None:
 
     assert not decision.promote
     assert decision.reasons == ("invalid_policy:object_type",)
+
+
+def test_non_tuple_regressions_fail_closed_without_exception() -> None:
+    decision = decide_promotion(_good_evidence(regressions=None))
+
+    assert not decision.promote
+    assert "invalid_evidence:regressions:not_tuple" in decision.reasons
+
+
+def test_non_regression_item_fails_closed_without_exception() -> None:
+    decision = decide_promotion(
+        _good_evidence(
+            regressions=(
+                {
+                    "scenario": "kickoff",
+                    "severity": "critical",
+                    "details": "regressed",
+                },
+            )
+        )
+    )
+
+    assert not decision.promote
+    assert "invalid_evidence:regressions:0:object_type" in decision.reasons
+
+
+def test_malformed_regression_fields_fail_closed() -> None:
+    bad_severity = decide_promotion(
+        _good_evidence(
+            regressions=(
+                Regression(
+                    scenario="kickoff",
+                    severity=1,
+                    details="regressed",
+                ),
+            )
+        )
+    )
+    bad_scenario = decide_promotion(
+        _good_evidence(
+            regressions=(
+                Regression(
+                    scenario="",
+                    severity="critical",
+                    details="regressed",
+                ),
+            )
+        )
+    )
+    bad_details = decide_promotion(
+        _good_evidence(
+            regressions=(
+                Regression(
+                    scenario="kickoff",
+                    severity="critical",
+                    details=1,
+                ),
+            )
+        )
+    )
+
+    assert not bad_severity.promote
+    assert "invalid_evidence:regressions:0:severity:invalid" in bad_severity.reasons
+    assert not bad_scenario.promote
+    assert "invalid_evidence:regressions:0:scenario:invalid" in bad_scenario.reasons
+    assert not bad_details.promote
+    assert "invalid_evidence:regressions:0:details:not_string" in bad_details.reasons
