@@ -187,3 +187,63 @@ def test_non_object_duel_fails_closed() -> None:
 
     assert not decision.eligible_to_replace_champion
     assert decision.reasons == ("invalid_duel:object_type",)
+
+
+def test_numeric_string_rate_is_not_coerced() -> None:
+    payload = _duel()
+    payload["challenger_kick_action_rate"] = "0.01"
+
+    decision = decide_duel_gate(payload)
+
+    assert not decision.eligible_to_replace_champion
+    assert "invalid_metric:challenger_kick_action_rate:non_numeric" in decision.reasons
+
+
+def test_numeric_string_match_count_is_not_coerced() -> None:
+    payload = _duel()
+    payload["wins"] = "6"
+
+    decision = decide_duel_gate(payload)
+
+    assert not decision.eligible_to_replace_champion
+    assert "invalid_metric:wins:not_integer" in decision.reasons
+
+
+def test_integral_float_match_count_is_not_accepted_as_integer() -> None:
+    payload = _duel()
+    payload["matches"] = 12.0
+
+    decision = decide_duel_gate(payload)
+
+    assert not decision.eligible_to_replace_champion
+    assert "invalid_metric:matches:not_integer" in decision.reasons
+
+
+def test_non_string_model_paths_fail_closed_without_coercion() -> None:
+    payload = _duel()
+    payload["challenger_model"] = {"path": "/tmp/challenger/runtime-model.json"}
+
+    decision = decide_duel_gate(payload)
+
+    assert not decision.eligible_to_replace_champion
+    assert "invalid_challenger_model" in decision.reasons
+
+
+def test_non_string_schema_fails_closed_without_coercion() -> None:
+    payload = _duel()
+    payload["schema"] = 123
+
+    decision = decide_duel_gate(payload)
+
+    assert not decision.eligible_to_replace_champion
+    assert "invalid_duel:schema" in decision.reasons
+
+
+def test_non_string_scenario_hash_fails_closed_without_coercion() -> None:
+    payload = _duel()
+    payload["scenario_sha256"] = {"sha256": "a" * 64}
+
+    decision = decide_duel_gate(payload)
+
+    assert not decision.eligible_to_replace_champion
+    assert "invalid_scenario_sha256" in decision.reasons
