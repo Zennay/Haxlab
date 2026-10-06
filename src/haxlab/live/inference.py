@@ -22,13 +22,34 @@ def _load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _safe_version_dir(root: Path, version: Any) -> Path | None:
+    if not isinstance(version, str) or not version:
+        return None
+    if Path(version).name != version or version in {".", ".."}:
+        return None
+
+    versions_root = (root / "versions").resolve()
+    candidate = (versions_root / version).resolve()
+    if candidate.parent != versions_root:
+        return None
+    if not (candidate / "metrics.json").is_file():
+        return None
+    if not (candidate / "model.npz").is_file():
+        return None
+    return candidate
+
+
 def _candidate_version_from_pointer(root: Path) -> str | None:
+    versions_root = (root / "versions").resolve()
     for name in ("current", "live", "champion"):
         path = root / name
         if path.is_symlink() or path.is_dir():
             try:
                 resolved = path.resolve()
-                if resolved.parent.name == "versions":
+                if (
+                    resolved.parent == versions_root
+                    and _safe_version_dir(root, resolved.name) is not None
+                ):
                     return resolved.name
             except OSError:
                 pass
@@ -42,11 +63,11 @@ def _candidate_version_from_pointer(root: Path) -> str | None:
             continue
         for key in ("version", "version_id", "id", "champion"):
             value = payload.get(key)
-            if isinstance(value, str) and (root / "versions" / value / "metrics.json").is_file():
+            if isinstance(value, str) and _safe_version_dir(root, value) is not None:
                 return value
             if isinstance(value, dict):
                 nested = value.get("version") or value.get("version_id") or value.get("id")
-                if isinstance(nested, str) and (root / "versions" / nested / "metrics.json").is_file():
+                if _safe_version_dir(root, nested) is not None:
                     return nested
     return None
 
@@ -54,14 +75,17 @@ def _candidate_version_from_pointer(root: Path) -> str | None:
 def resolve_version_dir(root: Path, explicit: str | None = None) -> Path:
     version = explicit or os.environ.get("HAXLAB_CHAMPION_VERSION")
     if version:
-        path = root / "versions" / version
-        if (path / "metrics.json").is_file() and (path / "model.npz").is_file():
+        path = _safe_version_dir(root, version)
+        if path is not None:
             return path
-        raise FileNotFoundError(f"champion version not found: {version}")
+        raise FileNotFoundError(f"champion version not found or unsafe: {version}")
 
     pointer = _candidate_version_from_pointer(root)
     if pointer:
-        return root / "versions" / pointer
+        path = _safe_version_dir(root, pointer)
+        if path is not None:
+            return path
+        raise FileNotFoundError(f"promoted champion pointer is no longer loadable: {pointer}")
 
     raise FileNotFoundError(
         "no promoted live champion pointer found below "
