@@ -55,6 +55,27 @@ assert.ok(Number.isFinite(action.direction_probability));
 assert.strictEqual(action.dir_x, 0);
 assert.strictEqual(action.dir_y, 0);
 
+assert.throws(
+  () => runtime.act({
+    agent_id: "coerced-feature",
+    role: "am",
+    features: { ball_dx: "10", ball_dy: 5 },
+  }),
+  /model feature ball_dx must be a finite native number/,
+);
+
+const overflowModel = validModel();
+overflowModel.weights.w1[0][0] = 1e308;
+const overflowRuntime = new ElitePolicyRuntime(overflowModel);
+assert.throws(
+  () => overflowRuntime.act({
+    agent_id: "overflow",
+    role: "am",
+    features: { ball_dx: 1e308, ball_dy: 0 },
+  }),
+  /dense output 0 is non-finite|normalized model feature ball_dx is non-finite/,
+);
+
 expectReject((model) => {
   model.window = "1";
 }, /window must be a native integer/);
