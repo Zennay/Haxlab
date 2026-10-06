@@ -60,8 +60,16 @@ jobs:
           CAND_D=/var/lib/haxlab/derived/training/elite-player-candidate-d/model/runtime-model.json
           PARTNER_B=/var/lib/haxlab/derived/training/elite-player-candidate-b/model/runtime-model.json
           PARTNER_C=/var/lib/haxlab/derived/training/elite-player-candidate-c/model/runtime-model.json
+          CURRENT_POINTER=/var/lib/haxlab/derived/champions/elite-player/current.json
+          LIVE_POINTER=/var/lib/haxlab/derived/champions/elite-player/live.json
           LIVE_RUNTIME="$(
             sudo -u haxlab /opt/haxlab/.venv/bin/python -c               'import json; print(json.load(open("/var/lib/haxlab/derived/champions/elite-player/current.json"))["runtime_model_path"])'
+          )"
+          CURRENT_POINTER_SHA_BEFORE="$(
+            sudo -u haxlab sha256sum "$CURRENT_POINTER" | awk '{print $1}'
+          )"
+          LIVE_POINTER_SHA_BEFORE="$(
+            sudo -u haxlab sha256sum "$LIVE_POINTER" | awk '{print $1}'
           )"
           OUT="/var/lib/haxlab/derived/evaluation/closed-loop-arena-v2-calibration-v1/${GITHUB_SHA:0:12}"
 
@@ -248,6 +256,10 @@ jobs:
             echo "ARENA_LIVE=$LIVE_RUNTIME"
             echo "ARENA_OUT=$OUT"
             echo "ARENA_WEAK=$OUT/ablated-zero-policy.json"
+            echo "ARENA_CURRENT_POINTER=$CURRENT_POINTER"
+            echo "ARENA_LIVE_POINTER=$LIVE_POINTER"
+            echo "ARENA_CURRENT_POINTER_SHA_BEFORE=$CURRENT_POINTER_SHA_BEFORE"
+            echo "ARENA_LIVE_POINTER_SHA_BEFORE=$LIVE_POINTER_SHA_BEFORE"
           } >> "$GITHUB_ENV"
 
       - name: Run full frozen paired calibration batch
@@ -408,6 +420,55 @@ jobs:
 
           sudo -u haxlab cat "$ARENA_OUT/calibration-summary.json"             > /tmp/haxlab-arena-v2-calibration-latest-summary.json
           printf '{"status":"completed","sha":"%s","output":"%s"}\n'             "$GITHUB_SHA" "$ARENA_OUT"             > /tmp/haxlab-arena-v2-calibration-latest-status.json
+
+      - name: Verify champion pointers unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          CURRENT_AFTER="$(
+            sudo -u haxlab sha256sum "$ARENA_CURRENT_POINTER" | awk '{print $1}'
+          )"
+          LIVE_AFTER="$(
+            sudo -u haxlab sha256sum "$ARENA_LIVE_POINTER" | awk '{print $1}'
+          )"
+          sudo -u haxlab env \
+            ARENA_OUT="$ARENA_OUT" \
+            CURRENT_PATH="$ARENA_CURRENT_POINTER" \
+            LIVE_PATH="$ARENA_LIVE_POINTER" \
+            CURRENT_BEFORE="$ARENA_CURRENT_POINTER_SHA_BEFORE" \
+            CURRENT_AFTER="$CURRENT_AFTER" \
+            LIVE_BEFORE="$ARENA_LIVE_POINTER_SHA_BEFORE" \
+            LIVE_AFTER="$LIVE_AFTER" \
+            /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          evidence = {
+              "schema": "haxlab-arena-v2-pointer-invariant-v1",
+              "current_pointer": os.environ["CURRENT_PATH"],
+              "live_pointer": os.environ["LIVE_PATH"],
+              "current_sha256_before": os.environ["CURRENT_BEFORE"],
+              "current_sha256_after": os.environ["CURRENT_AFTER"],
+              "live_sha256_before": os.environ["LIVE_BEFORE"],
+              "live_sha256_after": os.environ["LIVE_AFTER"],
+          }
+          evidence["current_unchanged"] = (
+              evidence["current_sha256_before"]
+              == evidence["current_sha256_after"]
+          )
+          evidence["live_unchanged"] = (
+              evidence["live_sha256_before"]
+              == evidence["live_sha256_after"]
+          )
+          path = Path(os.environ["ARENA_OUT"]) / "pointer-invariant.json"
+          path.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
+          print(json.dumps(evidence, sort_keys=True))
+          if not evidence["current_unchanged"]:
+              raise SystemExit("current champion pointer changed during calibration")
+          if not evidence["live_unchanged"]:
+              raise SystemExit("live champion pointer changed during calibration")
+          PY
 
       - name: Collect calibration evidence
         if: always()
