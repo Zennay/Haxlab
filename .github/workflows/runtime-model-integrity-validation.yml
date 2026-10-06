@@ -4,6 +4,13 @@ on:
   push:
     branches:
       - validation/runtime-model-integrity-20261006
+  pull_request:
+    branches:
+      - feature/arena-v2-current-main-20261004
+    paths:
+      - "tools/elite_policy_runtime.js"
+      - "tests/test_elite_policy_runtime_integrity.js"
+      - ".github/workflows/runtime-model-integrity-validation.yml"
   workflow_dispatch:
 
 permissions:
@@ -21,7 +28,7 @@ jobs:
       - name: Checkout exact validation head
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           clean: true
 
       - name: Validate runtime Node syntax
@@ -87,4 +94,6 @@ jobs:
         run: |
           set -euo pipefail
           echo "RUNTIME_MODEL_INTEGRITY_HEAD=$(git rev-parse HEAD)"
+          echo "RUNTIME_MODEL_INTEGRITY_TRIGGER_SHA=${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
           echo "RUNTIME_MODEL_INTEGRITY_RESULT=green"
