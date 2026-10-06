@@ -247,8 +247,26 @@ assert.ok(finished.context_adaptation_rate <= 1);
 
 
 
-function pairRoleMetrics() {
+function pairLineup(kind, testedRole = null) {
+  return Object.fromEntries(
+    ["gk", "dm", "am", "st"].map((role) => [
+      role,
+      {
+        model_kind:
+          testedRole && role !== testedRole ? "partner" : kind,
+        model_path:
+          testedRole && role !== testedRole
+            ? "partner-" + role + ".json"
+            : kind + ".json",
+      },
+    ]),
+  );
+}
+
+function pairRoleMetrics(modelKind, modelPath) {
   return {
+    model_kind: modelKind,
+    model_path: modelPath,
     policy_samples: 10,
     kicks: 1,
     near_ball_rate: 0.2,
@@ -268,24 +286,15 @@ function pairRoleMetrics() {
   };
 }
 
-function pairTeamRoles() {
-  return Object.fromEntries(
-    ["gk", "dm", "am", "st"].map((role) => [role, pairRoleMetrics()]),
-  );
-}
-
-function pairLineup(kind, testedRole = null) {
+function pairTeamRoles(kind, testedRole = null) {
+  const lineup = pairLineup(kind, testedRole);
   return Object.fromEntries(
     ["gk", "dm", "am", "st"].map((role) => [
       role,
-      {
-        model_kind:
-          testedRole && role !== testedRole ? "partner" : kind,
-        model_path:
-          testedRole && role !== testedRole
-            ? "partner-" + role + ".json"
-            : kind + ".json",
-      },
+      pairRoleMetrics(
+        lineup[role].model_kind,
+        lineup[role].model_path,
+      ),
     ]),
   );
 }
@@ -298,22 +307,35 @@ const candidateIdentityRow = {
   test_team_id: 1,
   repeat_index: 0,
   lineup: pairLineup("challenger"),
-  proxy: { test_score: 0.123 },
-  goals: { differential: 0 },
-  progression: { test_share: 0.5 },
+  proxy: { test_score: 0.5, opponent_score: 0.5 },
+  goals: { test: 0, opponent: 0, differential: 0 },
+  territory: {
+    test_half_rate: 0.5,
+    opponent_half_rate: 0.5,
+    neutral_rate: 0,
+    test_attack_third_rate: 0.5,
+    opponent_attack_third_rate: 0.5,
+  },
+  progression: { test_share: 0.5, opponent_share: 0.5 },
   possession_proxy: { test_rate: 0.5 },
   team_shape: {
     formation_order_rate: 0.8,
     collapsed_rate: 0.1,
     overstretched_rate: 0.05,
   },
-  test_team: { roles: pairTeamRoles() },
+  test_team: {
+    roles: pairTeamRoles("challenger"),
+    runtime_errors: 0,
+  },
 };
 const referenceIdentityRow = {
   ...candidateIdentityRow,
   tested_kind: "reference",
   lineup: pairLineup("reference"),
-  test_team: { roles: pairTeamRoles() },
+  test_team: {
+    roles: pairTeamRoles("reference"),
+    runtime_errors: 0,
+  },
 };
 const identityPair = pairArenaRows(
   candidateIdentityRow,
@@ -466,12 +488,20 @@ const candidatePlugRow = {
   mode: "plug_and_play",
   tested_role: "am",
   lineup: pairLineup("challenger", "am"),
+  test_team: {
+    roles: pairTeamRoles("challenger", "am"),
+    runtime_errors: 0,
+  },
 };
 const referencePlugRow = {
   ...referenceIdentityRow,
   mode: "plug_and_play",
   tested_role: "am",
   lineup: pairLineup("reference", "am"),
+  test_team: {
+    roles: pairTeamRoles("reference", "am"),
+    runtime_errors: 0,
+  },
 };
 const plugIdentityPair = pairArenaRows(
   candidatePlugRow,
@@ -489,6 +519,16 @@ assert.throws(
         gk: {
           ...referencePlugRow.lineup.gk,
           model_path: "different-partner.json",
+        },
+      },
+      test_team: {
+        ...referencePlugRow.test_team,
+        roles: {
+          ...referencePlugRow.test_team.roles,
+          gk: {
+            ...referencePlugRow.test_team.roles.gk,
+            model_path: "different-partner.json",
+          },
         },
       },
     },
