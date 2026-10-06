@@ -671,7 +671,7 @@ jobs:
         if: always()
         shell: bash
         run: |
-          set -u
+          set -euo pipefail
           rm -rf arena-v2-calibration-evidence
           mkdir -p arena-v2-calibration-evidence
           if [ -n "${ARENA_OUT:-}" ] && sudo -u haxlab test -d "$ARENA_OUT"; then
@@ -686,5 +686,5 @@ jobs:
         with:
           name: closed-loop-arena-v2-calibration
           path: arena-v2-calibration-evidence/
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
