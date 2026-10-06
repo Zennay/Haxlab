@@ -56,6 +56,23 @@ def _payload() -> dict:
             "collapsed_shape_rate": 0.1,
         },
     }
+    team_rows = [
+        {
+            "mode": "full_team",
+            "tested_role": None,
+            "result": "draw",
+        }
+        for _ in range(8)
+    ]
+    plug_rows = [
+        {
+            "mode": "plug_and_play",
+            "tested_role": role,
+            "result": "draw",
+        }
+        for role in roles
+        for _ in range(4)
+    ]
     return {
         "schema": "haxlab-closed-loop-arena-v2",
         "evaluation_mode": (
@@ -92,6 +109,10 @@ def _payload() -> dict:
                 }
                 for role in roles
             },
+        },
+        "match_results": {
+            "team_mode": team_rows,
+            "plug_and_play": plug_rows,
         },
     }
 
@@ -679,4 +700,53 @@ def test_string_subclass_evaluation_mode_fails_closed() -> None:
     assert not decision.structurally_valid
     assert not decision.eligible_for_live_promotion
     assert "unsupported_evaluation_mode" in decision.reasons
+
+
+def test_raw_team_outcomes_must_match_team_summary() -> None:
+    payload = _payload()
+    payload["match_results"]["team_mode"][0]["result"] = "win"
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "team:raw_outcome_mismatch" in decision.reasons
+
+
+def test_raw_plug_role_outcomes_must_match_role_summary() -> None:
+    payload = _payload()
+    first_gk = next(
+        row
+        for row in payload["match_results"]["plug_and_play"]
+        if row["tested_role"] == "gk"
+    )
+    first_gk["result"] = "loss"
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "plug:raw_outcome_mismatch" in decision.reasons
+    assert "gk:raw_outcome_mismatch" in decision.reasons
+
+
+def test_malformed_raw_outcome_row_fails_closed() -> None:
+    payload = _payload()
+    payload["match_results"]["team_mode"][0] = "malformed"
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "invalid_object:team:row:0" in decision.reasons
+    assert "team:raw_outcome_mismatch" in decision.reasons
 
