@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -42,6 +43,47 @@ def _safe_version_dir(root: Path, version: Any) -> Path | None:
     return candidate
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _live_validation_evidence_matches(
+    root: Path,
+    *,
+    payload: dict[str, Any],
+    version: str,
+    source_stage: str,
+) -> bool:
+    raw_path = payload.get("validation_evidence_path")
+    expected_sha = payload.get("validation_evidence_sha256")
+    if not isinstance(raw_path, str) or not isinstance(expected_sha, str):
+        return False
+    try:
+        evidence_root = (
+            root.resolve() / "validations" / version / source_stage
+        ).resolve()
+        evidence_path = Path(raw_path).resolve()
+        if evidence_path.parent != evidence_root or not evidence_path.is_file():
+            return False
+        if _sha256_file(evidence_path) != expected_sha:
+            return False
+        evidence = _load_json(evidence_path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+    if not isinstance(evidence, dict) or evidence.get("validated") is not True:
+        return False
+    candidate = evidence.get("candidate")
+    if isinstance(candidate, dict):
+        evidence_version = candidate.get("version_id")
+        if evidence_version not in (None, "") and evidence_version != version:
+            return False
+    return True
+
+
 def _promoted_live_version_from_pointer(root: Path) -> str | None:
     live_path = root / "live.json"
     if not live_path.is_file():
@@ -56,7 +98,8 @@ def _promoted_live_version_from_pointer(root: Path) -> str | None:
         return None
     if payload.get("validation_stage") != "live":
         return None
-    if payload.get("source_validation_stage") not in {"canary", "live"}:
+    source_stage = payload.get("source_validation_stage")
+    if source_stage not in {"canary", "live"}:
         return None
 
     version = payload.get("version_id")
@@ -77,6 +120,14 @@ def _promoted_live_version_from_pointer(root: Path) -> str | None:
                 return None
         except OSError:
             return None
+
+    if not _live_validation_evidence_matches(
+        root,
+        payload=payload,
+        version=version,
+        source_stage=source_stage,
+    ):
+        return None
 
     return version
 
