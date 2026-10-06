@@ -194,3 +194,32 @@ def test_multisource_gate_rejects_malformed_aggregate_types() -> None:
         in decision.reasons
     )
 
+def test_multisource_gate_rejects_tampered_declared_scenario_hashes() -> None:
+    payload = build_multisource_duel([
+        _duel("a"),
+        _duel("b"),
+        _duel("c"),
+    ])
+    payload["scenario_sha256s"][1] = "d" * 64
+
+    decision = decide_multisource_duel_gate(payload)
+
+    assert not decision.eligible_to_replace_champion
+    assert "scenario_sha256s_mismatch" in decision.reasons
+
+
+def test_multisource_gate_rejects_malformed_wrapper_collections() -> None:
+    payload = build_multisource_duel([
+        _duel("a"),
+        _duel("b"),
+        _duel("c"),
+    ])
+    payload["scenario_sha256s"] = "not-a-list"
+    payload["sources"] = {"not": "a-list"}
+
+    decision = decide_multisource_duel_gate(payload)
+
+    assert not decision.eligible_to_replace_champion
+    assert "invalid_sources_payload" in decision.reasons
+    assert "invalid_scenario_sha256s_payload" in decision.reasons
+
