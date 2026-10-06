@@ -139,6 +139,7 @@ def elite_gate_evidence_issues(
         issues.append(f"missing_{split_key}.by_role")
         by_role = {}
 
+    valid_role_samples: list[int] = []
     for role in EXPECTED_ROLES:
         row = by_role.get(role)
         if not isinstance(row, dict):
@@ -147,13 +148,16 @@ def elite_gate_evidence_issues(
         if "samples" not in row:
             issues.append(f"missing_{split_key}.by_role.{role}.samples")
         else:
+            role_samples = row["samples"]
             _validate_number(
                 issues,
-                row["samples"],
+                role_samples,
                 f"{split_key}.by_role.{role}.samples",
                 minimum=1.0,
                 integer=True,
             )
+            if type(role_samples) is int and role_samples >= 1:
+                valid_role_samples.append(role_samples)
         if "direction_accuracy" not in row:
             issues.append(
                 f"missing_{split_key}.by_role.{role}.direction_accuracy"
@@ -182,6 +186,19 @@ def elite_gate_evidence_issues(
                 "majority_direction_accuracy",
                 minimum=0.0,
                 maximum=1.0,
+            )
+
+    aggregate_samples = split.get("samples")
+    if (
+        type(aggregate_samples) is int
+        and aggregate_samples >= 1
+        and len(valid_role_samples) == len(EXPECTED_ROLES)
+    ):
+        role_sample_total = sum(valid_role_samples)
+        if role_sample_total != aggregate_samples:
+            issues.append(
+                f"{split_key}.samples_mismatch_by_role:"
+                f"{aggregate_samples}!={role_sample_total}"
             )
 
     return issues
