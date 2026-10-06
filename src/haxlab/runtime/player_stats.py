@@ -44,6 +44,7 @@ def collect(root: Path) -> list[dict]:
             "name_counts": Counter(),
             "matches": 0,
             "samples": 0,
+            "active_minutes": 0.0,
             "nearest_ball_samples": 0,
             "close_ball_samples": 0,
             "input_events": 0,
@@ -72,6 +73,17 @@ def collect(root: Path) -> list[dict]:
         if int(payload.get("schemaVersion") or 0) not in (3, 4):
             continue
 
+        simulation = payload.get("simulation") or {}
+        if not isinstance(simulation, dict):
+            continue
+        sample_every_ticks = simulation.get("sampleEveryTicks", 6)
+        if (
+            isinstance(sample_every_ticks, bool)
+            or not isinstance(sample_every_ticks, int)
+            or sample_every_ticks <= 0
+        ):
+            continue
+
         seen: set[str] = set()
         for player in payload.get("players") or []:
             key = _identity_key(player)
@@ -87,7 +99,11 @@ def collect(root: Path) -> list[dict]:
                 row["matches"] += 1
                 seen.add(key)
 
-            row["samples"] += int(player.get("samples") or 0)
+            player_samples = int(player.get("samples") or 0)
+            row["samples"] += player_samples
+            row["active_minutes"] += (
+                player_samples * sample_every_ticks / 3600.0
+            )
             row["nearest_ball_samples"] += int(player.get("nearestBallSamples") or 0)
             row["close_ball_samples"] += int(player.get("closeBallSamples") or 0)
             row["input_events"] += int(player.get("inputEvents") or 0)
@@ -119,7 +135,7 @@ def collect(root: Path) -> list[dict]:
     for row in totals.values():
         if row["name_counts"]:
             row["name"] = row["name_counts"].most_common(1)[0][0]
-        active_minutes = row["samples"] / 600.0  # 10 Hz state sampling.
+        active_minutes = row["active_minutes"]
         retained_touch_transitions = (
             row["self_retouches"] + row["team_touch_transfers_out"]
         )
@@ -128,7 +144,6 @@ def collect(root: Path) -> list[dict]:
         rows.append(
             {
                 **output_row,
-                "active_minutes": active_minutes,
                 "nearest_ball_pct": 100.0
                 * _safe_div(row["nearest_ball_samples"], row["samples"]),
                 "close_ball_pct": 100.0
