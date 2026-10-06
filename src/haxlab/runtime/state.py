@@ -342,6 +342,20 @@ class RuntimeState:
         self.connection.commit()
 
     def status_snapshot(self) -> dict[str, object]:
+        """Return all runtime counters from one consistent SQLite snapshot."""
+
+        owns_transaction = not self.connection.in_transaction
+        if owns_transaction:
+            self.connection.execute("BEGIN")
+        try:
+            return self._status_snapshot_in_transaction()
+        finally:
+            if owns_transaction:
+                # Read-only transaction: rollback simply releases the snapshot
+                # and avoids accidentally committing unrelated future writes.
+                self.connection.rollback()
+
+    def _status_snapshot_in_transaction(self) -> dict[str, object]:
         source = {
             row["status"]: row["count"]
             for row in self.connection.execute(
