@@ -1,0 +1,83 @@
+name: Data pipeline live integrity proof
+
+on:
+  push:
+    branches:
+      - feature/data-pipeline-vps-audit-control-20261006
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-data-pipeline-live-integrity-proof
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Validate VPS control syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n deploy/haxlab-actions-control.sh
+          python3 -m pytest -q tests/test_data_pipeline_vps_control.py
+
+      - name: Validate deployed ingest integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          JSON="$(sudo /usr/local/sbin/haxlab-actions-control status | sed -n '/^{/,$p')"
+          python3 - "$JSON" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+print(json.dumps({
+    "unique_replays": payload.get("unique_replays"),
+    "source_failed": payload.get("source_failed"),
+    "recent_ingest_events_1h": payload.get("recent_ingest_events_1h"),
+    "ingest_integrity_ok": payload.get("ingest_integrity_ok"),
+}, sort_keys=True))
+if payload.get("unique_replays") != 7775:
+    raise SystemExit("unexpected replay ledger size")
+if payload.get("ingest_integrity_ok") is not True:
+    raise SystemExit("ingest integrity gate is not green")
+PY
+
+      - name: Audit immutable raw archive against live ledger
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            /opt/haxlab/.venv/bin/python -m haxlab.runtime.archive_audit \
+            --state-db /var/lib/haxlab/state/haxlab.sqlite3 \
+            --max-issues 25 | tee /tmp/haxlab-archive-audit.json
+          python3 - /tmp/haxlab-archive-audit.json <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
+print(json.dumps(payload, sort_keys=True))
+if payload.get("ok") is not True:
+    raise SystemExit("raw archive audit failed")
+if payload.get("checked_records") != 7775:
+    raise SystemExit("raw archive audit did not cover the full ledger")
+if payload.get("existing_files") != payload.get("checked_records"):
+    raise SystemExit("not every ledger record has a regular archive file")
+PY
+
+      - name: Record exact-head proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "DATA_PIPELINE_LIVE_PROOF_HEAD=$(git rev-parse HEAD)"
+          echo "DATA_PIPELINE_LIVE_PROOF_RESULT=green"
