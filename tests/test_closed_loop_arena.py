@@ -68,12 +68,18 @@ def _payload() -> dict:
             "partner_model_count": 2,
             "summary": {
                 "matches": 16,
+                "wins": 0,
+                "draws": 16,
+                "losses": 0,
                 "proxy_match_score": 0.5,
             },
             "by_role": {
                 role: {
                     "team_outcome": {
                         "matches": 4,
+                        "wins": 0,
+                        "draws": 4,
+                        "losses": 0,
                         "proxy_match_score": 0.5,
                         "candidate": {},
                         "reference": {},
@@ -471,3 +477,89 @@ def test_stringified_role_metric_fails_closed() -> None:
         "invalid_metric:st:candidate:far_stall_rate:non_numeric"
         in decision.reasons
     )
+
+
+def test_team_outcome_tally_mismatch_fails_closed() -> None:
+    payload = _payload()
+    payload["team_mode"]["summary"]["wins"] = 1
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert (
+        "invalid_outcome:team:tally_mismatch:9!=8"
+        in decision.reasons
+    )
+
+
+def test_team_proxy_score_must_match_declared_outcomes() -> None:
+    payload = _payload()
+    payload["team_mode"]["summary"]["proxy_match_score"] = 0.75
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert (
+        "invalid_outcome:team:proxy_match_score_mismatch:"
+        "0.750000000000!=0.500000000000"
+        in decision.reasons
+    )
+
+
+def test_role_proxy_score_must_match_role_outcomes() -> None:
+    payload = _payload()
+    payload["plug_and_play"]["by_role"]["am"]["team_outcome"][
+        "proxy_match_score"
+    ] = 0.75
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert (
+        "invalid_outcome:am:proxy_match_score_mismatch:"
+        "0.750000000000!=0.500000000000"
+        in decision.reasons
+    )
+
+
+def test_plug_summary_must_equal_role_outcome_totals() -> None:
+    payload = _payload()
+    summary = payload["plug_and_play"]["summary"]
+    summary["matches"] = 17
+    summary["draws"] = 17
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "plug_summary_matches_mismatch:17!=16" in decision.reasons
+    assert "plug_summary_draws_mismatch:17!=16" in decision.reasons
+
+
+def test_stringified_outcome_tally_fails_closed() -> None:
+    payload = _payload()
+    payload["team_mode"]["summary"]["wins"] = "0"
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "invalid_metric:team:wins:non_numeric" in decision.reasons
