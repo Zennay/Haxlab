@@ -119,6 +119,17 @@ def _require_mapping(
     return value
 
 
+def _reject_unexpected_role_keys(
+    failures: list[str],
+    *,
+    mapping: dict[Any, Any],
+    label: str,
+) -> None:
+    for key in mapping:
+        if key not in ROLES:
+            failures.append(f"{label}:unexpected_role:{key!r}")
+
+
 def _validate_outcome_summary(
     failures: list[str],
     *,
@@ -256,6 +267,11 @@ def decide_closed_loop_arena(
         team_mode.get("roles"),
         "team_mode:roles",
     )
+    _reject_unexpected_role_keys(
+        structural_failures,
+        mapping=team_roles,
+        label="team_mode:roles",
+    )
     (
         team_matches,
         team_wins,
@@ -362,6 +378,11 @@ def decide_closed_loop_arena(
         structural_failures,
         plug.get("by_role"),
         "plug_and_play:by_role",
+    )
+    _reject_unexpected_role_keys(
+        structural_failures,
+        mapping=by_role,
+        label="plug_and_play:by_role",
     )
     role_checks: dict[str, Any] = {}
     for role in ROLES:
