@@ -197,6 +197,7 @@ def _existing_generation_loop(tmp_path):
         "next_generation": 2,
         "champion": {
             "id": "gen-0001",
+            "generation": 1,
             "metrics": champion_metrics,
             "score": composite_score(champion_metrics),
         },
