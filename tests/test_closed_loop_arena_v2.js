@@ -249,10 +249,17 @@ assert.ok(finished.context_adaptation_rate <= 1);
 
 function pairRoleMetrics() {
   return {
+    policy_samples: 10,
+    kicks: 1,
     near_ball_rate: 0.2,
+    close_ball_rate: 0.1,
     boundary_rate: 0.0,
     ood_rate: 0.01,
+    ood_max_abs_z: 1.5,
     far_stall_rate: 0.05,
+    max_far_stall_seconds: 0.4,
+    context_adaptations: 3,
+    context_misses: 1,
     context_adaptation_rate: 0.75,
     average_ball_distance: 200,
     average_role_deviation: 120,
@@ -389,6 +396,63 @@ assert.throws(
     referenceIdentityRow,
   ),
   /candidate gk\.runtime_errors must be a safe integer/,
+);
+
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      test_team: {
+        roles: {
+          ...candidateIdentityRow.test_team.roles,
+          dm: {
+            ...candidateIdentityRow.test_team.roles.dm,
+            policy_samples: 0,
+          },
+        },
+      },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate dm\.policy_samples is out of range/,
+);
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      test_team: {
+        roles: {
+          ...candidateIdentityRow.test_team.roles,
+          st: {
+            ...candidateIdentityRow.test_team.roles.st,
+            close_ball_rate: 0.3,
+            near_ball_rate: 0.2,
+          },
+        },
+      },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate st\.close_ball_rate exceeds near_ball_rate/,
+);
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      test_team: {
+        roles: {
+          ...candidateIdentityRow.test_team.roles,
+          am: {
+            ...candidateIdentityRow.test_team.roles.am,
+            context_adaptations: 8,
+            context_misses: 4,
+          },
+        },
+      },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate am\.context event count exceeds policy_samples/,
 );
 assert.throws(
   () => pairArenaRows(
