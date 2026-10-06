@@ -151,24 +151,20 @@ def decide_closed_loop_arena(
         "policy_version": policy.policy_version,
         "policy_calibrated": policy.calibrated,
         "schema": payload.get("schema"),
-        "raw_policy_only": bool(payload.get("raw_policy_only")),
-        "safety_recovery_enabled": bool(
-            payload.get("safety_recovery_enabled")
-        ),
-        "paired_reference_design": bool(
-            payload.get("paired_reference_design")
-        ),
+        "raw_policy_only": payload.get("raw_policy_only"),
+        "safety_recovery_enabled": payload.get("safety_recovery_enabled"),
+        "paired_reference_design": payload.get("paired_reference_design"),
     }
 
     if payload.get("schema") != ARENA_SCHEMA:
         structural_failures.append(
             f"unsupported_schema:{payload.get('schema') or 'missing'}"
         )
-    if not payload.get("raw_policy_only"):
+    if payload.get("raw_policy_only") is not True:
         structural_failures.append("arena_must_measure_raw_policy")
-    if payload.get("safety_recovery_enabled"):
+    if payload.get("safety_recovery_enabled") is not False:
         structural_failures.append("safety_recovery_must_be_disabled")
-    if not payload.get("paired_reference_design"):
+    if payload.get("paired_reference_design") is not True:
         structural_failures.append("paired_reference_design_required")
 
     team_mode = payload.get("team_mode") or {}
