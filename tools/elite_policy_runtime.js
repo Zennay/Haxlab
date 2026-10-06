@@ -29,6 +29,51 @@ function softmax(logits) {
   return exp.map((value) => value / total);
 }
 
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function requireFiniteNumber(value, label, { min = -Infinity, max = Infinity } = {}) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${label} must be a finite native number`);
+  }
+  if (value < min || value > max) {
+    throw new Error(`${label} must be within [${min}, ${max}]`);
+  }
+  return value;
+}
+
+function requireNativeInteger(value, label, { min = -Infinity, max = Infinity } = {}) {
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    throw new Error(`${label} must be a native integer`);
+  }
+  if (value < min || value > max) {
+    throw new Error(`${label} must be within [${min}, ${max}]`);
+  }
+  return value;
+}
+
+function requireNumericVector(value, label, expectedLength = null) {
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array`);
+  }
+  if (expectedLength != null && value.length !== expectedLength) {
+    throw new Error(`${label} length ${value.length}; expected ${expectedLength}`);
+  }
+  return value.map((item, index) =>
+    requireFiniteNumber(item, `${label}[${index}]`),
+  );
+}
+
+function requireNumericMatrix(value, label, expectedRows, expectedColumns) {
+  if (!Array.isArray(value) || value.length !== expectedRows) {
+    throw new Error(`${label} rows ${value?.length}; expected ${expectedRows}`);
+  }
+  return value.map((row, index) =>
+    requireNumericVector(row, `${label}[${index}]`, expectedColumns),
+  );
+}
+
 function dense(input, weights, bias, relu = false) {
   if (!Array.isArray(weights) || weights.length !== input.length) {
     throw new Error(
@@ -60,42 +105,155 @@ function dense(input, weights, bias, relu = false) {
 
 class ElitePolicyRuntime {
   constructor(model) {
-    if (!model || model.schema !== "haxlab-elite-js-runtime-v1") {
+    if (!isPlainObject(model) || model.schema !== "haxlab-elite-js-runtime-v1") {
       throw new Error(
         `unsupported runtime model schema: ${model?.schema || "missing"}`,
       );
     }
-    this.model = model;
-    this.window = Number(model.window);
-    this.inputColumns = model.base_input_columns.slice();
-    this.featureOrdering = String(
-      model.feature_ordering || "nearest-distance-v1",
-    );
-    this.mean = model.mean.map(Number);
-    this.std = model.std.map(Number);
-    this.roleIds = { ...ROLE_IDS, ...(model.role_ids || {}) };
-    this.directionClasses = model.direction_classes.slice();
-    this.kickThreshold = Number(model.kick_threshold);
-    this.kickThresholdsByRole = Object.fromEntries(
-      Object.entries(model.kick_thresholds_by_role || {}).map(
-        ([role, value]) => [role, Number(value)],
-      ),
-    );
-    this.kickMaxDistance = Number(model.kick_max_distance ?? 31.0);
-    this.weights = model.weights;
-    this.futureHeadAvailable =
-      Array.isArray(this.weights.wf) && Array.isArray(this.weights.bf);
-    this.history = new Map();
 
-    if (!Number.isInteger(this.window) || this.window < 1) {
-      throw new Error(`invalid window: ${model.window}`);
+    this.window = requireNativeInteger(model.window, "window", { min: 1 });
+
+    if (!Array.isArray(model.base_input_columns) || model.base_input_columns.length === 0) {
+      throw new Error("base_input_columns must be a non-empty array");
     }
-    if (this.mean.length !== this.inputColumns.length) {
-      throw new Error("mean/input column length mismatch");
+    this.inputColumns = model.base_input_columns.map((value, index) => {
+      if (typeof value !== "string" || value.trim() === "") {
+        throw new Error(`base_input_columns[${index}] must be a non-empty string`);
+      }
+      return value;
+    });
+    if (new Set(this.inputColumns).size !== this.inputColumns.length) {
+      throw new Error("base_input_columns must not contain duplicates");
     }
-    if (this.std.length !== this.inputColumns.length) {
-      throw new Error("std/input column length mismatch");
+
+    if (
+      model.feature_ordering != null &&
+      (typeof model.feature_ordering !== "string" || model.feature_ordering.trim() === "")
+    ) {
+      throw new Error("feature_ordering must be a non-empty string when provided");
     }
+    this.featureOrdering = model.feature_ordering || "nearest-distance-v1";
+
+    this.mean = requireNumericVector(model.mean, "mean", this.inputColumns.length);
+    this.std = requireNumericVector(model.std, "std", this.inputColumns.length);
+
+    if (model.role_ids != null && !isPlainObject(model.role_ids)) {
+      throw new Error("role_ids must be an object when provided");
+    }
+    this.roleIds = { ...ROLE_IDS, ...(model.role_ids || {}) };
+    for (const [role, value] of Object.entries(this.roleIds)) {
+      requireNativeInteger(value, `role_ids.${role}`, { min: 0, max: 3 });
+    }
+
+    if (!Array.isArray(model.direction_classes) || model.direction_classes.length === 0) {
+      throw new Error("direction_classes must be a non-empty array");
+    }
+    this.directionClasses = model.direction_classes.map((row, index) => {
+      if (!isPlainObject(row)) {
+        throw new Error(`direction_classes[${index}] must be an object`);
+      }
+      return {
+        ...row,
+        dir_x: requireFiniteNumber(row.dir_x, `direction_classes[${index}].dir_x`, {
+          min: -1,
+          max: 1,
+        }),
+        dir_y: requireFiniteNumber(row.dir_y, `direction_classes[${index}].dir_y`, {
+          min: -1,
+          max: 1,
+        }),
+      };
+    });
+
+    this.kickThreshold = requireFiniteNumber(model.kick_threshold, "kick_threshold", {
+      min: 0,
+      max: 1,
+    });
+    if (
+      model.kick_thresholds_by_role != null &&
+      !isPlainObject(model.kick_thresholds_by_role)
+    ) {
+      throw new Error("kick_thresholds_by_role must be an object when provided");
+    }
+    this.kickThresholdsByRole = Object.fromEntries(
+      Object.entries(model.kick_thresholds_by_role || {}).map(([role, value]) => [
+        role,
+        requireFiniteNumber(value, `kick_thresholds_by_role.${role}`, {
+          min: 0,
+          max: 1,
+        }),
+      ]),
+    );
+    this.kickMaxDistance = requireFiniteNumber(
+      model.kick_max_distance ?? 31.0,
+      "kick_max_distance",
+      { min: 0 },
+    );
+
+    if (!isPlainObject(model.weights)) {
+      throw new Error("weights must be an object");
+    }
+    const weights = model.weights;
+    const inputDim = this.window * this.inputColumns.length + 4;
+
+    const b1 = requireNumericVector(weights.b1, "weights.b1");
+    if (b1.length === 0) throw new Error("weights.b1 may not be empty");
+    const w1 = requireNumericMatrix(weights.w1, "weights.w1", inputDim, b1.length);
+
+    const b2 = requireNumericVector(weights.b2, "weights.b2");
+    if (b2.length === 0) throw new Error("weights.b2 may not be empty");
+    const w2 = requireNumericMatrix(weights.w2, "weights.w2", b1.length, b2.length);
+
+    const bd = requireNumericVector(
+      weights.bd,
+      "weights.bd",
+      this.directionClasses.length,
+    );
+    const wd = requireNumericMatrix(
+      weights.wd,
+      "weights.wd",
+      b2.length,
+      bd.length,
+    );
+
+    const bk = requireNumericVector(weights.bk, "weights.bk", 1);
+    const wk = requireNumericMatrix(weights.wk, "weights.wk", b2.length, 1);
+
+    const hasWf = weights.wf != null;
+    const hasBf = weights.bf != null;
+    if (hasWf !== hasBf) {
+      throw new Error("future head requires both weights.wf and weights.bf");
+    }
+
+    const normalizedWeights = { ...weights, w1, b1, w2, b2, wd, bd, wk, bk };
+    if (hasWf) {
+      normalizedWeights.bf = requireNumericVector(
+        weights.bf,
+        "weights.bf",
+        this.directionClasses.length,
+      );
+      normalizedWeights.wf = requireNumericMatrix(
+        weights.wf,
+        "weights.wf",
+        b2.length,
+        normalizedWeights.bf.length,
+      );
+    }
+
+    this.weights = normalizedWeights;
+    this.futureHeadAvailable = hasWf;
+    this.model = {
+      ...model,
+      base_input_columns: this.inputColumns.slice(),
+      mean: this.mean.slice(),
+      std: this.std.slice(),
+      direction_classes: this.directionClasses.map((row) => ({ ...row })),
+      kick_threshold: this.kickThreshold,
+      kick_thresholds_by_role: { ...this.kickThresholdsByRole },
+      kick_max_distance: this.kickMaxDistance,
+      weights: this.weights,
+    };
+    this.history = new Map();
   }
 
   static fromFile(path) {
