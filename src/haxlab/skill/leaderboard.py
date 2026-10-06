@@ -264,7 +264,7 @@ def _normalize(
     value: float | None,
     normalizers: dict[tuple[str, str], tuple[float, float]],
 ) -> float | None:
-    if value is None:
+    if value is None or not math.isfinite(float(value)):
         return None
     params = normalizers.get((role, dimension))
     if params is None:
