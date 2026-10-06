@@ -247,16 +247,89 @@ assert.ok(finished.context_adaptation_rate <= 1);
 
 
 
-const identityRow = {
+const candidateIdentityRow = {
   mode: "full_team",
+  tested_kind: "challenger",
   tested_role: null,
   scenario_index: 1,
   test_team_id: 1,
   repeat_index: 0,
   proxy: { test_score: 0.123 },
 };
-const identityPair = pairArenaRows(identityRow, { ...identityRow });
+const referenceIdentityRow = {
+  ...candidateIdentityRow,
+  tested_kind: "reference",
+};
+const identityPair = pairArenaRows(
+  candidateIdentityRow,
+  referenceIdentityRow,
+);
 assert.strictEqual(identityPair.result, "draw");
 assert.strictEqual(identityPair.proxy_delta, 0);
+
+assert.throws(
+  () => pairArenaRows(
+    { ...candidateIdentityRow, tested_kind: "reference" },
+    referenceIdentityRow,
+  ),
+  /candidate tested_kind must be challenger/,
+);
+assert.throws(
+  () => pairArenaRows(
+    candidateIdentityRow,
+    { ...referenceIdentityRow, tested_kind: "challenger" },
+  ),
+  /reference tested_kind must be reference/,
+);
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      proxy: { test_score: "0.123" },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate proxy\.test_score must be a finite rate/,
+);
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      proxy: { test_score: Number.NaN },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate proxy\.test_score must be a finite rate/,
+);
+assert.throws(
+  () => pairArenaRows(
+    { ...candidateIdentityRow, test_team_id: 3 },
+    referenceIdentityRow,
+  ),
+  /candidate has invalid test_team_id/,
+);
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      mode: "plug_and_play",
+      tested_role: "sweeper",
+    },
+    {
+      ...referenceIdentityRow,
+      mode: "plug_and_play",
+      tested_role: "sweeper",
+    },
+  ),
+  /candidate plug_and_play row has invalid tested_role/,
+);
+assert.throws(
+  () => pairArenaRows(
+    candidateIdentityRow,
+    referenceIdentityRow,
+    Number.NaN,
+  ),
+  /arena tie margin must be a finite rate/,
+);
 
 console.log("test_closed_loop_arena_v2: ok");
