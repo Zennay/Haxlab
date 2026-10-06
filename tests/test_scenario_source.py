@@ -5,6 +5,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 import haxlab.evaluation.scenario_source as scenario_source
 
 
@@ -44,6 +46,60 @@ def _db(path: Path) -> None:
         db.commit()
     finally:
         db.close()
+
+
+@pytest.mark.parametrize("bad_value", [True, 1.5, "2", 0, -1])
+def test_select_scenario_source_rejects_invalid_max_candidates(
+    tmp_path: Path,
+    bad_value,
+) -> None:
+    db_path = tmp_path / "state.sqlite3"
+    _db(db_path)
+
+    with pytest.raises(
+        ValueError,
+        match="max_candidates must be a native positive integer",
+    ):
+        scenario_source.select_scenario_source(
+            db_path,
+            max_candidates=bad_value,
+        )
+
+
+@pytest.mark.parametrize("bad_value", [True, 1.5, "2", 0, -1])
+def test_select_scenario_sources_rejects_invalid_count(
+    tmp_path: Path,
+    bad_value,
+) -> None:
+    db_path = tmp_path / "state.sqlite3"
+    _db(db_path)
+
+    with pytest.raises(
+        ValueError,
+        match="count must be a native positive integer",
+    ):
+        scenario_source.select_scenario_sources(
+            db_path,
+            count=bad_value,
+        )
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    ["not-a-sha", "a" * 63, "g" * 64, 123],
+)
+def test_selector_rejects_malformed_exclusion_provenance(
+    tmp_path: Path,
+    bad_value,
+) -> None:
+    db_path = tmp_path / "state.sqlite3"
+    _db(db_path)
+
+    with pytest.raises(ValueError, match="exclude_sha256"):
+        scenario_source.select_scenario_source(
+            db_path,
+            exclude_sha256={bad_value},  # type: ignore[arg-type]
+        )
 
 
 def test_select_scenario_source_skips_excluded_sha(
@@ -169,7 +225,145 @@ def test_healthy_candidate_verifies_raw_replay_sha(
     assert candidate is not None
     assert candidate["sha256"] == raw_sha
     assert candidate["raw_file_sha256_verified"] is True
+    assert candidate["analysis_sha256"] == hashlib.sha256(
+        analysis.read_bytes()
+    ).hexdigest()
     assert candidate["sampled_states"] == 100
+
+
+def test_healthy_candidate_analysis_fingerprint_tracks_exact_bytes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    raw, analysis, raw_sha = _candidate_files(tmp_path)
+    monkeypatch.setattr(scenario_source, "infer_roles_4v4", _fake_roles)
+
+    first = scenario_source._healthy_candidate(
+        sha256=raw_sha,
+        raw_path=str(raw),
+        analysis_path=str(analysis),
+        sampled_states=100,
+    )
+    assert first is not None
+
+    payload = json.loads(analysis.read_text(encoding="utf-8"))
+    analysis.write_text(
+        json.dumps(payload, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    second = scenario_source._healthy_candidate(
+        sha256=raw_sha,
+        raw_path=str(raw),
+        analysis_path=str(analysis),
+        sampled_states=100,
+    )
+    assert second is not None
+    assert second["analysis_sha256"] == hashlib.sha256(
+        analysis.read_bytes()
+    ).hexdigest()
+    assert second["analysis_sha256"] != first["analysis_sha256"]
+
+
+def test_healthy_candidate_rejects_symlinked_source_artifacts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    raw, analysis, raw_sha = _candidate_files(tmp_path)
+    monkeypatch.setattr(scenario_source, "infer_roles_4v4", _fake_roles)
+
+    raw_link = tmp_path / "raw-link.hbr2"
+    raw_link.symlink_to(raw)
+    assert (
+        scenario_source._healthy_candidate(
+            sha256=raw_sha,
+            raw_path=str(raw_link),
+            analysis_path=str(analysis),
+            sampled_states=100,
+        )
+        is None
+    )
+
+    analysis_link = tmp_path / "analysis-link.json"
+    analysis_link.symlink_to(analysis)
+    assert (
+        scenario_source._healthy_candidate(
+            sha256=raw_sha,
+            raw_path=str(raw),
+            analysis_path=str(analysis_link),
+            sampled_states=100,
+        )
+        is None
+    )
+
+
+def test_healthy_candidate_rejects_non_file_source_artifacts(
+    tmp_path: Path,
+) -> None:
+    raw, analysis, raw_sha = _candidate_files(tmp_path)
+    directory = tmp_path / "not-a-file"
+    directory.mkdir()
+
+    assert (
+        scenario_source._healthy_candidate(
+            sha256=raw_sha,
+            raw_path=str(directory),
+            analysis_path=str(analysis),
+            sampled_states=100,
+        )
+        is None
+    )
+    assert (
+        scenario_source._healthy_candidate(
+            sha256=raw_sha,
+            raw_path=str(raw),
+            analysis_path=str(directory),
+            sampled_states=100,
+        )
+        is None
+    )
+
+
+def test_healthy_candidate_rejects_malformed_role_evidence(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    raw, analysis, raw_sha = _candidate_files(tmp_path)
+
+    def bad_role_type(players):
+        rows = _fake_roles(players)
+        rows[1]["role"] = 123
+        return rows
+
+    monkeypatch.setattr(scenario_source, "infer_roles_4v4", bad_role_type)
+    assert (
+        scenario_source._healthy_candidate(
+            sha256=raw_sha,
+            raw_path=str(raw),
+            analysis_path=str(analysis),
+            sampled_states=100,
+        )
+        is None
+    )
+
+    def impossible_confidence(players):
+        rows = _fake_roles(players)
+        rows[1]["confidence"] = 1.01
+        return rows
+
+    monkeypatch.setattr(
+        scenario_source,
+        "infer_roles_4v4",
+        impossible_confidence,
+    )
+    assert (
+        scenario_source._healthy_candidate(
+            sha256=raw_sha,
+            raw_path=str(raw),
+            analysis_path=str(analysis),
+            sampled_states=100,
+        )
+        is None
+    )
 
 
 def test_healthy_candidate_rejects_raw_sha_mismatch(
