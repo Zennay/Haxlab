@@ -1,0 +1,52 @@
+name: Validate sandbox start input integrity
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Exact lowercase 40-character commit SHA to validate
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 10
+    steps:
+      - name: Validate requested immutable SHA
+        shell: bash
+        env:
+          REQUESTED_SHA: ${{ inputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "commit_sha must be an exact lowercase 40-character SHA" >&2
+            exit 1
+          fi
+
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_sha }}
+          fetch-depth: 1
+
+      - name: Verify exact checkout
+        shell: bash
+        env:
+          REQUESTED_SHA: ${{ inputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$REQUESTED_SHA"
+
+      - name: Run focused Node regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check tools/sandbox_neutral_start.js
+          node --check tools/sandbox_replay_start.js
+          NODE_PATH=/opt/haxlab/node_modules node tests/test_replay_scenario_state_integrity.js
+          NODE_PATH=/opt/haxlab/node_modules node tests/test_sandbox_start_input_integrity.js
