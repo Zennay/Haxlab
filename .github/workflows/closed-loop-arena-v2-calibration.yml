@@ -139,19 +139,6 @@ jobs:
                       "the exact historical Candidate D metrics before calibration can run"
                   )
 
-          frozen_manifest = Path(
-              "/var/lib/haxlab/derived/evaluation/candidate-d-multisource-holdout-v1/frozen-manifest.json"
-          )
-          frozen_manifest_hash = "541b635e34492e9409c5d0fbe2ffd6303c75a2cd10348aebee9e5df49669a609"
-          if not frozen_manifest.is_file():
-              raise SystemExit(f"missing frozen Candidate D evaluation manifest: {frozen_manifest}")
-          actual_manifest_hash = hashlib.sha256(frozen_manifest.read_bytes()).hexdigest()
-          if actual_manifest_hash != frozen_manifest_hash:
-              raise SystemExit(
-                  "frozen Candidate D evaluation manifest hash mismatch: "
-                  f"{actual_manifest_hash} != {frozen_manifest_hash}"
-              )
-          print("ARENA_CANDIDATE_D_INPUTS_PRESENT_EVAL_MANIFEST_VERIFIED")
           PY
 
             sudo -u haxlab rm -rf /var/lib/haxlab/derived/training/elite-player-candidate-d
@@ -178,6 +165,18 @@ jobs:
               > /tmp/haxlab-candidate-d-rehydrate.log
             echo "ARENA_CANDIDATE_D_REHYDRATE_END"
           fi
+
+          FROZEN_MANIFEST="$ROOT/frozen-manifest.json"
+          FROZEN_MANIFEST_EXPECTED_SHA="541b635e34492e9409c5d0fbe2ffd6303c75a2cd10348aebee9e5df49669a609"
+          require_readable frozen-manifest "$FROZEN_MANIFEST"
+          FROZEN_MANIFEST_ACTUAL_SHA="$(
+            sudo -u haxlab sha256sum "$FROZEN_MANIFEST" | awk '{print $1}'
+          )"
+          if [ "$FROZEN_MANIFEST_ACTUAL_SHA" != "$FROZEN_MANIFEST_EXPECTED_SHA" ]; then
+            echo "::error title=Frozen manifest provenance mismatch::actual=$FROZEN_MANIFEST_ACTUAL_SHA expected=$FROZEN_MANIFEST_EXPECTED_SHA"
+            exit 1
+          fi
+          echo "ARENA_FROZEN_MANIFEST_HASH_VERIFIED sha256=$FROZEN_MANIFEST_ACTUAL_SHA"
 
           require_readable candidate-d "$CAND_D"
           require_readable candidate-d-metrics /var/lib/haxlab/derived/training/elite-player-candidate-d/model/metrics.json
@@ -218,7 +217,6 @@ jobs:
           require_readable live-runtime "$LIVE_RUNTIME"
           require_readable partner-b "$PARTNER_B"
           require_readable partner-c "$PARTNER_C"
-          require_readable frozen-manifest "$ROOT/frozen-manifest.json"
           for I in 01 02 03; do
             require_readable "source-$I-stadium" "$ROOT/source-$I/stadium.hbs"
             require_readable "source-$I-scenarios" "$ROOT/source-$I/scenarios.json"
