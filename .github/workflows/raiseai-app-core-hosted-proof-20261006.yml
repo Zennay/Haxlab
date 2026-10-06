@@ -21,7 +21,7 @@ jobs:
           - lane: runtime-counter-saturation
             sha: a2730d215ca0a585d586d48b6e1ca7f562165db6
           - lane: sensor-registration-fail-closed
-            sha: 6a9a9f10c1d1f1e157eef4171887ea392dddb243
+            sha: 6308ad015761d3d1c820ca60fc9bb7d7dfe799b1
     steps:
       - name: Checkout exact RaiseAI head
         uses: actions/checkout@v4
