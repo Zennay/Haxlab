@@ -13,6 +13,9 @@ EVALUATION_MODE = (
     "paired_raw_policy_full_team_plus_plug_and_play_context_generalization_v2"
 )
 ROLES = ("gk", "dm", "am", "st")
+CALIBRATED_MIN_SECONDS = 30.0
+CALIBRATED_SAMPLE_EVERY = 6
+PAIR_TIE_MARGIN = 0.025
 
 
 @dataclass(frozen=True)
@@ -199,6 +202,30 @@ def _require_raw_outcomes_match(
 
 
 _ANY_ROLE = object()
+
+
+def _native_number_value(
+    failures: list[str],
+    value: Any,
+    label: str,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float | None:
+    if isinstance(value, bool) or type(value) not in (int, float):
+        failures.append(f"invalid_metric:{label}:non_numeric")
+        return None
+    number = float(value)
+    if not math.isfinite(number):
+        failures.append(f"invalid_metric:{label}:non_finite")
+        return None
+    if minimum is not None and number < minimum:
+        failures.append(f"invalid_metric:{label}:below_minimum")
+        return None
+    if maximum is not None and number > maximum:
+        failures.append(f"invalid_metric:{label}:above_maximum")
+        return None
+    return number
 
 
 def _native_integer_value(
@@ -816,6 +843,31 @@ def decide_closed_loop_arena(
         payload.get("config"),
         "config",
     )
+    seconds = _native_number_value(
+        structural_failures,
+        config.get("seconds"),
+        "config:seconds",
+        minimum=5.0,
+    )
+    sample_every = _native_integer_value(
+        structural_failures,
+        config.get("sample_every"),
+        "config:sample_every",
+        minimum=1,
+    )
+    seed = _native_integer_value(
+        structural_failures,
+        config.get("seed"),
+        "config:seed",
+        minimum=1,
+    )
+    pair_tie_margin = _native_number_value(
+        structural_failures,
+        config.get("pair_tie_margin"),
+        "config:pair_tie_margin",
+        minimum=0.0,
+        maximum=1.0,
+    )
     scenario_count = _native_integer_value(
         structural_failures,
         config.get("scenario_count"),
@@ -848,6 +900,27 @@ def decide_closed_loop_arena(
         and scenario_count > max_scenarios
     ):
         structural_failures.append("invalid_config:scenario_count_exceeds_max")
+    if policy.calibrated:
+        if seconds is not None and seconds < CALIBRATED_MIN_SECONDS:
+            structural_failures.append(
+                "calibrated_config:seconds_below_minimum"
+            )
+        if sample_every is not None and sample_every != CALIBRATED_SAMPLE_EVERY:
+            structural_failures.append(
+                "calibrated_config:sample_every_mismatch"
+            )
+        if (
+            pair_tie_margin is not None
+            and not math.isclose(
+                pair_tie_margin,
+                PAIR_TIE_MARGIN,
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+        ):
+            structural_failures.append(
+                "calibrated_config:pair_tie_margin_mismatch"
+            )
 
     match_results = _require_mapping(
         structural_failures,
