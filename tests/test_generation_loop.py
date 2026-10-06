@@ -3,11 +3,15 @@ import math
 import pytest
 
 from haxlab.research.generation_loop import (
+    GenerationLoop,
+    SCHEMA,
     composite_score,
     evaluate_candidate,
     experiment_for_generation,
+    generation_state_issues,
     mine_failure,
     metric_snapshot,
+    sha256_file,
 )
 
 
@@ -157,3 +161,99 @@ def test_evaluate_candidate_rejects_malformed_policy_threshold() -> None:
 
     assert decision["promote"] is False
     assert "invalid_policy.maximum_kick_regression:above_maximum" in decision["reasons"]
+
+
+
+def _existing_generation_loop(tmp_path):
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text('{"schema":"test-manifest-v1"}\n', encoding="utf-8")
+    state_dir = tmp_path / "state"
+    models_dir = tmp_path / "models"
+    shard_root = tmp_path / "shards"
+    shard_root.mkdir()
+    loop = GenerationLoop(
+        app_dir=tmp_path,
+        state_dir=state_dir,
+        models_dir=models_dir,
+        derived_dir=tmp_path / "derived",
+        analysis_version="analysis-v4",
+        manifest=manifest,
+        shard_root=shard_root,
+    )
+    champion_metrics = {
+        "direction_accuracy": 0.70,
+        "joint_accuracy": 0.55,
+        "kick_f1": 0.40,
+        "samples": 1000.0,
+    }
+    state = {
+        "schema": SCHEMA,
+        "analysis_version": "analysis-v4",
+        "manifest": str(manifest),
+        "manifest_sha256": sha256_file(manifest),
+        "shard_root": str(shard_root),
+        "next_generation": 2,
+        "champion": {
+            "id": "gen-0001",
+            "metrics": champion_metrics,
+            "score": composite_score(champion_metrics),
+        },
+        "active": None,
+    }
+    loop.save_state(state)
+    return loop, state
+
+
+def test_existing_generation_state_reuses_matching_provenance(tmp_path) -> None:
+    loop, state = _existing_generation_loop(tmp_path)
+
+    loaded = loop.initialize()
+
+    assert loaded["champion"]["id"] == state["champion"]["id"]
+    assert generation_state_issues(
+        loaded,
+        analysis_version=loop.analysis_version,
+        manifest_sha256=sha256_file(loop.manifest),
+    ) == []
+
+
+def test_existing_generation_state_rejects_changed_manifest(tmp_path) -> None:
+    loop, _ = _existing_generation_loop(tmp_path)
+    loop.manifest.write_text('{"schema":"different-manifest"}\n', encoding="utf-8")
+
+    with pytest.raises(
+        RuntimeError,
+        match="generation_state.manifest_sha256_mismatch",
+    ):
+        loop.initialize()
+
+
+def test_existing_generation_state_rejects_analysis_version_change(tmp_path) -> None:
+    loop, _ = _existing_generation_loop(tmp_path)
+    changed = GenerationLoop(
+        app_dir=loop.app_dir,
+        state_dir=loop.state_dir,
+        models_dir=loop.models_dir,
+        derived_dir=loop.derived_dir,
+        analysis_version="analysis-v5",
+        manifest=loop.manifest,
+        shard_root=loop.shard_root,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="generation_state.analysis_version_mismatch",
+    ):
+        changed.initialize()
+
+
+def test_existing_generation_state_rejects_tampered_champion_score(tmp_path) -> None:
+    loop, state = _existing_generation_loop(tmp_path)
+    state["champion"]["score"] = 0.99
+    loop.save_state(state)
+
+    with pytest.raises(
+        RuntimeError,
+        match="generation_state.champion_score_mismatch",
+    ):
+        loop.initialize()
