@@ -19,6 +19,7 @@ jobs:
     # single HaxLab VPS runner. Keep a hard upper bound, but do not cancel
     # otherwise healthy exact-head evidence at the previous 180-minute limit.
     # Exact-head calibration evidence is rebound by marker commits after gate changes.
+    # Composite evaluation-validation workflow hardening is now included on this head.
     timeout-minutes: 360
 
     steps:
