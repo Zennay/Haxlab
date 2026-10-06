@@ -230,3 +230,79 @@ def test_runtime_error_count_must_be_numeric_integer() -> None:
         "invalid_metric:dm:candidate:runtime_errors:non_numeric"
         in decision.reasons
     )
+
+
+def test_team_proxy_match_score_above_one_fails_closed() -> None:
+    payload = _payload()
+    payload["team_mode"]["summary"]["proxy_match_score"] = 1.25
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert (
+        "invalid_metric:team:proxy_match_score:above_maximum:1.250000>1.000000"
+        in decision.reasons
+    )
+
+
+def test_negative_reference_rate_fails_closed() -> None:
+    payload = _payload()
+    payload["plug_and_play"]["by_role"]["gk"]["individual"]["reference"][
+        "boundary_rate"
+    ] = -0.01
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert (
+        "invalid_metric:gk:reference:boundary_rate:below_minimum:-0.010000<0.000000"
+        in decision.reasons
+    )
+
+
+def test_rate_above_one_fails_closed() -> None:
+    payload = _payload()
+    payload["plug_and_play"]["by_role"]["am"]["individual"]["candidate"][
+        "context_adaptation_rate"
+    ] = 1.01
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert (
+        "invalid_metric:am:candidate:context_adaptation_rate:above_maximum:"
+        "1.010000>1.000000"
+        in decision.reasons
+    )
+
+
+def test_negative_duration_fails_closed() -> None:
+    payload = _payload()
+    payload["plug_and_play"]["by_role"]["st"]["individual"]["candidate"][
+        "max_held_action_seconds"
+    ] = -0.5
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert (
+        "invalid_metric:st:candidate:max_held_action_seconds:"
+        "below_minimum:-0.500000<0.000000"
+        in decision.reasons
+    )
