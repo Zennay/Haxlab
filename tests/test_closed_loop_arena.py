@@ -61,6 +61,16 @@ def _payload() -> dict:
         "raw_policy_only": True,
         "safety_recovery_enabled": False,
         "paired_reference_design": True,
+        "config": {
+            "seconds": 30,
+            "sample_every": 6,
+            "max_scenarios": 16,
+            "plug_repeats": 1,
+            "seed": 1337,
+            "scenario_count": 16,
+            "roles": ["gk", "dm", "am", "st"],
+            "pair_tie_margin": 0.025,
+        },
         "team_mode": {
             "summary": team_summary,
             "roles": {role: _role_pair(samples=8) for role in roles},
@@ -567,3 +577,74 @@ def test_stringified_role_metric_fails_closed() -> None:
         "invalid_metric:st:candidate:far_stall_rate:non_numeric"
         in decision.reasons
     )
+
+
+def test_calibrated_policy_rejects_frozen_seconds_drift() -> None:
+    payload = _payload()
+    payload["config"]["seconds"] = 20
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "config:seconds:mismatch" in decision.reasons
+
+
+def test_calibrated_policy_rejects_tie_margin_drift() -> None:
+    payload = _payload()
+    payload["config"]["pair_tie_margin"] = 0.0
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "config:pair_tie_margin:mismatch" in decision.reasons
+
+
+def test_calibrated_policy_rejects_role_config_drift() -> None:
+    payload = _payload()
+    payload["config"]["roles"] = ["gk", "dm", "am", "coach"]
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "config:roles:mismatch" in decision.reasons
+
+
+def test_calibrated_policy_rejects_non_native_config_types() -> None:
+    payload = _payload()
+    payload["config"]["sample_every"] = 6.0
+    payload["config"]["seed"] = True
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "config:sample_every:wrong_type" in decision.reasons
+    assert "config:seed:wrong_type" in decision.reasons
+
+
+def test_uncalibrated_relative_gate_does_not_require_frozen_config() -> None:
+    payload = _payload()
+    del payload["config"]
+
+    decision = decide_closed_loop_arena(payload)
+
+    assert decision.structurally_valid
+    assert decision.behavior_gate_passed
+    assert not decision.eligible_for_live_promotion
+    assert "thresholds_not_calibrated" in decision.reasons
+
