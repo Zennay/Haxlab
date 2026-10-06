@@ -41,7 +41,7 @@ def read_discord_exports(root: Path) -> tuple[list[MatchReport], list[ImportFail
     if not root.is_dir():
         raise NotADirectoryError(f"discord_export_root_not_directory:{root}")
 
-    reports: list[MatchReport] = []
+    reports_by_id: dict[str, MatchReport] = {}
     failures: list[ImportFailure] = []
 
     paths = (
@@ -64,9 +64,23 @@ def read_discord_exports(root: Path) -> tuple[list[MatchReport], list[ImportFail
                 if not looks_like_match_report(message):
                     continue
                 try:
-                    reports.append(
-                        parse_match_report(message, channel_id=channel_id)
+                    report = parse_match_report(
+                        message,
+                        channel_id=channel_id,
                     )
+                    existing = reports_by_id.get(report.message_id)
+                    if existing is None:
+                        reports_by_id[report.message_id] = report
+                    elif existing != report:
+                        failures.append(
+                            ImportFailure(
+                                source=(
+                                    f"{path}#message:{report.message_id}"
+                                ),
+                                stage="discord_message_duplicate",
+                                error="conflicting_duplicate_message_id",
+                            )
+                        )
                 except Exception as exc:
                     raw_message_id = message.get("id") or message.get("messageId")
                     message_id = (
@@ -86,5 +100,8 @@ def read_discord_exports(root: Path) -> tuple[list[MatchReport], list[ImportFail
                 ImportFailure(source=str(path), stage="discord_messages", error=str(exc))
             )
 
-    reports.sort(key=lambda report: (report.timestamp or "", report.message_id))
+    reports = sorted(
+        reports_by_id.values(),
+        key=lambda report: (report.timestamp or "", report.message_id),
+    )
     return reports, failures
