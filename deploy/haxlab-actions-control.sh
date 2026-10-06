@@ -143,15 +143,14 @@ import json
 import sys
 from pathlib import Path
 
+from haxlab.live.inference import resolve_version_dir
+
 root = Path(sys.argv[1])
-metrics_files = sorted(
-    root.glob("versions/*/metrics.json"),
-    key=lambda p: p.stat().st_mtime,
-    reverse=True,
-)
-if not metrics_files:
-    raise SystemExit("no champion metrics found")
-metrics_path = metrics_files[0]
+try:
+    version_dir = resolve_version_dir(root)
+except FileNotFoundError as exc:
+    raise SystemExit(str(exc)) from exc
+metrics_path = version_dir / "metrics.json"
 metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
 runtime_path = Path(str(metrics.get("runtime_model_path") or ""))
 runtime = None
