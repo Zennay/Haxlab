@@ -305,6 +305,49 @@ def test_healthy_candidate_rejects_non_file_source_artifacts(
     )
 
 
+def test_healthy_candidate_rejects_malformed_role_evidence(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    raw, analysis, raw_sha = _candidate_files(tmp_path)
+
+    def bad_role_type(players):
+        rows = _fake_roles(players)
+        rows[1]["role"] = 123
+        return rows
+
+    monkeypatch.setattr(scenario_source, "infer_roles_4v4", bad_role_type)
+    assert (
+        scenario_source._healthy_candidate(
+            sha256=raw_sha,
+            raw_path=str(raw),
+            analysis_path=str(analysis),
+            sampled_states=100,
+        )
+        is None
+    )
+
+    def impossible_confidence(players):
+        rows = _fake_roles(players)
+        rows[1]["confidence"] = 1.01
+        return rows
+
+    monkeypatch.setattr(
+        scenario_source,
+        "infer_roles_4v4",
+        impossible_confidence,
+    )
+    assert (
+        scenario_source._healthy_candidate(
+            sha256=raw_sha,
+            raw_path=str(raw),
+            analysis_path=str(analysis),
+            sampled_states=100,
+        )
+        is None
+    )
+
+
 def test_healthy_candidate_rejects_raw_sha_mismatch(
     tmp_path: Path,
     monkeypatch,
