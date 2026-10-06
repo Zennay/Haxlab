@@ -1,4 +1,4 @@
-name: Cancel superseded HaxLab calibration only
+name: Cancel exact superseded HaxLab evaluation runs
 
 on:
   push:
@@ -14,15 +14,12 @@ permissions:
 jobs:
   cancel:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 4
     env:
-      TARGET_RUN_ID: "37486999853"
-      EXPECTED_HEAD_SHA: "7a8689a875474ad3d4114967ae35e015472ea8b5"
-      EXPECTED_WORKFLOW_NAME: "Closed-Loop Arena v2 Frozen Policy Validation"
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
     steps:
-      - name: Cancel exact superseded calibration run
+      - name: Cancel exact superseded evaluation runs only
         shell: bash
         run: |
           set -euo pipefail
@@ -33,16 +30,40 @@ jobs:
           import urllib.error
           import urllib.request
 
+          targets = {
+              37486999853: (
+                  "Closed-Loop Arena v2 Frozen Policy Validation",
+                  "7a8689a875474ad3d4114967ae35e015472ea8b5",
+              ),
+              37512280392: (
+                  "Freeze Multisource Evaluation Suite v2 Current-Main",
+                  "1271b4f2365773350999bd7b854f5966955f1db7",
+              ),
+              37512347288: (
+                  "Freeze Multisource Evaluation Suite v2 Current-Main",
+                  "f6968433826044889a53c9127439a8fdbbe4a2b5",
+              ),
+              37512350210: (
+                  "HaxLab CI",
+                  "f6968433826044889a53c9127439a8fdbbe4a2b5",
+              ),
+              37512837718: (
+                  "Freeze Multisource Evaluation Suite v2 Current-Main",
+                  "a070d031a35d4191a14b4f780ae454114219c50f",
+              ),
+              37512850878: (
+                  "Freeze Multisource Evaluation Suite v2 Current-Main",
+                  "5541c37c9d2bc6cc31d4c6e3747a75ff1c32431f",
+              ),
+          }
+          protected_head = "1c186d5d8927ab55722615631e0e61e5bda56971"
           repo = os.environ["REPO"]
           token = os.environ["GH_TOKEN"]
-          run_id = int(os.environ["TARGET_RUN_ID"])
-          expected_sha = os.environ["EXPECTED_HEAD_SHA"]
-          expected_name = os.environ["EXPECTED_WORKFLOW_NAME"]
           headers = {
               "Authorization": f"Bearer {token}",
               "Accept": "application/vnd.github+json",
               "X-GitHub-Api-Version": "2022-11-28",
-              "User-Agent": "haxlab-targeted-calibration-cancel/1",
+              "User-Agent": "haxlab-targeted-evaluation-cancel/2",
           }
 
           def request(path, method="GET"):
@@ -57,52 +78,52 @@ jobs:
                       return json.loads(raw) if raw else {}
               except urllib.error.HTTPError as exc:
                   body = exc.read().decode("utf-8", "replace")
+                  if method == "POST" and exc.code in (409, 422):
+                      return {"terminal_race": True, "status": exc.code, "body": body}
                   raise SystemExit(
                       f"GitHub API {method} {path} failed: {exc.code} {body}"
                   )
 
-          run = request(f"/repos/{repo}/actions/runs/{run_id}")
-          actual = {
-              "id": int(run["id"]),
-              "name": str(run.get("name") or ""),
-              "head_sha": str(run.get("head_sha") or ""),
-              "status": str(run.get("status") or ""),
-              "conclusion": run.get("conclusion"),
-          }
-          print("TARGET_STATE=" + json.dumps(actual, sort_keys=True))
+          states = {}
+          requested = []
+          for run_id, (expected_name, expected_sha) in targets.items():
+              run = request(f"/repos/{repo}/actions/runs/{run_id}")
+              actual_name = str(run.get("name") or "")
+              actual_sha = str(run.get("head_sha") or "")
+              status = str(run.get("status") or "")
+              conclusion = run.get("conclusion")
+              states[run_id] = {
+                  "name": actual_name,
+                  "head_sha": actual_sha,
+                  "status": status,
+                  "conclusion": conclusion,
+              }
+              if actual_sha == protected_head:
+                  raise SystemExit(f"refusing to cancel protected current head run {run_id}")
+              if actual_name != expected_name or actual_sha != expected_sha:
+                  raise SystemExit(
+                      f"target mismatch run={run_id} name={actual_name!r} sha={actual_sha}"
+                  )
+              if status == "completed":
+                  continue
+              result = request(f"/repos/{repo}/actions/runs/{run_id}/cancel", method="POST")
+              if not result.get("terminal_race"):
+                  requested.append(run_id)
 
-          if actual["id"] != run_id:
-              raise SystemExit("target run id mismatch")
-          if actual["name"] != expected_name:
-              raise SystemExit(
-                  f"workflow name mismatch: {actual['name']!r} != {expected_name!r}"
-              )
-          if actual["head_sha"] != expected_sha:
-              raise SystemExit(
-                  f"head sha mismatch: {actual['head_sha']} != {expected_sha}"
-              )
-          if actual["status"] == "completed":
-              print("TARGET_ALREADY_TERMINAL")
-              raise SystemExit(0)
-          if actual["status"] not in {"queued", "in_progress", "pending", "waiting"}:
-              raise SystemExit(f"unexpected target status: {actual['status']}")
-
-          request(f"/repos/{repo}/actions/runs/{run_id}/cancel", method="POST")
-          print("TARGET_CANCEL_REQUESTED")
+          print("TARGETS_BEFORE=" + json.dumps(states, sort_keys=True))
+          print("CANCEL_REQUESTED=" + json.dumps(requested))
 
           for _ in range(12):
-              time.sleep(5)
-              current = request(f"/repos/{repo}/actions/runs/{run_id}")
-              status = str(current.get("status") or "")
-              conclusion = current.get("conclusion")
-              print(f"TARGET_POLL status={status} conclusion={conclusion}")
-              if status == "completed":
-                  if conclusion != "cancelled":
-                      raise SystemExit(
-                          f"target became terminal with unexpected conclusion={conclusion}"
-                      )
-                  print("TARGET_CANCELLED_EXACT")
+              remaining = []
+              for run_id in requested:
+                  run = request(f"/repos/{repo}/actions/runs/{run_id}")
+                  if str(run.get("status") or "") != "completed":
+                      remaining.append(run_id)
+              if not remaining:
+                  print("SUPERSEDED_EVALUATION_RUNS_TERMINAL")
                   raise SystemExit(0)
+              print("WAITING_FOR_CANCEL=" + json.dumps(remaining))
+              time.sleep(5)
 
-          raise SystemExit("target did not become cancelled within 60 seconds")
+          raise SystemExit("targeted superseded runs did not become terminal within 60 seconds")
           PY
