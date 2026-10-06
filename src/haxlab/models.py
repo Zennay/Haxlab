@@ -118,6 +118,17 @@ class ImportManifest:
                 "invalid import manifest counts: match_count exceeds report_count"
             )
 
+        if len(self.unmatched_replays) > unique_replay_count - match_count:
+            raise ValueError(
+                "invalid import manifest counts: unmatched_replays exceed remaining "
+                "unique replay capacity"
+            )
+        if len(self.unmatched_reports) > report_count - match_count:
+            raise ValueError(
+                "invalid import manifest counts: unmatched_reports exceed remaining "
+                "report capacity"
+            )
+
     def as_dict(self) -> dict[str, Any]:
         self._validate()
         data = asdict(self)
