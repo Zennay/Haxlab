@@ -893,6 +893,33 @@ function requireArenaObject(value, label) {
   return value;
 }
 
+function requireArenaLineup(row, expectedKind, label) {
+  const lineup = requireArenaObject(row.lineup, label + " lineup");
+  for (const role of ROLES) {
+    const entry = requireArenaObject(
+      lineup[role],
+      label + " lineup." + role,
+    );
+    if (
+      typeof entry.model_path !== "string" ||
+      entry.model_path.trim().length === 0
+    ) {
+      throw new Error(label + " lineup." + role + " model_path is invalid");
+    }
+    const expectedRoleKind =
+      row.mode === "plug_and_play" && role !== row.tested_role
+        ? "partner"
+        : expectedKind;
+    if (entry.model_kind !== expectedRoleKind) {
+      throw new Error(
+        label + " lineup." + role + " model_kind must be " +
+        expectedRoleKind,
+      );
+    }
+  }
+  return lineup;
+}
+
 function requireArenaPairRow(row, expectedKind, label) {
   requireArenaObject(row, label + " arena row");
   if (row.tested_kind !== expectedKind) {
@@ -925,6 +952,8 @@ function requireArenaPairRow(row, expectedKind, label) {
   if (!Number.isSafeInteger(row.repeat_index) || row.repeat_index < 0) {
     throw new Error(label + " has invalid repeat_index");
   }
+
+  requireArenaLineup(row, expectedKind, label);
 
   const proxy = requireArenaObject(row.proxy, label + " proxy");
   requireArenaMetric(
@@ -1031,6 +1060,19 @@ function pairArenaRows(candidate, reference, tieMargin = 0.025) {
     candidate.repeat_index !== reference.repeat_index
   ) {
     throw new Error("arena candidate/reference row mismatch");
+  }
+  if (candidate.mode === "plug_and_play") {
+    for (const role of ROLES) {
+      if (role === candidate.tested_role) continue;
+      if (
+        candidate.lineup[role].model_path !==
+        reference.lineup[role].model_path
+      ) {
+        throw new Error(
+          "arena paired partner lineup mismatch for role " + role,
+        );
+      }
+    }
   }
   const delta =
     candidate.proxy.test_score -
