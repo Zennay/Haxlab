@@ -33,11 +33,10 @@ def _validate_number(
     if isinstance(value, bool):
         issues.append(f"invalid_{label}:boolean")
         return
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
+    if not isinstance(value, (int, float)):
         issues.append(f"invalid_{label}:non_numeric")
         return
+    number = float(value)
     if not math.isfinite(number):
         issues.append(f"invalid_{label}:non_finite")
         return
