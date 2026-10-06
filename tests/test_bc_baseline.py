@@ -261,3 +261,23 @@ def test_baseline_rejects_train_holdout_manifest_provenance_mismatch(
             batch_size=32,
             seed=13,
         )
+
+
+def test_load_shard_rejects_shard_content_drift(tmp_path: Path) -> None:
+    entry = _write_shard(
+        tmp_path,
+        "content-a",
+        _synthetic_rows(32, 15),
+    )
+    shard_path = Path(entry["shard_path"])
+    original = shard_path.read_bytes()
+    protected = {
+        **entry,
+        "shard_sha256": hashlib.sha256(original).hexdigest(),
+        "shard_size_bytes": len(original),
+    }
+
+    shard_path.write_bytes(original + b"x")
+
+    with pytest.raises(ValueError, match="shard size mismatch|shard sha256 mismatch"):
+        _load_shard(protected)
