@@ -46,11 +46,21 @@ def _safe_div(num: float, den: float) -> float | None:
     return num / den
 
 
-def _player_minutes(player: dict, payload: dict) -> float:
-    sample_every = max(
-        1,
-        int((payload.get("simulation") or {}).get("sampleEveryTicks") or 6),
-    )
+def _player_minutes(player: dict, payload: dict) -> float | None:
+    simulation = payload.get("simulation")
+    if simulation is None:
+        sample_every = 6
+    else:
+        if not isinstance(simulation, dict):
+            return None
+        sample_every = simulation.get("sampleEveryTicks", 6)
+        if (
+            isinstance(sample_every, bool)
+            or not isinstance(sample_every, int)
+            or sample_every <= 0
+        ):
+            return None
+
     samples = int(player.get("samples") or 0)
     return samples * sample_every / 3600.0
 
@@ -160,11 +170,20 @@ def load_match_evidence(root: Path) -> list[dict]:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        schema_version = int(payload.get("schemaVersion") or 0)
-        if schema_version not in (3, 4):
+        schema_version = payload.get("schemaVersion")
+        if (
+            isinstance(schema_version, bool)
+            or not isinstance(schema_version, int)
+            or schema_version not in (3, 4)
+        ):
             continue
 
-        players = list(payload.get("players") or [])
+        players = payload.get("players")
+        if (
+            not isinstance(players, list)
+            or any(not isinstance(player, dict) for player in players)
+        ):
+            continue
         roles = _role_map(players)
         total_frames = int(payload.get("totalFrames") or 0)
         match_minutes = total_frames / 3600.0
@@ -174,7 +193,7 @@ def load_match_evidence(root: Path) -> list[dict]:
             if key is None:
                 continue
             minutes = _player_minutes(player, payload)
-            if minutes <= 0:
+            if minutes is None or minutes <= 0:
                 continue
             evidence.append(
                 {
