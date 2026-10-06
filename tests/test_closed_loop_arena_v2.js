@@ -149,6 +149,36 @@ try {
     /invalid scenario_index/,
   );
 
+  fs.writeFileSync(
+    scenarioPath,
+    JSON.stringify({
+      scenarios: [{ scenario_index: 1, history: "not-an-array" }],
+    }),
+  );
+  assert.throws(
+    () => loadScenarioRows(scenarioPath, 1),
+    /scenario 1 history must be an array/,
+  );
+
+  fs.writeFileSync(
+    scenarioPath,
+    JSON.stringify({
+      scenarios: [{ scenario_index: 1, history: [null] }],
+    }),
+  );
+  assert.throws(
+    () => loadScenarioRows(scenarioPath, 1),
+    /scenario 1 history frame 0 must be an object/,
+  );
+
+  fs.writeFileSync(
+    scenarioPath,
+    JSON.stringify({
+      scenarios: [{ scenario_index: 1, history: [{}] }],
+    }),
+  );
+  assert.strictEqual(loadScenarioRows(scenarioPath, 1).length, 1);
+
   assert.throws(
     () => loadScenarioRows(scenarioPath, 0),
     /maxScenarios must be a positive safe integer/,
