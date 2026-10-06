@@ -48,7 +48,7 @@ def test_import_manifest_rejects_non_native_or_negative_counts(
         ImportManifest(**kwargs).as_dict()
 
 
-@pytest.mark.parametrize("schema_version", [0, -1, True, 1.0, "1"])
+@pytest.mark.parametrize("schema_version", [0, -1, 2, True, 1.0, "1"])
 def test_import_manifest_rejects_invalid_schema_version(schema_version: object) -> None:
     with pytest.raises(ValueError, match="schema_version"):
         ImportManifest(schema_version=schema_version).as_dict()
