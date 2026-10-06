@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import PurePosixPath
@@ -47,6 +48,7 @@ PROTECTED_TEST_TOKENS = (
 )
 
 _ALLOWED_DIFF_STATUSES = frozenset("ACDMRTUXB")
+_EXACT_COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 @dataclass(frozen=True)
@@ -138,7 +140,17 @@ def _paths_from_name_status(output: str) -> tuple[str, ...]:
     return tuple(paths)
 
 
+def _require_exact_commit_sha(value: str, *, label: str) -> str:
+    if not isinstance(value, str) or _EXACT_COMMIT_SHA_RE.fullmatch(value) is None:
+        raise ValueError(
+            f"{label} must be an exact lowercase 40-character commit SHA"
+        )
+    return value
+
+
 def changed_paths_from_git(base: str, head: str) -> tuple[str, ...]:
+    base_sha = _require_exact_commit_sha(base, label="base")
+    head_sha = _require_exact_commit_sha(head, label="head")
     command = [
         "git",
         "diff",
@@ -147,7 +159,7 @@ def changed_paths_from_git(base: str, head: str) -> tuple[str, ...]:
         "--find-renames",
         "--find-copies",
         "--diff-filter=ACDMRTUXB",
-        f"{base}...{head}",
+        f"{base_sha}...{head_sha}",
     ]
     completed = subprocess.run(
         command,
@@ -158,7 +170,7 @@ def changed_paths_from_git(base: str, head: str) -> tuple[str, ...]:
     if completed.returncode != 0:
         message = completed.stderr.strip() or completed.stdout.strip()
         raise RuntimeError(
-            f"git diff failed for {base}...{head}: "
+            f"git diff failed for {base_sha}...{head_sha}: "
             f"{message or f'exit {completed.returncode}'}"
         )
     return _paths_from_name_status(completed.stdout)
@@ -182,12 +194,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--base",
         required=True,
-        help="Prepared evaluation staging commit/ref.",
+        help="Prepared evaluation staging exact commit SHA.",
     )
     parser.add_argument(
         "--head",
         required=True,
-        help="Current main commit/ref to compare against base.",
+        help="Current main exact commit SHA to compare against base.",
     )
     return parser
 
