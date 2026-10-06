@@ -361,3 +361,30 @@ def test_rejects_hash_read_failure_without_raising(tmp_path: Path) -> None:
     assert reusable is False
     assert "provenance:challenger:sha256:unreadable:PermissionError" in reasons
 
+
+def test_rejects_non_path_result_locator_without_raising(tmp_path: Path) -> None:
+    inputs = _inputs(tmp_path)
+
+    reusable, reasons = reusable_result_or_reasons("result.json", **inputs)
+
+    assert reusable is False
+    assert reasons == ("result:path:not_path",)
+
+
+def test_rejects_malformed_partner_container_without_raising(tmp_path: Path) -> None:
+    inputs = _inputs(tmp_path)
+    result = _write_result(tmp_path, _payload(inputs))
+
+    for malformed, expected in (
+        (None, "request:partners:not_sequence"),
+        ("partner.json", "request:partners:not_sequence"),
+        ((), "request:partners:empty"),
+    ):
+        mutated = dict(inputs)
+        mutated["partners"] = malformed
+
+        reusable, reasons = reusable_result_or_reasons(result, **mutated)
+
+        assert reusable is False
+        assert expected in reasons
+
