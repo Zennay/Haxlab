@@ -36,6 +36,7 @@ def test_extract_one_uses_cached_valid_shard(
         example_weight=1.0,
     )
     shard.write_bytes(b"cached")
+    cached_sha = hashlib.sha256(shard.read_bytes()).hexdigest()
     meta.write_text(
         json.dumps(
             {
@@ -45,6 +46,8 @@ def test_extract_one_uses_cached_valid_shard(
                 "compressedBytes": 6,
                 "replay_sha256": sha,
                 "input_fingerprint": fingerprint,
+                "shard_sha256": cached_sha,
+                "shard_size_bytes": shard.stat().st_size,
             }
         ),
         encoding="utf-8",
@@ -301,6 +304,8 @@ def test_extract_one_does_not_reuse_cache_for_changed_selection(
 
     def fake_run(*args, **kwargs):
         calls.append(args)
+        command = args[0]
+        Path(command[3]).write_bytes(b"rebuilt")
         return Completed()
 
     monkeypatch.setattr(shards.subprocess, "run", fake_run)
@@ -328,3 +333,91 @@ def test_extract_one_does_not_reuse_cache_for_changed_selection(
     assert len(calls) == 1
     assert result["status"] == "ok"
     assert result["input_fingerprint"] != old_fingerprint
+    assert result["shard_sha256"] == hashlib.sha256(b"rebuilt").hexdigest()
+    assert result["shard_size_bytes"] == len(b"rebuilt")
+
+
+def test_extract_one_rebuilds_cache_when_shard_bytes_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sha = "1" * 64
+    output_dir = tmp_path / "train"
+    output_dir.mkdir()
+    raw = tmp_path / "raw.hbr2"
+    raw.write_bytes(b"raw")
+    shard = output_dir / f"{sha}.f32.gz"
+    meta = output_dir / f"{sha}.meta.json"
+    original = b"original-shard"
+    shard.write_bytes(original)
+
+    fingerprint = shards._extraction_input_fingerprint(
+        replay_sha256=sha,
+        selected_player_map={"7": "name:alpha"},
+        sample_every_ticks=6,
+        analysis_sha256=None,
+        example_weight=1.0,
+    )
+    meta.write_text(
+        json.dumps(
+            {
+                "schema": "haxlab-imitation-extract-summary-v2",
+                "sampleEveryTicks": 6,
+                "samples": 10,
+                "input_fingerprint": fingerprint,
+                "shard_sha256": hashlib.sha256(original).hexdigest(),
+                "shard_size_bytes": len(original),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    shard.write_bytes(b"tampered")
+    calls = []
+
+    class Completed:
+        returncode = 0
+        stderr = ""
+        stdout = json.dumps(
+            {
+                "schema": "haxlab-imitation-extract-summary-v2",
+                "sampleEveryTicks": 6,
+                "samples": 11,
+                "compressedBytes": 8,
+                "selectedPlayersSeen": 1,
+                "skippedUnknownInput": 0,
+            }
+        )
+
+    def fake_run(*args, **kwargs):
+        calls.append(args)
+        command = args[0]
+        Path(command[3]).write_bytes(b"repaired")
+        return Completed()
+
+    monkeypatch.setattr(shards.subprocess, "run", fake_run)
+
+    result = shards._extract_one(
+        {
+            "replay_sha256": sha,
+            "raw_path": str(raw),
+            "selected_players": [
+                {
+                    "replay_player_id": 7,
+                    "identity": "name:alpha",
+                    "samples": 100,
+                }
+            ],
+            "example_weight": 1.0,
+        },
+        node_script=tmp_path / "tools" / "extract_imitation.js",
+        output_dir=output_dir,
+        sample_every_ticks=6,
+        timeout_seconds=60,
+        force=False,
+    )
+
+    assert len(calls) == 1
+    assert result["status"] == "ok"
+    assert result["shard_sha256"] == hashlib.sha256(b"repaired").hexdigest()
+    assert result["shard_size_bytes"] == len(b"repaired")
