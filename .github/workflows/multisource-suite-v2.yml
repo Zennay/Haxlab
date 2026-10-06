@@ -126,12 +126,12 @@ jobs:
 
           manifest = build_frozen_multisource_suite(
               source_roots,
-              suite_seed=int(config["suite_seed"]),
-              scenarios_per_source=int(config["scenarios_per_source"]),
-              rollout_seconds=int(config["rollout_seconds"]),
-              sample_every_ticks=int(config["sample_every_ticks"]),
-              history_window=int(config["history_window"]),
-              minimum_sources=int(config["minimum_sources"]),
+              suite_seed=config["suite_seed"],
+              scenarios_per_source=config["scenarios_per_source"],
+              rollout_seconds=config["rollout_seconds"],
+              sample_every_ticks=config["sample_every_ticks"],
+              history_window=config["history_window"],
+              minimum_sources=config["minimum_sources"],
           )
           manifest["provenance"] = {
               "source_suite": "candidate-d-multisource-holdout-v1",
