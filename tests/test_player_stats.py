@@ -139,3 +139,107 @@ def test_collect_uses_auth_hash_across_name_changes(tmp_path: Path) -> None:
     assert len(rows) == 1
     assert rows[0]["matches"] == 3
     assert rows[0]["name"] == "New Name"
+
+
+
+def test_collect_uses_per_artifact_sampling_cadence_for_active_minutes(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "slow-cadence.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 4,
+                "simulation": {"sampleEveryTicks": 12},
+                "players": [
+                    {
+                        "name": "Cadence",
+                        "samples": 600,
+                        "nearestBallSamples": 120,
+                        "closeBallSamples": 60,
+                        "inputEvents": 30,
+                        "kickEvents": 12,
+                        "kickPressedInputs": 10,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "fast-cadence.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 4,
+                "simulation": {"sampleEveryTicks": 3},
+                "players": [
+                    {
+                        "name": "Cadence",
+                        "samples": 600,
+                        "nearestBallSamples": 180,
+                        "closeBallSamples": 90,
+                        "inputEvents": 50,
+                        "kickEvents": 18,
+                        "kickPressedInputs": 15,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rows = collect(tmp_path)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["matches"] == 2
+    assert row["samples"] == 1200
+    assert row["active_minutes"] == 2.5
+    assert row["kicks_per_min"] == 12.0
+    assert row["inputs_per_min"] == 32.0
+
+
+def test_collect_ignores_artifact_with_invalid_sampling_cadence(
+    tmp_path: Path,
+) -> None:
+    _write_replay(
+        tmp_path,
+        "valid",
+        [
+            {
+                "name": "Cadence",
+                "samples": 600,
+                "nearestBallSamples": 120,
+                "closeBallSamples": 60,
+                "inputEvents": 30,
+                "kickEvents": 12,
+                "kickPressedInputs": 10,
+            }
+        ],
+    )
+    (tmp_path / "invalid.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 4,
+                "simulation": {"sampleEveryTicks": "6"},
+                "players": [
+                    {
+                        "name": "Cadence",
+                        "samples": 6000,
+                        "nearestBallSamples": 6000,
+                        "closeBallSamples": 6000,
+                        "inputEvents": 6000,
+                        "kickEvents": 6000,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rows = collect(tmp_path)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["matches"] == 1
+    assert row["samples"] == 600
+    assert row["active_minutes"] == 1.0
+    assert row["kick_events"] == 12
