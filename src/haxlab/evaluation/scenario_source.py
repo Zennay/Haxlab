@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sqlite3
 from pathlib import Path
 from typing import Any
 
 from haxlab.analysis.roles import ROLES_4V4, infer_roles_4v4
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _healthy_candidate(
@@ -40,6 +49,8 @@ def _healthy_candidate(
         simulation.get("sampledStateCount") or sampled_states or 0
     )
     if sampled_state_count <= 0:
+        return None
+    if int(sampled_states or 0) != sampled_state_count:
         return None
 
     average_team_sizes: dict[int, float] = {}
@@ -87,13 +98,27 @@ def _healthy_candidate(
         if seen != set(ROLES_4V4):
             return None
 
+    normalized_sha = str(sha256).strip().lower()
+    if (
+        len(normalized_sha) != 64
+        or any(ch not in "0123456789abcdef" for ch in normalized_sha)
+    ):
+        return None
+    try:
+        actual_raw_sha = _sha256_file(raw)
+    except OSError:
+        return None
+    if actual_raw_sha != normalized_sha:
+        return None
+
     return {
         "schema": "haxlab-replay-scenario-source-v1",
-        "sha256": sha256,
+        "sha256": normalized_sha,
         "raw_path": str(raw),
         "analysis_path": str(analysis_file),
         "duration_seconds": total_frames / 60.0,
-        "sampled_states": int(sampled_states),
+        "sampled_states": sampled_state_count,
+        "raw_file_sha256_verified": True,
         "average_team_sizes": {
             str(team_id): round(value, 4)
             for team_id, value in average_team_sizes.items()
