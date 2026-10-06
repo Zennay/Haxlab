@@ -149,3 +149,41 @@ def test_attachment_strings_are_trimmed_without_type_coercion() -> None:
     assert report.attachments[0].file_name == "replay.hbr2"
     assert report.attachments[0].url == "https://cdn.discordapp.com/replay"
     assert report.attachments[0].size_bytes == 44237
+
+
+
+def test_report_rejects_impossible_possession_percentages() -> None:
+    invalid_contents = [
+        "MATCH REPORT #m1 Red Team 1 - 0 Blue Team\nPossession: 150% 20%",
+        "MATCH REPORT #m1 Red Team 1 - 0 Blue Team\nPossession: 60% 30%",
+    ]
+
+    for content in invalid_contents:
+        try:
+            parse_match_report(
+                {
+                    "id": "message-1",
+                    "content": content,
+                    "attachments": [],
+                }
+            )
+        except ValueError as exc:
+            assert str(exc) == "invalid_possession_percentages"
+        else:
+            raise AssertionError("expected ValueError")
+
+
+def test_report_accepts_rounded_possession_percentages() -> None:
+    report = parse_match_report(
+        {
+            "id": "message-1",
+            "content": (
+                "MATCH REPORT #m1 Red Team 1 - 0 Blue Team\n"
+                "Possession: 50.2% 49.7%"
+            ),
+            "attachments": [],
+        }
+    )
+
+    assert report.possession_red == 50.2
+    assert report.possession_blue == 49.7
