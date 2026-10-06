@@ -28,10 +28,82 @@ def test_evaluation_owned_paths_cover_runtime_tests_docs_and_workflows() -> None
         "tools/elite_features.js",
         "tools/elite_policy_runtime.js",
         "tools/elite_tactics.js",
+        "tools/sandbox_neutral_start.js",
         "tools/sandbox_replay_start.js",
+        ".github/workflows/arena-runner-config-integrity-validation.yml",
+        ".github/workflows/runtime-model-integrity-validation.yml",
+        "tests/test_elite_policy_runtime_integrity.js",
+        "tests/test_roles_4v4.py",
+        "tests/test_ci_workflow_exact_head_contract.py",
     )
 
     assert all(resync_guard.is_evaluation_owned_path(path) for path in protected)
+
+
+
+def test_canonical_arena_validation_surface_is_fully_guarded() -> None:
+    canonical_paths = (
+        ".github/workflows/arena-runner-config-integrity-validation.yml",
+        ".github/workflows/arena-v2-evaluation-validation.yml",
+        ".github/workflows/arena-v2-integration-validate.yml",
+        ".github/workflows/arena-v2-metric-bounds-validation.yml",
+        ".github/workflows/calibration-gate-contract-validation.yml",
+        ".github/workflows/calibration-pointer-invariant-validation.yml",
+        ".github/workflows/ci.yml",
+        ".github/workflows/closed-loop-arena-v2-calibration.yml",
+        ".github/workflows/closed-loop-native-numeric-validation.yml",
+        ".github/workflows/duel-policy-integrity-validation.yml",
+        ".github/workflows/elite-gate-preflight-integrity-validation.yml",
+        ".github/workflows/evaluation-green-integration-validation.yml",
+        ".github/workflows/multisource-suite-integrity-validation.yml",
+        ".github/workflows/multisource-suite-v2.yml",
+        ".github/workflows/promotion-evidence-validation.yml",
+        ".github/workflows/promotion-policy-integrity-validation.yml",
+        ".github/workflows/replay-scenario-state-integrity-validation.yml",
+        ".github/workflows/runtime-model-integrity-validation.yml",
+        ".github/workflows/scenario-source-integrity-validation.yml",
+        "configs/evaluation/multisource-suite-v2.json",
+        "docs/closed-loop-arena-v2.md",
+        "src/haxlab/analysis/roles.py",
+        "src/haxlab/evaluation/calibration_gate.py",
+        "src/haxlab/evaluation/calibration_resume.py",
+        "src/haxlab/evaluation/closed_loop_arena.py",
+        "src/haxlab/evaluation/duel_gate.py",
+        "src/haxlab/evaluation/elite_gate_preflight.py",
+        "src/haxlab/evaluation/multisource_duel.py",
+        "src/haxlab/evaluation/multisource_suite.py",
+        "src/haxlab/evaluation/promotion.py",
+        "src/haxlab/evaluation/scenario_source.py",
+        "tests/test_arena_v2_integration_workflow_contract.py",
+        "tests/test_calibration_gate.py",
+        "tests/test_calibration_resume.py",
+        "tests/test_calibration_workflow_evidence_contract.py",
+        "tests/test_calibration_workflow_runtime_budget.py",
+        "tests/test_ci_workflow_exact_head_contract.py",
+        "tests/test_closed_loop_arena.py",
+        "tests/test_closed_loop_arena_v2.js",
+        "tests/test_duel_gate.py",
+        "tests/test_elite_gate_preflight.py",
+        "tests/test_elite_policy_runtime_integrity.js",
+        "tests/test_multisource_duel.py",
+        "tests/test_multisource_suite.py",
+        "tests/test_promotion.py",
+        "tests/test_replay_scenario_state_integrity.js",
+        "tests/test_roles_4v4.py",
+        "tests/test_scenario_source.py",
+        "tools/elite_closed_loop_arena_v2.js",
+        "tools/elite_features.js",
+        "tools/elite_policy_runtime.js",
+        "tools/elite_tactics.js",
+        "tools/sandbox_neutral_start.js",
+        "tools/sandbox_replay_start.js",
+    )
+
+    uncovered = tuple(
+        path for path in canonical_paths if not resync_guard.is_evaluation_owned_path(path)
+    )
+
+    assert uncovered == ()
 
 
 def test_unrelated_main_drift_is_safe() -> None:
