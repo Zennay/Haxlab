@@ -172,9 +172,7 @@ class EliteGateEvidencePreflightTests(unittest.TestCase):
 
         issues = elite_gate_evidence_issues(metadata)
 
-        # Numeric strings are intentionally accepted only when they represent a
-        # finite integer; JSON producers may serialize numeric metadata.
-        self.assertNotIn("invalid_final_holdout.samples:non_numeric", issues)
+        self.assertIn("invalid_final_holdout.samples:non_numeric", issues)
 
     def test_fractional_sample_count_fails_preflight(self) -> None:
         split = complete_split()
