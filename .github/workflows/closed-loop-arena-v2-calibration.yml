@@ -62,15 +62,22 @@ jobs:
           PARTNER_C=/var/lib/haxlab/derived/training/elite-player-candidate-c/model/runtime-model.json
           CURRENT_POINTER=/var/lib/haxlab/derived/champions/elite-player/current.json
           LIVE_POINTER=/var/lib/haxlab/derived/champions/elite-player/live.json
-          LIVE_RUNTIME="$(
-            sudo -u haxlab /opt/haxlab/.venv/bin/python -c               'import json; print(json.load(open("/var/lib/haxlab/derived/champions/elite-player/current.json"))["runtime_model_path"])'
-          )"
           CURRENT_POINTER_SHA_BEFORE="$(
             sudo -u haxlab sha256sum "$CURRENT_POINTER" | awk '{print $1}'
           )"
           LIVE_POINTER_SHA_BEFORE="$(
             sudo -u haxlab sha256sum "$LIVE_POINTER" | awk '{print $1}'
           )"
+          LIVE_RUNTIME="$(
+            sudo -u haxlab /opt/haxlab/.venv/bin/python -c               'import json; print(json.load(open("/var/lib/haxlab/derived/champions/elite-player/current.json"))["runtime_model_path"])'
+          )"
+          CURRENT_POINTER_SHA_AFTER_RESOLVE="$(
+            sudo -u haxlab sha256sum "$CURRENT_POINTER" | awk '{print $1}'
+          )"
+          if [ "$CURRENT_POINTER_SHA_BEFORE" != "$CURRENT_POINTER_SHA_AFTER_RESOLVE" ]; then
+            echo "::error title=Champion pointer race::current.json changed while resolving runtime_model_path"
+            exit 1
+          fi
           OUT="/var/lib/haxlab/derived/evaluation/closed-loop-arena-v2-calibration-v1/${GITHUB_SHA:0:12}"
 
           require_readable() {
