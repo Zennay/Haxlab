@@ -181,6 +181,80 @@ def generation_state_issues(
     return issues
 
 
+def preregistration_issues(
+    preregistration: Any,
+    *,
+    state: dict[str, Any],
+    generation: int,
+    analysis_version: str,
+    manifest_sha256: str,
+    shard_root: Path,
+) -> list[str]:
+    if not isinstance(preregistration, dict):
+        return ["invalid_preregistration:not_object"]
+
+    issues: list[str] = []
+    expected_experiment_id = f"gen-{generation:04d}"
+    expected_parent = state.get("champion", {}).get("id")
+    expected_hyperparameters = experiment_for_generation(generation)
+
+    if preregistration.get("schema") != PREREGISTRATION_SCHEMA:
+        issues.append("preregistration.schema_mismatch")
+    if type(preregistration.get("generation")) is not int:
+        issues.append("preregistration.generation_invalid")
+    elif preregistration["generation"] != generation:
+        issues.append("preregistration.generation_mismatch")
+    if preregistration.get("experiment_id") != expected_experiment_id:
+        issues.append("preregistration.experiment_id_mismatch")
+    if preregistration.get("parent_champion") != expected_parent:
+        issues.append("preregistration.parent_champion_mismatch")
+    if preregistration.get("analysis_version") != analysis_version:
+        issues.append("preregistration.analysis_version_mismatch")
+    if preregistration.get("dataset_manifest_sha256") != manifest_sha256:
+        issues.append("preregistration.manifest_sha256_mismatch")
+
+    split = preregistration.get("split")
+    if not isinstance(split, dict):
+        issues.append("preregistration.split_invalid")
+    else:
+        if split.get("train_index") != str(shard_root / "train" / "_index.json"):
+            issues.append("preregistration.train_index_mismatch")
+        if split.get("holdout_index") != str(shard_root / "holdout" / "_index.json"):
+            issues.append("preregistration.holdout_index_mismatch")
+        if split.get("holdout_is_frozen") is not True:
+            issues.append("preregistration.holdout_not_frozen")
+
+    budget = preregistration.get("budget")
+    if not isinstance(budget, dict):
+        issues.append("preregistration.budget_invalid")
+    else:
+        if budget.get("paper_or_offline_only") is not True:
+            issues.append("preregistration.paper_or_offline_only_required")
+        if budget.get("no_external_ai_calls") is not True:
+            issues.append("preregistration.no_external_ai_calls_required")
+        if budget.get("max_epochs") != 8:
+            issues.append("preregistration.max_epochs_mismatch")
+        if budget.get("max_hidden_dim") != 128:
+            issues.append("preregistration.max_hidden_dim_mismatch")
+
+    if preregistration.get("hyperparameters") != expected_hyperparameters:
+        issues.append("preregistration.hyperparameters_mismatch")
+    if preregistration.get("seed") != expected_hyperparameters["seed"]:
+        issues.append("preregistration.seed_mismatch")
+
+    stored_sha256 = preregistration.get("preregistration_sha256")
+    if not isinstance(stored_sha256, str):
+        issues.append("preregistration.sha256_invalid")
+    else:
+        unhashed = dict(preregistration)
+        unhashed.pop("preregistration_sha256", None)
+        expected_sha256 = hashlib.sha256(canonical_json(unhashed)).hexdigest()
+        if stored_sha256 != expected_sha256:
+            issues.append("preregistration.sha256_mismatch")
+
+    return issues
+
+
 def evaluate_candidate(
     candidate: dict[str, float],
     champion: dict[str, float],
@@ -367,8 +441,23 @@ class GenerationLoop:
         experiment = experiment_for_generation(generation)
         candidate_dir = self.generations_dir / f"gen-{generation:04d}"
         prereg_path = candidate_dir / "preregistration.json"
+        manifest_sha256 = sha256_file(self.manifest)
         if prereg_path.is_file():
-            return load_json(prereg_path)
+            cached = load_json(prereg_path)
+            issues = preregistration_issues(
+                cached,
+                state=state,
+                generation=generation,
+                analysis_version=self.analysis_version,
+                manifest_sha256=manifest_sha256,
+                shard_root=self.shard_root,
+            )
+            if issues:
+                raise RuntimeError(
+                    "generation preregistration validation failed: "
+                    + ", ".join(issues)
+                )
+            return cached
 
         revision = "unknown"
         try:
@@ -387,7 +476,7 @@ class GenerationLoop:
             "parent_champion": state["champion"]["id"],
             "analysis_version": self.analysis_version,
             "dataset_manifest": str(self.manifest),
-            "dataset_manifest_sha256": sha256_file(self.manifest),
+            "dataset_manifest_sha256": manifest_sha256,
             "split": {
                 "train_index": str(self.shard_root / "train" / "_index.json"),
                 "holdout_index": str(self.shard_root / "holdout" / "_index.json"),
@@ -406,6 +495,19 @@ class GenerationLoop:
             "created_at": utc_now(),
         }
         payload["preregistration_sha256"] = hashlib.sha256(canonical_json(payload)).hexdigest()
+        issues = preregistration_issues(
+            payload,
+            state=state,
+            generation=generation,
+            analysis_version=self.analysis_version,
+            manifest_sha256=manifest_sha256,
+            shard_root=self.shard_root,
+        )
+        if issues:
+            raise RuntimeError(
+                "generated preregistration failed validation: "
+                + ", ".join(issues)
+            )
         atomic_json(prereg_path, payload)
         return payload
 
