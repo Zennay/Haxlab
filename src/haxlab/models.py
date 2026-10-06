@@ -79,9 +79,9 @@ class ImportManifest:
         return value
 
     def _validate(self) -> None:
-        if type(self.schema_version) is not int or self.schema_version <= 0:
+        if type(self.schema_version) is not int or self.schema_version != 1:
             raise ValueError(
-                "invalid import manifest schema_version: expected native positive int"
+                "invalid import manifest schema_version: expected exact schema version 1"
             )
 
         replay_count = self._require_native_non_negative_int(
