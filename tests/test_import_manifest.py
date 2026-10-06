@@ -143,3 +143,35 @@ def test_import_manifest_allows_failed_replay_to_reduce_unmatched_replay_count()
     assert value["unique_replay_count"] == 3
     assert value["match_count"] == 1
     assert value["unmatched_replays"] == ["still-valid-unmatched.hbr2"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("unmatched_replays", ("a.hbr2",)),
+        ("unmatched_replays", ["a.hbr2", 1]),
+        ("unmatched_reports", "message-1"),
+        ("unmatched_reports", ["message-1", None]),
+    ],
+)
+def test_import_manifest_rejects_malformed_unmatched_containers(
+    field: str, value: object
+) -> None:
+    kwargs = {
+        "replay_count": 1,
+        "unique_replay_count": 1,
+        "duplicate_replay_count": 0,
+        "report_count": 1,
+        "match_count": 0,
+    }
+    kwargs[field] = value
+
+    with pytest.raises(ValueError, match=field):
+        ImportManifest(**kwargs).as_dict()
+
+
+def test_import_manifest_rejects_malformed_failures_container() -> None:
+    manifest = ImportManifest(failures=[{"source": "x"}])
+
+    with pytest.raises(ValueError, match="failures"):
+        manifest.as_dict()
