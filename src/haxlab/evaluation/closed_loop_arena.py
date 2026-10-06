@@ -9,6 +9,9 @@ from typing import Any
 
 
 ARENA_SCHEMA = "haxlab-closed-loop-arena-v2"
+EVALUATION_MODE = (
+    "paired_raw_policy_full_team_plus_plug_and_play_context_generalization_v2"
+)
 ROLES = ("gk", "dm", "am", "st")
 
 
@@ -236,6 +239,7 @@ def decide_closed_loop_arena(
         "policy_version": policy.policy_version,
         "policy_calibrated": policy.calibrated,
         "schema": payload.get("schema"),
+        "evaluation_mode": payload.get("evaluation_mode"),
         "raw_policy_only": payload.get("raw_policy_only"),
         "safety_recovery_enabled": payload.get("safety_recovery_enabled"),
         "paired_reference_design": payload.get("paired_reference_design"),
@@ -245,6 +249,9 @@ def decide_closed_loop_arena(
         structural_failures.append(
             f"unsupported_schema:{payload.get('schema') or 'missing'}"
         )
+    evaluation_mode = payload.get("evaluation_mode")
+    if not isinstance(evaluation_mode, str) or evaluation_mode != EVALUATION_MODE:
+        structural_failures.append("unsupported_evaluation_mode")
     if payload.get("raw_policy_only") is not True:
         structural_failures.append("arena_must_measure_raw_policy")
     if payload.get("safety_recovery_enabled") is not False:
