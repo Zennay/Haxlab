@@ -111,6 +111,11 @@ def run_import(
     export_root = export_root.resolve()
     output_root = output_root.resolve()
 
+    if not export_root.exists():
+        raise FileNotFoundError(f"export_root_missing:{export_root}")
+    if not export_root.is_dir():
+        raise NotADirectoryError(f"export_root_not_directory:{export_root}")
+
     if export_root == output_root or output_root.is_relative_to(export_root):
         raise ValueError("output_root must be outside the immutable raw export directory")
 
