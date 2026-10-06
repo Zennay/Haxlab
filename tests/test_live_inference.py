@@ -63,3 +63,57 @@ def test_explicit_version_remains_available_for_scoped_probe(
     resolved = resolve_version_dir(tmp_path, "candidate-v1")
 
     assert resolved == candidate
+
+
+def test_explicit_version_rejects_parent_traversal(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "metrics.json").write_text("{}\n", encoding="utf-8")
+    (outside / "model.npz").write_bytes(b"model-placeholder")
+
+    with pytest.raises(FileNotFoundError, match="not found or unsafe"):
+        resolve_version_dir(tmp_path, "../outside")
+
+
+def test_explicit_version_rejects_symlink_escape(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "metrics.json").write_text("{}\n", encoding="utf-8")
+    (outside / "model.npz").write_bytes(b"model-placeholder")
+    versions = tmp_path / "versions"
+    versions.mkdir()
+    (versions / "candidate-link").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(FileNotFoundError, match="not found or unsafe"):
+        resolve_version_dir(tmp_path, "candidate-link")
+
+
+def test_pointer_rejects_unsafe_version_reference(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "metrics.json").write_text("{}\n", encoding="utf-8")
+    (outside / "model.npz").write_bytes(b"model-placeholder")
+    (tmp_path / "current.json").write_text(
+        json.dumps({"version": "../outside"}) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        FileNotFoundError,
+        match="refusing to select an unpromoted version by recency",
+    ):
+        resolve_version_dir(tmp_path)
+
+
+def test_pointer_requires_complete_loadable_version(tmp_path: Path) -> None:
+    version = tmp_path / "versions" / "incomplete-v1"
+    version.mkdir(parents=True)
+    (version / "metrics.json").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "current.json").write_text(
+        json.dumps({"version": "incomplete-v1"}) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(FileNotFoundError):
+        resolve_version_dir(tmp_path)
+
