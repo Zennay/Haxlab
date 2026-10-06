@@ -1,10 +1,24 @@
 from __future__ import annotations
 
+import math
+
 from haxlab.quality.models import (
     MatchQualityAssessment,
     MatchQualityEvidence,
     QualityTier,
 )
+
+
+def _is_native_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_finite_number(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )
 
 
 def assess_match_quality(evidence: MatchQualityEvidence) -> MatchQualityAssessment:
@@ -15,6 +29,58 @@ def assess_match_quality(evidence: MatchQualityEvidence) -> MatchQualityAssessme
     """
     reasons: list[str] = []
     missing: list[str] = []
+    invalid: list[str] = []
+
+    if not isinstance(evidence.replay_valid, bool):
+        invalid.append("invalid_replay_valid")
+    if evidence.duration_seconds is not None and (
+        not _is_finite_number(evidence.duration_seconds)
+        or float(evidence.duration_seconds) < 0.0
+    ):
+        invalid.append("invalid_duration_seconds")
+    if evidence.expected_player_count is not None and (
+        not _is_native_int(evidence.expected_player_count)
+        or evidence.expected_player_count <= 0
+    ):
+        invalid.append("invalid_expected_player_count")
+    if evidence.observed_player_count is not None and (
+        not _is_native_int(evidence.observed_player_count)
+        or evidence.observed_player_count < 0
+    ):
+        invalid.append("invalid_observed_player_count")
+    if evidence.disconnect_count is not None and (
+        not _is_native_int(evidence.disconnect_count)
+        or evidence.disconnect_count < 0
+    ):
+        invalid.append("invalid_disconnect_count")
+    if evidence.activity_ratio is not None and (
+        not _is_finite_number(evidence.activity_ratio)
+        or not 0.0 <= float(evidence.activity_ratio) <= 1.0
+    ):
+        invalid.append("invalid_activity_ratio")
+    if evidence.parser_completeness is not None and (
+        not _is_finite_number(evidence.parser_completeness)
+        or not 0.0 <= float(evidence.parser_completeness) <= 1.0
+    ):
+        invalid.append("invalid_parser_completeness")
+    if evidence.stadium_supported is not None and not isinstance(
+        evidence.stadium_supported,
+        bool,
+    ):
+        invalid.append("invalid_stadium_supported")
+    if (
+        evidence.has_reliable_player_identities is not None
+        and not isinstance(evidence.has_reliable_player_identities, bool)
+    ):
+        invalid.append("invalid_player_identity_confidence")
+
+    if invalid:
+        return MatchQualityAssessment(
+            tier=QualityTier.REJECTED,
+            weight=0.0,
+            reasons=tuple(sorted(invalid)),
+            missing_evidence=(),
+        )
 
     if not evidence.replay_valid:
         return MatchQualityAssessment(
