@@ -93,12 +93,148 @@ def _required_integer(
     return int(number)
 
 
+def _policy_number(
+    failures: list[str],
+    value: Any,
+    label: str,
+    *,
+    minimum: float,
+    maximum: float,
+) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        failures.append(f"invalid_policy:{label}:non_numeric")
+        return minimum
+    number = float(value)
+    if not math.isfinite(number):
+        failures.append(f"invalid_policy:{label}:non_finite")
+        return minimum
+    if number < minimum:
+        failures.append(
+            f"invalid_policy:{label}:below_minimum:"
+            f"{number:.6f}<{minimum:.6f}"
+        )
+    if number > maximum:
+        failures.append(
+            f"invalid_policy:{label}:above_maximum:"
+            f"{number:.6f}>{maximum:.6f}"
+        )
+    return number
+
+
+def _policy_integer(
+    failures: list[str],
+    value: Any,
+    label: str,
+    *,
+    minimum: int,
+) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        failures.append(f"invalid_policy:{label}:non_integer")
+        return minimum
+    if value < minimum:
+        failures.append(
+            f"invalid_policy:{label}:below_minimum:{value}<{minimum}"
+        )
+    return value
+
+
+def _policy_bool(
+    failures: list[str],
+    value: Any,
+    label: str,
+) -> bool:
+    if type(value) is not bool:
+        failures.append(f"invalid_policy:{label}:not_boolean")
+        return False
+    return value
+
+
 def decide_duel_gate(
     duel: dict[str, Any],
     policy: DuelGatePolicy = DuelGatePolicy(),
 ) -> DuelGateDecision:
+    if not isinstance(duel, dict):
+        return DuelGateDecision(
+            eligible_to_replace_champion=False,
+            reasons=("invalid_duel:object_type",),
+            checks={},
+        )
+    if not isinstance(policy, DuelGatePolicy):
+        return DuelGateDecision(
+            eligible_to_replace_champion=False,
+            reasons=("invalid_policy:object_type",),
+            checks={},
+        )
+
     failures: list[str] = []
     checks: dict[str, Any] = {}
+
+    minimum_matches = _policy_integer(
+        failures,
+        policy.minimum_matches,
+        "minimum_matches",
+        minimum=1,
+    )
+    minimum_match_score = _policy_number(
+        failures,
+        policy.minimum_match_score,
+        "minimum_match_score",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    minimum_territory_share = _policy_number(
+        failures,
+        policy.minimum_territory_share,
+        "minimum_territory_share",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    minimum_attack_third_share = _policy_number(
+        failures,
+        policy.minimum_attack_third_share,
+        "minimum_attack_third_share",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    maximum_side_territory_gap = _policy_number(
+        failures,
+        policy.maximum_side_territory_gap,
+        "maximum_side_territory_gap",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    maximum_runtime_errors = _policy_integer(
+        failures,
+        policy.maximum_runtime_errors,
+        "maximum_runtime_errors",
+        minimum=0,
+    )
+    maximum_kick_action_rate = _policy_number(
+        failures,
+        policy.maximum_kick_action_rate,
+        "maximum_kick_action_rate",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    minimum_replay_progression_share = _policy_number(
+        failures,
+        policy.minimum_replay_progression_share,
+        "minimum_replay_progression_share",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    minimum_replay_nonzero_movement_rate = _policy_number(
+        failures,
+        policy.minimum_replay_nonzero_movement_rate,
+        "minimum_replay_nonzero_movement_rate",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    require_replay_kick_activity = _policy_bool(
+        failures,
+        policy.require_replay_kick_activity,
+        "require_replay_kick_activity",
+    )
 
     schema = str(duel.get("schema") or "")
     supported_schemas = {
@@ -166,16 +302,16 @@ def decide_duel_gate(
             "match_tally_mismatch:"
             f"{wins}+{draws}+{losses}!={matches}"
         )
-    if matches < policy.minimum_matches:
+    if matches < minimum_matches:
         failures.append(
-            f"insufficient_matches:{matches}<{policy.minimum_matches}"
+            f"insufficient_matches:{matches}<{minimum_matches}"
         )
 
     match_score = (wins + 0.5 * draws) / matches if matches > 0 else 0.0
     checks["match_score"] = match_score
-    if match_score < policy.minimum_match_score:
+    if match_score < minimum_match_score:
         failures.append(
-            f"match_score:{match_score:.4f}<{policy.minimum_match_score:.4f}"
+            f"match_score:{match_score:.4f}<{minimum_match_score:.4f}"
         )
 
     territory = duel.get("territory") or {}
@@ -201,10 +337,10 @@ def decide_duel_gate(
     )
     territory_share = _share(challenger_half, champion_half)
     checks["territory_share"] = territory_share
-    if territory_share < policy.minimum_territory_share:
+    if territory_share < minimum_territory_share:
         failures.append(
             "territory_share:"
-            f"{territory_share:.4f}<{policy.minimum_territory_share:.4f}"
+            f"{territory_share:.4f}<{minimum_territory_share:.4f}"
         )
 
     challenger_attack = _required_number(
@@ -225,10 +361,10 @@ def decide_duel_gate(
     )
     attack_share = _share(challenger_attack, champion_attack)
     checks["attack_third_share"] = attack_share
-    if attack_share < policy.minimum_attack_third_share:
+    if attack_share < minimum_attack_third_share:
         failures.append(
             "attack_third_share:"
-            f"{attack_share:.4f}<{policy.minimum_attack_third_share:.4f}"
+            f"{attack_share:.4f}<{minimum_attack_third_share:.4f}"
         )
 
     challenger_errors = _required_integer(
@@ -247,15 +383,15 @@ def decide_duel_gate(
     )
     checks["challenger_runtime_errors"] = challenger_errors
     checks["champion_runtime_errors"] = champion_errors
-    if challenger_errors > policy.maximum_runtime_errors:
+    if challenger_errors > maximum_runtime_errors:
         failures.append(
             "challenger_runtime_errors:"
-            f"{challenger_errors}>{policy.maximum_runtime_errors}"
+            f"{challenger_errors}>{maximum_runtime_errors}"
         )
-    if champion_errors > policy.maximum_runtime_errors:
+    if champion_errors > maximum_runtime_errors:
         failures.append(
             "champion_runtime_errors:"
-            f"{champion_errors}>{policy.maximum_runtime_errors}"
+            f"{champion_errors}>{maximum_runtime_errors}"
         )
 
     kick_rate = _required_number(
@@ -267,10 +403,10 @@ def decide_duel_gate(
         maximum=1.0,
     )
     checks["challenger_kick_action_rate"] = kick_rate
-    if kick_rate > policy.maximum_kick_action_rate:
+    if kick_rate > maximum_kick_action_rate:
         failures.append(
             "challenger_kick_action_rate:"
-            f"{kick_rate:.4f}>{policy.maximum_kick_action_rate:.4f}"
+            f"{kick_rate:.4f}>{maximum_kick_action_rate:.4f}"
         )
 
     if schema == "haxlab-elite-replay-seeded-duel-v1":
@@ -292,19 +428,19 @@ def decide_duel_gate(
         )
         checks["challenger_progression_share"] = progression_share
         checks["challenger_nonzero_movement_rate"] = movement_rate
-        if progression_share < policy.minimum_replay_progression_share:
+        if progression_share < minimum_replay_progression_share:
             failures.append(
                 "challenger_progression_share:"
                 f"{progression_share:.4f}<"
-                f"{policy.minimum_replay_progression_share:.4f}"
+                f"{minimum_replay_progression_share:.4f}"
             )
-        if movement_rate < policy.minimum_replay_nonzero_movement_rate:
+        if movement_rate < minimum_replay_nonzero_movement_rate:
             failures.append(
                 "challenger_nonzero_movement_rate:"
                 f"{movement_rate:.4f}<"
-                f"{policy.minimum_replay_nonzero_movement_rate:.4f}"
+                f"{minimum_replay_nonzero_movement_rate:.4f}"
             )
-        if policy.require_replay_kick_activity and kick_rate <= 0.0:
+        if require_replay_kick_activity and kick_rate <= 0.0:
             failures.append("challenger_no_kick_activity")
 
     sides = duel.get("by_challenger_side") or {}
@@ -329,10 +465,10 @@ def decide_duel_gate(
     if len(side_rates) == 2:
         side_gap = abs(side_rates["1"] - side_rates["2"])
         checks["side_territory_gap"] = side_gap
-        if side_gap > policy.maximum_side_territory_gap:
+        if side_gap > maximum_side_territory_gap:
             failures.append(
                 "side_territory_gap:"
-                f"{side_gap:.4f}>{policy.maximum_side_territory_gap:.4f}"
+                f"{side_gap:.4f}>{maximum_side_territory_gap:.4f}"
             )
 
     goals = duel.get("goals") or {}

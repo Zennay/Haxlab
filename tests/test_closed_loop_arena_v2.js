@@ -1,7 +1,13 @@
 "use strict";
 
 const assert = require("assert");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 const {
+  parseArgs,
+  scenarioIndexForRow,
+  loadScenarioRows,
   contextShifted,
   choosePartnerModel,
   createTracker,
@@ -9,6 +15,147 @@ const {
   finishTracker,
   pairArenaRows,
 } = require("../tools/elite_closed_loop_arena_v2");
+
+const requiredArgs = [
+  "--challenger", "challenger.json",
+  "--champion", "champion.json",
+  "--stadium", "stadium.hbs",
+  "--scenarios", "scenarios.json",
+];
+
+const defaults = parseArgs(requiredArgs);
+assert.strictEqual(defaults.seconds, 30);
+assert.strictEqual(defaults.maxScenarios, 4);
+assert.strictEqual(defaults.sampleEvery, 6);
+assert.strictEqual(defaults.plugRepeats, 1);
+assert.strictEqual(defaults.seed, 1337);
+assert.deepStrictEqual(defaults.partnerModels, ["champion.json"]);
+
+const explicit = parseArgs([
+  ...requiredArgs,
+  "--seconds", "30.5",
+  "--max-scenarios", "3",
+  "--sample-every", "4",
+  "--plug-repeats", "2",
+  "--seed", "42",
+]);
+assert.strictEqual(explicit.seconds, 30.5);
+assert.strictEqual(explicit.maxScenarios, 3);
+assert.strictEqual(explicit.sampleEvery, 4);
+assert.strictEqual(explicit.plugRepeats, 2);
+assert.strictEqual(explicit.seed, 42);
+
+assert.throws(
+  () => parseArgs([...requiredArgs, "--seconds", "NaN"]),
+  /Invalid numeric value for --seconds/,
+);
+assert.throws(
+  () => parseArgs([...requiredArgs, "--seconds", "4.99"]),
+  /Out-of-range value for --seconds/,
+);
+assert.throws(
+  () => parseArgs([...requiredArgs, "--max-scenarios", "2.5"]),
+  /Invalid integer value for --max-scenarios/,
+);
+assert.throws(
+  () => parseArgs([...requiredArgs, "--sample-every", "0"]),
+  /Out-of-range integer for --sample-every/,
+);
+assert.throws(
+  () => parseArgs([...requiredArgs, "--seed", "0"]),
+  /Out-of-range integer for --seed/,
+);
+assert.throws(
+  () => parseArgs([...requiredArgs, "--seed", "4294967296"]),
+  /Out-of-range integer for --seed/,
+);
+assert.throws(
+  () => parseArgs([...requiredArgs, "--seconds"]),
+  /Missing value for --seconds/,
+);
+assert.throws(
+  () => parseArgs([
+    "--challenger", "--champion",
+    "champion.json",
+    "--stadium", "stadium.hbs",
+    "--scenarios", "scenarios.json",
+  ]),
+  /Missing value for --challenger/,
+);
+
+assert.strictEqual(scenarioIndexForRow({}, 0), 1);
+assert.strictEqual(scenarioIndexForRow({ scenario_index: 7 }, 0), 7);
+assert.throws(
+  () => scenarioIndexForRow({ scenario_index: "7" }, 0),
+  /invalid scenario_index/,
+);
+assert.throws(
+  () => scenarioIndexForRow({ scenario_index: 1.5 }, 0),
+  /invalid scenario_index/,
+);
+assert.throws(
+  () => scenarioIndexForRow({ scenario_index: 0 }, 0),
+  /invalid scenario_index/,
+);
+assert.throws(
+  () => scenarioIndexForRow(null, 0),
+  /must be an object/,
+);
+
+const scenarioTemp = fs.mkdtempSync(
+  path.join(os.tmpdir(), "haxlab-arena-v2-config-"),
+);
+try {
+  const scenarioPath = path.join(scenarioTemp, "scenarios.json");
+  fs.writeFileSync(
+    scenarioPath,
+    JSON.stringify({ scenarios: [{ scenario_index: 2 }, { scenario_index: 3 }] }),
+  );
+  assert.strictEqual(loadScenarioRows(scenarioPath, 2).length, 2);
+
+  fs.writeFileSync(
+    scenarioPath,
+    JSON.stringify({ scenarios: [{ scenario_index: 1 }, { scenario_index: 1 }] }),
+  );
+  assert.throws(
+    () => loadScenarioRows(scenarioPath, 2),
+    /duplicate scenario_index: 1/,
+  );
+
+  fs.writeFileSync(
+    scenarioPath,
+    JSON.stringify({ scenarios: [{ scenario_index: 2 }, {}] }),
+  );
+  assert.throws(
+    () => loadScenarioRows(scenarioPath, 2),
+    /duplicate scenario_index: 2/,
+  );
+
+  fs.writeFileSync(
+    scenarioPath,
+    JSON.stringify({ scenarios: [null] }),
+  );
+  assert.throws(
+    () => loadScenarioRows(scenarioPath, 1),
+    /must be an object/,
+  );
+
+  fs.writeFileSync(
+    scenarioPath,
+    JSON.stringify({ scenarios: [{ scenario_index: "1" }] }),
+  );
+  assert.throws(
+    () => loadScenarioRows(scenarioPath, 1),
+    /invalid scenario_index/,
+  );
+
+  assert.throws(
+    () => loadScenarioRows(scenarioPath, 0),
+    /maxScenarios must be a positive safe integer/,
+  );
+} finally {
+  fs.rmSync(scenarioTemp, { recursive: true, force: true });
+}
 
 assert.strictEqual(
   contextShifted(

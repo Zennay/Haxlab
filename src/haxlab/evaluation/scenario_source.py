@@ -2,12 +2,26 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sqlite3
 from pathlib import Path
 from typing import Any
 
 from haxlab.analysis.roles import ROLES_4V4, infer_roles_4v4
 from haxlab.hashing import sha256_file
+
+
+def _native_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _finite_number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
 
 
 def _healthy_candidate(
@@ -25,30 +39,72 @@ def _healthy_candidate(
         payload = json.loads(analysis_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-
-    if int(payload.get("schemaVersion") or 0) < 4:
-        return None
-    total_frames = int(payload.get("totalFrames") or 0)
-    if total_frames < 60 * 180:
-        return None
-    touches = int((payload.get("featureSummary") or {}).get("touches") or 0)
-    if touches < 100:
+    if not isinstance(payload, dict):
         return None
 
-    players = list(payload.get("players") or [])
+    schema_version = _native_int(payload.get("schemaVersion"))
+    total_frames = _native_int(payload.get("totalFrames"))
+    if schema_version is None or schema_version < 4:
+        return None
+    if total_frames is None or total_frames < 60 * 180:
+        return None
+
+    feature_summary = payload.get("featureSummary") or {}
+    if not isinstance(feature_summary, dict):
+        return None
+    raw_touches = feature_summary.get("touches")
+    touches = _native_int(0 if raw_touches is None else raw_touches)
+    if touches is None or touches < 100:
+        return None
+
+    raw_players = payload.get("players") or []
+    if not isinstance(raw_players, list):
+        return None
+    players: list[dict[str, Any]] = []
+    player_ids: set[int] = set()
+    for player in raw_players:
+        if not isinstance(player, dict):
+            return None
+        player_id = _native_int(player.get("id"))
+        raw_team_id = player.get("teamId")
+        raw_samples = player.get("samples")
+        team_id = _native_int(0 if raw_team_id is None else raw_team_id)
+        samples = _native_int(0 if raw_samples is None else raw_samples)
+        if (
+            player_id is None
+            or team_id is None
+            or samples is None
+            or samples < 0
+            or player_id in player_ids
+        ):
+            return None
+        player_ids.add(player_id)
+        players.append(player)
+
     simulation = payload.get("simulation") or {}
-    sampled_state_count = int(
-        simulation.get("sampledStateCount") or sampled_states or 0
-    )
+    if not isinstance(simulation, dict):
+        return None
+    expected_sampled_states = _native_int(sampled_states)
+    if expected_sampled_states is None or expected_sampled_states <= 0:
+        return None
+    declared_sampled_states = simulation.get("sampledStateCount")
+    if declared_sampled_states is None:
+        sampled_state_count = expected_sampled_states
+    else:
+        sampled_state_count = _native_int(declared_sampled_states)
+        if sampled_state_count is None:
+            return None
+        if sampled_state_count == 0:
+            sampled_state_count = expected_sampled_states
     if sampled_state_count <= 0:
         return None
-    if int(sampled_states or 0) != sampled_state_count:
+    if expected_sampled_states != sampled_state_count:
         return None
 
     average_team_sizes: dict[int, float] = {}
     for team_id in (1, 2):
         team_sample_total = sum(
-            int(player.get("samples") or 0)
+            int(player["samples"])
             for player in players
             if int(player.get("teamId") or 0) == team_id
         )
@@ -57,7 +113,13 @@ def _healthy_candidate(
         if not 3.5 <= average_team_size <= 4.5:
             return None
 
-    roles = infer_roles_4v4(players)
+    try:
+        roles = infer_roles_4v4(players)
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return None
+    if not isinstance(roles, dict):
+        return None
+
     core_roles: dict[int, dict[str, int]] = {1: {}, 2: {}}
     role_confidences: list[float] = []
 
@@ -80,9 +142,16 @@ def _healthy_candidate(
         for player in core:
             player_id = int(player["id"])
             role_row = roles.get(player_id) or {}
+            if not isinstance(role_row, dict):
+                return None
             role = str(role_row.get("role") or "unknown")
-            confidence = float(role_row.get("confidence") or 0.0)
-            if role not in ROLES_4V4 or confidence < 0.55 or role in seen:
+            confidence = _finite_number(role_row.get("confidence") or 0.0)
+            if (
+                confidence is None
+                or role not in ROLES_4V4
+                or confidence < 0.55
+                or role in seen
+            ):
                 return None
             seen.add(role)
             core_roles[team_id][role] = player_id
@@ -163,11 +232,14 @@ def select_scenario_source(
         normalized_sha = str(sha256).lower()
         if normalized_sha in excluded:
             continue
+        sampled_state_count = _native_int(sampled_states)
+        if sampled_state_count is None:
+            continue
         candidate = _healthy_candidate(
             sha256=str(sha256),
             raw_path=str(raw_path),
             analysis_path=str(analysis_path),
-            sampled_states=int(sampled_states or 0),
+            sampled_states=sampled_state_count,
         )
         if candidate is not None:
             return {

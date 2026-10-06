@@ -204,3 +204,181 @@ def test_healthy_candidate_rejects_sample_count_drift(
     )
 
     assert candidate is None
+
+
+
+def test_healthy_candidate_rejects_non_object_analysis(
+    tmp_path: Path,
+) -> None:
+    raw, analysis, raw_sha = _candidate_files(tmp_path)
+    analysis.write_text(json.dumps([]), encoding="utf-8")
+
+    candidate = scenario_source._healthy_candidate(
+        sha256=raw_sha,
+        raw_path=str(raw),
+        analysis_path=str(analysis),
+        sampled_states=100,
+    )
+
+    assert candidate is None
+
+
+def test_healthy_candidate_rejects_malformed_nested_objects(
+    tmp_path: Path,
+) -> None:
+    raw, analysis, raw_sha = _candidate_files(tmp_path)
+    payload = json.loads(analysis.read_text(encoding="utf-8"))
+    payload["featureSummary"] = []
+    analysis.write_text(json.dumps(payload), encoding="utf-8")
+
+    candidate = scenario_source._healthy_candidate(
+        sha256=raw_sha,
+        raw_path=str(raw),
+        analysis_path=str(analysis),
+        sampled_states=100,
+    )
+
+    assert candidate is None
+
+
+def test_healthy_candidate_rejects_non_native_integer_metrics(
+    tmp_path: Path,
+) -> None:
+    raw, analysis, raw_sha = _candidate_files(tmp_path)
+    payload = json.loads(analysis.read_text(encoding="utf-8"))
+    payload["totalFrames"] = "10800"
+    analysis.write_text(json.dumps(payload), encoding="utf-8")
+
+    candidate = scenario_source._healthy_candidate(
+        sha256=raw_sha,
+        raw_path=str(raw),
+        analysis_path=str(analysis),
+        sampled_states=100,
+    )
+
+    assert candidate is None
+
+
+def test_healthy_candidate_rejects_malformed_player_rows(
+    tmp_path: Path,
+) -> None:
+    raw, analysis, raw_sha = _candidate_files(tmp_path)
+    payload = json.loads(analysis.read_text(encoding="utf-8"))
+    payload["players"][0]["samples"] = "100"
+    analysis.write_text(json.dumps(payload), encoding="utf-8")
+
+    candidate = scenario_source._healthy_candidate(
+        sha256=raw_sha,
+        raw_path=str(raw),
+        analysis_path=str(analysis),
+        sampled_states=100,
+    )
+
+    assert candidate is None
+
+
+def test_healthy_candidate_rejects_duplicate_player_ids(
+    tmp_path: Path,
+) -> None:
+    raw, analysis, raw_sha = _candidate_files(tmp_path)
+    payload = json.loads(analysis.read_text(encoding="utf-8"))
+    payload["players"][1]["id"] = payload["players"][0]["id"]
+    analysis.write_text(json.dumps(payload), encoding="utf-8")
+
+    candidate = scenario_source._healthy_candidate(
+        sha256=raw_sha,
+        raw_path=str(raw),
+        analysis_path=str(analysis),
+        sampled_states=100,
+    )
+
+    assert candidate is None
+
+
+def test_healthy_candidate_rejects_malformed_simulation(
+    tmp_path: Path,
+) -> None:
+    raw, analysis, raw_sha = _candidate_files(tmp_path)
+    payload = json.loads(analysis.read_text(encoding="utf-8"))
+    payload["simulation"] = ["not", "an", "object"]
+    analysis.write_text(json.dumps(payload), encoding="utf-8")
+
+    candidate = scenario_source._healthy_candidate(
+        sha256=raw_sha,
+        raw_path=str(raw),
+        analysis_path=str(analysis),
+        sampled_states=100,
+    )
+
+    assert candidate is None
+
+
+def test_selector_skips_corrupt_db_sample_count(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "state.sqlite3"
+    _db(db_path)
+    db = sqlite3.connect(db_path)
+    try:
+        db.execute(
+            "UPDATE replay_analysis_versions "
+            "SET sampled_state_count = 'broken' WHERE sha256 = ?",
+            ("a" * 64,),
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    def fake_healthy_candidate(**kwargs):
+        return {
+            "schema": "haxlab-replay-scenario-source-v1",
+            "sha256": kwargs["sha256"],
+        }
+
+    monkeypatch.setattr(
+        scenario_source,
+        "_healthy_candidate",
+        fake_healthy_candidate,
+    )
+
+    result = scenario_source.select_scenario_source(db_path)
+
+    assert result["sha256"] == "b" * 64
+
+
+
+def test_healthy_candidate_rejects_boolean_player_integer(
+    tmp_path: Path,
+) -> None:
+    raw, analysis, raw_sha = _candidate_files(tmp_path)
+    payload = json.loads(analysis.read_text(encoding="utf-8"))
+    payload["players"][0]["teamId"] = False
+    analysis.write_text(json.dumps(payload), encoding="utf-8")
+
+    candidate = scenario_source._healthy_candidate(
+        sha256=raw_sha,
+        raw_path=str(raw),
+        analysis_path=str(analysis),
+        sampled_states=100,
+    )
+
+    assert candidate is None
+
+
+def test_healthy_candidate_rejects_boolean_sample_count(
+    tmp_path: Path,
+) -> None:
+    raw, analysis, raw_sha = _candidate_files(tmp_path)
+    payload = json.loads(analysis.read_text(encoding="utf-8"))
+    payload["simulation"]["sampledStateCount"] = False
+    analysis.write_text(json.dumps(payload), encoding="utf-8")
+
+    candidate = scenario_source._healthy_candidate(
+        sha256=raw_sha,
+        raw_path=str(raw),
+        analysis_path=str(analysis),
+        sampled_states=100,
+    )
+
+    assert candidate is None

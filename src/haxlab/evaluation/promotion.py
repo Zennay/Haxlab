@@ -61,12 +61,105 @@ def _integer(
     return int(number)
 
 
+def _policy_number(
+    failures: list[str],
+    value: Any,
+    label: str,
+    *,
+    minimum: float,
+    maximum: float,
+) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        failures.append(f"invalid_policy:{label}:non_numeric")
+        return minimum
+    number = float(value)
+    if not math.isfinite(number):
+        failures.append(f"invalid_policy:{label}:non_finite")
+        return minimum
+    if number < minimum:
+        failures.append(
+            f"invalid_policy:{label}:below_minimum:"
+            f"{number:.6f}<{minimum:.6f}"
+        )
+    if number > maximum:
+        failures.append(
+            f"invalid_policy:{label}:above_maximum:"
+            f"{number:.6f}>{maximum:.6f}"
+        )
+    return number
+
+
+def _policy_integer(
+    failures: list[str],
+    value: Any,
+    label: str,
+    *,
+    minimum: int,
+) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        failures.append(f"invalid_policy:{label}:non_integer")
+        return minimum
+    if value < minimum:
+        failures.append(
+            f"invalid_policy:{label}:below_minimum:{value}<{minimum}"
+        )
+    return value
+
+
+def _policy_bool(
+    failures: list[str],
+    value: Any,
+    label: str,
+) -> bool:
+    if type(value) is not bool:
+        failures.append(f"invalid_policy:{label}:not_boolean")
+        return False
+    return value
+
+
 def decide_promotion(
     evidence: EvaluationEvidence,
     policy: PromotionPolicy = PromotionPolicy(),
 ) -> PromotionDecision:
     """Conservative fail-closed gate for challenger -> champion promotion."""
+    if not isinstance(evidence, EvaluationEvidence):
+        return PromotionDecision(
+            promote=False,
+            reasons=("invalid_evidence:object_type",),
+        )
+    if not isinstance(policy, PromotionPolicy):
+        return PromotionDecision(
+            promote=False,
+            reasons=("invalid_policy:object_type",),
+        )
+
     failures: list[str] = []
+
+    minimum_games = _policy_integer(
+        failures,
+        policy.minimum_games,
+        "minimum_games",
+        minimum=1,
+    )
+    minimum_score_rate_lower_bound = _policy_number(
+        failures,
+        policy.minimum_score_rate_lower_bound,
+        "minimum_score_rate_lower_bound",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    minimum_scenario_pass_rate = _policy_number(
+        failures,
+        policy.minimum_scenario_pass_rate,
+        "minimum_scenario_pass_rate",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    allow_critical_regressions = _policy_bool(
+        failures,
+        policy.allow_critical_regressions,
+        "allow_critical_regressions",
+    )
 
     challenger_id = str(evidence.challenger_id or "").strip()
     champion_id = str(evidence.champion_id or "").strip()
@@ -119,16 +212,16 @@ def decide_promotion(
             "invalid_evidence:score_rate_lower_bound_exceeds_score_rate"
         )
 
-    if games < policy.minimum_games:
+    if games < minimum_games:
         failures.append(
-            f"insufficient_games:{games}<{policy.minimum_games}"
+            f"insufficient_games:{games}<{minimum_games}"
         )
 
-    if lower_bound < policy.minimum_score_rate_lower_bound:
+    if lower_bound < minimum_score_rate_lower_bound:
         failures.append(
             "head_to_head_confidence_gate_failed:"
             f"{lower_bound:.4f}"
-            f"<{policy.minimum_score_rate_lower_bound:.4f}"
+            f"<{minimum_score_rate_lower_bound:.4f}"
         )
 
     if scenario_passed > scenario_total:
@@ -141,10 +234,10 @@ def decide_promotion(
         failures.append("no_frozen_scenarios")
     else:
         pass_rate = scenario_passed / scenario_total
-        if pass_rate < policy.minimum_scenario_pass_rate:
+        if pass_rate < minimum_scenario_pass_rate:
             failures.append(
                 f"scenario_pass_rate_failed:{pass_rate:.4f}"
-                f"<{policy.minimum_scenario_pass_rate:.4f}"
+                f"<{minimum_scenario_pass_rate:.4f}"
             )
 
     critical = [
@@ -152,7 +245,7 @@ def decide_promotion(
         for regression in evidence.regressions
         if str(regression.severity).casefold() == "critical"
     ]
-    if critical and not policy.allow_critical_regressions:
+    if critical and not allow_critical_regressions:
         failures.append(
             "critical_regressions:"
             + ",".join(str(item.scenario) for item in critical)
