@@ -141,6 +141,13 @@ def generation_state_issues(
     if state.get("analysis_version") != analysis_version:
         issues.append("generation_state.analysis_version_mismatch")
 
+    next_generation = state.get("next_generation")
+    valid_next_generation = (
+        type(next_generation) is int and next_generation >= 1
+    )
+    if not valid_next_generation:
+        issues.append("generation_state.next_generation_invalid")
+
     stored_manifest_sha256 = state.get("manifest_sha256")
     if not isinstance(stored_manifest_sha256, str):
         issues.append("generation_state.manifest_sha256_invalid")
@@ -155,6 +162,40 @@ def generation_state_issues(
     champion_id = champion.get("id")
     if not isinstance(champion_id, str) or not champion_id.strip():
         issues.append("generation_state.champion_id_invalid")
+
+    champion_generation = champion.get("generation")
+    valid_champion_generation = (
+        type(champion_generation) is int and champion_generation >= 0
+    )
+    if not valid_champion_generation:
+        issues.append("generation_state.champion_generation_invalid")
+    else:
+        expected_champion_id = (
+            "gen-0000-bootstrap"
+            if champion_generation == 0
+            else f"gen-{champion_generation:04d}"
+        )
+        if champion_id != expected_champion_id:
+            issues.append("generation_state.champion_id_generation_mismatch")
+        if (
+            valid_next_generation
+            and next_generation <= champion_generation
+        ):
+            issues.append("generation_state.next_generation_not_after_champion")
+
+    active = state.get("active")
+    if active is not None:
+        if not isinstance(active, dict):
+            issues.append("generation_state.active_invalid")
+        else:
+            active_generation = active.get("generation")
+            if type(active_generation) is not int or active_generation < 1:
+                issues.append("generation_state.active_generation_invalid")
+            elif (
+                valid_next_generation
+                and active_generation != next_generation
+            ):
+                issues.append("generation_state.active_generation_mismatch")
 
     champion_metrics = champion.get("metrics")
     metric_issues = _snapshot_issues(
