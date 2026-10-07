@@ -521,6 +521,72 @@ def test_request_bindings_are_snapshotted_before_validation(
     )
 
 
+def test_cli_require_complete_accepts_real_nine_of_nine_inventory(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    request = _request(tmp_path)
+    result_root = request["result_root"]
+    champion = request["champion"]
+    challengers = request["challengers"]
+    partners = request["partners"]
+    assert isinstance(result_root, Path)
+    assert isinstance(champion, Path)
+    assert isinstance(challengers, dict)
+    assert isinstance(partners, tuple)
+
+    for label in ("champion-self", "candidate-d", "weak-zero"):
+        for source_id in ("01", "02", "03"):
+            path = result_root / f"{label}-source-{source_id}.json"
+            path.write_text(
+                json.dumps(
+                    _valid_payload(
+                        request,
+                        label=label,
+                        source_id=source_id,
+                    )
+                ),
+                encoding="utf-8",
+            )
+
+    argv = [
+        str(result_root),
+        "--source-root",
+        str(request["source_root"]),
+        "--champion",
+        str(champion),
+        "--candidate-d",
+        str(challengers["candidate-d"]),
+        "--weak-zero",
+        str(challengers["weak-zero"]),
+    ]
+    for partner in partners:
+        argv.extend(["--partner-model", str(partner)])
+    argv.extend(
+        [
+            "--seconds",
+            "30",
+            "--sample-every",
+            "6",
+            "--max-scenarios",
+            "16",
+            "--plug-repeats",
+            "1",
+            "--seed",
+            "1337",
+            "--require-complete",
+        ]
+    )
+
+    assert main(argv) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["complete"] is True
+    assert payload["expected_results"] == 9
+    assert payload["reusable_results"] == 9
+    assert payload["blocked_results"] == 0
+    assert all(row["reusable"] is True for row in payload["results"])
+
+
 def test_cli_require_complete_returns_nonzero_for_partial_inventory(
     tmp_path: Path,
     capsys,
