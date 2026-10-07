@@ -50,15 +50,13 @@ jobs:
           .data-pipeline-audit-liveness-venv/bin/pip install --upgrade pip
           .data-pipeline-audit-liveness-venv/bin/pip install -e '.[dev]'
 
-      - name: Compile audit surfaces and contract
+      - name: Compile repository Python before isolated import checks
         shell: bash
         run: |
           set -euo pipefail
           .data-pipeline-audit-liveness-venv/bin/python -m compileall -q \
-            src/haxlab/ingestion \
-            src/haxlab/learning \
-            src/haxlab/runtime \
-            tests/test_data_pipeline_audit_liveness_contract.py
+            src \
+            tests
 
       - name: Run focused liveness contract
         shell: bash
