@@ -1,0 +1,56 @@
+name: Evaluation Cross-Workflow Contract Current-Head
+
+on:
+  push:
+    branches:
+      - validation/evaluation-cross-workflow-current-head-20261007
+    paths:
+      - tests/test_evaluation_cross_workflow_contract.py
+      - .github/workflows/evaluation-cross-workflow-current-head.yml
+      - .github/workflows/closed-loop-arena-v2-calibration.yml
+      - .github/workflows/multisource-suite-v2.yml
+      - .github/workflows/ci.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-evaluation-cross-workflow-current-head
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Verify exact validation head
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "::error title=Cross-workflow validation provenance mismatch::checked out $ACTUAL_SHA, expected $EXPECTED_SHA"
+            exit 1
+          fi
+          echo "HAXLAB_EVALUATION_CROSS_WORKFLOW_HEAD=$ACTUAL_SHA"
+
+      - name: Run cross-workflow contract regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          /opt/haxlab/.venv/bin/python -m pytest -q tests/test_evaluation_cross_workflow_contract.py
+
+      - name: Record focused proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HAXLAB_EVALUATION_CROSS_WORKFLOW_CONTRACT=success"
