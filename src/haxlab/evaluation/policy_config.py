@@ -135,6 +135,27 @@ def _read_regular_file_nofollow(path: Path) -> bytes:
             raise ValueError(
                 f"promotion policy config exceeds {MAX_POLICY_CONFIG_BYTES} bytes"
             )
+
+        try:
+            after = os.fstat(fd)
+        except OSError as exc:
+            raise ValueError("promotion policy config metadata is unreadable") from exc
+        before_identity = (
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_size,
+            metadata.st_mtime_ns,
+            metadata.st_ctime_ns,
+        )
+        after_identity = (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        )
+        if before_identity != after_identity or len(raw) != after.st_size:
+            raise ValueError("promotion policy config changed while being read")
         return raw
         except OSError as exc:
             raise ValueError("promotion policy config is unreadable") from exc
