@@ -290,9 +290,25 @@ def _extract_role_order(payload: Any) -> list[str] | None:
 
 
 def _resolve_role_order(runtime_payload: Any) -> list[str]:
-    role_order = _extract_role_order(runtime_payload)
-    if not role_order:
-        role_order = list(DEFAULT_ROLE_ORDER)
+    explicit_orders: list[list[str]] = []
+    if isinstance(runtime_payload, dict):
+        for key in ROLE_KEYS:
+            if key not in runtime_payload:
+                continue
+            parsed = _extract_role_order({key: runtime_payload[key]})
+            if parsed is None:
+                raise ValueError(f"invalid role metadata: {key}")
+            explicit_orders.append(parsed)
+
+    if explicit_orders:
+        role_order = explicit_orders[0]
+        if any(order != role_order for order in explicit_orders[1:]):
+            raise ValueError("conflicting role metadata")
+    else:
+        role_order = _extract_role_order(runtime_payload)
+        if not role_order:
+            role_order = list(DEFAULT_ROLE_ORDER)
+
     if (
         len(role_order) != len(DEFAULT_ROLE_ORDER)
         or len(set(role_order)) != len(DEFAULT_ROLE_ORDER)
