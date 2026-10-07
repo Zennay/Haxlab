@@ -56,15 +56,24 @@ def inventory_calibration_results(
     missing_labels = [
         label for label in expected_labels if label not in challengers
     ]
-    unexpected_labels = sorted(
-        str(label) for label in challengers if label not in expected_labels
-    )
+    unexpected_labels: list[str] = []
+    invalid_challenger_key = False
+    for key in challengers:
+        if type(key) is not str:
+            invalid_challenger_key = True
+        elif key not in expected_labels:
+            unexpected_labels.append(key)
+    unexpected_labels.sort()
+
     request_errors: list[str] = []
     global_request_errors: list[str] = []
     if missing_labels:
         request_errors.append(
             "challengers:missing:" + ",".join(missing_labels)
         )
+    if invalid_challenger_key:
+        request_errors.append("challengers:key_type")
+        global_request_errors.append("challengers:key_type")
     if unexpected_labels:
         unexpected_reason = (
             "challengers:unexpected:" + ",".join(unexpected_labels)
@@ -112,6 +121,16 @@ def inventory_calibration_results(
                 except (OSError, TypeError, ValueError) as exc:
                     reusable = False
                     reasons = (f"validator_error:{type(exc).__name__}",)
+
+                if type(reusable) is not bool:
+                    reusable = False
+                    reasons = ("validator_error:reusable_not_boolean",)
+                elif reusable and reasons:
+                    reusable = False
+                    reasons = (
+                        "validator_error:reusable_with_reasons",
+                        *tuple(reasons),
+                    )
 
                 row = {
                     "label": label,
