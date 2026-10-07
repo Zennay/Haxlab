@@ -19,7 +19,7 @@ The source audit first opens the published manifest as a read-only no-follow ide
 
 The v3 manifest does not record raw replay byte hashes, so raw validation is intentionally limited to path existence/type/size snapshot evidence. It does not claim raw-byte identity.
 
-The manifest and leaderboard identity anchors close a cross-auditor handoff gap: a byte-identical replacement after the nested auditor returns cannot be accepted merely because SHA-256 and byte size still match. The outer audit requires the published pathname to remain bound to the originally held device/inode for the whole handoff.
+The manifest and leaderboard identity anchors close a cross-auditor handoff gap: a byte-identical replacement after the nested auditor returns cannot be accepted merely because SHA-256 and byte size still match. The outer source bytes are double-read directly from the held descriptor, while the published pathname must reconfirm to the same device/inode before and after that anchored read. A transient pathname swap therefore cannot substitute different bytes into the source receipt.
 
 ## Receipt
 
