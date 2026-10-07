@@ -12,7 +12,8 @@ on:
       - "tests/test_evaluation_model_schema_contract.py"
       - "tests/test_evaluation_workflow_module_contract.py"
       - "tests/test_promotion.py"
-      - ".github/workflows/*.yml"
+      - ".github/workflows/closed-loop-arena-v2-calibration.yml"
+      - ".github/workflows/evaluation-contract-current-head-validation.yml"
   pull_request:
     branches:
       - feature/arena-v2-current-main-20261004
@@ -24,7 +25,8 @@ on:
       - "tests/test_evaluation_model_schema_contract.py"
       - "tests/test_evaluation_workflow_module_contract.py"
       - "tests/test_promotion.py"
-      - ".github/workflows/*.yml"
+      - ".github/workflows/closed-loop-arena-v2-calibration.yml"
+      - ".github/workflows/evaluation-contract-current-head-validation.yml"
   workflow_dispatch:
 
 permissions:
