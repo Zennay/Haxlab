@@ -266,8 +266,10 @@ def _callable_aliases(
     tree: ast.AST,
     aliases: dict[str, str],
     path_objects: set[str],
-) -> dict[str, str]:
-    callable_aliases: dict[str, str] = {}
+    typed_path_parameters: dict[ast.AST, set[str]],
+    parents: dict[ast.AST, ast.AST],
+) -> dict[ast.AST | None, dict[str, str]]:
+    by_scope: dict[ast.AST | None, dict[str, str]] = {None: {}}
     changed = True
     while changed:
         changed = False
@@ -276,16 +278,26 @@ def _callable_aliases(
             if assignment is None:
                 continue
             local, expression = assignment
+            scope = _enclosing_function(node, parents)
+            scoped_aliases = dict(by_scope[None])
+            if scope is not None:
+                scoped_aliases.update(by_scope.get(scope, {}))
+            scoped_path_objects = path_objects | typed_path_parameters.get(
+                scope,
+                set(),
+            )
             value = _callable_name(
                 expression,
                 aliases,
-                path_objects,
-                callable_aliases,
+                scoped_path_objects,
+                scoped_aliases,
             )
-            if value and callable_aliases.get(local) != value:
-                callable_aliases[local] = value
-                changed = True
-    return callable_aliases
+            if value:
+                scope_aliases = by_scope.setdefault(scope, {})
+                if scope_aliases.get(local) != value:
+                    scope_aliases[local] = value
+                    changed = True
+    return by_scope
 
 
 def _violations(source: str, *, filename: str = "<source>") -> list[str]:
@@ -294,7 +306,13 @@ def _violations(source: str, *, filename: str = "<source>") -> list[str]:
     path_objects = _path_objects(tree, aliases)
     typed_path_parameters = _typed_path_parameters(tree, aliases)
     parents = _parent_nodes(tree)
-    callable_aliases = _callable_aliases(tree, aliases, path_objects)
+    callable_aliases_by_scope = _callable_aliases(
+        tree,
+        aliases,
+        path_objects,
+        typed_path_parameters,
+        parents,
+    )
 
     violations: list[str] = []
     for node in ast.walk(tree):
@@ -302,11 +320,14 @@ def _violations(source: str, *, filename: str = "<source>") -> list[str]:
             continue
         scope = _enclosing_function(node, parents)
         scoped_path_objects = path_objects | typed_path_parameters.get(scope, set())
+        scoped_callable_aliases = dict(callable_aliases_by_scope.get(None, {}))
+        if scope is not None:
+            scoped_callable_aliases.update(callable_aliases_by_scope.get(scope, {}))
         target = _callable_name(
             node.func,
             aliases,
             scoped_path_objects,
-            callable_aliases,
+            scoped_callable_aliases,
         )
         if target in DIRECT_DISCOVERY_CALLS or (
             target is not None and target.startswith("pathlib.Path.")
@@ -402,6 +423,32 @@ def test_contract_rejects_discovery_from_derived_path_objects(source: str) -> No
 )
 def test_contract_rejects_discovery_from_path_typed_parameters(source: str) -> None:
     assert _violations(source)
+
+
+def test_contract_rejects_callable_alias_from_path_typed_parameter() -> None:
+    source = (
+        "from pathlib import Path\n"
+        "def discover(root: Path):\n"
+        "    scan = root.glob\n"
+        "    return scan('*.json')\n"
+    )
+    assert _violations(source)
+
+
+def test_typed_callable_alias_does_not_leak_into_sibling_scope() -> None:
+    source = (
+        "from pathlib import Path\n"
+        "class ExplicitIndex:\n"
+        "    def glob(self, pattern):\n"
+        "        return ()\n"
+        "def guarded(root: Path):\n"
+        "    scan = root.glob\n"
+        "    return root.read_text()\n"
+        "def unrelated(root: ExplicitIndex):\n"
+        "    scan = root.glob\n"
+        "    return scan('*.json')\n"
+    )
+    assert _violations(source) == []
 
 
 @pytest.mark.parametrize(
