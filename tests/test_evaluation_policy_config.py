@@ -72,6 +72,53 @@ def test_policy_config_uses_atomic_nofollow_file_open(
     assert all(flags & os.O_NONBLOCK for flags in seen_flags)
 
 
+def test_policy_config_fails_closed_on_same_size_byte_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _write_policy(
+        tmp_path,
+        "minimum_games_vs_champion = 500\n"
+        "minimum_score_rate_lower_bound = 0.51\n"
+        "minimum_frozen_scenario_pass_rate = 0.98\n",
+    )
+    real_fdopen = os.fdopen
+
+    class MutatingReader:
+        def __init__(self, handle: object) -> None:
+            self.handle = handle
+            self.reads = 0
+
+        def __enter__(self) -> "MutatingReader":
+            self.handle.__enter__()  # type: ignore[attr-defined]
+            return self
+
+        def __exit__(self, *args: object) -> object:
+            return self.handle.__exit__(*args)  # type: ignore[attr-defined]
+
+        def read(self, size: int = -1) -> bytes:
+            data = self.handle.read(size)  # type: ignore[attr-defined]
+            self.reads += 1
+            if self.reads == 1:
+                original = path.read_bytes()
+                replacement = original.replace(b"0.51", b"0.52", 1)
+                assert len(replacement) == len(original)
+                path.write_bytes(replacement)
+            return data
+
+        def seek(self, offset: int) -> int:
+            return self.handle.seek(offset)  # type: ignore[attr-defined]
+
+    def mutating_fdopen(fd: int, mode: str, *, closefd: bool) -> MutatingReader:
+        return MutatingReader(real_fdopen(fd, mode, closefd=closefd))
+
+    monkeypatch.setattr(policy_config_module.os, "fdopen", mutating_fdopen)
+
+    with pytest.raises(ValueError, match="changed while being read"):
+        load_promotion_policy(path)
+
+
+
 def test_policy_config_fails_closed_on_read_time_metadata_drift(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
