@@ -141,6 +141,39 @@ def test_nonfailing_sha_regex_does_not_validate_dispatch_input() -> None:
     assert report["checkout_refs_bound"] is False
 
 
+def test_hybrid_dispatch_ref_requires_input_validation() -> None:
+    text = _clean_workflow().replace(
+        "ref: github.sha",
+        "ref: github.event_name == 'workflow_dispatch' && inputs.ref || github.sha",
+    )
+    report = audit_workflow_text(".github/workflows/hybrid-ref.yml", text)
+
+    assert report["checkout_ref_kinds"] == ["mutable_input"]
+    assert report["checkout_refs_bound"] is False
+
+
+def test_validated_hybrid_dispatch_ref_is_bound() -> None:
+    text = _clean_workflow().replace(
+        "      - name: Checkout exact source",
+        """      - name: Validate requested ref
+        env:
+          TARGET_SHA: inputs.ref
+        run: |
+          set -euo pipefail
+          if ! [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            exit 1
+          fi
+      - name: Checkout exact source""",
+    ).replace(
+        "ref: github.sha",
+        "ref: github.event_name == 'workflow_dispatch' && inputs.ref || github.sha",
+    )
+    report = audit_workflow_text(".github/workflows/validated-hybrid.yml", text)
+
+    assert report["checkout_ref_kinds"] == ["validated_input_or_event"]
+    assert report["checkout_refs_bound"] is True
+
+
 def test_immutable_secondary_checkout_is_provenance_bound() -> None:
     text = _clean_workflow().replace(
         "      - name: Verify exact source",
@@ -442,3 +475,14 @@ def test_default_canonical_workflow_set_is_unique_and_present() -> None:
 
     assert report["workflow_count"] == len(DEFAULT_WORKFLOWS)
     assert report["missing_workflows"] == []
+    assert all(item["self_hosted_haxlab_only"] for item in report["workflows"])
+    assert all(item["bounded_timeouts"] for item in report["workflows"])
+    assert all(not item["continue_on_error_enabled"] for item in report["workflows"])
+
+    by_path = {item["path"]: item for item in report["workflows"]}
+    assert by_path[
+        ".github/workflows/closed-loop-arena-v2-calibration.yml"
+    ]["checkout_ref_kinds"] == ["event_source", "immutable_commit"]
+    assert by_path[
+        ".github/workflows/arena-v2-integration-validate.yml"
+    ]["checkout_ref_kinds"] == ["validated_input_or_event"]
