@@ -41,13 +41,12 @@ class RuntimeImportVisitor(ast.NodeVisitor):
             f"{target}.{name}"
             for name in (imported_names or [])
             if f"{target}.{name}" in self.known_modules
-            and f"{target}.{name}" != self.module_name
         }
         if child_modules:
             self.dependencies.update(child_modules)
             return
 
-        if target in self.known_modules and target != self.module_name:
+        if target in self.known_modules:
             self.dependencies.add(target)
 
     def _resolve_from(self, node: ast.ImportFrom) -> str | None:
@@ -194,6 +193,16 @@ def test_cycle_detector_reports_direct_and_transitive_cycles() -> None:
         "c",
         "a",
     )
+
+
+def test_runtime_import_extraction_preserves_self_import_edges() -> None:
+    module = "haxlab.evaluation.probe"
+    assert _runtime_dependencies(
+        "from haxlab.evaluation.probe import helper\n",
+        module_name=module,
+        package_name="haxlab.evaluation",
+        known_modules={module},
+    ) == {module}
 
 
 def test_runtime_import_extraction_handles_absolute_and_relative_modules() -> None:
