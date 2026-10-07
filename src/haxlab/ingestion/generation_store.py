@@ -8,10 +8,15 @@ import secrets
 import stat
 from typing import BinaryIO
 
-from haxlab.ingestion.dataset_receipt import M0_ARTIFACTS, build_dataset_receipt
+from haxlab.ingestion.dataset_receipt import (
+    M0_ARTIFACTS,
+    DatasetReceiptError,
+    build_dataset_receipt,
+)
 from haxlab.ingestion.generation_commit import (
     CURRENT_GENERATION_POINTER_FILE,
     GENERATION_COMMIT_FILE,
+    GenerationCommitError,
     GENERATIONS_DIRECTORY,
     MAX_GENERATION_COMMIT_BYTES,
     MAX_GENERATION_POINTER_BYTES,
@@ -88,8 +93,7 @@ def _read_regular_at(
     max_bytes: int,
 ) -> bytes:
     flags = os.O_RDONLY | _required_flag("O_NOFOLLOW")
-    nonblock = getattr(os, "O_NONBLOCK", 0)
-    flags |= int(nonblock)
+    flags |= _required_flag("O_NONBLOCK")
     fd = -1
     try:
         fd = os.open(name, flags, dir_fd=parent_fd)
@@ -142,13 +146,23 @@ def _write_new_regular_at(parent_fd: int, name: str, payload: bytes) -> None:
         | _required_flag("O_NOFOLLOW")
     )
     fd = -1
+    created = False
     try:
         fd = os.open(name, flags, 0o644, dir_fd=parent_fd)
+        created = True
         _write_all(fd, payload)
         os.fsync(fd)
-    except GenerationStoreError:
-        raise
-    except OSError as exc:
+    except (GenerationStoreError, OSError) as exc:
+        if fd >= 0:
+            os.close(fd)
+            fd = -1
+        if created:
+            try:
+                os.unlink(name, dir_fd=parent_fd)
+            except OSError:
+                pass
+        if isinstance(exc, GenerationStoreError):
+            raise
         raise GenerationStoreError(f"failed to publish file: {name}") from exc
     finally:
         if fd >= 0:
@@ -156,8 +170,11 @@ def _write_new_regular_at(parent_fd: int, name: str, payload: bytes) -> None:
 
 
 def _copy_regular_at(source_fd: int, destination_fd: int, name: str) -> None:
-    read_flags = os.O_RDONLY | _required_flag("O_NOFOLLOW")
-    read_flags |= int(getattr(os, "O_NONBLOCK", 0))
+    read_flags = (
+        os.O_RDONLY
+        | _required_flag("O_NOFOLLOW")
+        | _required_flag("O_NONBLOCK")
+    )
     source = -1
     destination = -1
     try:
@@ -258,12 +275,17 @@ def _validate_existing_generation(
         )
     finally:
         os.close(generation_fd)
-    commit = parse_generation_commit_bytes(commit_payload)
-    if commit != expected_commit:
-        raise GenerationStoreError("existing generation commit does not match receipt")
-    receipt = build_dataset_receipt(generation_root)
-    if build_generation_commit(receipt) != expected_commit:
-        raise GenerationStoreError("existing generation artifacts do not match commit")
+    try:
+        commit = parse_generation_commit_bytes(commit_payload)
+        if commit != expected_commit:
+            raise GenerationStoreError("existing generation commit does not match receipt")
+        receipt = build_dataset_receipt(generation_root)
+        if build_generation_commit(receipt) != expected_commit:
+            raise GenerationStoreError("existing generation artifacts do not match commit")
+    except GenerationStoreError:
+        raise
+    except (DatasetReceiptError, GenerationCommitError) as exc:
+        raise GenerationStoreError("existing generation evidence is invalid") from exc
 
 
 def publish_generation(
@@ -276,8 +298,11 @@ def publish_generation(
 
     source_root = Path(source_root)
     store_root = Path(store_root)
-    source_receipt = build_dataset_receipt(source_root)
-    commit = build_generation_commit(source_receipt)
+    try:
+        source_receipt = build_dataset_receipt(source_root)
+        commit = build_generation_commit(source_receipt)
+    except (DatasetReceiptError, GenerationCommitError) as exc:
+        raise GenerationStoreError("source dataset evidence is invalid") from exc
     generation_id = str(commit["generation_id"])
 
     try:
@@ -285,12 +310,22 @@ def publish_generation(
     except OSError as exc:
         raise GenerationStoreError(f"failed to create store root: {store_root}") from exc
 
-    source_fd = _open_directory(source_root)
-    store_fd = _open_directory(store_root)
+    try:
+        resolved_source = source_root.resolve(strict=True)
+        resolved_store = store_root.resolve(strict=True)
+    except OSError as exc:
+        raise GenerationStoreError("source/store paths cannot be resolved safely") from exc
+    if resolved_store == resolved_source or resolved_store.is_relative_to(resolved_source):
+        raise GenerationStoreError("store_root must be outside source_root")
+
+    source_fd = -1
+    store_fd = -1
     generations_fd = -1
     stage_name: str | None = None
     pointer_temp_name: str | None = None
     try:
+        source_fd = _open_directory(source_root)
+        store_fd = _open_directory(store_root)
         generations_fd = _ensure_generations_directory(store_fd)
         generation_root = store_root / GENERATIONS_DIRECTORY / generation_id
 
@@ -372,7 +407,7 @@ def publish_generation(
         os.fsync(store_fd)
         _emit_fault(_fault, "after_pointer_swap")
     finally:
-        if pointer_temp_name is not None:
+        if pointer_temp_name is not None and store_fd >= 0:
             try:
                 os.unlink(pointer_temp_name, dir_fd=store_fd)
             except OSError:
@@ -381,8 +416,10 @@ def publish_generation(
             _cleanup_stage(generations_fd, stage_name)
         if generations_fd >= 0:
             os.close(generations_fd)
-        os.close(store_fd)
-        os.close(source_fd)
+        if store_fd >= 0:
+            os.close(store_fd)
+        if source_fd >= 0:
+            os.close(source_fd)
 
     return resolve_current_generation(store_root)
 
@@ -400,7 +437,10 @@ def resolve_current_generation(store_root: Path) -> ResolvedGeneration:
             CURRENT_GENERATION_POINTER_FILE,
             max_bytes=MAX_GENERATION_POINTER_BYTES,
         )
-        pointer = parse_generation_pointer_bytes(pointer_payload)
+        try:
+            pointer = parse_generation_pointer_bytes(pointer_payload)
+        except GenerationCommitError as exc:
+            raise GenerationStoreError("current generation pointer is invalid") from exc
 
         generations_fd = _open_directory_at(store_fd, GENERATIONS_DIRECTORY)
         generation_id = str(pointer["generation_id"])
@@ -410,8 +450,11 @@ def resolve_current_generation(store_root: Path) -> ResolvedGeneration:
             GENERATION_COMMIT_FILE,
             max_bytes=MAX_GENERATION_COMMIT_BYTES,
         )
-        commit = parse_generation_commit_bytes(commit_payload)
-        validate_generation_pointer(pointer, commit)
+        try:
+            commit = parse_generation_commit_bytes(commit_payload)
+            validate_generation_pointer(pointer, commit)
+        except GenerationCommitError as exc:
+            raise GenerationStoreError("current generation commit is invalid") from exc
     finally:
         if generation_fd >= 0:
             os.close(generation_fd)
@@ -420,9 +463,14 @@ def resolve_current_generation(store_root: Path) -> ResolvedGeneration:
         os.close(store_fd)
 
     generation_root = store_root / GENERATIONS_DIRECTORY / str(pointer["generation_id"])
-    receipt = build_dataset_receipt(generation_root)
-    if build_generation_commit(receipt) != commit:
-        raise GenerationStoreError("resolved generation artifacts do not match commit")
+    try:
+        receipt = build_dataset_receipt(generation_root)
+        if build_generation_commit(receipt) != commit:
+            raise GenerationStoreError("resolved generation artifacts do not match commit")
+    except GenerationStoreError:
+        raise
+    except (DatasetReceiptError, GenerationCommitError) as exc:
+        raise GenerationStoreError("resolved generation evidence is invalid") from exc
 
     return ResolvedGeneration(
         root=generation_root,
