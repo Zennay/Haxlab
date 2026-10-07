@@ -100,5 +100,5 @@ jobs:
                 `- job status: \`${process.env.JOB_STATUS}\``,
                 "- focused inventory + adjacent calibration-resume regressions required on success",
                 "- green marker: `HAXLAB_CALIBRATION_REUSE_INVENTORY_RESULT=green`",
-              ].join("\\n"),
+              ].join("\n"),
             });
