@@ -117,14 +117,14 @@ def store_dataset_receipt(
     payload = receipt_file_bytes(receipt)
 
     parent_fd = _open_output_parent(output_path)
-    _reject_dataset_artifact_destination(
-        Path(dataset_root),
-        parent_fd,
-        output_path.name,
-    )
     temp_fd = -1
     temp_name: str | None = None
     try:
+        _reject_dataset_artifact_destination(
+            Path(dataset_root),
+            parent_fd,
+            output_path.name,
+        )
         temp_fd, temp_name = _create_temp_file(parent_fd, output_path.name)
         with os.fdopen(temp_fd, "wb", closefd=True) as handle:
             temp_fd = -1
