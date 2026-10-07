@@ -77,8 +77,8 @@ jobs:
           58d54dbbfb1cf3db0d03f6f9c04f67a0140823b4 validation/evaluation-runtime-output-purity-20261007
           17705f6d763b678409a49213e95ef8fc2668d8ac validation/evaluation-mutable-defaults-contract-20261007
           19b4d05c4e47a2cff7ae83bbf156efa3731dc520 validation/evaluation-native-ffi-contract-20261007
-          0372395d465ef5d86550212df7b4c35a8246b4fa validation/evaluation-memoization-state-contract-20261007
-          8f83595f0e1ce18730100c57b9ebc7ee626a762e validation/evaluation-class-state-contract-20261007
+          9268422a1b9b99b6b12dc9432f41e41f287b6f70 validation/evaluation-memoization-state-contract-20261007
+          9ea064929f744578ed16772c30c09df30da74a9c validation/evaluation-class-state-contract-20261007
           EOF
 
       - name: Materialize exact additive validation contracts
@@ -129,10 +129,10 @@ jobs:
           17705f6d763b678409a49213e95ef8fc2668d8ac .github/workflows/evaluation-mutable-defaults-validation.yml
           19b4d05c4e47a2cff7ae83bbf156efa3731dc520 tests/test_evaluation_native_ffi_contract.py
           19b4d05c4e47a2cff7ae83bbf156efa3731dc520 .github/workflows/evaluation-native-ffi-validation.yml
-          0372395d465ef5d86550212df7b4c35a8246b4fa tests/test_evaluation_memoization_state_contract.py
-          0372395d465ef5d86550212df7b4c35a8246b4fa .github/workflows/evaluation-memoization-state-validation.yml
-          8f83595f0e1ce18730100c57b9ebc7ee626a762e tests/test_evaluation_class_state_contract.py
-          8f83595f0e1ce18730100c57b9ebc7ee626a762e .github/workflows/evaluation-class-state-validation.yml
+          9268422a1b9b99b6b12dc9432f41e41f287b6f70 tests/test_evaluation_memoization_state_contract.py
+          9268422a1b9b99b6b12dc9432f41e41f287b6f70 .github/workflows/evaluation-memoization-state-validation.yml
+          9ea064929f744578ed16772c30c09df30da74a9c tests/test_evaluation_class_state_contract.py
+          9ea064929f744578ed16772c30c09df30da74a9c .github/workflows/evaluation-class-state-validation.yml
           EOF
 
       - name: Create isolated test environment
