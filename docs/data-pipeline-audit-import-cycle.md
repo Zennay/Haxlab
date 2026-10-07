@@ -6,13 +6,11 @@ auditor cannot expose another in a partially initialized state.
 
 ## Required invariant
 
-Every Python module recursively named `*_audit.py` below:
-
-- `src/haxlab/ingestion/`
-- `src/haxlab/learning/`
-- `src/haxlab/runtime/`
-
-is a node in one deterministic directed graph. Runtime imports from one auditor
+Every Python module recursively named `*_audit.py` below `src/haxlab/` is a
+node in one deterministic directed graph. This deliberately includes audit
+helpers reached outside the three primary ingestion/learning/runtime roots;
+today that adds `haxlab.skill.leaderboard_audit`, which is imported by
+`manifest_source_audit`. Runtime imports from one auditor
 to another are edges. The graph must contain no direct or transitive cycle.
 
 The contract understands absolute imports, package-child imports, relative
@@ -29,6 +27,7 @@ The current graph is intentionally sparse. Known legitimate one-way
 dependencies include:
 
 - `manifest_source_audit -> manifest_audit`;
+- `manifest_source_audit -> skill.leaderboard_audit`;
 - `shard_bundle_audit -> shard_audit`.
 
 The contract protects those directions from later becoming cycles.
@@ -40,7 +39,8 @@ from importing higher product/control packages such as evaluation, live,
 rollout, research and training. Import-time hermeticity guards side effects.
 
 Neither rule detects a cycle formed entirely among otherwise allowed audit
-modules. This contract owns only that intra-auditor graph property and changes
+modules, including a cycle that leaves a primary data-pipeline package through
+an imported audit helper and returns later. This contract owns only that intra-auditor graph property and changes
 no auditor implementation, producer, runtime schema/state, model or champion
 pointer.
 
