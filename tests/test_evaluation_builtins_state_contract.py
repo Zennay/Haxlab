@@ -105,17 +105,59 @@ def _assignment_names(node: ast.AST) -> list[str]:
     return []
 
 
-def _scope_nodes(root: ast.AST) -> list[ast.AST]:
-    nodes: list[ast.AST] = []
+def _definition_time_children(node: ast.AST) -> list[ast.AST]:
+    children: list[ast.AST] = []
 
-    def visit(node: ast.AST, *, scope_root: bool = False) -> None:
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        children.extend(node.decorator_list)
+        children.extend(node.args.defaults)
+        children.extend(
+            default
+            for default in node.args.kw_defaults
+            if default is not None
+        )
+    elif isinstance(node, ast.Lambda):
+        children.extend(node.args.defaults)
+        children.extend(
+            default
+            for default in node.args.kw_defaults
+            if default is not None
+        )
+    elif isinstance(node, ast.ClassDef):
+        children.extend(node.decorator_list)
+        children.extend(node.bases)
+        children.extend(keyword.value for keyword in node.keywords)
+
+    return children
+
+
+def _scope_nodes(root: ast.AST) -> list[ast.AST]:
+    nodes: list[ast.AST] = [root]
+
+    def visit(node: ast.AST) -> None:
         nodes.append(node)
-        if not scope_root and isinstance(node, SCOPE_NODES):
+        if isinstance(node, SCOPE_NODES):
+            # Nested bodies execute in their own lexical scope, but defaults,
+            # decorators and class bases execute immediately in the enclosing
+            # scope and therefore must remain part of this scan.
+            for child in _definition_time_children(node):
+                visit(child)
             return
         for child in ast.iter_child_nodes(node):
             visit(child)
 
-    visit(root, scope_root=True)
+    if isinstance(root, ast.Module):
+        seeds = list(root.body)
+    elif isinstance(root, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        seeds = list(root.body)
+    elif isinstance(root, ast.Lambda):
+        seeds = [root.body]
+    else:
+        seeds = list(ast.iter_child_nodes(root))
+
+    for seed in seeds:
+        visit(seed)
+
     return nodes
 
 
@@ -486,6 +528,33 @@ def test_contract_resolves_assignment_operator_and_inplace_aliases() -> None:
     assert "operator.delitem" in findings
     assert "operator.setitem" in findings
     assert "augmented assignment: builtins.__dict__" in findings
+
+
+def test_contract_rejects_definition_time_builtin_mutation() -> None:
+    source = textwrap.dedent(
+        """
+        import builtins
+
+        def first(
+            removed=builtins.__dict__.pop("open", None),
+        ):
+            return removed
+
+        @builtins.__dict__.pop("decorator", lambda function: function)
+        def second():
+            return True
+
+        third = lambda removed=vars(builtins).pop("len", None): removed
+
+        class Fourth(
+            builtins.__dict__.pop("base", object),
+        ):
+            pass
+        """
+    )
+
+    findings = "\n".join(scan_source(source))
+    assert findings.count("builtins.__dict__") >= 4
 
 
 def test_contract_resolves_function_local_and_closure_aliases() -> None:
