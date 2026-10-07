@@ -163,7 +163,54 @@ def test_schema_drift_is_rejected_without_mutation(tmp_path: Path) -> None:
         assert connection.execute("SELECT COUNT(*) FROM runtime_events").fetchone()[0] == 1
 
 
-def test_cli_emits_machine_readable_receipt(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_malformed_timestamp_fails_closed_without_deleting_rows(tmp_path: Path) -> None:
+    path = _db(tmp_path)
+    _insert(path, "not-a-timestamp", 1)
+    _insert(path, "2000-01-01 00:00:00", 1)
+
+    with pytest.raises(EventRetentionError, match="non-canonical created_at"):
+        apply_event_retention(
+            path,
+            keep_hours=1,
+            keep_latest=0,
+            evaluated_at=datetime(2026, 10, 7, 4, 0, tzinfo=timezone.utc),
+        )
+
+    assert _ids(path) == [1, 2]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("keep_hours", 1.5),
+        ("keep_hours", True),
+        ("keep_hours", 0),
+        ("keep_latest", 1.5),
+        ("keep_latest", True),
+        ("keep_latest", -1),
+    ],
+)
+def test_retention_rejects_non_integer_or_out_of_range_limits(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    path = _db(tmp_path)
+    kwargs: dict[str, object] = {"keep_hours": 24, "keep_latest": 10}
+    kwargs[field] = value
+
+    with pytest.raises(EventRetentionError, match="must be an integer"):
+        apply_event_retention(path, **kwargs)  # type: ignore[arg-type]
+
+
+def test_naive_evaluation_time_is_rejected(tmp_path: Path) -> None:
+    path = _db(tmp_path)
+
+    with pytest.raises(EventRetentionError, match="timezone-aware"):
+        apply_event_retention(path, evaluated_at=datetime(2026, 10, 7, 4, 0))
+
+
+def test_cli_emits_machine_readable_receipt(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     path = _db(tmp_path)
     _insert(path, "2000-01-01 00:00:00", 2)
 
