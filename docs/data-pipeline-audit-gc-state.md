@@ -20,7 +20,7 @@ Audit modules must not invoke:
 - `gc.set_debug(...)` or `gc.set_threshold(...)`;
 - `gc.freeze()` or `gc.unfreeze()`;
 - `gc.collect(...)`;
-- mutating list operations or assignment/deletion against `gc.callbacks`.
+- mutating list operations or assignment/deletion against `gc.callbacks` or `gc.garbage`, including direct dunder/setattr/delattr write paths.
 
 The scanner resolves normal imports, direct imports, aliases, chained/tuple assignment aliases and constant-string `getattr(...)`. Dynamic `getattr(gc, name)` capability selection and wildcard imports from `gc` fail closed because mutator provenance cannot be proven statically.
 
@@ -31,11 +31,11 @@ Read-only inspection remains valid, including:
 - `gc.isenabled()`, `gc.get_debug()`, and `gc.get_threshold()`;
 - `gc.get_count()` and `gc.get_stats()`;
 - `gc.get_freeze_count()`;
-- snapshotting the callback registry for observation, for example `tuple(gc.callbacks)`.
+- snapshotting GC registries for observation, for example `tuple(gc.callbacks)` or `tuple(gc.garbage)`.
 
 ## Why this matters
 
-Garbage collection is process-global. Reconfiguring it, changing callbacks, freezing objects or forcing a collection can affect later validation, trigger finalizers, and make exact-head evidence depend on audit order rather than explicit repository and data inputs.
+Garbage collection is process-global. Reconfiguring it, changing callback/garbage registries, freezing objects or forcing a collection can affect later validation, trigger finalizers, and make exact-head evidence depend on audit order rather than explicit repository and data inputs.
 
 ## Proof
 
