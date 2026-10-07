@@ -6,9 +6,12 @@ row existence, but they do not enforce the semantic contracts HaxLab relies on
 for data-pipeline decisions.
 
 The isolated `haxlab.runtime.state_audit` module performs a **read-only,
-fail-closed** audit. It opens the database with SQLite `mode=ro`, refuses a
-symlinked database path, runs SQLite `quick_check` and `foreign_key_check`,
-then validates the runtime ledger contracts without rewriting any state.
+fail-closed** audit. It opens the database with SQLite `mode=ro`, enables
+`query_only`, and pins all checks to one explicit read transaction so live
+ingest/analyzer writes cannot make cross-record checks observe different
+moments. It refuses a symlinked database path, runs SQLite `quick_check` and
+`foreign_key_check`, then validates the runtime ledger contracts without
+rewriting any state.
 
 The v1 audit checks:
 
