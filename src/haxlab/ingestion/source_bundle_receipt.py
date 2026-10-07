@@ -36,9 +36,17 @@ def _inventory_paths(root: Path) -> tuple[tuple[str, str, Path], ...]:
     if not stat.S_ISDIR(root_stat.st_mode):
         raise SourceBundleReceiptError("source_root_not_directory")
 
+    def walk_error(exc: OSError) -> None:
+        raise SourceBundleReceiptError(f"source_inventory_failed:{exc}") from exc
+
     entries: list[tuple[str, str, Path]] = []
     try:
-        for current, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
+        for current, dirnames, filenames in os.walk(
+            root,
+            topdown=True,
+            onerror=walk_error,
+            followlinks=False,
+        ):
             current_path = Path(current)
 
             for dirname in dirnames:
