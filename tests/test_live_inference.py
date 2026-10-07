@@ -167,6 +167,20 @@ def test_explicit_version_remains_available_for_scoped_probe(
     assert resolved == candidate
 
 
+def test_environment_version_cannot_authorize_live_inference(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _version(tmp_path, "candidate-v1")
+    monkeypatch.setenv("HAXLAB_CHAMPION_VERSION", "candidate-v1")
+
+    with pytest.raises(
+        FileNotFoundError,
+        match="refusing to select current/canary or unpromoted versions",
+    ):
+        resolve_version_dir(tmp_path)
+
+
 def test_explicit_version_rejects_parent_traversal(tmp_path: Path) -> None:
     outside = tmp_path / "outside"
     outside.mkdir()

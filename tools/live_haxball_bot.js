@@ -20,7 +20,6 @@ const roomLinkFile = String(process.env.HAXLAB_ROOM_LINK_FILE || "/var/lib/haxla
 const playerName = String(process.env.HAXLAB_PLAYER_NAME || "HaxLab AI");
 const playerAvatar = String(process.env.HAXLAB_PLAYER_AVATAR || "AI").slice(0, 2);
 const role = String(process.env.HAXLAB_LIVE_ROLE || "st");
-const championVersion = String(process.env.HAXLAB_CHAMPION_VERSION || "").trim();
 const inferEveryTicks = Math.max(1, Number.parseInt(process.env.HAXLAB_INFER_EVERY_TICKS || "2", 10) || 2);
 
 if (!hostMode && !/^[A-Za-z0-9_-]{4,80}$/.test(roomId)) {
@@ -129,8 +128,6 @@ function buildFeatures(room) {
 }
 
 const pythonArgs = ["-u", "-m", "haxlab.live.inference", "--role", role];
-if (championVersion) pythonArgs.push("--version", championVersion);
-
 const inference = spawn(
   process.env.HAXLAB_PYTHON || "/opt/haxlab/.venv/bin/python",
   pythonArgs,

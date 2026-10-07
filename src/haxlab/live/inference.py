@@ -6,7 +6,6 @@ import argparse
 import hashlib
 import json
 import math
-import os
 import sys
 from collections import deque
 from pathlib import Path
@@ -190,7 +189,7 @@ def _promoted_live_version_from_pointer(root: Path) -> str | None:
 
 
 def resolve_version_dir(root: Path, explicit: str | None = None) -> Path:
-    version = explicit or os.environ.get("HAXLAB_CHAMPION_VERSION")
+    version = explicit
     if version:
         path = _safe_version_dir(root, version)
         if path is not None:
