@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+import haxlab.skill.leaderboard_audit as audit_module
 
 from haxlab.skill.leaderboard_audit import (
     AUDIT_SCHEMA,
@@ -230,3 +231,23 @@ def test_audit_rejects_symlinked_leaderboard(tmp_path: Path) -> None:
 
     with pytest.raises(LeaderboardAuditError, match="regular non-symlink"):
         audit_leaderboard(link)
+
+
+def test_audit_handles_short_regular_file_reads(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    path = tmp_path / "leaderboard.json"
+    _write(path, _snapshot(_row("auth:alpha", name="Alpha", rating=60.0)))
+
+    real_read = audit_module.os.read
+
+    def short_read(fd: int, size: int) -> bytes:
+        return real_read(fd, min(size, 7))
+
+    monkeypatch.setattr(audit_module.os, "read", short_read)
+
+    receipt = audit_leaderboard(path)
+
+    assert receipt["ok"] is True
+    assert receipt["row_count"] == 1
