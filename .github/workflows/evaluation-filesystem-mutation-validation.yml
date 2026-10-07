@@ -1,44 +1,48 @@
 name: Evaluation filesystem mutation validation
 
 on:
-  push:
+  pull_request:
     branches:
-      - validation/evaluation-filesystem-mutation-contract-20261007
+      - feature/arena-v2-current-main-20261004
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: haxlab-evaluation-filesystem-mutation-${{ github.sha }}
+  group: haxlab-evaluation-filesystem-mutation-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
 
 jobs:
   validate:
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 20
+    env:
+      CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      CANDIDATE_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
 
     steps:
       - name: Checkout exact validation head
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.CANDIDATE_SHA }}
           clean: true
 
       - name: Verify exact checkout
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
           echo "HAXLAB_EVALUATION_FILESYSTEM_MUTATION_HEAD=$(git rev-parse HEAD)"
 
       - name: Verify candidate is still the live branch head
         shell: bash
         run: |
           set -euo pipefail
-          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk 'NR == 1 {print $1}')"
+          remote_head="$(git ls-remote origin "refs/heads/$CANDIDATE_REF" | awk 'NR == 1 {print $1}')"
           test -n "$remote_head"
-          test "$remote_head" = "${{ github.sha }}"
+          test "$remote_head" = "$CANDIDATE_SHA"
           echo "HAXLAB_EVALUATION_FILESYSTEM_MUTATION_LIVE_HEAD=$remote_head"
 
       - name: Create isolated test environment
