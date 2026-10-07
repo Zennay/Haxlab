@@ -303,6 +303,63 @@ def test_runtime_state_audit_rejects_reused_success_output_path(
     assert reused[0].subject == str(shared_output)
 
 
+def test_runtime_state_audit_validates_ledger_timestamps(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "state.sqlite3"
+    sha = "6" * 64
+    replay = tmp_path / "timestamp.hbr2"
+    _healthy_state(db, tmp_path, sha=sha)
+
+    with RuntimeState(db) as state:
+        state.mark_seen(
+            source_path=str(replay),
+            size_bytes=1,
+            mtime_ns=1,
+            sha256=sha,
+            status="archived",
+        )
+        state.event(
+            "replay_probe_ok",
+            subject=sha,
+            detail="timestamp validation fixture",
+        )
+
+    with sqlite3.connect(db) as connection:
+        connection.execute(
+            """
+            UPDATE source_files
+            SET first_seen_at = '2026-10-07 04:00:00',
+                last_seen_at = '2026-10-07 03:59:59'
+            """
+        )
+        connection.execute(
+            "UPDATE raw_replays SET first_archived_at = 'not-a-timestamp'"
+        )
+        connection.execute(
+            "UPDATE replay_processing SET updated_at = '2026-10-07T04:00:00Z'"
+        )
+        connection.execute(
+            "UPDATE replay_analysis_versions SET updated_at = ''"
+        )
+        connection.execute(
+            "UPDATE runtime_events SET created_at = '2026-10-07 04:00'"
+        )
+        connection.commit()
+
+    result = audit_runtime_state(db)
+    codes = {issue.code for issue in result.issues}
+
+    assert result.ok is False
+    assert {
+        "source_seen_time_reversed",
+        "raw_first_archived_at_invalid",
+        "processing_updated_at_invalid",
+        "analysis_updated_at_invalid",
+        "event_created_at_invalid",
+    } <= codes
+
+
 def test_runtime_state_audit_validates_runtime_event_provenance(
     tmp_path: Path,
 ) -> None:
