@@ -121,8 +121,10 @@ active `pipeline.py` producer:
 The publisher refuses a store root equal to or below the source dataset before it
 creates directories, so publication cannot mutate the input dataset by configuration
 mistake. Store roots, generation directories, source artifacts, commit evidence and
-the current pointer are opened with no-follow semantics; evidence reads are bounded
-and metadata-stable.
+the current pointer are opened with no-follow semantics. Before the receipt layer is
+entered, all five dataset artifacts are also opened with `O_NONBLOCK` and required to
+be regular files, preventing a FIFO/device from blocking publication or reader
+validation. Evidence reads are bounded and metadata-stable.
 
 Republishing an already committed content ID is idempotent: its existing commit and
 artifact receipt must validate exactly before the current pointer can be refreshed.
