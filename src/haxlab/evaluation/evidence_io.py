@@ -8,10 +8,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from haxlab.evaluation.models import EvaluationEvidence, PromotionPolicy, Regression
+
 
 _NATIVE_PATH_TYPE = type(Path("."))
-
-from haxlab.evaluation.models import EvaluationEvidence, PromotionPolicy, Regression
 
 
 _ALLOWED_KEYS = {
