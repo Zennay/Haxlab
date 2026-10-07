@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import errno
+import os
+import stat
 import struct
 import zlib
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO, Iterator
 
 
 HBR2_MAGIC = b"HBR2"
@@ -25,8 +30,46 @@ class ReplayFormatError(ValueError):
     pass
 
 
+@contextmanager
+def _open_regular_replay(path: Path) -> Iterator[BinaryIO]:
+    """Open one stable regular replay file without following symlinks."""
+
+    before = os.lstat(path)
+    if stat.S_ISLNK(before.st_mode):
+        raise ReplayFormatError("unsafe_replay_path:symlink")
+    if not stat.S_ISREG(before.st_mode):
+        raise ReplayFormatError("unsafe_replay_path:not_regular")
+
+    flags = os.O_RDONLY
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise ReplayFormatError("unsafe_replay_path:symlink") from exc
+        raise
+
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode):
+            raise ReplayFormatError("unsafe_replay_path:not_regular")
+        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+            raise ReplayFormatError("unsafe_replay_path:identity_changed")
+        handle = os.fdopen(fd, "rb")
+    except Exception:
+        os.close(fd)
+        raise
+
+    with handle:
+        yield handle
+
+
 def read_replay_header(path: Path) -> ReplayHeader:
-    with path.open("rb") as handle:
+    with _open_regular_replay(path) as handle:
         header = handle.read(12)
 
     if len(header) != 12:
@@ -48,7 +91,7 @@ def decompress_replay_payload(path: Path) -> bytes:
 
     HBR2 v3 stores the payload after the 12-byte header as raw DEFLATE.
     """
-    with path.open("rb") as handle:
+    with _open_regular_replay(path) as handle:
         data = handle.read()
 
     if len(data) < 12:
