@@ -3,8 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+
+from haxlab.ingestion import dataset_receipt as receipt_module
 
 from haxlab.ingestion.dataset_receipt import (
     M0_ARTIFACTS,
@@ -129,3 +132,73 @@ def test_receipt_rejects_symlink_dataset_root(tmp_path: Path) -> None:
         match="dataset root is unsafe or unreadable",
     ):
         build_dataset_receipt(linked_root)
+
+
+
+def test_receipt_rejects_artifact_changed_while_hashing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "dataset"
+    _write_dataset(root)
+    real_fstat = receipt_module.os.fstat
+    seen_by_fd: dict[int, int] = {}
+
+    def drifting_fstat(fd: int) -> object:
+        current = real_fstat(fd)
+        seen_by_fd[fd] = seen_by_fd.get(fd, 0) + 1
+        if seen_by_fd[fd] == 3:
+            return SimpleNamespace(
+                st_mode=current.st_mode,
+                st_dev=current.st_dev,
+                st_ino=current.st_ino,
+                st_size=current.st_size,
+                st_mtime_ns=current.st_mtime_ns + 1,
+                st_ctime_ns=current.st_ctime_ns,
+            )
+        return current
+
+    monkeypatch.setattr(receipt_module.os, "fstat", drifting_fstat)
+
+    with pytest.raises(
+        DatasetReceiptError,
+        match="artifact changed while hashing: manifest.json",
+    ):
+        build_dataset_receipt(root)
+
+
+def test_receipt_rejects_dataset_root_changed_during_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "dataset"
+    _write_dataset(root)
+    real_fstat = receipt_module.os.fstat
+    root_fd: int | None = None
+    root_reads = 0
+
+    def drifting_root_fstat(fd: int) -> object:
+        nonlocal root_fd, root_reads
+        current = real_fstat(fd)
+        if root_fd is None:
+            root_fd = fd
+        if fd == root_fd:
+            root_reads += 1
+            if root_reads == 2:
+                return SimpleNamespace(
+                    st_mode=current.st_mode,
+                    st_dev=current.st_dev,
+                    st_ino=current.st_ino,
+                    st_size=current.st_size,
+                    st_mtime_ns=current.st_mtime_ns + 1,
+                    st_ctime_ns=current.st_ctime_ns,
+                )
+        return current
+
+    monkeypatch.setattr(receipt_module.os, "fstat", drifting_root_fstat)
+
+    with pytest.raises(
+        DatasetReceiptError,
+        match="dataset root changed while building receipt",
+    ):
+        build_dataset_receipt(root)
