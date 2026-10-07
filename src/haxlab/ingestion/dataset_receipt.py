@@ -26,10 +26,13 @@ class DatasetReceiptError(ValueError):
 
 def _open_regular_nofollow(root_fd: int, name: str) -> BinaryIO:
     nofollow = getattr(os, "O_NOFOLLOW", None)
-    if nofollow is None:
-        raise DatasetReceiptError("O_NOFOLLOW is required for dataset receipts")
+    nonblock = getattr(os, "O_NONBLOCK", None)
+    if nofollow is None or nonblock is None:
+        raise DatasetReceiptError(
+            "O_NOFOLLOW and O_NONBLOCK are required for dataset receipts"
+        )
 
-    flags = os.O_RDONLY | nofollow
+    flags = os.O_RDONLY | nofollow | nonblock
     fd = -1
     try:
         fd = os.open(name, flags, dir_fd=root_fd)
