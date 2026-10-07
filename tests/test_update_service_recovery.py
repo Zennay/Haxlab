@@ -38,11 +38,29 @@ def _mock_systemctl(
     )
     return f"""
 systemctl() {{
-  if [[ "$1" == "is-active" && "$2" == "--quiet" ]]; then
-    case "$3" in
-      {active_case}) return 0 ;;
-      *) return 3 ;;
+  if [[ "$1" == "is-active" ]]; then
+    local unit="$2"
+    local quiet=0
+    if [[ "$2" == "--quiet" ]]; then
+      unit="$3"
+      quiet=1
+    fi
+    local state
+    local code
+    case "$unit" in
+      {active_case})
+        state="active"
+        code=0
+        ;;
+      *)
+        state="inactive"
+        code=3
+        ;;
     esac
+    if [[ "$quiet" -eq 0 ]]; then
+      printf '%s\\n' "$state"
+    fi
+    return "$code"
   fi
   if [[ "$1" == "stop" ]]; then
     if declare -p STOP_CALLS >/dev/null 2>&1; then
@@ -59,6 +77,83 @@ systemctl() {{
   return 97
 }}
 """
+
+def test_capture_accepts_failed_as_stably_inactive() -> None:
+    script = f"""
+set -euo pipefail
+source {shlex.quote(str(HELPER))}
+systemctl() {{
+  if [[ "$1" != "is-active" ]]; then
+    return 97
+  fi
+  case "$2" in
+    haxlab-live-bot.service)
+      printf 'active\\n'
+      return 0
+      ;;
+    haxlab-analyzer.service)
+      printf 'failed\\n'
+      return 3
+      ;;
+    *)
+      printf 'inactive\\n'
+      return 3
+      ;;
+  esac
+}}
+haxlab_capture_update_service_state
+printf 'active:%s\\n' "${{HAXLAB_UPDATE_ACTIVE_BEFORE[*]}}"
+"""
+
+    result = _run_bash(script)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "active:haxlab-live-bot.service"
+
+
+def test_capture_rejects_indeterminate_state_without_partial_snapshot() -> None:
+    for state, code in [
+        ("unknown", 4),
+        ("activating", 3),
+        ("deactivating", 3),
+        ("reloading", 3),
+        ("", 1),
+    ]:
+        script = f"""
+set -euo pipefail
+source {shlex.quote(str(HELPER))}
+systemctl() {{
+  if [[ "$1" != "is-active" ]]; then
+    return 97
+  fi
+  case "$2" in
+    haxlab-live-bot.service)
+      printf 'active\\n'
+      return 0
+      ;;
+    haxlab-analyzer.service)
+      printf '%s\\n' {shlex.quote(state)}
+      return {code}
+      ;;
+    *)
+      printf 'inactive\\n'
+      return 3
+      ;;
+  esac
+}}
+set +e
+haxlab_capture_update_service_state
+capture_status="$?"
+set -e
+printf 'status:%s active:%s\\n' "$capture_status" "${{HAXLAB_UPDATE_ACTIVE_BEFORE[*]}}"
+"""
+
+        result = _run_bash(script)
+
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "status:1 active:"
+        assert "Indeterminate update service state" in result.stderr
+
 
 def test_capture_and_restore_use_dependency_safe_reverse_stop_order(
     tmp_path: Path,
