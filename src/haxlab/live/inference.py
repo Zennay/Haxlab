@@ -90,6 +90,8 @@ def _live_validation_evidence_matches(
     payload: dict[str, Any],
     version: str,
     source_stage: str,
+    model_sha256: str,
+    metrics_sha256: str,
 ) -> bool:
     raw_path = payload.get("validation_evidence_path")
     expected_sha = payload.get("validation_evidence_sha256")
@@ -144,10 +146,14 @@ def _live_validation_evidence_matches(
     if not isinstance(evidence, dict) or evidence.get("validated") is not True:
         return False
     candidate = evidence.get("candidate")
-    if isinstance(candidate, dict):
-        evidence_version = candidate.get("version_id")
-        if evidence_version not in (None, "") and evidence_version != version:
-            return False
+    if not isinstance(candidate, dict):
+        return False
+    if candidate.get("version_id") != version:
+        return False
+    if candidate.get("model_sha256") != model_sha256:
+        return False
+    if candidate.get("metrics_sha256") != metrics_sha256:
+        return False
     return True
 
 
@@ -198,11 +204,32 @@ def _promoted_live_version_from_pointer(root: Path) -> str | None:
         except OSError:
             return None
 
+    artifact_digests: dict[str, str] = {}
+    for key, artifact in (
+        ("model_sha256", version_dir / "model.npz"),
+        ("metrics_sha256", version_dir / "metrics.json"),
+    ):
+        expected_sha = payload.get(key)
+        if (
+            not isinstance(expected_sha, str)
+            or len(expected_sha) != 64
+            or any(ch not in "0123456789abcdef" for ch in expected_sha)
+        ):
+            return None
+        try:
+            if _sha256_file(artifact) != expected_sha:
+                return None
+        except OSError:
+            return None
+        artifact_digests[key] = expected_sha
+
     if not _live_validation_evidence_matches(
         root,
         payload=payload,
         version=version,
         source_stage=source_stage,
+        model_sha256=artifact_digests["model_sha256"],
+        metrics_sha256=artifact_digests["metrics_sha256"],
     ):
         return None
 
