@@ -296,10 +296,14 @@ def finalize_analysis_if_ready(
     )
     raw_root = derived_root.parent / "raw" / "replays"
 
-    if (
-        leaderboard_path.exists()
-        and completion_path.exists()
-        and training_manifest_path.exists()
+    reuse_artifact_paths = (
+        leaderboard_path,
+        completion_path,
+        training_manifest_path,
+    )
+    if all(
+        not path.is_symlink() and path.is_file()
+        for path in reuse_artifact_paths
     ):
         try:
             previous: object = json.loads(
