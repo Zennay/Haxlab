@@ -1,0 +1,62 @@
+name: HaxLab raw archive race-safety proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact branch SHA to prove
+        required: true
+        type: string
+  push:
+    branches:
+      - feature/data-pipeline-raw-archive-race-safe-20261007
+    paths:
+      - "src/haxlab/runtime/archive_audit.py"
+      - "tests/test_archive_audit.py"
+      - "docs/raw-archive-audit-race-safety.md"
+      - ".github/workflows/data-pipeline-raw-archive-race-safety-proof.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-raw-archive-race-safety-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate exact-head raw archive race safety
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    env:
+      EXPECTED_HEAD: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_sha || github.sha }}
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+
+      - name: Assert exact head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Run focused proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .archive-race-venv
+          python3 -m venv .archive-race-venv
+          .archive-race-venv/bin/pip install -q --upgrade pip
+          .archive-race-venv/bin/pip install -q -e '.[dev]'
+          .archive-race-venv/bin/python -m compileall -q src tests
+          .archive-race-venv/bin/pytest -q tests/test_archive_audit.py
+          .archive-race-venv/bin/pytest -q \
+            tests/test_data_pipeline_audit_hermeticity.py \
+            tests/test_data_pipeline_audit_determinism_contract.py \
+            tests/test_data_pipeline_audit_readonly_contract.py \
+            tests/test_data_pipeline_audit_exception_boundary.py \
+            tests/test_data_pipeline_audit_safe_deserialization.py
+          .archive-race-venv/bin/pytest --collect-only -q >/dev/null
