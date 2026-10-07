@@ -53,6 +53,7 @@ SMOKE_SOURCES = {
     ),
     "hermeticity": "import socket\nsocket.socket()\n",
     "instrumentation_state": "import sys\nsys.addaudithook(lambda *args: None)\n",
+    "interpreter_tuning": "import sys\nsys.setrecursionlimit(2000)\n",
     "layer_boundary": "import haxlab.evaluation.promotion as promotion\n",
     "liveness": "def audit():\n    input('continue?')\n",
     "logging_state": "import logging\nlogging.basicConfig(level=10)\n",
