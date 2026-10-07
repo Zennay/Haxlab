@@ -87,3 +87,30 @@ Schema: `haxlab-m0-dataset-receipt-diff-v1`.
 
 Malformed, ambiguous or internally inconsistent receipt evidence fails closed
 instead of producing a best-effort comparison.
+
+
+## Fail-safe receipt persistence
+
+When receipt evidence must be stored as a file, prefer the dedicated store
+command over shell redirection:
+
+```bash
+python -m haxlab.ingestion.dataset_receipt_store \
+  /path/to/m0-output \
+  /path/to/evidence/m0-receipt.json
+```
+
+The store builds the complete dataset receipt before touching the destination.
+It then writes deterministic CLI-shaped receipt JSON to a same-directory
+exclusive tempfile, flushes and fsyncs that file, atomically replaces the
+destination, and fsyncs the output directory.
+
+The output parent itself is opened with no-follow directory semantics. An
+existing destination symlink is replaced as a directory entry rather than
+followed, so an external symlink target is not modified.
+
+If dataset validation fails or publication fails before the atomic replace,
+the previous receipt remains byte-for-byte intact and temporary files are
+cleaned up.
+
+Store status schema: `haxlab-m0-dataset-receipt-store-v1`.
