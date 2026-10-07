@@ -56,5 +56,7 @@ jobs:
           .archive-race-venv/bin/pytest -q \
             tests/test_data_pipeline_audit_hermeticity.py \
             tests/test_data_pipeline_audit_determinism_contract.py \
-            tests/test_data_pipeline_audit_readonly_contract.py
+            tests/test_data_pipeline_audit_readonly_contract.py \
+            tests/test_data_pipeline_audit_exception_boundary.py \
+            tests/test_data_pipeline_audit_safe_deserialization.py
           .archive-race-venv/bin/pytest --collect-only -q >/dev/null
