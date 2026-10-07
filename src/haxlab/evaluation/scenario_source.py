@@ -56,10 +56,21 @@ def _healthy_candidate(
 ) -> dict[str, Any] | None:
     if not isinstance(sha256, str):
         return None
+    normalized_sha = sha256.strip().lower()
+    if (
+        len(normalized_sha) != 64
+        or any(ch not in "0123456789abcdef" for ch in normalized_sha)
+    ):
+        return None
     if not isinstance(raw_path, str) or not isinstance(analysis_path, str):
         return None
     raw = Path(raw_path)
     analysis_file = Path(analysis_path)
+    if (
+        raw.name != f"{normalized_sha}.hbr2"
+        or analysis_file.name != f"{normalized_sha}.json"
+    ):
+        return None
     if (
         raw.is_symlink()
         or analysis_file.is_symlink()
@@ -198,12 +209,6 @@ def _healthy_candidate(
         if seen != set(ROLES_4V4):
             return None
 
-    normalized_sha = str(sha256).strip().lower()
-    if (
-        len(normalized_sha) != 64
-        or any(ch not in "0123456789abcdef" for ch in normalized_sha)
-    ):
-        return None
     try:
         actual_raw_sha = sha256_file(raw)
     except OSError:
