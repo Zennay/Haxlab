@@ -33,12 +33,19 @@ def scan_once(
         (
             path
             for path in incoming_root.rglob("*")
-            if path.is_file() and path.suffix.casefold() == ".hbr2"
+            if not path.is_symlink()
+            and path.is_file()
+            and path.suffix.casefold() == ".hbr2"
         ),
         key=lambda path: str(path).casefold(),
     )
 
     for path in paths:
+        # Re-check after discovery/sorting so a source replaced by a symlink
+        # while queued is not handed to the archive boundary.
+        if path.is_symlink():
+            continue
+
         discovered += 1
         try:
             stat = path.stat()
