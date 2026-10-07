@@ -29,6 +29,11 @@ def _first_defined(value: dict[str, Any], keys: tuple[str, ...]) -> Any:
     return None
 
 
+def _attachment_values(message: dict[str, Any]) -> list[Any]:
+    value = message.get("attachments")
+    return value if type(value) is list else []
+
+
 def _attachment_from_json(value: dict[str, Any]) -> AttachmentRef | None:
     file_name = _first_defined(
         value,
@@ -61,7 +66,7 @@ def _attachment_from_json(value: dict[str, Any]) -> AttachmentRef | None:
 
 def looks_like_match_report(message: dict[str, Any]) -> bool:
     content = str(message.get("content") or "")
-    attachments = message.get("attachments") or []
+    attachments = _attachment_values(message)
     has_replay = any(
         str(
             item.get("fileName")
@@ -83,7 +88,7 @@ def parse_match_report(
     channel_id: str | None = None,
 ) -> MatchReport:
     content = str(message.get("content") or "")
-    attachment_values = message.get("attachments") or []
+    attachment_values = _attachment_values(message)
     attachments = tuple(
         attachment
         for item in attachment_values
