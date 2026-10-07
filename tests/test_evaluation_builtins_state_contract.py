@@ -467,11 +467,11 @@ def test_contract_resolves_assignment_operator_and_inplace_aliases() -> None:
         import operator as op
 
         module = bi
-        namespace = vars(module)
-        write = namespace.__setitem__
-        erase = op.delitem
 
         def probe():
+            namespace = vars(module)
+            write = namespace.__setitem__
+            erase = op.delitem
             module.input = lambda prompt="": ""
             write("print", lambda *args, **kwargs: None)
             erase(namespace, "enumerate")
