@@ -177,3 +177,51 @@ def test_update_wires_recovery_before_stop_and_disables_after_health_checks() ->
 
     assert source_index < capture_index < trap_index < stop_index
     assert stop_index < restart_index < status_index < disable_index
+
+
+def test_all_managed_services_restore_in_exact_reverse_stop_order(
+    tmp_path: Path,
+) -> None:
+    calls = tmp_path / "calls"
+    active = (
+        "haxlab-live-bot.service",
+        "haxlab-autonomy.timer",
+        "haxlab-autonomy.service",
+        "haxlab-analyzer.service",
+        "haxlab-worker.service",
+        "haxlab-ingest.service",
+    )
+    script = f"""
+set -euo pipefail
+source {shlex.quote(str(HELPER))}
+CALLS="$1"
+{_mock_systemctl(active)}
+haxlab_capture_update_service_state
+haxlab_restore_update_services
+"""
+
+    result = _run_bash(script, str(calls))
+
+    assert result.returncode == 0, result.stderr
+    assert calls.read_text(encoding="utf-8").splitlines() == list(reversed(active))
+
+
+def test_disabling_recovery_trap_prevents_later_failure_restore(
+    tmp_path: Path,
+) -> None:
+    calls = tmp_path / "calls"
+    script = f"""
+set -euo pipefail
+source {shlex.quote(str(HELPER))}
+CALLS="$1"
+{_mock_systemctl(("haxlab-worker.service", "haxlab-ingest.service"))}
+haxlab_capture_update_service_state
+haxlab_install_update_recovery_trap
+haxlab_disable_update_recovery_trap
+exit 31
+"""
+
+    result = _run_bash(script, str(calls))
+
+    assert result.returncode == 31
+    assert not calls.exists()
