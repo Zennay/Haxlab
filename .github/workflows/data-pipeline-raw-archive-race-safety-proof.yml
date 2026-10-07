@@ -51,7 +51,7 @@ jobs:
           python3 -m venv .archive-race-venv
           .archive-race-venv/bin/pip install -q --upgrade pip
           .archive-race-venv/bin/pip install -q -e '.[dev]'
-          .archive-race-venv/bin/python -m compileall -q src/haxlab/runtime/archive_audit.py tests/test_archive_audit.py
+          .archive-race-venv/bin/python -m compileall -q src tests
           .archive-race-venv/bin/pytest -q tests/test_archive_audit.py
           .archive-race-venv/bin/pytest -q \
             tests/test_data_pipeline_audit_hermeticity.py \
