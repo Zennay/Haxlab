@@ -79,6 +79,31 @@ def test_coercible_or_non_native_fields_fail_closed(
     assert reason in result.reasons
 
 
+def test_identity_strings_reject_surrounding_whitespace() -> None:
+    result = parse_evaluation_evidence(
+        _payload(
+            challenger_id=" model-2",
+            regressions=[
+                {
+                    "scenario": "kickoff ",
+                    "severity": "critical",
+                    "details": "regressed",
+                }
+            ],
+        )
+    )
+
+    assert not result.valid
+    assert (
+        "invalid_evidence:challenger_id:surrounding_whitespace"
+        in result.reasons
+    )
+    assert (
+        "invalid_evidence:regressions:0:scenario:surrounding_whitespace"
+        in result.reasons
+    )
+
+
 def test_missing_and_unexpected_fields_fail_closed() -> None:
     payload = _payload(extra="unexpected")
     del payload["games_vs_champion"]
