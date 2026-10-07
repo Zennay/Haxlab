@@ -30,10 +30,12 @@ Classifications are fail-closed:
   challenger-policy rejection.
 - `summary_failed` — the paired batch completed but the deterministic summary
   step failed without an explicit calibration-gate rejection marker.
-- `evaluation_rejected` — the paired batch completed, the summary step failed,
-  and the decoded job log contains the exact message emitted by the deterministic
-  calibration gate: `frozen policy validation failed:`. Only this classification
-  sets `model_rejection=true`.
+- `evaluation_gate_rejected` — the paired batch completed, the summary step
+  failed, and the decoded job log contains the exact message emitted by the
+  deterministic calibration gate: `frozen policy validation failed:`. This sets
+  `gate_rejection=true`, but deliberately leaves `model_rejection=false`: the
+  calibration gate also validates champion-self and negative-control sanity, so
+  that marker cannot attribute the failure to one particular model.
 - `evidence_failed` — the evaluation summary passed but pointer/evidence
   publication failed. The model result cannot be promoted because the immutable
   proof is incomplete.
@@ -51,7 +53,9 @@ evidence collection were skipped.
 
 Under this contract that run is `interrupted`, with
 `promotion_evidence_valid=false` and `model_rejection=false`. It therefore
-does not reject Candidate D and it cannot supply promotion evidence.
+does not reject Candidate D and it cannot supply promotion evidence. Even a later
+deterministic calibration-gate rejection is recorded as a gate rejection rather
+than a model rejection unless a separate model-specific contract proves attribution.
 
 ## CLI
 
