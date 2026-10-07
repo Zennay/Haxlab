@@ -65,9 +65,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          .evaluation-provenance-venv/bin/python -m py_compile             tools/evaluation_workflow_provenance_inventory.py             tests/test_evaluation_workflow_provenance_inventory.py
-          .evaluation-provenance-venv/bin/pytest -q             tests/test_evaluation_workflow_provenance_inventory.py
-          .evaluation-provenance-venv/bin/python             tools/evaluation_workflow_provenance_inventory.py             > /tmp/haxlab-evaluation-workflow-provenance-inventory.json
+          .evaluation-provenance-venv/bin/python -m py_compile tools/evaluation_workflow_provenance_inventory.py tests/test_evaluation_workflow_provenance_inventory.py
+          .evaluation-provenance-venv/bin/pytest -q tests/test_evaluation_workflow_provenance_inventory.py
+          .evaluation-provenance-venv/bin/python tools/evaluation_workflow_provenance_inventory.py > /tmp/haxlab-evaluation-workflow-provenance-inventory.json
           .evaluation-provenance-venv/bin/python - <<'PY'
           import json
           from pathlib import Path
