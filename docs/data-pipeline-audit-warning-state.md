@@ -17,8 +17,9 @@ It is intentionally additive and does not modify audit implementations or produc
 Audit modules must not:
 
 - call `warnings.filterwarnings(...)`, `warnings.simplefilter(...)`, `warnings.resetwarnings()`, or `warnings.catch_warnings()`;
-- mutate `warnings.filters`, `warnings.defaultaction`, `warnings.onceregistry`, `warnings._onceregistry`, or `warnings._defaultaction`;
-- mutate those objects through local aliases, constant-`getattr(...)` aliases, reflected `setattr`/`delattr`, list-style mutators, subscript writes/deletes, augmented assignment, or `operator.setitem`/related functional mutation;
+- mutate `warnings.filters`, `warnings.defaultaction`, `warnings.onceregistry`, `warnings._onceregistry`, `warnings._defaultaction`, `warnings.showwarning`, or `warnings.formatwarning`;
+- mutate those objects through local aliases, constant-`getattr(...)` aliases, reflected `setattr`/`delattr`, bound or unbound list mutators, subscript writes/deletes, augmented assignment, or `operator.setitem`/related functional mutation;
+- call the private `warnings._filters_mutated()` policy-version mutator;
 - use `from warnings import *`, because that makes warning-policy mutators statically ambiguous.
 
 The contract resolves ordinary imports, import aliases, assignment aliases, and constant-string `getattr(...)` indirection before evaluating calls.
