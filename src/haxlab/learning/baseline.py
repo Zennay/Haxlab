@@ -339,6 +339,7 @@ def _iter_batches(
     batch_size: int,
     rng: np.random.Generator,
     shuffle: bool,
+    expected_input_columns: list[str] | None = None,
 ):
     entries = list(index["entries"])
     if shuffle:
@@ -346,7 +347,12 @@ def _iter_batches(
 
     for entry in entries:
         rows, columns = _load_shard(entry)
-        x, direction, kick, _ = _extract_xy(rows, columns)
+        x, direction, kick, shard_input_columns = _extract_xy(rows, columns)
+        if (
+            expected_input_columns is not None
+            and shard_input_columns != expected_input_columns
+        ):
+            raise ValueError("inconsistent shard column layout")
         x = ((x - mean) / std).astype(np.float32, copy=False)
         order = np.arange(x.shape[0])
         if shuffle:
@@ -363,6 +369,7 @@ def evaluate(
     params: dict[str, np.ndarray],
     mean: np.ndarray,
     std: np.ndarray,
+    input_columns: list[str] | None = None,
     batch_size: int = 8192,
     kick_threshold: float = 0.5,
 ) -> dict[str, Any]:
@@ -383,6 +390,7 @@ def evaluate(
         batch_size=batch_size,
         rng=rng,
         shuffle=False,
+        expected_input_columns=input_columns,
     ):
         _, dir_prob, kick_prob = _forward(x, params)
         dir_pred = dir_prob.argmax(axis=1)
@@ -474,6 +482,7 @@ def train_baseline(
             batch_size=max(32, batch_size),
             rng=rng,
             shuffle=True,
+            expected_input_columns=input_columns,
         ):
             grads, loss = _train_batch(
                 x,
@@ -501,6 +510,7 @@ def train_baseline(
             params=params,
             mean=mean,
             std=std,
+            input_columns=input_columns,
             batch_size=max(32, batch_size),
         )
         history.append(
@@ -538,6 +548,7 @@ def train_baseline(
             params=params,
             mean=mean,
             std=std,
+            input_columns=input_columns,
             batch_size=max(32, batch_size),
             kick_threshold=float(candidate),
         )
