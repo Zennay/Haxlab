@@ -59,7 +59,23 @@ def test_imitation_player_map_preserves_valid_canonical_entries() -> None:
         ('"player"', "not_object"),
         ("42", "not_object"),
         ("{}", "empty"),
-        ('{"01":"player"}', "invalid_player_id"),
+    ],
+)
+def test_imitation_player_map_rejects_invalid_containers(
+    raw: str,
+    reason: str,
+) -> None:
+    completed = _parse(raw)
+
+    assert completed.returncode == 7
+    assert completed.stdout == ""
+    assert completed.stderr == f"invalid_selected_player_map:{reason}"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"01":"player"}',
         '{"+1":"player"}',
         '{" 1":"player"}',
         '{"1 ":"player"}',
@@ -68,18 +84,14 @@ def test_imitation_player_map_preserves_valid_canonical_entries() -> None:
         '{"9007199254740992":"player"}',
     ],
 )
-def test_imitation_player_map_rejects_invalid_container_or_player_ids(
+def test_imitation_player_map_rejects_noncanonical_or_unsafe_player_ids(
     raw: str,
-    reason: str | None = None,
 ) -> None:
-    if reason is None:
-        reason = "invalid_player_id"
-
     completed = _parse(raw)
 
     assert completed.returncode == 7
     assert completed.stdout == ""
-    assert completed.stderr == f"invalid_selected_player_map:{reason}"
+    assert completed.stderr == "invalid_selected_player_map:invalid_player_id"
 
 
 @pytest.mark.parametrize(
