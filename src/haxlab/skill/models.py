@@ -6,6 +6,22 @@ from dataclasses import dataclass, fields
 from types import MappingProxyType
 
 
+def _require_finite_number(
+    value: object,
+    field_name: str,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> None:
+    if type(value) not in (int, float) or not math.isfinite(float(value)):
+        raise ValueError(field_name)
+    numeric = float(value)
+    if minimum is not None and numeric < minimum:
+        raise ValueError(field_name)
+    if maximum is not None and numeric > maximum:
+        raise ValueError(field_name)
+
+
 @dataclass(frozen=True)
 class PerformanceVector:
     """Role-aware normalized player evidence for one observation window.
@@ -23,6 +39,16 @@ class PerformanceVector:
     pressure_recovery: float | None = None
     risk_management: float | None = None
 
+    def __post_init__(self) -> None:
+        for field in fields(self):
+            value = getattr(self, field.name)
+            if value is None:
+                continue
+            _require_finite_number(
+                value,
+                f"invalid_performance_vector:{field.name}",
+            )
+
 
 @dataclass(frozen=True)
 class SkillObservation:
@@ -35,17 +61,40 @@ class SkillObservation:
     state_difficulty: float | None = None
     role: str | None = None
 
+    def __post_init__(self) -> None:
+        if type(self.player_id) is not str or not self.player_id.strip():
+            raise ValueError("invalid_skill_observation:player_id")
+        if type(self.performance) is not PerformanceVector:
+            raise ValueError("invalid_skill_observation:performance")
 
-def _require_finite_number(
-    value: object,
-    field_name: str,
-    *,
-    minimum: float | None = None,
-) -> None:
-    if type(value) not in (int, float) or not math.isfinite(float(value)):
-        raise ValueError(field_name)
-    if minimum is not None and float(value) < minimum:
-        raise ValueError(field_name)
+        _require_finite_number(
+            self.match_quality_weight,
+            "invalid_skill_observation:match_quality_weight",
+            minimum=0.0,
+            maximum=1.0,
+        )
+        _require_finite_number(
+            self.minutes_or_possessions_weight,
+            "invalid_skill_observation:minutes_or_possessions_weight",
+            minimum=0.0,
+        )
+
+        for field_name in (
+            "teammate_context",
+            "opponent_context",
+            "state_difficulty",
+        ):
+            value = getattr(self, field_name)
+            if value is not None:
+                _require_finite_number(
+                    value,
+                    f"invalid_skill_observation:{field_name}",
+                )
+
+        if self.role is not None and (
+            type(self.role) is not str or not self.role.strip()
+        ):
+            raise ValueError("invalid_skill_observation:role")
 
 
 @dataclass(frozen=True)
