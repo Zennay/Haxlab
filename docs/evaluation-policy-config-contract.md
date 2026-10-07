@@ -71,3 +71,8 @@ active promotion/generation-loop ownership clears, with an exact-head regression
 proving the loaded policy is the object actually passed into the promotion
 decision. Do not infer from the presence of `configs/autonomy.toml` alone that
 editing the file currently changes a running promotion gate.
+
+
+## Bounded input
+
+Policy configuration is a small control-plane artifact. The loader fails closed before TOML parsing when the opened regular file exceeds 64 KiB, and its read call is capped to one byte beyond that limit so a misleading or racing size report cannot cause an unbounded allocation. The bound is part of the evaluation-validation boundary; larger files must not be treated as valid promotion policy input.
