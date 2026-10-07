@@ -16,6 +16,7 @@ A clean audit exits 0 and emits `haxlab-imitation-shard-audit-v1`. Any structura
 The verifier fails closed when:
 
 - the shard root, index, metadata, or shard is missing, symlinked, non-regular, unreadable, or malformed;
+- index/metadata JSON contains duplicate object keys or non-standard `NaN` / `Infinity` / `-Infinity` numeric constants;
 - index schema, manifest schema, split, cadence, replay identity, native integer counters, or success/failure identity sets are invalid;
 - a success entry does not have exactly the canonical `<replay_sha256>.meta.json` and `<replay_sha256>.f32.gz` pair;
 - index and metadata drift on any producer-published field other than the cache-only index `status`;
