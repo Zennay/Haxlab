@@ -13,3 +13,5 @@ This contract does not change evaluation thresholds, calibration inputs, model/c
 ## Integration
 
 This lane is stacked directly on the canonical Arena-v2 head and should remain isolated from active owners for calibration runtime, scenario provenance, gate receipts, resync, evidence I/O, policy config, promotion hardening, and cross-workflow validation. Exact-head CI is required before integration.
+
+The branch-scoped proof must execute on the exact pushed commit SHA; superseded heads are not acceptance evidence.
