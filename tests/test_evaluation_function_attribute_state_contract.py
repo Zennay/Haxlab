@@ -56,6 +56,13 @@ UNBOUND_MUTATORS = {
     "list.reverse",
     "list.sort",
     "operator.delitem",
+    "operator.iadd",
+    "operator.iand",
+    "operator.iconcat",
+    "operator.imul",
+    "operator.ior",
+    "operator.isub",
+    "operator.ixor",
     "operator.setitem",
     "set.__ior__",
     "set.add",
@@ -526,6 +533,14 @@ def test_evaluation_package_has_no_persistent_function_attribute_state() -> None
         (
             "import operator\ndef gate():\n    return True\noperator.setitem(gate.cache, 'x', 1)\n",
             "operator.setitem(gate.cache",
+        ),
+        (
+            "import operator\ndef gate():\n    return True\noperator.iadd(gate.cache, [1])\n",
+            "operator.iadd(gate.cache",
+        ),
+        (
+            "from operator import ior as merge\ndef gate():\n    return True\nmerge(gate.cache, {'x': 1})\n",
+            "operator.ior(gate.cache",
         ),
         (
             "def gate():\n    return True\nlist.append(gate.cache, 1)\n",
