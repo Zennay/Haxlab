@@ -18,11 +18,11 @@ Audit modules must not invoke:
 
 - `sys.addaudithook(...)`;
 - mutating `faulthandler` APIs: `enable`, `disable`, `register`, `unregister`, `dump_traceback_later`, `cancel_dump_traceback_later`;
-- `tracemalloc.start`, `stop`, or `reset_peak`;
+- `tracemalloc.start`, `stop`, `reset_peak`, or `clear_traces`;
 - threading-wide trace/profile setters: `threading.settrace`, `setprofile`, `settrace_all_threads`, `setprofile_all_threads`;
 - mutating `sys.monitoring` APIs: `use_tool_id`, `free_tool_id`, `register_callback`, `set_events`, `set_local_events`, or `restart_events`.
 
-The contract resolves normal imports, direct imports, import aliases, assignment aliases, and constant-string `getattr(...)` indirection. Wildcard imports from the tracked instrumentation modules are rejected because they make mutator provenance statically ambiguous.
+The contract resolves normal imports, direct imports, import aliases, assignment/chained/tuple aliases, and constant-string `getattr(...)` indirection. Wildcard imports from the tracked instrumentation modules are rejected because they make mutator provenance statically ambiguous.
 
 ## Allowed behavior
 
