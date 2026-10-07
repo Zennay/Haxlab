@@ -20,7 +20,9 @@ The v1 audit checks:
   stale error text;
 - failed rows retain error evidence;
 - statuses use the runtime's declared state vocabulary;
-- every versioned analysis row is backed by a successfully processed replay.
+- archived/duplicate source records resolve to a raw replay with the same byte size;
+- every versioned analysis row is backed by a successfully processed replay;
+- successful analysis rows cannot reuse the same output path.
 
 Run it directly without adding a console-script dependency:
 
@@ -35,6 +37,12 @@ any integrity finding exits `2`.
 This lane intentionally does not inspect raw replay bytes or derived artifact
 bytes. Those are owned by the existing archive/artifact audits. It also does not
 modify `runtime/state.py`, ingestion, analyzer, selector, shard, evaluation, or
-champion state. Integration into VPS control should happen only after exact-head
-tests are green and after the current serialized HaxLab runner owner releases
-the self-hosted runner.
+champion state.
+
+Exact-head proof is staged in
+`.github/workflows/data-pipeline-runtime-ledger-audit-proof.yml`. Ordinary
+branch pushes cannot execute its self-hosted job; proof requires either manual
+dispatch or an explicit commit whose message contains
+`[runtime-ledger-proof]`. Integration into VPS control should happen only
+after that focused proof is green and after the current serialized HaxLab runner
+owner releases the self-hosted runner.
