@@ -22,13 +22,14 @@ numbers in `[0, 1]`, and the config must be a regular non-symlink file.
 ## Immutable source provenance
 
 `load_promotion_policy_config()` reads the config bytes once and returns the
-validated `PromotionPolicy` together with the exact source SHA-256 and byte
-size. This distinguishes two files that happen to map to the same policy values
-but do not have identical bytes.
+validated `PromotionPolicy` together with receipt schema
+`haxlab-promotion-policy-config-v1`, the exact source SHA-256, and byte size.
+This distinguishes two files that happen to map to the same policy values but do
+not have identical bytes.
 
 Promotion evidence can therefore bind a future runtime decision to the exact
-configuration artifact that produced it instead of recording only normalized
-threshold values.
+configuration artifact and receipt contract that produced it instead of
+recording only normalized threshold values.
 
 ## Validation
 
@@ -38,21 +39,22 @@ Validate and render the mapped runtime policy without changing champion state:
 python -m haxlab.evaluation.policy_config configs/autonomy.toml
 ```
 
-Successful output is deterministic compact JSON with separate `policy` and
-`source` objects. The source object contains `sha256` and `size_bytes`.
+Successful output is deterministic compact JSON with `schema`, `policy`, and
+`source` fields. The source object contains `sha256` and `size_bytes`.
 Any malformed policy config exits non-zero through the CLI parser.
 
 `tests/test_evaluation_policy_config.py` binds the repository's canonical
 `configs/autonomy.toml` values to the current `PromotionPolicy` defaults,
 binds provenance to the exact file bytes, proves semantically equal byte-drift
-changes the provenance hash, and covers the fail-closed input boundary.
+changes the provenance hash, locks the versioned deterministic JSON receipt, and
+covers the fail-closed input boundary.
 
 ## Runtime wiring status
 
-The strict parsing, mapping, and source-provenance boundary is implemented, but
-existing promotion orchestration does not yet load this TOML automatically.
-Until that integration is completed, the runtime's default `PromotionPolicy`
-remains authoritative.
+The strict parsing, mapping, source-provenance, and receipt-schema boundary is
+implemented, but existing promotion orchestration does not yet load this TOML
+automatically. Until that integration is completed, the runtime's default
+`PromotionPolicy` remains authoritative.
 
 GitHub issue #93 tracks the wiring step. It should be integrated only after the
 active promotion/generation-loop ownership clears, with an exact-head regression
