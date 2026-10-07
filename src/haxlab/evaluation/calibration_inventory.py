@@ -69,6 +69,18 @@ def inventory_calibration_results(
 
     request_errors: list[str] = []
     global_request_errors: list[str] = []
+    if not isinstance(champion, Path):
+        request_errors.append("champion:not_path")
+        global_request_errors.append("champion:not_path")
+    invalid_partners = [
+        index
+        for index, partner in enumerate(partner_snapshot)
+        if not isinstance(partner, Path)
+    ]
+    for index in invalid_partners:
+        reason = f"partners:{index}:not_path"
+        request_errors.append(reason)
+        global_request_errors.append(reason)
     if missing_labels:
         request_errors.append(
             "challengers:missing:" + ",".join(missing_labels)
@@ -127,12 +139,20 @@ def inventory_calibration_results(
                 if type(reusable) is not bool:
                     reusable = False
                     reasons = ("validator_error:reusable_not_boolean",)
+                elif (
+                    type(reasons) is not tuple
+                    or any(type(reason) is not str for reason in reasons)
+                ):
+                    reusable = False
+                    reasons = ("validator_error:reasons_shape",)
                 elif reusable and reasons:
                     reusable = False
                     reasons = (
                         "validator_error:reusable_with_reasons",
-                        *tuple(reasons),
+                        *reasons,
                     )
+                elif not reusable and not reasons:
+                    reasons = ("validator_error:blocked_without_reasons",)
 
                 row = {
                     "label": label,
