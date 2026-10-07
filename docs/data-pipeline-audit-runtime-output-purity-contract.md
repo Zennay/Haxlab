@@ -18,7 +18,7 @@ The contract rejects:
   `write`/`writelines` calls, including their `.buffer` forms;
 - aliases and constant-`getattr(...)` spellings of those output surfaces;
 - `os.write(1|2, ...)`;
-- `os.fdopen(1|2, ...).write(...)` and `.writelines(...)`;
+- direct or assigned `os.fdopen(1|2, ...)` streams followed by `.write(...)` or `.writelines(...)`;
 - output from class methods or nested helpers/lambdas even when named
   `main`;
 - output in decorators, default values, and annotations evaluated outside the
@@ -46,8 +46,9 @@ receipt, runtime state, model/evaluation logic, or champion state.
 `tests/test_data_pipeline_audit_runtime_output_purity_contract.py` recursively
 parses every current and future `*_audit.py` module under `src/haxlab/`.
 Self-tests cover direct output, import/assignment aliases, constant `getattr`,
-primary/original streams, `writelines`, stdio buffers, file-descriptor output,
-nested/class `main` lookalikes, and signature/decorator side effects.
+primary/original streams, `writelines`, stdio buffers, direct and assigned
+`fdopen` stdio handles, file-descriptor output, nested/class `main` lookalikes,
+and signature/decorator side effects.
 
 The branch-scoped self-hosted workflow verifies the exact live branch head,
 compiles the repository, runs the focused contract, then reruns the integrated

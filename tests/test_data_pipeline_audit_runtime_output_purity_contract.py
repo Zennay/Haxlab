@@ -20,12 +20,13 @@ STDIO_STREAMS = {
     "sys.__stdout__",
     "sys.__stdout__.buffer",
 }
+STDIO_FD_STREAMS = {"os.fdopen(1)", "os.fdopen(2)"}
 DIRECT_OUTPUT_CALLS = {
     "builtins.print",
     "print",
     *(
         f"{stream}.{method}"
-        for stream in STDIO_STREAMS
+        for stream in STDIO_STREAMS | STDIO_FD_STREAMS
         for method in {"write", "writelines"}
     ),
 }
@@ -76,6 +77,15 @@ def _canonical_name(node: ast.AST | None, aliases: dict[str, str]) -> str | None
             owner = _canonical_name(node.args[0], aliases)
             if owner:
                 return f"{owner}.{node.args[1].value}"
+        if accessor == "os.fdopen" and node.args:
+            fd = node.args[0]
+            if (
+                isinstance(fd, ast.Constant)
+                and isinstance(fd.value, int)
+                and not isinstance(fd.value, bool)
+                and fd.value in {1, 2}
+            ):
+                return f"os.fdopen({fd.value})"
     return None
 
 
@@ -107,6 +117,7 @@ def _aliases(tree: ast.AST) -> dict[str, str]:
             if value and (
                 value in DIRECT_OUTPUT_CALLS
                 or value in STDIO_STREAMS
+                or value in STDIO_FD_STREAMS
             ):
                 if aliases.get(local) != value:
                     aliases[local] = value
@@ -287,6 +298,11 @@ def test_data_pipeline_audit_libraries_are_silent_outside_cli_main() -> None:
         (
             "import os\ndef audit():\n    os.fdopen(1, 'w', closefd=False).write('noise')\n",
             "os.fdopen(1",
+        ),
+        (
+            "import os\nout = os.fdopen(1, 'w', closefd=False)\n"
+            "def audit():\n    out.write('noise')\n",
+            "os.fdopen(1).write",
         ),
     ],
 )
