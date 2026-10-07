@@ -13,11 +13,11 @@ permissions:
 
 concurrency:
   group: haxlab-evaluation-sequence-proof-dispatch
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   dispatch-next:
-    runs-on: [self-hosted, zcloud, vps]
+    runs-on: [self-hosted, haxlab]
     timeout-minutes: 5
     env:
       REQUIRED_RUN_ID: "37666946317"
