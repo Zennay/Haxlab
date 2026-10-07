@@ -237,6 +237,7 @@ def test_contract_rejects_process_global_state_mutation() -> None:
 def test_contract_resolves_direct_import_and_builtin_aliases() -> None:
     source = textwrap.dedent(
         """
+        import sys as system
         from builtins import setattr as mutate_attr
         from os import chdir as cd, environ as env
         from signal import signal as install
@@ -247,7 +248,7 @@ def test_contract_resolves_direct_import_and_builtin_aliases() -> None:
             env.clear()
             loaded.__delitem__("haxlab.plugin")
             install(2, lambda *_: None)
-            mutate_attr(__import__("sys"), "path", ["/tmp"])
+            mutate_attr(system, "path", ["/tmp"])
         """
     )
 
