@@ -48,6 +48,8 @@ Producer outputs must already be structurally valid when they cross the model bo
 - `replay_count == unique_replay_count + duplicate_replay_count`;
 - match count cannot exceed unique replay count or report count;
 - unmatched replay/report evidence is a list of canonical, non-empty, unique strings;
+- unmatched report evidence is exact: `len(unmatched_reports) == report_count - match_count`;
+- unmatched replay evidence cannot exceed `unique_replay_count - match_count`; invalid replay evidence may instead be represented as import failures;
 - failures are real `ImportFailure` objects whose source, stage and error remain valid.
 
 `ImportManifest.as_dict()` revalidates the mutable manifest and every mutable failure before serialization. This prevents post-construction mutation from publishing malformed evidence.
