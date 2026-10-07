@@ -52,17 +52,17 @@ def scan_once(
 
     paths = sorted(
         (
-            path
+            (path, path.is_symlink())
             for path in incoming_root.rglob("*")
             if path.suffix.casefold() == ".hbr2"
         ),
-        key=lambda path: str(path).casefold(),
+        key=lambda item: str(item[0]).casefold(),
     )
 
-    for path in paths:
-        # Check before is_file() because that call follows symlinks. Re-checking
-        # here also catches a candidate replaced after discovery/sorting.
-        if path.is_symlink():
+    for path, was_symlink in paths:
+        # is_file() follows symlinks, so retain the discovery-time observation
+        # and re-check after sorting before any file metadata/content is trusted.
+        if was_symlink or path.is_symlink():
             state.event(
                 "replay_rejected",
                 subject=str(path),
