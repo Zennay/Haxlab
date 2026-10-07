@@ -146,3 +146,17 @@ def test_duplicate_fallback_identity_reports_full_replay_provenance() -> None:
     assert "a" * 64 in message
     assert "b" * 64 in message
     assert "None" in message
+
+
+def test_duplicate_error_canonicalizes_machine_readable_conflicts() -> None:
+    error = DuplicateMatchIdError(
+        (
+            ("match-z", (("d" * 64, "400"), ("b" * 64, "200"))),
+            ("match-a", (("c" * 64, "300"), ("a" * 64, "100"))),
+        )
+    )
+
+    assert error.conflicts == (
+        ("match-a", (("a" * 64, "100"), ("c" * 64, "300"))),
+        ("match-z", (("b" * 64, "200"), ("d" * 64, "400"))),
+    )
