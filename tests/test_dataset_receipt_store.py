@@ -132,3 +132,35 @@ def test_store_invalid_dataset_does_not_touch_existing_output(
         store_dataset_receipt(root, output)
 
     assert output.read_bytes() == previous
+
+
+
+def test_store_refuses_to_overwrite_canonical_dataset_artifact(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "dataset"
+    _write_dataset(root)
+    manifest = root / "manifest.json"
+    previous = manifest.read_bytes()
+
+    with pytest.raises(
+        DatasetReceiptStoreError,
+        match="receipt output would overwrite dataset artifact: manifest.json",
+    ):
+        store_dataset_receipt(root, manifest)
+
+    assert manifest.read_bytes() == previous
+    assert list(root.glob(".manifest.json.*.tmp")) == []
+
+
+def test_store_allows_noncanonical_receipt_name_inside_dataset_root(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "dataset"
+    _write_dataset(root)
+    output = root / "receipt.json"
+
+    receipt = store_dataset_receipt(root, output)
+
+    assert load_receipt(output)["receipt_sha256"] == receipt["receipt_sha256"]
+    assert verify_dataset_receipt(root, load_receipt(output))["ok"] is True
