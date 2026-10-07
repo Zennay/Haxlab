@@ -25,6 +25,16 @@ ingest is restored before worker and analyzer and the live bot is restored
 last. This also covers late failures after the normal update path has already
 started services that were inactive before the update.
 
+## Managed-service stop gate
+
+The update path is not the bootstrap path: `deploy/install-vps.sh` installs the
+managed unit definitions before enabling them. During an update, stopping all
+managed units is therefore a required precondition for mutating packages,
+checkout state, Python dependencies or Node dependencies. A failed
+`systemctl stop` aborts the pre-parsed update function immediately while the
+recovery EXIT trap is armed; the updater does not continue into `apt-get` or
+`git reset` after a failed stop.
+
 ## Stable updater execution
 
 The updater resets `APP_DIR` to `origin/main`, which replaces the checked-out
