@@ -182,6 +182,10 @@ class ResourceStateVisitor(ast.NodeVisitor):
 
     @staticmethod
     def _prlimit_mutates(node: ast.Call) -> bool:
+        if any(isinstance(argument, ast.Starred) for argument in node.args):
+            return True
+        if any(keyword.arg is None for keyword in node.keywords):
+            return True
         if len(node.args) >= 3:
             third = node.args[2]
             return not (isinstance(third, ast.Constant) and third.value is None)
@@ -191,12 +195,37 @@ class ResourceStateVisitor(ast.NodeVisitor):
                 return not (isinstance(value, ast.Constant) and value.value is None)
         return False
 
+    def _bind_pattern(self, target: ast.AST, value: ast.AST) -> None:
+        if isinstance(target, ast.Name):
+            resolved = self.canonical(value)
+            self.aliases.bind(
+                target.id,
+                resolved if self._is_trackable(resolved) else None,
+            )
+            return
+
+        if (
+            isinstance(target, (ast.Tuple, ast.List))
+            and isinstance(value, (ast.Tuple, ast.List))
+            and len(target.elts) == len(value.elts)
+        ):
+            for target_item, value_item in zip(target.elts, value.elts, strict=True):
+                self._bind_pattern(target_item, value_item)
+            return
+
+        for name in self._name_targets(target):
+            self.aliases.bind(name, None)
+
     def _bind_assignment(self, targets: list[ast.AST], value: ast.AST) -> None:
+        if len(targets) == 1:
+            self._bind_pattern(targets[0], value)
+            return
+
         resolved = self.canonical(value)
-        target = resolved if self._is_trackable(resolved) else None
+        alias = resolved if self._is_trackable(resolved) else None
         for item in targets:
             for name in self._name_targets(item):
-                self.aliases.bind(name, target)
+                self.aliases.bind(name, alias)
 
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
@@ -211,6 +240,10 @@ class ResourceStateVisitor(ast.NodeVisitor):
             if root in TRACKED_MODULES:
                 for alias in node.names:
                     if alias.name == "*":
+                        if root in {"os", "resource"}:
+                            self.findings.append(
+                                f"line {node.lineno}: ambiguous host resource/scheduler wildcard import: {node.module}"
+                            )
                         continue
                     self.aliases.bind(
                         alias.asname or alias.name,
@@ -345,6 +378,43 @@ def test_detector_rejects_alias_and_constant_getattr_bypasses() -> None:
     ):
         assert expected in findings
 
+
+
+def test_detector_rejects_destructured_aliases_and_ambiguous_prlimit_calls() -> None:
+    source = textwrap.dedent(
+        """
+        import os
+        import resource
+
+        nice_fn, set_limit = os.nice, resource.setrlimit
+
+        def probe(args, kwargs):
+            nice_fn(1)
+            set_limit(resource.RLIMIT_CPU, (1, 1))
+            resource.prlimit(*args)
+            resource.prlimit(0, resource.RLIMIT_CPU, **kwargs)
+        """
+    )
+
+    findings = "\n".join(scan_source(source))
+    assert "os.nice" in findings
+    assert "resource.setrlimit" in findings
+    assert findings.count("resource.prlimit") >= 2
+
+
+def test_detector_rejects_tracked_wildcard_imports() -> None:
+    findings = "\n".join(
+        scan_source(
+            textwrap.dedent(
+                """
+                from resource import *
+                from os import *
+                """
+            )
+        )
+    )
+    assert "wildcard import: resource" in findings
+    assert "wildcard import: os" in findings
 
 def test_detector_allows_read_only_resource_scheduler_queries() -> None:
     source = textwrap.dedent(
