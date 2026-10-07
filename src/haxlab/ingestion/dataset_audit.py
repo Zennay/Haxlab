@@ -207,6 +207,7 @@ def audit_dataset(root: Path) -> DatasetAudit:
                 valid_replay_sources.add(source_path)
 
     report_ids: set[str] = set()
+    report_by_id: dict[str, dict[str, Any]] = {}
     if reports is not None:
         for index, row in enumerate(reports):
             prefix = f"reports:{index}"
@@ -220,6 +221,7 @@ def audit_dataset(root: Path) -> DatasetAudit:
                 issues.append(f"{prefix}:duplicate_message_id")
             else:
                 report_ids.add(message_id)
+                report_by_id[message_id] = row
 
     duplicate_count = 0
     if duplicates is not None:
@@ -298,8 +300,8 @@ def audit_dataset(root: Path) -> DatasetAudit:
                 matched_report_ids.add(source_message_id)
                 if type(report) is not dict:
                     issues.append(f"{prefix}:missing_report")
-                elif report.get("message_id") != source_message_id:
-                    issues.append(f"{prefix}:report_message_id_mismatch")
+                elif report != report_by_id[source_message_id]:
+                    issues.append(f"{prefix}:report_payload_mismatch")
 
             if not _is_finite_probability(row.get("match_confidence")):
                 issues.append(f"{prefix}:invalid_match_confidence")
