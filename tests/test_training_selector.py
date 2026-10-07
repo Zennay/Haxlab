@@ -703,3 +703,91 @@ def test_training_manifest_does_not_coerce_selected_player_evidence(
 
     assert manifest["train_replays"] == []
     assert manifest["holdout_replays"] == []
+
+
+
+@pytest.mark.parametrize(
+    "name",
+    [123, True, [], {}, object()],
+)
+def test_name_key_does_not_coerce_non_string_names(name: object) -> None:
+    from haxlab.learning.selector import _name_key
+
+    assert _name_key(name) is None
+
+
+@pytest.mark.parametrize(
+    "auth_hash",
+    [123, True, [], {}, ""],
+)
+def test_identity_key_rejects_non_string_or_blank_auth_hash(
+    auth_hash: object,
+) -> None:
+    from haxlab.learning.selector import _identity_key
+
+    assert _identity_key({"authHash": auth_hash, "name": "Alpha"}) is None
+
+
+@pytest.mark.parametrize(
+    "mutated",
+    [
+        {"role": 1},
+        {"role": True},
+        {"role": ""},
+        {"role": "   "},
+    ],
+)
+def test_select_players_rejects_malformed_role_evidence(mutated: dict) -> None:
+    row = {
+        "player_id": "name:alpha",
+        "name": "Alpha",
+        "role": "forward",
+        "rating": 56.0,
+        "rating_uncertainty": 0.8,
+        "matches": 80,
+        "minutes": 500.0,
+    }
+    row.update(mutated)
+
+    assert select_players(
+        [row],
+        top_fraction_per_role=1.0,
+        min_players_per_role=1,
+        min_matches=1,
+        min_minutes=0.0,
+        max_uncertainty=10.0,
+    ) == []
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"top_fraction_per_role": float("nan")},
+        {"top_fraction_per_role": float("inf")},
+        {"top_fraction_per_role": -0.1},
+        {"top_fraction_per_role": 1.1},
+        {"top_fraction_per_role": True},
+        {"min_players_per_role": 0},
+        {"min_players_per_role": True},
+        {"min_matches": 0},
+        {"min_matches": True},
+        {"min_minutes": float("nan")},
+        {"min_minutes": -1.0},
+        {"max_uncertainty": float("inf")},
+        {"max_uncertainty": -1.0},
+    ],
+)
+def test_select_players_rejects_invalid_selection_config(
+    kwargs: dict,
+) -> None:
+    defaults = {
+        "top_fraction_per_role": 1.0,
+        "min_players_per_role": 1,
+        "min_matches": 1,
+        "min_minutes": 0.0,
+        "max_uncertainty": 10.0,
+    }
+    defaults.update(kwargs)
+
+    with pytest.raises(ValueError):
+        select_players([], **defaults)
