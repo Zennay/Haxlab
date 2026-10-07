@@ -154,14 +154,32 @@ def _shell_var_on_line(name: str, line: str) -> bool:
     return plain in line or braced in line
 
 
+def _is_equality_assertion(line: str) -> bool:
+    if "test " not in line:
+        return False
+    if "!=" in line:
+        return False
+    return " = " in line or " == " in line
+
+
+def _block_exits_nonzero(lines: Sequence[str], start: int) -> bool:
+    for line in lines[start + 1 : start + 9]:
+        stripped = line.strip()
+        if stripped == "fi":
+            return False
+        match = re.fullmatch(r"exit\s+([0-9]+)", stripped)
+        if match and int(match.group(1)) != 0:
+            return True
+    return False
+
+
 def _has_exact_head_guard(text: str) -> bool:
     lines = text.splitlines()
     expected_vars = _source_bound_vars(lines)
 
-    # Direct shell assertions can compare HEAD with either the source expression
-    # itself or an environment variable bound to that expression.
+    # Direct source-bound equality assertion.
     for line in lines:
-        if "git rev-parse HEAD" not in line or "test " not in line:
+        if "git rev-parse HEAD" not in line or not _is_equality_assertion(line):
             continue
         if any(marker in line for marker in SOURCE_SHA_MARKERS):
             return True
@@ -178,14 +196,19 @@ def _has_exact_head_guard(text: str) -> bool:
     if not actual_vars or not expected_vars:
         return False
 
-    for line in lines:
-        if not ("[" in line or "test " in line):
-            continue
+    for index, line in enumerate(lines):
         actual_present = any(_shell_var_on_line(name, line) for name in actual_vars)
         expected_present = any(
             _shell_var_on_line(name, line) for name in expected_vars
         )
-        if actual_present and expected_present:
+        if not (actual_present and expected_present):
+            continue
+
+        if _is_equality_assertion(line):
+            return True
+
+        # Canonical CI-style guard: mismatch enters a branch that exits nonzero.
+        if "if [" in line and "!=" in line and _block_exits_nonzero(lines, index):
             return True
 
     return False
