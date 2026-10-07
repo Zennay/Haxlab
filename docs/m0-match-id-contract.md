@@ -65,3 +65,13 @@ verbatim when present; otherwise the identity is exactly
 malformed report IDs and replay hashes instead of coercing them. Producer integration
 can therefore reuse the same derivation and uniqueness boundary rather than
 re-implementing fallback semantics in two places.
+
+
+## Current importer compatibility
+
+The focused regression suite also runs the existing `run_import()` path on a minimal
+valid replay + Discord report fixture, reads the published `matches.jsonl` row and
+asserts that the producer's current `match_id` equals `derive_canonical_match_id()`.
+That real row must then pass `validate_unique_match_ids()`. This keeps the staged
+contract green against current producer behavior while producer wiring remains owned
+by the separate active lane.
