@@ -1,0 +1,60 @@
+name: HaxLab imitation shard audit proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact branch SHA to prove
+        required: true
+        type: string
+  push:
+    branches:
+      - feature/data-pipeline-shard-audit-20261007
+    paths:
+      - "src/haxlab/learning/shard_audit.py"
+      - "tests/test_shard_audit.py"
+      - "docs/imitation-shard-audit.md"
+      - ".github/workflows/data-pipeline-shard-audit-proof.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-shard-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[shard-audit-proof]')
+    name: Validate exact-head shard auditor
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    env:
+      EXPECTED_HEAD: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_sha || github.sha }}
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+
+      - name: Assert exact head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Run focused proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .shard-audit-venv
+          python3 -m venv .shard-audit-venv
+          .shard-audit-venv/bin/pip install -q --upgrade pip
+          .shard-audit-venv/bin/pip install -q -e '.[dev]'
+          .shard-audit-venv/bin/python -m compileall -q src/haxlab/learning
+          .shard-audit-venv/bin/python -m haxlab.learning.shard_audit --help >/dev/null
+          .shard-audit-venv/bin/pytest -q tests/test_shard_audit.py
+          .shard-audit-venv/bin/pytest --collect-only -q >/dev/null
