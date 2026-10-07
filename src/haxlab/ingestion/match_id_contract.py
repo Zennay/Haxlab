@@ -14,17 +14,25 @@ def _require_non_empty_string(value: Any, *, field: str) -> str:
     return value
 
 
+def _provenance_sort_key(
+    provenance: tuple[str | None, str | None],
+) -> tuple[str, str]:
+    replay_sha256, source_message_id = provenance
+    return replay_sha256 or "", source_message_id or ""
+
+
 def validate_unique_match_ids(
     records: Iterable[Mapping[str, Any]],
 ) -> tuple[str, ...]:
     """Validate and return canonical match IDs in deterministic order.
 
     This helper is intentionally side-effect free so producer code can validate the
-    full candidate publication before writing any M0 artifact.
+    full candidate publication before writing any M0 artifact. Duplicate diagnostics
+    are also deterministic across source ordering: every duplicate identity is
+    reported with its complete, sorted provenance set.
     """
 
-    seen: dict[str, tuple[str | None, str | None]] = {}
-    ordered: list[str] = []
+    provenance_by_match_id: dict[str, list[tuple[str | None, str | None]]] = {}
 
     for index, record in enumerate(records):
         if not isinstance(record, Mapping):
@@ -47,16 +55,21 @@ def validate_unique_match_ids(
                 field=f"canonical match row {index} source_message_id",
             )
 
-        previous = seen.get(match_id)
-        provenance = (replay_sha256, source_message_id)
-        if previous is not None:
-            raise DuplicateMatchIdError(
-                "duplicate canonical match_id "
-                f"{match_id!r}: first provenance={previous!r}, "
-                f"duplicate provenance={provenance!r}"
-            )
+        provenance_by_match_id.setdefault(match_id, []).append(
+            (replay_sha256, source_message_id)
+        )
 
-        seen[match_id] = provenance
-        ordered.append(match_id)
+    duplicates = [
+        (match_id, tuple(sorted(provenances, key=_provenance_sort_key)))
+        for match_id, provenances in provenance_by_match_id.items()
+        if len(provenances) > 1
+    ]
+    if duplicates:
+        duplicates.sort(key=lambda item: item[0])
+        rendered = "; ".join(
+            f"{match_id!r} provenances={provenances!r}"
+            for match_id, provenances in duplicates
+        )
+        raise DuplicateMatchIdError(f"duplicate canonical match_id values: {rendered}")
 
-    return tuple(sorted(ordered))
+    return tuple(sorted(provenance_by_match_id))
