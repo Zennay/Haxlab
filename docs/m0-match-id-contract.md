@@ -8,7 +8,7 @@ This lane adds a side-effect-free pre-publication validator:
 
 - every candidate canonical row must have a native, non-empty, whitespace-canonical
   `match_id`;
-- optional replay/message provenance must also be native canonical strings;
+- every candidate must carry the full replay SHA-256 as exactly 64 lowercase hex characters; optional message provenance must be either `None` or a native canonical string;
 - duplicate `match_id` values fail closed and report the complete provenance set for
   every duplicate identity;
 - duplicate diagnostics are canonicalized by `match_id` and provenance, so the same
@@ -35,3 +35,13 @@ with each group's `(replay_sha256, source_message_id)` provenances sorted
 lexicographically. This avoids an otherwise subtle observability drift where two
 reruns over identical evidence could emit different failure text solely because source
 discovery order changed.
+
+
+## Provenance boundary
+
+The producer currently emits a full lowercase SHA-256 for every canonical match row, and
+the independent cross-artifact auditor already treats any other replay hash form as
+invalid. The pre-publication validator enforces the same boundary before identity
+uniqueness is evaluated. This guarantees that duplicate diagnostics always identify
+the complete replay provenance, including the rare fallback-ID collision case where
+two full hashes share the same `hbr2:<16-char-prefix>`.
