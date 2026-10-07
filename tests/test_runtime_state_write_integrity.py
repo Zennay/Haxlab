@@ -400,3 +400,193 @@ def test_required_runtime_text_is_preserved_without_normalization(
     assert raw_value == archive_path
     assert processing_value == parser_stage
     assert analysis_value == analyzer_version
+
+
+def test_invalid_source_update_does_not_clobber_existing_row(
+    tmp_path: Path,
+) -> None:
+    source_path = str(tmp_path / "incoming.hbr2")
+    sha = "4" * 64
+
+    with RuntimeState(tmp_path / "state.sqlite3") as state:
+        state.mark_seen(
+            source_path=source_path,
+            size_bytes=10,
+            mtime_ns=20,
+            sha256=sha,
+            status="archived",
+        )
+
+        with pytest.raises(ValueError, match="native non-negative integer"):
+            state.mark_seen(
+                source_path=source_path,
+                size_bytes=-1,
+                mtime_ns=999,
+                sha256="5" * 64,
+                status="failed",
+                error="must not persist",
+            )
+
+        row = dict(
+            state.connection.execute(
+                """
+                SELECT source_path, size_bytes, mtime_ns, sha256, status, error
+                FROM source_files
+                WHERE source_path = ?
+                """,
+                (source_path,),
+            ).fetchone()
+        )
+
+    assert row == {
+        "source_path": source_path,
+        "size_bytes": 10,
+        "mtime_ns": 20,
+        "sha256": sha,
+        "status": "archived",
+        "error": None,
+    }
+
+
+def test_invalid_processing_update_does_not_clobber_existing_row(
+    tmp_path: Path,
+) -> None:
+    sha = "6" * 64
+
+    with RuntimeState(tmp_path / "state.sqlite3") as state:
+        _register_raw(state, tmp_path, sha)
+        state.mark_replay_processing(
+            sha256=sha,
+            status="ok",
+            format_version=3,
+            total_frames=100,
+            duration_seconds=2.5,
+            decompressed_bytes=200,
+            parser_stage="probe",
+        )
+
+        with pytest.raises(ValueError, match="native non-negative integer"):
+            state.mark_replay_processing(
+                sha256=sha,
+                status="failed",
+                format_version=3,
+                total_frames=-1,
+                duration_seconds=9.5,
+                decompressed_bytes=999,
+                parser_stage="replacement",
+                error="must not persist",
+            )
+
+        row = dict(
+            state.connection.execute(
+                """
+                SELECT status, format_version, total_frames, duration_seconds,
+                       decompressed_bytes, parser_stage, error
+                FROM replay_processing
+                WHERE sha256 = ?
+                """,
+                (sha,),
+            ).fetchone()
+        )
+
+    assert row == {
+        "status": "ok",
+        "format_version": 3,
+        "total_frames": 100,
+        "duration_seconds": 2.5,
+        "decompressed_bytes": 200,
+        "parser_stage": "probe",
+        "error": None,
+    }
+
+
+def test_invalid_analysis_update_does_not_clobber_existing_row(
+    tmp_path: Path,
+) -> None:
+    sha = "7" * 64
+    original_path = str(tmp_path / "original.json")
+
+    with RuntimeState(tmp_path / "state.sqlite3") as state:
+        _register_raw(state, tmp_path, sha)
+        state.mark_replay_analysis(
+            sha256=sha,
+            status="ok",
+            analyzer_version=CURRENT_ANALYZER_VERSION,
+            output_path=original_path,
+            sampled_state_count=10,
+            player_count=8,
+            raw_event_count=20,
+            tick_count=100,
+        )
+
+        with pytest.raises(ValueError, match="native non-negative integer"):
+            state.mark_replay_analysis(
+                sha256=sha,
+                status="failed",
+                analyzer_version=CURRENT_ANALYZER_VERSION,
+                output_path=str(tmp_path / "replacement.json"),
+                sampled_state_count=999,
+                player_count=999,
+                raw_event_count=999,
+                tick_count=-1,
+                error="must not persist",
+            )
+
+        row = dict(
+            state.connection.execute(
+                """
+                SELECT status, output_path, sampled_state_count, player_count,
+                       raw_event_count, tick_count, error
+                FROM replay_analysis_versions
+                WHERE sha256 = ? AND analyzer_version = ?
+                """,
+                (sha, CURRENT_ANALYZER_VERSION),
+            ).fetchone()
+        )
+
+    assert row == {
+        "status": "ok",
+        "output_path": original_path,
+        "sampled_state_count": 10,
+        "player_count": 8,
+        "raw_event_count": 20,
+        "tick_count": 100,
+        "error": None,
+    }
+
+
+def test_invalid_duplicate_raw_registration_does_not_mutate_existing_row(
+    tmp_path: Path,
+) -> None:
+    sha = "8" * 64
+    original_path = str(tmp_path / "original.hbr2")
+
+    with RuntimeState(tmp_path / "state.sqlite3") as state:
+        state.register_raw(
+            sha256=sha,
+            archive_path=original_path,
+            size_bytes=123,
+        )
+
+        with pytest.raises(ValueError, match="native non-negative integer"):
+            state.register_raw(
+                sha256=sha,
+                archive_path=str(tmp_path / "replacement.hbr2"),
+                size_bytes=-1,
+            )
+
+        row = dict(
+            state.connection.execute(
+                """
+                SELECT archive_path, size_bytes
+                FROM raw_replays
+                WHERE sha256 = ?
+                """,
+                (sha,),
+            ).fetchone()
+        )
+
+    assert row == {
+        "archive_path": original_path,
+        "size_bytes": 123,
+    }
