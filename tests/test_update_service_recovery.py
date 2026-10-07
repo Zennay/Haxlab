@@ -147,8 +147,12 @@ def test_update_wires_recovery_before_stop_and_disables_after_health_checks() ->
     capture_index = text.index("haxlab_capture_update_service_state")
     trap_index = text.index("haxlab_install_update_recovery_trap")
     stop_index = text.index('systemctl stop "${HAXLAB_UPDATE_MANAGED_SERVICES[@]}"')
-    status_index = text.index("haxlab-status")
-    disable_index = text.index("haxlab_disable_update_recovery_trap")
+    status_index = text.index("\nhaxlab-status\n")
+    disable_index = text.index("\nhaxlab_disable_update_recovery_trap\n")
+    restart_index = text.index(
+        "systemctl start haxlab-ingest.service haxlab-worker.service "
+        "haxlab-analyzer.service haxlab-autonomy.timer"
+    )
 
     assert source_index < capture_index < trap_index < stop_index
-    assert status_index < disable_index
+    assert stop_index < restart_index < status_index < disable_index
