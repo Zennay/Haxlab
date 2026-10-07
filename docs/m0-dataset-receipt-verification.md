@@ -116,4 +116,12 @@ If dataset validation fails or publication fails before the atomic replace,
 the previous receipt remains byte-for-byte intact and temporary files are
 cleaned up.
 
-Store status schema: `haxlab-m0-dataset-receipt-store-v1`.
+
+
+The store refuses a destination that resolves to the same directory inode as
+the dataset root when its filename is one of the five canonical M0 artifacts.
+This prevents receipt publication from replacing `manifest.json`,
+`replays.json`, `duplicates.json`, `reports.json` or `matches.jsonl`.
+A noncanonical evidence filename such as `receipt.json` may still live beside
+the dataset because it is not part of the five-file receipt hash.
+\nStore status schema: `haxlab-m0-dataset-receipt-store-v1`.
