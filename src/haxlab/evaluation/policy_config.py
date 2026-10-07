@@ -6,6 +6,7 @@ import json
 import math
 import os
 import stat
+import sys
 import tomllib
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
@@ -237,7 +238,19 @@ def main(argv: list[str] | None = None) -> int:
     try:
         loaded = load_promotion_policy_config(args.config)
     except ValueError as exc:
-        parser.error(str(exc))
+        print(
+            json.dumps(
+                {
+                    "error": str(exc),
+                    "schema": POLICY_CONFIG_SCHEMA,
+                    "valid": False,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            file=sys.stderr,
+        )
+        return 2
 
     print(
         json.dumps(

@@ -367,7 +367,7 @@ def test_policy_config_cli_emits_versioned_policy_and_source_provenance(
     assert output == json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
 
 
-def test_policy_config_cli_fails_closed_on_invalid_config(
+def test_policy_config_cli_fails_closed_with_machine_readable_error(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -378,11 +378,21 @@ def test_policy_config_cli_fails_closed_on_invalid_config(
         "minimum_frozen_scenario_pass_rate = 0.98\n",
     )
 
-    with pytest.raises(SystemExit) as exc_info:
-        main([str(path)])
+    assert main([str(path)]) == 2
 
-    assert exc_info.value.code == 2
-    assert "minimum_games_vs_champion must be >= 1" in capsys.readouterr().err
+    captured = capsys.readouterr()
+    payload = {
+        "error": "evaluation.minimum_games_vs_champion must be >= 1",
+        "schema": POLICY_CONFIG_SCHEMA,
+        "valid": False,
+    }
+    assert captured.out == ""
+    assert json.loads(captured.err) == payload
+    assert captured.err == json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+    ) + "\n"
 
 
 @pytest.mark.parametrize(

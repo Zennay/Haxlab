@@ -31,8 +31,8 @@ loader/runtime mismatch.
 
 ## Immutable source provenance
 
-`load_promotion_policy_config()` reads the config bytes once and returns the
-validated `PromotionPolicy` together with receipt schema
+`load_promotion_policy_config()` captures a stable byte snapshot from the already-open
+descriptor and returns the validated `PromotionPolicy` together with receipt schema
 `haxlab-promotion-policy-config-v1`, the exact source SHA-256, and byte size.
 This distinguishes two files that happen to map to the same policy values but do
 not have identical bytes.
@@ -51,7 +51,9 @@ python -m haxlab.evaluation.policy_config configs/autonomy.toml
 
 Successful output is deterministic compact JSON with `schema`, `policy`, and
 `source` fields. The source object contains `sha256` and `size_bytes`.
-Any malformed policy config exits non-zero through the CLI parser.
+A malformed policy config returns exit code `2` and emits deterministic compact JSON
+to stderr with `schema`, `valid=false`, and `error`; validation failures therefore stay
+machine-readable without falling back to argparse usage text.
 
 `tests/test_evaluation_policy_config.py` binds the repository's canonical
 `configs/autonomy.toml` values to the current `PromotionPolicy` defaults,
