@@ -1,4 +1,4 @@
-name: Arena integration manifest exact-candidate proof
+name: Arena integration manifest carrier retracted
 
 on:
   push:
@@ -10,46 +10,12 @@ permissions:
 
 concurrency:
   group: haxlab-arena-manifest-exact-proof
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
-  prove:
+  owner-boundary:
+    if: ${{ false }}
     runs-on: [self-hosted, haxlab]
-    timeout-minutes: 20
     steps:
-      - name: Checkout exact owner candidate
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: 730c8d6146e2feb4e95f0cdd3396788000db9d49
-          fetch-depth: 1
-          clean: true
-
-      - name: Verify exact candidate and live owner head
-        shell: bash
-        run: |
-          set -euo pipefail
-          target=730c8d6146e2feb4e95f0cdd3396788000db9d49
-          owner_branch=validation/arena-integration-test-manifest-current-20261007
-          test "$(git rev-parse HEAD)" = "$target"
-          remote_head="$(git ls-remote origin "refs/heads/$owner_branch" | awk 'NR == 1 {print $1}')"
-          test -n "$remote_head"
-          test "$remote_head" = "$target"
-          echo "ARENA_INTEGRATION_MANIFEST_PROOF_HEAD=$target"
-
-      - name: Create isolated proof environment
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf .arena-manifest-exact-proof-venv
-          python3 -m venv .arena-manifest-exact-proof-venv
-          .arena-manifest-exact-proof-venv/bin/pip install --upgrade pip
-          .arena-manifest-exact-proof-venv/bin/pip install -e '.[dev]'
-
-      - name: Run focused owner contract
-        shell: bash
-        run: |
-          set -euo pipefail
-          .arena-manifest-exact-proof-venv/bin/python -m compileall -q tests/test_arena_integration_test_manifest.py
-          PYTHONPATH="$GITHUB_WORKSPACE/src" \
-            .arena-manifest-exact-proof-venv/bin/pytest -q tests/test_arena_integration_test_manifest.py
-          echo "ARENA_INTEGRATION_TEST_MANIFEST_RESULT=green"
+      - name: Retracted in favor of #100 owner lane
+        run: echo "carrier retracted; #100 owner lane remains authoritative"
