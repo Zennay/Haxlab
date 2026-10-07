@@ -106,6 +106,13 @@ def _aliases(tree: ast.AST) -> dict[str, str]:
 
 
 def _canonical_name(node: ast.AST | None, aliases: dict[str, str]) -> str | None:
+    if node is None:
+        return None
+    if isinstance(node, ast.Name):
+        return aliases.get(node.id, node.id)
+    if isinstance(node, ast.Attribute):
+        parent = _canonical_name(node.value, aliases)
+        return f"{parent}.{node.attr}" if parent else node.attr
     if isinstance(node, ast.Call):
         accessor = _canonical_name(node.func, aliases)
         if (
@@ -117,19 +124,11 @@ def _canonical_name(node: ast.AST | None, aliases: dict[str, str]) -> str | None
             owner = _canonical_name(node.args[0], aliases)
             if owner:
                 return f"{owner}.{node.args[1].value}"
-        return None
-
-    name = _name(node)
-    if name is None:
-        return None
-    head, dot, tail = name.partition(".")
-    if head in aliases:
-        return aliases[head] + (dot + tail if dot else "")
-    return name
+    return None
 
 
 def _target_root(node: ast.AST, aliases: dict[str, str]) -> str | None:
-    if isinstance(node, (ast.Name, ast.Attribute)):
+    if isinstance(node, (ast.Name, ast.Attribute, ast.Call)):
         return _canonical_name(node, aliases)
     if isinstance(node, ast.Subscript):
         return _target_root(node.value, aliases)
@@ -282,16 +281,20 @@ def test_contract_rejects_constant_getattr_mutation_bypasses() -> None:
         def probe():
             getattr(os, "chdir")("/tmp")
             getattr(os.environ, "update")({"MODE": "unsafe"})
+            getattr(os, "environ")["DIRECT"] = "unsafe"
             read_attr(sys, "settrace")(lambda *args: None)
             read_attr(sys, "path").append("/tmp/plugin")
+            read_attr(sys, "modules").pop("haxlab.plugin", None)
         """
     )
 
     findings = "\n".join(scan_source(source))
     assert "os.chdir" in findings
     assert "os.environ.update" in findings
+    assert "process-state assignment: os.environ" in findings
     assert "sys.settrace" in findings
     assert "sys.path.append" in findings
+    assert "sys.modules.pop" in findings
 
 
 def test_contract_allows_read_only_process_state_access() -> None:
