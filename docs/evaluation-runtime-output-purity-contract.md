@@ -14,10 +14,9 @@ entrypoints.
 The contract rejects:
 
 - builtin `print(...)` outside `main()`;
-- `sys.stdout.write`, `sys.stderr.write` and their `.buffer.write`
-  equivalents outside `main()`;
+- `sys.stdout` / `sys.stderr` plus `sys.__stdout__` / `sys.__stderr__` `write` or `writelines` calls, including `.buffer` equivalents, outside `main()`;
 - aliases and constant-`getattr(...)` spellings of those output paths;
-- direct `os.write(1, ...)` and `os.write(2, ...)` outside `main()`.
+- direct `os.write(1, ...)` / `os.write(2, ...)` and `os.fdopen(1|2, ...).write(...)` or `.writelines(...)` outside `main()`.
 
 Intentional CLI rendering inside `main()`, pure return values, and writes to
 non-stdio file descriptors remain allowed.
@@ -41,8 +40,8 @@ workflow.
 
 `tests/test_evaluation_runtime_output_purity_contract.py` recursively parses
 the evaluation package with Python ASTs. Its self-tests cover direct output,
-import aliases, assignment aliases, constant `getattr`, stdout/stderr buffer
-writes and file-descriptor output while freezing allowed CLI output and pure
+import aliases, assignment aliases, constant `getattr`, primary/original stdout/stderr streams,
+`writelines`, stdio buffers and file-descriptor/fdopen output while freezing allowed CLI output and pure
 library return behavior.
 
 The branch-scoped proof workflow verifies that the checked SHA is still the
