@@ -56,12 +56,34 @@ def _artifact_record(root_fd: int, name: str) -> dict[str, object]:
     size_bytes = 0
 
     with _open_regular_nofollow(root_fd, name) as handle:
+        before = os.fstat(handle.fileno())
         while True:
             chunk = handle.read(1024 * 1024)
             if not chunk:
                 break
             size_bytes += len(chunk)
             hasher.update(chunk)
+        after = os.fstat(handle.fileno())
+
+    before_identity = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    after_identity = (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    )
+    if (
+        before_identity != after_identity
+        or size_bytes != after.st_size
+    ):
+        raise DatasetReceiptError(f"artifact changed while hashing: {name}")
 
     return {
         "name": name,
@@ -93,11 +115,30 @@ def build_dataset_receipt(root: Path) -> dict[str, object]:
     root_fd = -1
     try:
         root_fd = os.open(root, os.O_RDONLY | nofollow | odirectory)
-        root_stat = os.fstat(root_fd)
-        if not stat.S_ISDIR(root_stat.st_mode):
+        root_before = os.fstat(root_fd)
+        if not stat.S_ISDIR(root_before.st_mode):
             raise DatasetReceiptError("dataset root is not a directory")
 
         artifacts = [_artifact_record(root_fd, name) for name in M0_ARTIFACTS]
+        root_after = os.fstat(root_fd)
+        root_before_identity = (
+            root_before.st_dev,
+            root_before.st_ino,
+            root_before.st_size,
+            root_before.st_mtime_ns,
+            root_before.st_ctime_ns,
+        )
+        root_after_identity = (
+            root_after.st_dev,
+            root_after.st_ino,
+            root_after.st_size,
+            root_after.st_mtime_ns,
+            root_after.st_ctime_ns,
+        )
+        if root_before_identity != root_after_identity:
+            raise DatasetReceiptError(
+                "dataset root changed while building receipt"
+            )
     except FileNotFoundError as exc:
         raise DatasetReceiptError(f"dataset root does not exist: {root}") from exc
     except OSError as exc:
