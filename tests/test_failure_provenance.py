@@ -91,7 +91,7 @@ def test_export_root_itself_is_not_a_failure_file() -> None:
 
 @pytest.mark.parametrize(
     "message_id",
-    ["", " message", "message ", "message#other", "line\nbreak", "\x00bad"],
+    ["", " message", "message ", "message#other", "line\nbreak", "\x00bad", "\x7fbad"],
 )
 def test_ambiguous_message_tokens_fail_closed(message_id: str) -> None:
     root = Path("/srv/haxlab/raw")
@@ -116,4 +116,27 @@ def test_non_path_inputs_fail_closed() -> None:
         canonical_failure_source(
             root,
             "/srv/haxlab/raw/channel.json",  # type: ignore[arg-type]
+        )
+
+
+def test_lexical_path_aliases_canonicalize_inside_root() -> None:
+    root = Path("/srv/haxlab/raw")
+
+    assert canonical_failure_source(
+        root,
+        root / "nested" / ".." / "channel.json",
+    ) == "channel.json"
+    assert canonical_failure_source(
+        root / ".",
+        root / "discord" / "." / "channel.json",
+    ) == "discord/channel.json"
+
+
+def test_lexical_parent_escape_fails_closed() -> None:
+    root = Path("/srv/haxlab/raw")
+
+    with pytest.raises(ValueError, match="contained by export_root"):
+        canonical_failure_source(
+            root,
+            root / ".." / "outside.json",
         )
