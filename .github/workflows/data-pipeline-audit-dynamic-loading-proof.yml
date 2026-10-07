@@ -1,0 +1,55 @@
+name: HaxLab data pipeline audit dynamic loading proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact branch SHA to prove
+        required: true
+        type: string
+  push:
+    branches:
+      - validation/data-pipeline-audit-dynamic-loading-20261007
+    paths:
+      - "tests/test_data_pipeline_audit_dynamic_loading.py"
+      - "docs/data-pipeline-audit-dynamic-loading.md"
+      - ".github/workflows/data-pipeline-audit-dynamic-loading-proof.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-audit-dynamic-loading-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate exact-head audit dynamic-loading contract
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    env:
+      EXPECTED_HEAD: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_sha || github.sha }}
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+
+      - name: Assert exact head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Run focused proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .audit-dynamic-loading-venv
+          python3 -m venv .audit-dynamic-loading-venv
+          .audit-dynamic-loading-venv/bin/pip install -q --upgrade pip
+          .audit-dynamic-loading-venv/bin/pip install -q -e '.[dev]'
+          .audit-dynamic-loading-venv/bin/python -m compileall -q tests/test_data_pipeline_audit_dynamic_loading.py
+          .audit-dynamic-loading-venv/bin/pytest -q tests/test_data_pipeline_audit_dynamic_loading.py
+          .audit-dynamic-loading-venv/bin/pytest --collect-only -q >/dev/null
