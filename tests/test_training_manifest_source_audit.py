@@ -328,3 +328,56 @@ def test_source_audit_rejects_byte_identical_leaderboard_handoff_replacement(
     ):
         audit_manifest_sources(manifest_path)
 
+def test_source_audit_reads_manifest_from_held_identity_during_transient_swap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest_path, _, _, _, _ = _fixture(tmp_path)
+    original_path = tmp_path / "anchored-manifest.json"
+    replacement = tmp_path / "transient-manifest.json"
+    replacement.write_bytes(b"not-the-audited-manifest")
+
+    read_bounded = manifest_source_audit._read_fd_bounded
+    swapped = False
+
+    def swapping_read(
+        fd: int,
+        *,
+        limit: int,
+        label: str,
+    ) -> bytes:
+        nonlocal swapped
+        if label == "manifest" and not swapped:
+            manifest_path.rename(original_path)
+            replacement.rename(manifest_path)
+            try:
+                payload = read_bounded(
+                    fd,
+                    limit=limit,
+                    label=label,
+                )
+            finally:
+                manifest_path.rename(replacement)
+                original_path.rename(manifest_path)
+            swapped = True
+            return payload
+        return read_bounded(
+            fd,
+            limit=limit,
+            label=label,
+        )
+
+    monkeypatch.setattr(
+        manifest_source_audit,
+        "_read_fd_bounded",
+        swapping_read,
+    )
+
+    receipt = audit_manifest_sources(manifest_path)
+
+    assert swapped is True
+    assert receipt["ok"] is True
+    assert receipt["manifest_sha256"] == hashlib.sha256(
+        manifest_path.read_bytes()
+    ).hexdigest()
+
