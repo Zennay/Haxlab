@@ -201,6 +201,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONPATH="$GITHUB_WORKSPACE/src" .evaluation-contract-compat-v5-venv/bin/pytest -q \
+            tests/test_promotion.py \
             -k 'not test_regression_subclass_is_rejected_before_custom_attribute_behavior'
 
       - name: Prove corrected hostile-subclass boundary
@@ -246,7 +247,6 @@ jobs:
             tests/test_elite_gate_preflight.py \
             tests/test_multisource_duel.py \
             tests/test_multisource_suite.py \
-            tests/test_promotion.py \
             tests/test_scenario_source.py \
             tests/test_arena_v2_integration_workflow_contract.py \
             tests/test_calibration_cross_sha_resume_contract.py \
