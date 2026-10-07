@@ -65,11 +65,13 @@ def _read_stable_regular_text(path: Path) -> str:
             raise OSError("evidence_path_identity_changed_before_open")
 
         chunks: list[bytes] = []
-        while True:
-            chunk = os.read(fd, 1024 * 1024)
+        remaining = opened.st_size + 1
+        while remaining > 0:
+            chunk = os.read(fd, min(1024 * 1024, remaining))
             if not chunk:
                 break
             chunks.append(chunk)
+            remaining -= len(chunk)
 
         after_read = os.fstat(fd)
     finally:
