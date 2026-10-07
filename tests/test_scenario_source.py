@@ -384,10 +384,21 @@ def test_healthy_candidate_rejects_raw_sha_mismatch(
     raw, analysis, _ = _candidate_files(tmp_path)
     monkeypatch.setattr(scenario_source, "infer_roles_4v4", _fake_roles)
 
+    claimed_sha = "a" * 64
+    mismatch_root = tmp_path / "mismatch"
+    mismatch_root.mkdir()
+    claimed_raw = mismatch_root / f"{claimed_sha}.hbr2"
+    claimed_raw.write_bytes(raw.read_bytes())
+    claimed_analysis = mismatch_root / f"{claimed_sha}.json"
+    payload = json.loads(analysis.read_text(encoding="utf-8"))
+    payload["sourceFile"] = claimed_raw.name
+    claimed_analysis.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert hashlib.sha256(claimed_raw.read_bytes()).hexdigest() != claimed_sha
     candidate = scenario_source._healthy_candidate(
-        sha256="a" * 64,
-        raw_path=str(raw),
-        analysis_path=str(analysis),
+        sha256=claimed_sha,
+        raw_path=str(claimed_raw),
+        analysis_path=str(claimed_analysis),
         sampled_states=100,
     )
 
