@@ -43,4 +43,6 @@ jobs:
           .venv-ledger-proof/bin/python -m pip install -q -e ".[dev]"
           .venv-ledger-proof/bin/python -m py_compile src/haxlab/runtime/state_audit.py
           .venv-ledger-proof/bin/python -m pytest -q tests/test_runtime_state_audit.py
+          .venv-ledger-proof/bin/python -m pytest --collect-only -q >"$RUNNER_TEMP/haxlab-runtime-ledger-$GITHUB_RUN_ID.collect"
+          test -s "$RUNNER_TEMP/haxlab-runtime-ledger-$GITHUB_RUN_ID.collect"
           echo "HAXLAB_RUNTIME_LEDGER_AUDIT_PROOF=success"
