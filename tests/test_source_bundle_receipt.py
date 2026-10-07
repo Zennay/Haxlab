@@ -90,6 +90,22 @@ def test_receipt_rejects_symlinked_root(tmp_path: Path) -> None:
         receipt.create_source_bundle_receipt(link)
 
 
+def test_receipt_rejects_symlinked_parent_component(tmp_path: Path) -> None:
+    actual_parent = tmp_path / "actual"
+    actual_parent.mkdir()
+    root = actual_parent / "export"
+    root.mkdir()
+    (root / "match.hbr2").write_bytes(b"replay")
+    linked_parent = tmp_path / "linked"
+    linked_parent.symlink_to(actual_parent, target_is_directory=True)
+
+    with pytest.raises(
+        receipt.SourceBundleReceiptError,
+        match="source_root_component_symlink:",
+    ):
+        receipt.create_source_bundle_receipt(linked_parent / "export")
+
+
 def test_receipt_rejects_relevant_symlink_file(tmp_path: Path) -> None:
     root = tmp_path / "export"
     root.mkdir()
@@ -133,7 +149,10 @@ def test_receipt_rejects_non_regular_relevant_file(tmp_path: Path) -> None:
         receipt.create_source_bundle_receipt(root)
 
 
-def test_receipt_rejects_inventory_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_receipt_rejects_inventory_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     root = tmp_path / "export"
     root.mkdir()
     (root / "match.hbr2").write_bytes(b"replay")
@@ -141,18 +160,81 @@ def test_receipt_rejects_inventory_drift(tmp_path: Path, monkeypatch: pytest.Mon
     original = receipt._inventory_paths
     calls = 0
 
-    def unstable_inventory(path: Path):
+    def unstable_inventory(root_fd: int):
         nonlocal calls
         calls += 1
         if calls == 2:
             (root / "late.json").write_text("{}", encoding="utf-8")
-        return original(path)
+        return original(root_fd)
 
     monkeypatch.setattr(receipt, "_inventory_paths", unstable_inventory)
 
     with pytest.raises(
         receipt.SourceBundleReceiptError,
         match="source_inventory_changed_during_receipt",
+    ):
+        receipt.create_source_bundle_receipt(root)
+
+
+def test_receipt_rejects_nested_directory_identity_swap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "export"
+    nested = root / "nested"
+    nested.mkdir(parents=True)
+    (nested / "match.hbr2").write_bytes(b"original")
+
+    original = receipt._inventory_paths
+    calls = 0
+
+    def swapping_inventory(root_fd: int):
+        nonlocal calls
+        calls += 1
+        result = original(root_fd)
+        if calls == 1:
+            moved = tmp_path / "old-nested"
+            nested.rename(moved)
+            nested.mkdir()
+            (nested / "match.hbr2").write_bytes(b"replacement")
+        return result
+
+    monkeypatch.setattr(receipt, "_inventory_paths", swapping_inventory)
+
+    with pytest.raises(
+        receipt.SourceBundleReceiptError,
+        match="source_directory_identity_changed:nested",
+    ):
+        receipt.create_source_bundle_receipt(root)
+
+
+def test_receipt_rejects_logical_root_swap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "export"
+    root.mkdir()
+    (root / "match.hbr2").write_bytes(b"original")
+
+    original = receipt._inventory_paths
+    calls = 0
+
+    def swapping_inventory(root_fd: int):
+        nonlocal calls
+        calls += 1
+        result = original(root_fd)
+        if calls == 2:
+            moved = tmp_path / "old-export"
+            root.rename(moved)
+            root.mkdir()
+            (root / "match.hbr2").write_bytes(b"replacement")
+        return result
+
+    monkeypatch.setattr(receipt, "_inventory_paths", swapping_inventory)
+
+    with pytest.raises(
+        receipt.SourceBundleReceiptError,
+        match="source_root_changed_during_receipt",
     ):
         receipt.create_source_bundle_receipt(root)
 
@@ -214,24 +296,17 @@ def test_cli_emits_machine_readable_failure(
     assert payload["error"].startswith("source_root_unreadable:")
 
 
-
-def test_receipt_fails_closed_on_walk_error(
+def test_receipt_fails_closed_on_inventory_read_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = tmp_path / "export"
     root.mkdir()
 
-    def failing_walk(
-        *_args: object,
-        onerror=None,
-        **_kwargs: object,
-    ):
-        assert onerror is not None
-        onerror(OSError("walk denied"))
-        yield None
+    def failing_listdir(_fd: int) -> list[str]:
+        raise OSError("walk denied")
 
-    monkeypatch.setattr(receipt.os, "walk", failing_walk)
+    monkeypatch.setattr(receipt.os, "listdir", failing_listdir)
 
     with pytest.raises(
         receipt.SourceBundleReceiptError,
