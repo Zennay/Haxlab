@@ -22,15 +22,17 @@ JSON parsing is strict:
 
 ## Filesystem safety
 
-The expected receipt file must be a stable regular file. The verifier rejects:
+The expected receipt file must be a stable regular file reached through one immutable path. The verifier rejects:
 
+- platforms without directory + no-follow descriptor support;
 - missing/unreadable receipt files;
+- symlinks or non-directory components anywhere in the receipt parent chain;
 - receipt symlinks and non-regular files;
-- descriptor/path identity changes;
+- parent-directory or final-file device/inode replacement;
 - size/mtime/ctime changes during or immediately after reading;
 - receipts larger than the bounded parser limit.
 
-After validating the expected receipt, the verifier recomputes current source identity through `create_source_bundle_receipt()`. It then reads the expected receipt again and fails if its bytes changed during current-source hashing.
+The verifier opens the absolute receipt parent one component at a time relative to already-bound directory descriptors, then opens the final receipt through that bound parent with no-follow semantics. After validating the expected receipt, it recomputes current source identity through `create_source_bundle_receipt()`. It then reopens the configured receipt path, requires the entire parent/file device+inode binding to match the first read, and finally requires the receipt bytes to be unchanged. Replacing the path with an identical-byte copy therefore still fails closed.
 
 The source tree itself inherits all fail-closed source receipt protections, including relevant-file hashing, symlink rejection and inventory-drift detection.
 
