@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import struct
+import sys
 
 import pytest
 
@@ -10,8 +11,10 @@ from haxlab.ingestion.generation_commit import (
     CURRENT_GENERATION_POINTER_FILE,
     GENERATIONS_DIRECTORY,
 )
+import haxlab.ingestion.generation_pipeline as generation_pipeline
 from haxlab.ingestion.generation_pipeline import (
     GenerationImportError,
+    main,
     run_generation_import,
 )
 from haxlab.ingestion.generation_store import (
@@ -171,3 +174,94 @@ def test_generation_import_rejects_symlink_store_root(tmp_path: Path) -> None:
 
     with pytest.raises(GenerationImportError, match="must not be a symlink"):
         run_generation_import(export_root, linked_store)
+
+
+def test_generation_import_cleans_private_build_directory(tmp_path: Path) -> None:
+    export_root = tmp_path / "raw"
+    store_root = tmp_path / "store"
+    _write_export(export_root)
+
+    run_generation_import(export_root, store_root)
+
+    assert not any(
+        path.name.startswith(".haxlab-m0-build-")
+        for path in tmp_path.iterdir()
+    )
+
+
+def test_generation_import_cleans_private_build_on_import_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    export_root = tmp_path / "raw"
+    store_root = tmp_path / "store"
+    _write_export(export_root)
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("synthetic import failure")
+
+    monkeypatch.setattr(generation_pipeline, "run_import", explode)
+
+    with pytest.raises(RuntimeError, match="synthetic import failure"):
+        run_generation_import(export_root, store_root)
+
+    assert not any(
+        path.name.startswith(".haxlab-m0-build-")
+        for path in tmp_path.iterdir()
+    )
+
+
+def test_generation_pipeline_cli_emits_machine_readable_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    export_root = tmp_path / "raw"
+    store_root = tmp_path / "store"
+    _write_export(export_root)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "generation_pipeline",
+            str(export_root),
+            str(store_root),
+        ],
+    )
+
+    assert main() == 0
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert captured.err == ""
+    assert payload["ok"] is True
+    assert payload["manifest"]["match_count"] == 1
+    assert payload["generation"]["generation_id"].startswith("m0-")
+    assert len(payload["generation"]["receipt_sha256"]) == 64
+    assert len(payload["generation"]["commit_sha256"]) == 64
+
+
+def test_generation_pipeline_cli_emits_machine_readable_failure_to_stderr(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    export_root = tmp_path / "raw"
+    _write_export(export_root)
+    store_root = export_root / "unsafe-store"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "generation_pipeline",
+            str(export_root),
+            str(store_root),
+        ],
+    )
+
+    assert main() == 2
+    captured = capsys.readouterr()
+    payload = json.loads(captured.err)
+    assert captured.out == ""
+    assert payload["ok"] is False
+    assert "outside the immutable export_root" in payload["error"]
+    assert not store_root.exists()
