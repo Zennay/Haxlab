@@ -1,0 +1,112 @@
+name: Evaluation runtime instrumentation validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Exact 40-character candidate SHA to validate
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: haxlab-evaluation-runtime-instrumentation
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+
+    steps:
+      - name: Validate requested SHA
+        id: requested
+        shell: bash
+        env:
+          REQUESTED_SHA: ${{ inputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          echo "sha=$REQUESTED_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.requested.outputs.sha }}
+          clean: true
+          fetch-depth: 1
+
+      - name: Verify exact checkout and live branch head
+        shell: bash
+        env:
+          REQUESTED_SHA: ${{ steps.requested.outputs.sha }}
+          VALIDATION_BRANCH: validation/evaluation-runtime-instrumentation-contract-20261007
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$REQUESTED_SHA"
+          remote_head="$(git ls-remote origin "refs/heads/$VALIDATION_BRANCH" | awk 'NR == 1 {print $1}')"
+          test -n "$remote_head"
+          test "$remote_head" = "$REQUESTED_SHA"
+          echo "HAXLAB_EVALUATION_RUNTIME_INSTRUMENTATION_HEAD=$REQUESTED_SHA"
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .evaluation-runtime-instrumentation-venv
+          python3 -m venv .evaluation-runtime-instrumentation-venv
+          .evaluation-runtime-instrumentation-venv/bin/pip install --upgrade pip
+          .evaluation-runtime-instrumentation-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile evaluation package and contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          .evaluation-runtime-instrumentation-venv/bin/python -m compileall -q             src/haxlab/evaluation             tests/test_evaluation_runtime_instrumentation_contract.py
+
+      - name: Run runtime instrumentation contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src"             .evaluation-runtime-instrumentation-venv/bin/pytest -q             tests/test_evaluation_runtime_instrumentation_contract.py
+
+      - name: Run adjacent canonical evaluation regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src"             .evaluation-runtime-instrumentation-venv/bin/pytest -q             tests/test_arena_v2_integration_workflow_contract.py             tests/test_calibration_cross_sha_resume_contract.py             tests/test_calibration_gate.py             tests/test_calibration_resume.py             tests/test_calibration_workflow_evidence_contract.py             tests/test_closed_loop_arena.py             tests/test_duel_gate.py             tests/test_elite_gate_preflight.py             tests/test_multisource_duel.py             tests/test_multisource_suite.py             tests/test_promotion.py             tests/test_scenario_source.py
+
+      - name: Record green result
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HAXLAB_EVALUATION_RUNTIME_INSTRUMENTATION_RESULT=green"
+
+      - name: Publish exact-head proof receipt
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          JOB_STATUS: ${{ job.status }}
+          REQUESTED_SHA: ${{ steps.requested.outputs.sha }}
+        with:
+          script: |
+            const success = process.env.JOB_STATUS === "success";
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 446,
+              body: [
+                `Exact-head self-hosted proof: **${success ? "SUCCESS" : "FAILURE"}**`,
+                "",
+                `- run: \`${context.runId}\``,
+                `- exact head: \`${process.env.REQUESTED_SHA}\``,
+                `- job status: \`${process.env.JOB_STATUS}\``,
+                "- required on success: exact checkout/live-head, compile, focused instrumentation contract, adjacent canonical Arena-v2 regressions",
+                "- green marker: `HAXLAB_EVALUATION_RUNTIME_INSTRUMENTATION_RESULT=green`",
+                "",
+                "Validation evidence only; does not authorize Arena merge or champion promotion.",
+              ].join("\n"),
+            });
