@@ -245,7 +245,7 @@ def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
                         f"line {node.lineno}: warning state assignment: {state}"
                     )
         elif isinstance(node, ast.AnnAssign):
-            state = _mutation_target_name(node.target, aliases)
+            state = _direct_mutation_target_name(node.target, aliases)
             if state:
                 findings.append(
                     f"line {node.lineno}: warning state assignment: {state}"
@@ -357,7 +357,8 @@ import warnings
 def audit(value: object) -> tuple[int, str]:
     if value is None:
         warnings.warn("missing optional evidence", RuntimeWarning)
-    snapshot = tuple(warnings.filters)
+    policy = warnings.filters
+    snapshot = tuple(policy)
     action = warnings.defaultaction
     local = list(snapshot)
     local.clear()
