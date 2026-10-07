@@ -17,12 +17,17 @@ BANNED_RUNTIME_CODE_CALLS = {
     "builtins.compile",
     "builtins.eval",
     "builtins.exec",
+    "__builtins__.compile",
+    "__builtins__.eval",
+    "__builtins__.exec",
 }
 
 BANNED_RUNTIME_CODE_MODULES = {
     "code",
     "codeop",
 }
+
+DANGEROUS_BUILTIN_NAMES = {"compile", "eval", "exec"}
 
 
 class DynamicCodeExecutionVisitor(ast.NodeVisitor):
@@ -105,6 +110,7 @@ class DynamicCodeExecutionVisitor(ast.NodeVisitor):
 
         if isinstance(node, ast.Call):
             accessor = self._qualified_name(node.func)
+
             if (
                 accessor in {"getattr", "builtins.getattr"}
                 and len(node.args) >= 2
@@ -113,13 +119,31 @@ class DynamicCodeExecutionVisitor(ast.NodeVisitor):
             ):
                 owner = self._qualified_name(node.args[0])
                 if owner:
-                    return f"{owner}.{node.args[1].value}"
+                    normalized_owner = "builtins" if owner == "__builtins__" else owner
+                    return f"{normalized_owner}.{node.args[1].value}"
+
+            if accessor in {"vars", "builtins.vars"} and node.args:
+                owner = self._qualified_name(node.args[0])
+                if owner in {"builtins", "__builtins__"}:
+                    return "builtins.__dict__"
+
+            if accessor in {
+                "builtins.__dict__.get",
+                "__builtins__.__dict__.get",
+            } and node.args:
+                key = self._constant_string(node.args[0])
+                if key in DANGEROUS_BUILTIN_NAMES:
+                    return f"builtins.{key}"
 
         if isinstance(node, ast.Subscript):
             key = self._constant_string(node.slice)
             owner = self._qualified_name(node.value)
-            if key in {"compile", "eval", "exec"}:
-                if owner in {"__builtins__", "builtins.__dict__"}:
+            if key in DANGEROUS_BUILTIN_NAMES:
+                if owner in {
+                    "__builtins__",
+                    "builtins.__dict__",
+                    "__builtins__.__dict__",
+                }:
                     return f"builtins.{key}"
 
         return None
@@ -162,8 +186,11 @@ def test_evaluation_package_has_no_runtime_dynamic_code_execution() -> None:
         ("runner: object = exec\nrunner('value = 1')\n", "exec"),
         ("(runner := compile)('1', '<m>', 'eval')\n", "compile"),
         ("import builtins\ngetattr(builtins, 'eval')('1 + 1')\n", "builtins.eval"),
+        ("getattr(__builtins__, 'exec')('value = 1')\n", "builtins.exec"),
         ("__builtins__['exec']('value = 1')\n", "builtins.exec"),
         ("import builtins\nbuiltins.__dict__['compile']('1', '<m>', 'eval')\n", "builtins.compile"),
+        ("import builtins\nvars(builtins)['eval']('1 + 1')\n", "builtins.eval"),
+        ("import builtins\nrunner = builtins.__dict__.get('exec')\nrunner('value = 1')\n", "builtins.exec"),
         ("import code\n", "code"),
         ("from codeop import compile_command\n", "codeop"),
         ("from builtins import *\n", "wildcard builtins"),
@@ -182,6 +209,7 @@ def test_detector_rejects_runtime_code_execution(
     [
         "import ast\nast.parse('value = 1')\n",
         "import builtins\nvalue = builtins.len([1, 2, 3])\n",
+        "import builtins\nvalue = vars(builtins)['len']([1, 2])\n",
         "class Evaluator:\n    def eval(self, value):\n        return value\nEvaluator().eval(1)\n",
         "def compile_report(value):\n    return str(value)\ncompile_report(1)\n",
         "from haxlab.evaluation.models import PromotionDecision\n",
