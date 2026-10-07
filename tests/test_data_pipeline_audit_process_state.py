@@ -111,6 +111,10 @@ def _violations(source: str) -> list[str]:
     return sorted(set(findings))
 
 
+def _finding_kind(finding: str) -> str:
+    return finding.split(":", 2)[2]
+
+
 def test_data_pipeline_auditors_do_not_mutate_process_global_state() -> None:
     modules = _audit_modules()
     assert modules, "expected at least one data-pipeline *_audit.py module"
@@ -144,8 +148,7 @@ def test_contract_rejects_process_global_state_mutation() -> None:
         """
     )
 
-    findings = _violations(source)
-    kinds = {finding.rsplit(":", 1)[-1] for finding in findings}
+    kinds = {_finding_kind(finding) for finding in _violations(source)}
     assert {
         "call:os.chdir",
         "assignment:os.environ",
@@ -173,11 +176,11 @@ def test_contract_resolves_direct_import_aliases() -> None:
         """
     )
 
-    findings = _violations(source)
-    assert any(item.endswith("call:os.chdir") for item in findings)
-    assert any(item.endswith("mutation:os.environ.clear") for item in findings)
-    assert any(item.endswith("mutation:sys.path.insert") for item in findings)
-    assert any(item.endswith("call:signal.signal") for item in findings)
+    kinds = {_finding_kind(finding) for finding in _violations(source)}
+    assert "call:os.chdir" in kinds
+    assert "mutation:os.environ.clear" in kinds
+    assert "mutation:sys.path.insert" in kinds
+    assert "call:signal.signal" in kinds
 
 
 def test_contract_allows_read_only_process_state_access() -> None:
