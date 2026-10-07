@@ -15,8 +15,9 @@ create hidden/background execution through:
 - `multiprocessing.Process`, pools, or spawn-context workers;
 - `concurrent.futures.ThreadPoolExecutor` or `ProcessPoolExecutor`;
 - detached asyncio scheduling via `create_task`, `ensure_future`,
-  `run_coroutine_threadsafe`, `to_thread`, loop `create_task` /
-  `run_in_executor`, or `TaskGroup`;
+  `run_coroutine_threadsafe`, `to_thread`, loop task/executor APIs,
+  deferred callback APIs (`call_soon`, `call_later`, `call_at`,
+  `add_reader`, `add_writer`) or `TaskGroup`;
 - direct process-spawn primitives such as `os.fork`, `forkpty` and
   `posix_spawn*`.
 
