@@ -6,9 +6,10 @@ This is deliberately a second boundary after `manifest_audit`: internal manifest
 
 ## Verification chain
 
-The source audit first requires the merged structural manifest audit to pass. It then:
+The source audit first opens the published manifest as a read-only no-follow identity anchor, then requires the merged structural manifest audit to pass. The logical manifest path must still name that exact held file identity before and after the outer source read. It then:
 
-- securely reopens the linked leaderboard, requires the manifest's exact recorded byte size and SHA-256, and runs the independent leaderboard audit;
+- opens the linked leaderboard as its own read-only no-follow identity anchor before running the independent leaderboard audit, and reconfirms the logical leaderboard path still names that exact held identity around the outer source read;
+- securely reopens the linked leaderboard, requires the manifest's exact recorded byte size and SHA-256;
 - requires leaderboard `analysis_version` and `source_root` to match the manifest;
 - independently replays the selector policy from audited leaderboard rows and requires exact selected-player output/order;
 - securely reopens every referenced analyzed replay and requires the manifest's exact analysis size and SHA-256;
@@ -17,6 +18,8 @@ The source audit first requires the merged structural manifest audit to pass. It
 - requires every referenced raw replay path to exist as a regular non-symlink file.
 
 The v3 manifest does not record raw replay byte hashes, so raw validation is intentionally limited to path existence/type/size snapshot evidence. It does not claim raw-byte identity.
+
+The manifest and leaderboard identity anchors close a cross-auditor handoff gap: a byte-identical replacement after the nested auditor returns cannot be accepted merely because SHA-256 and byte size still match. The outer audit requires the published pathname to remain bound to the originally held device/inode for the whole handoff.
 
 ## Receipt
 
