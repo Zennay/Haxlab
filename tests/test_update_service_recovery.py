@@ -107,7 +107,7 @@ def test_restore_failure_never_replaces_original_update_exit_code(
 set -euo pipefail
 source {shlex.quote(str(HELPER))}
 CALLS="$1"
-{_mock_systemctl(("haxlab-analyzer.service", "haxlab-ingest.service"), fail_start="haxlab-analyzer.service")}
+{_mock_systemctl(("haxlab-live-bot.service", "haxlab-analyzer.service", "haxlab-ingest.service"), fail_start="haxlab-analyzer.service")}
 haxlab_capture_update_service_state
 haxlab_install_update_recovery_trap
 exit 17
@@ -119,6 +119,7 @@ exit 17
     assert calls.read_text(encoding="utf-8").splitlines() == [
         "haxlab-ingest.service",
         "haxlab-analyzer.service",
+        "haxlab-live-bot.service",
     ]
 
 
