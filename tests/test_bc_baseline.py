@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from haxlab.learning.baseline import (
     direction_class,
@@ -175,3 +176,70 @@ def test_baseline_trains_and_writes_holdout_metrics(tmp_path: Path) -> None:
     assert metrics["direction_accuracy"] > metrics["baselines"][
         "majority_direction_accuracy"
     ]
+
+
+def test_baseline_rejects_row_width_column_mismatch_before_model_publication(
+    tmp_path: Path,
+) -> None:
+    train_dir = tmp_path / "train"
+    holdout_dir = tmp_path / "holdout"
+    train_entry = _write_shard(train_dir, "train-a", _synthetic_rows(64, 11))
+    holdout_entry = _write_shard(
+        holdout_dir,
+        "holdout-a",
+        _synthetic_rows(64, 12),
+    )
+
+    train_meta = train_dir / "train-a.meta.json"
+    payload = json.loads(train_meta.read_text(encoding="utf-8"))
+    payload["rowWidth"] = len(COLUMNS) + 1
+    train_meta.write_text(json.dumps(payload), encoding="utf-8")
+
+    train_index = tmp_path / "train-index.json"
+    holdout_index = tmp_path / "holdout-index.json"
+    _write_index(train_index, [train_entry])
+    _write_index(holdout_index, [holdout_entry])
+    output = tmp_path / "model"
+
+    with pytest.raises(ValueError, match="does not match .* declared columns"):
+        train_baseline(
+            train_index_path=train_index,
+            holdout_index_path=holdout_index,
+            output_dir=output,
+            epochs=1,
+        )
+
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("invalid_value", [np.nan, np.inf, -np.inf])
+def test_baseline_rejects_non_finite_shard_values_before_model_publication(
+    tmp_path: Path,
+    invalid_value: float,
+) -> None:
+    train_dir = tmp_path / "train"
+    holdout_dir = tmp_path / "holdout"
+    train_rows = _synthetic_rows(64, 21)
+    train_rows[0, COLUMNS.index("own_x")] = invalid_value
+    train_entry = _write_shard(train_dir, "train-a", train_rows)
+    holdout_entry = _write_shard(
+        holdout_dir,
+        "holdout-a",
+        _synthetic_rows(64, 22),
+    )
+
+    train_index = tmp_path / "train-index.json"
+    holdout_index = tmp_path / "holdout-index.json"
+    _write_index(train_index, [train_entry])
+    _write_index(holdout_index, [holdout_entry])
+    output = tmp_path / "model"
+
+    with pytest.raises(ValueError, match="non-finite float32 value"):
+        train_baseline(
+            train_index_path=train_index,
+            holdout_index_path=holdout_index,
+            output_dir=output,
+            epochs=1,
+        )
+
+    assert not output.exists()
