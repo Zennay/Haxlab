@@ -77,3 +77,10 @@ python -m haxlab.evaluation.promotion_authorization request.json
 The request must contain exactly `exact_head`, `candidate_id`, `champion_id`, `promotion_decision`, `gate_receipt`, `evidence_sha256`, and `policy_sha256`. The nested decision must contain exactly a native JSON boolean `promote` and a JSON array `reasons`.
 
 Successful output is one canonical compact JSON line. Invalid JSON, missing or unexpected fields, malformed decision evidence, a mismatched gate receipt, or any failed gate exits with status 2 and emits no authorization payload to stdout. The CLI does not perform network access or mutate champion state.
+
+
+## Direct-call hardening
+
+The Python API is deliberately stricter than generic duck-typed mappings. Gate receipts must use native JSON-shaped `dict` / `list` containers; custom mapping/sequence objects are rejected before their object protocols can influence validation. Identity strings must be native, non-empty, and free of leading/trailing whitespace.
+
+A positive `PromotionDecision` must also carry the exact current success-reason tuple emitted by `decide_promotion()`. This is not a substitute for recomputing the promotion decision from source evidence, but it prevents contradictory or arbitrary `promote=True` shapes from being accepted as canonical decision evidence. A negative decision carrying the full canonical success tuple is rejected as internally inconsistent.
