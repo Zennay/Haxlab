@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import re
 import tomllib
 from pathlib import Path
@@ -26,6 +27,11 @@ EXPECTED_SCRIPTS = {
     "haxlab-analyzer": "haxlab.runtime.analyzer:main",
 }
 
+MODULE_PATHS = {
+    name: ROOT / "src" / Path(*module.split(".")).with_suffix(".py")
+    for name, module in EXPECTED_MODULES.items()
+}
+
 
 def _service_text(name: str) -> str:
     return PIPELINE_SERVICES[name].read_text(encoding="utf-8")
@@ -42,6 +48,31 @@ def _argument(name: str, flag: str) -> str:
     )
     assert match is not None, f"{PIPELINE_SERVICES[name].name} is missing {flag}"
     return match.group(1)
+
+
+def _service_flags(name: str) -> set[str]:
+    match = re.search(
+        r"^ExecStart=(.+)$",
+        _logical_service_text(name),
+        flags=re.MULTILINE,
+    )
+    assert match is not None, f"{PIPELINE_SERVICES[name].name} is missing ExecStart"
+    return set(re.findall(r"(?<!\S)--[a-z0-9-]+(?=\s|$)", match.group(1)))
+
+
+def _declared_flags(name: str) -> set[str]:
+    tree = ast.parse(MODULE_PATHS[name].read_text(encoding="utf-8"))
+    flags: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Attribute) or node.func.attr != "add_argument":
+            continue
+        for argument in node.args:
+            if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
+                if argument.value.startswith("--"):
+                    flags.add(argument.value)
+    return flags
 
 
 def test_pipeline_services_keep_required_dependency_order() -> None:
@@ -95,3 +126,13 @@ def test_packaged_pipeline_entrypoints_match_systemd_modules() -> None:
 
     for script, target in EXPECTED_SCRIPTS.items():
         assert scripts.get(script) == target
+
+
+def test_systemd_flags_are_declared_by_the_bound_runtime_modules() -> None:
+    for name in PIPELINE_SERVICES:
+        service_flags = _service_flags(name)
+        declared_flags = _declared_flags(name)
+        assert service_flags <= declared_flags, (
+            f"{PIPELINE_SERVICES[name].name} passes undeclared flags: "
+            f"{sorted(service_flags - declared_flags)}"
+        )
