@@ -69,3 +69,46 @@ def test_discovery_preserves_mixed_case_order_and_content_dedupe(
     assert len(inventory.duplicate_paths_by_hash) == 1
     duplicate_paths = next(iter(inventory.duplicate_paths_by_hash.values()))
     assert duplicate_paths == (str(duplicate),)
+
+
+def test_discovery_fails_closed_when_walk_reports_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "export"
+    root.mkdir()
+
+    def failing_walk(_root, *, topdown, onerror, followlinks):
+        assert topdown is True
+        assert followlinks is False
+        assert onerror is not None
+        onerror(PermissionError("denied"))
+        if False:
+            yield str(root), [], []
+
+    monkeypatch.setattr("haxlab.ingestion.discovery.os.walk", failing_walk)
+
+    with pytest.raises(ValueError, match="discovery_walk_failed"):
+        discover_replays(root)
+
+
+def test_discovery_fails_closed_when_directory_metadata_is_unreadable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "export"
+    blocked = root / "blocked"
+    blocked.mkdir(parents=True)
+    (blocked / "hidden.hbr2").write_bytes(b"hidden")
+
+    real_lstat = Path.lstat
+
+    def failing_lstat(path: Path):
+        if path == blocked:
+            raise PermissionError("denied")
+        return real_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", failing_lstat)
+
+    with pytest.raises(ValueError, match="discovery_directory_unreadable"):
+        discover_replays(root)
