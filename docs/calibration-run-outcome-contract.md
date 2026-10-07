@@ -83,3 +83,7 @@ It checks out and asserts the exact event SHA, builds an isolated environment, c
 the diagnostic contract and runs only `tests/test_calibration_run_outcome.py` on
 the self-hosted HaxLab runner. The workflow is intentionally branch-scoped and its
 push job runs only for an explicit `[calibration-outcome-proof]` commit marker.
+
+The proof must bind the current semantic head. Earlier proof attempts from heads
+before the gate-rejection/model-attribution split are superseded and must not be
+used as validation evidence.
