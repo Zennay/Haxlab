@@ -1,0 +1,59 @@
+name: Evaluation import purity contract validation
+
+on:
+  push:
+    branches:
+      - validation/evaluation-import-purity-contract-20261007
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-evaluation-import-purity-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Verify immutable checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          echo "HAXLAB_EVALUATION_IMPORT_PURITY_HEAD=$(git rev-parse HEAD)"
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .evaluation-import-purity-venv
+          python3 -m venv .evaluation-import-purity-venv
+          .evaluation-import-purity-venv/bin/pip install --upgrade pip
+          .evaluation-import-purity-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile evaluation package and contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          .evaluation-import-purity-venv/bin/python -m compileall -q src/haxlab/evaluation tests/test_evaluation_import_purity_contract.py
+
+      - name: Run import purity contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" .evaluation-import-purity-venv/bin/pytest -q tests/test_evaluation_import_purity_contract.py
+
+      - name: Record green marker
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HAXLAB_EVALUATION_IMPORT_PURITY_RESULT=green"
