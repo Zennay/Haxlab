@@ -48,6 +48,21 @@ def _aliases(tree: ast.AST) -> dict[str, str]:
                 if alias.name == "*":
                     continue
                 aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+    changed = True
+    while changed:
+        changed = False
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+            ):
+                value = _canonical_name(node.value, aliases)
+                if value in TERMINATION_CALLS or value in TERMINATION_EXCEPTIONS:
+                    local = node.targets[0].id
+                    if aliases.get(local) != value:
+                        aliases[local] = value
+                        changed = True
     return aliases
 
 
@@ -59,6 +74,17 @@ def _canonical_name(node: ast.AST | None, aliases: dict[str, str]) -> str | None
     if isinstance(node, ast.Attribute):
         parent = _canonical_name(node.value, aliases)
         return f"{parent}.{node.attr}" if parent else node.attr
+    if isinstance(node, ast.Call):
+        accessor = _canonical_name(node.func, aliases)
+        if (
+            accessor in {"getattr", "builtins.getattr"}
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and isinstance(node.args[1].value, str)
+        ):
+            owner = _canonical_name(node.args[0], aliases)
+            if owner:
+                return f"{owner}.{node.args[1].value}"
     return None
 
 
@@ -159,6 +185,8 @@ def test_evaluation_library_has_no_noncanonical_process_termination() -> None:
     [
         ("import sys\ndef gate():\n    sys.exit(2)\n", "sys.exit"),
         ("from sys import exit as stop\ndef gate():\n    stop(2)\n", "sys.exit"),
+        ("import sys\nstop = sys.exit\ndef gate():\n    stop(2)\n", "sys.exit"),
+        ("import sys\nstop = getattr(sys, 'exit')\ndef gate():\n    stop(2)\n", "sys.exit"),
         ("import os\ndef gate():\n    os._exit(2)\n", "os._exit"),
         ("import os\ndef gate():\n    os.abort()\n", "os.abort"),
         ("import os, signal\ndef gate():\n    os.kill(os.getpid(), signal.SIGTERM)\n", "os.kill"),
@@ -166,6 +194,7 @@ def test_evaluation_library_has_no_noncanonical_process_termination() -> None:
         ("import signal\ndef gate():\n    signal.raise_signal(signal.SIGTERM)\n", "signal.raise_signal"),
         ("def gate():\n    raise SystemExit(2)\n", "SystemExit"),
         ("from builtins import SystemExit as Stop\ndef gate():\n    raise Stop(2)\n", "builtins.SystemExit"),
+        ("Stop = SystemExit\ndef gate():\n    raise Stop(2)\n", "SystemExit"),
         ("def gate():\n    raise KeyboardInterrupt()\n", "KeyboardInterrupt"),
     ],
 )
