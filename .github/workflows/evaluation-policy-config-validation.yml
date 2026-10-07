@@ -1,0 +1,68 @@
+name: Evaluation Policy Config Validation
+
+on:
+  push:
+    branches:
+      - validation/evaluation-policy-config-contract-20261007
+    paths:
+      - "src/haxlab/evaluation/policy_config.py"
+      - "tests/test_evaluation_policy_config.py"
+      - "docs/evaluation-policy-config-contract.md"
+      - ".github/workflows/evaluation-policy-config-validation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-evaluation-policy-config-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  focused:
+    name: Exact-head policy config contract
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout exact event SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Verify exact source checkout
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "::error title=Policy config provenance mismatch::checked out $ACTUAL_SHA, expected $EXPECTED_SHA"
+            exit 1
+          fi
+          echo "HAXLAB_POLICY_CONFIG_EXACT_SOURCE_SHA=$ACTUAL_SHA"
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .policy-config-venv
+          python3 -m venv .policy-config-venv
+          .policy-config-venv/bin/pip install --upgrade pip
+          .policy-config-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile evaluation package
+        shell: bash
+        run: |
+          set -euo pipefail
+          .policy-config-venv/bin/python -m compileall -q src/haxlab/evaluation
+
+      - name: Run focused policy config and promotion regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          .policy-config-venv/bin/pytest -q \
+            tests/test_evaluation_policy_config.py \
+            tests/test_promotion.py
