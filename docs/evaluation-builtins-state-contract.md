@@ -14,7 +14,9 @@ The contract rejects:
 - attribute assignment, deletion, or augmented assignment on `builtins`;
 - subscript and in-place mutation through `builtins.__dict__`, an assigned
   alias of that dictionary, or the module-global `__builtins__` reference;
-- `setattr` / `delattr` against the `builtins` module;
+- `setattr` / `delattr` against the `builtins` module, plus bound
+  `builtins.__setattr__` / `builtins.__delattr__` calls (including reflected or
+  assignment-aliased spellings);
 - mapping mutators such as `update`, `setdefault`, `pop`, `clear`,
   `__setitem__`, `__delitem__`, and `__ior__` on the builtins dictionary;
 - unbound `dict` mutation methods and `operator.setitem`,
