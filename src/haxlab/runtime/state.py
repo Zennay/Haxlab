@@ -153,16 +153,8 @@ def _require_optional_non_negative_finite_number(
 
 
 def _require_non_empty_string(value: object, field: str) -> str:
-    if (
-        type(value) is not str
-        or not value
-        or not value.strip()
-        or value != value.strip()
-    ):
-        raise ValueError(
-            f"{field} must be a native non-empty string without "
-            "leading or trailing whitespace"
-        )
+    if type(value) is not str or not value or not value.strip():
+        raise ValueError(f"{field} must be a native non-empty string")
     return value
 
 
