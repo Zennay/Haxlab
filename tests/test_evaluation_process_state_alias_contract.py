@@ -254,7 +254,18 @@ class ProcessStateAliasVisitor(ast.NodeVisitor):
             return target[len("builtins.") :]
         return target
 
-    def _record_target_mutation(self, node: ast.AST, target: ast.AST) -> None:
+    def _record_target_mutation(
+        self,
+        node: ast.AST,
+        target: ast.AST,
+        *,
+        allow_name: bool = False,
+    ) -> None:
+        # Plain-name assignment/deletion only rebinds or removes the alias itself.
+        # Augmented assignment is different: e.g. os.environ aliases can mutate
+        # their underlying process-global object through in-place operators.
+        if isinstance(target, ast.Name) and not allow_name:
+            return
         root = self.canonical(target)
         if root in GUARDED_ROOTS:
             self.findings.append(
@@ -306,7 +317,7 @@ class ProcessStateAliasVisitor(ast.NodeVisitor):
 
     def visit_AugAssign(self, node: ast.AugAssign) -> None:
         self.visit(node.value)
-        self._record_target_mutation(node, node.target)
+        self._record_target_mutation(node, node.target, allow_name=True)
 
     def visit_Delete(self, node: ast.Delete) -> None:
         for target in node.targets:
@@ -459,6 +470,10 @@ def test_evaluation_package_has_no_process_state_alias_mutation() -> None:
             "delattr(os.environ",
         ),
         (
+            "import os\nenv = os.environ\nenv |= {'MODE': 'unsafe'}\n",
+            "os.environ",
+        ),
+        (
             "from sys import settrace as trace\nalias = trace\nalias(lambda *args: None)\n",
             "sys.settrace",
         ),
@@ -508,6 +523,17 @@ def test_contract_rejects_assignment_and_bound_alias_bypasses(
             "    env = {}\n"
             "    env.update({'local': True})\n"
             "    return value\n"
+        ),
+        (
+            "import sys\n"
+            "paths = sys.path\n"
+            "paths = []\n"
+            "paths.append('/local-only')\n"
+        ),
+        (
+            "import os\n"
+            "env = os.environ\n"
+            "del env\n"
         ),
     ],
 )
