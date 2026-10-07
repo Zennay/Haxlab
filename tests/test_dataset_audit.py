@@ -41,7 +41,7 @@ def _write_dataset(root: Path) -> None:
     )
     (root / "duplicates.json").write_text("{}", encoding="utf-8")
     (root / "reports.json").write_text(
-        json.dumps([{"message_id": "message-1", "content": "report"}]),
+        json.dumps([{"message_id": "message-1", "content": "report", "report_id": "scrim-1"}]),
         encoding="utf-8",
     )
     (root / "matches.jsonl").write_text(
@@ -54,7 +54,11 @@ def _write_dataset(root: Path) -> None:
                 "source_message_id": "message-1",
                 "match_confidence": 0.95,
                 "match_reasons": ["attachment_filename"],
-                "report": {"message_id": "message-1", "content": "report"},
+                "report": {
+                    "message_id": "message-1",
+                    "content": "report",
+                    "report_id": "scrim-1",
+                },
             }
         )
         + "\n",
@@ -259,3 +263,17 @@ def test_audit_rejects_stale_embedded_report_payload(tmp_path: Path) -> None:
 
     assert result.ok is False
     assert "matches:0:report_payload_mismatch" in result.issues
+
+
+def test_audit_rejects_match_id_drift(tmp_path: Path) -> None:
+    root = tmp_path / "m0"
+    _write_dataset(root)
+
+    match = json.loads((root / "matches.jsonl").read_text(encoding="utf-8"))
+    match["match_id"] = "stale-id"
+    (root / "matches.jsonl").write_text(json.dumps(match) + "\n", encoding="utf-8")
+
+    result = audit_dataset(root)
+
+    assert result.ok is False
+    assert "matches:0:match_id_mismatch" in result.issues
