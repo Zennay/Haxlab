@@ -33,8 +33,7 @@ class _InterpreterLimitScanner(ast.NodeVisitor):
             return f"{base}.{node.attr}" if base else None
         if (
             isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "getattr"
+            and self._resolve(node.func) in {"getattr", "builtins.getattr"}
             and len(node.args) >= 2
             and isinstance(node.args[1], ast.Constant)
             and isinstance(node.args[1].value, str)
@@ -86,6 +85,8 @@ class _InterpreterLimitScanner(ast.NodeVisitor):
                 self.visit(default)
 
         inherited = dict(self.aliases)
+        self.aliases[node.name] = None
+        inherited[node.name] = None
         self.scopes.append(inherited)
         arguments = [
             *node.args.posonlyargs,
@@ -107,6 +108,21 @@ class _InterpreterLimitScanner(ast.NodeVisitor):
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         self._visit_function(node)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        for decorator in node.decorator_list:
+            self.visit(decorator)
+        for base in node.bases:
+            self.visit(base)
+        for keyword in node.keywords:
+            self.visit(keyword.value)
+        inherited = dict(self.aliases)
+        self.aliases[node.name] = None
+        inherited[node.name] = None
+        self.scopes.append(inherited)
+        for statement in node.body:
+            self.visit(statement)
+        self.scopes.pop()
 
     def visit_Lambda(self, node: ast.Lambda) -> None:
         inherited = dict(self.aliases)
@@ -167,9 +183,10 @@ sys.set_int_max_str_digits(10000)
 def test_import_assignment_and_getattr_aliases_are_rejected() -> None:
     source = """
 import sys as runtime
+from builtins import getattr as read_attr
 from sys import setswitchinterval as tune
 recursion = runtime.setrecursionlimit
-digits = getattr(runtime, "set_int_max_str_digits")
+digits = read_attr(runtime, "set_int_max_str_digits")
 recursion(4096)
 tune(0.01)
 digits(10000)
