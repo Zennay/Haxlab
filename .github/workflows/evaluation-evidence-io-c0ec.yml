@@ -3,7 +3,7 @@ name: Evaluation Evidence IO Canonical c0ec
 on:
   push:
     branches:
-      - validation/evaluation-evidence-io-current-head-20261007
+      - validation/evaluation-evidence-io-c0ec-20261007
     paths:
       - src/haxlab/evaluation/evidence_io.py
       - tests/test_evaluation_evidence_io.py
@@ -37,6 +37,11 @@ jobs:
           ACTUAL_SHA="$(git rev-parse HEAD)"
           if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
             echo "::error title=Evidence IO validation provenance mismatch::checked out $ACTUAL_SHA, expected $EXPECTED_SHA"
+            exit 1
+          fi
+          LIVE_SHA="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          if [ -z "$LIVE_SHA" ] || [ "$LIVE_SHA" != "$EXPECTED_SHA" ]; then
+            echo "::error title=Evidence IO live-head mismatch::live $LIVE_SHA, expected $EXPECTED_SHA"
             exit 1
           fi
           echo "HAXLAB_EVALUATION_EVIDENCE_IO_HEAD=$ACTUAL_SHA"
