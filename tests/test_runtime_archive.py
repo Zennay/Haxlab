@@ -219,7 +219,12 @@ def test_duplicate_rejects_destination_replacement_during_verification(
 
         def swapping_open(target, flags, *args, **kwargs):
             nonlocal swapped
-            if not swapped and Path(target) == destination:
+            target_path = Path(target)
+            if (
+                not swapped
+                and target_path.name == destination.name
+                and str(target_path).startswith("/proc/self/fd/")
+            ):
                 swapped = True
                 replacement.replace(destination)
             return real_open(target, flags, *args, **kwargs)
@@ -348,3 +353,222 @@ def test_concurrent_valid_winner_is_verified_and_recovered(
     assert row["sha256"] == digest
     assert row["archive_path"] == str(destination)
     assert row["size_bytes"] == len(payload)
+
+
+def test_archive_replay_rejects_regular_file_raw_root(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "incoming" / "source.hbr2"
+    raw = tmp_path / "raw"
+    db = tmp_path / "state.sqlite3"
+    source.parent.mkdir()
+    source.write_bytes(_valid_hbr2(payload=b"root-regular-file"))
+    raw.write_bytes(b"not-a-directory")
+
+    with RuntimeState(db) as state:
+        try:
+            archive_replay(source, raw, state)
+        except RuntimeError as exc:
+            assert str(exc) == "raw_archive_root_unsafe"
+        else:
+            raise AssertionError("regular-file raw root must fail closed")
+        count = state.connection.execute(
+            "SELECT COUNT(*) AS count FROM raw_replays"
+        ).fetchone()["count"]
+
+    assert count == 0
+    assert raw.read_bytes() == b"not-a-directory"
+
+
+def test_archive_replay_rejects_symlinked_raw_root(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "incoming" / "source.hbr2"
+    raw = tmp_path / "raw"
+    external = tmp_path / "external"
+    db = tmp_path / "state.sqlite3"
+    source.parent.mkdir()
+    external.mkdir()
+    source.write_bytes(_valid_hbr2(payload=b"root-symlink"))
+    raw.symlink_to(external, target_is_directory=True)
+
+    with RuntimeState(db) as state:
+        try:
+            archive_replay(source, raw, state)
+        except RuntimeError as exc:
+            assert str(exc) == "raw_archive_root_unsafe"
+        else:
+            raise AssertionError("symlinked raw root must fail closed")
+        count = state.connection.execute(
+            "SELECT COUNT(*) AS count FROM raw_replays"
+        ).fetchone()["count"]
+
+    assert count == 0
+    assert list(external.iterdir()) == []
+
+
+def test_archive_replay_rejects_symlinked_raw_root_parent(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "incoming" / "source.hbr2"
+    external = tmp_path / "external"
+    redirected_parent = tmp_path / "redirected-parent"
+    raw = redirected_parent / "raw"
+    db = tmp_path / "state.sqlite3"
+    source.parent.mkdir()
+    external.mkdir()
+    source.write_bytes(_valid_hbr2(payload=b"parent-symlink"))
+    redirected_parent.symlink_to(external, target_is_directory=True)
+
+    with RuntimeState(db) as state:
+        try:
+            archive_replay(source, raw, state)
+        except RuntimeError as exc:
+            assert str(exc) == "raw_archive_root_unsafe"
+        else:
+            raise AssertionError("symlinked raw-root parent must fail closed")
+        count = state.connection.execute(
+            "SELECT COUNT(*) AS count FROM raw_replays"
+        ).fetchone()["count"]
+
+    assert count == 0
+    assert list(external.iterdir()) == []
+
+
+def test_archive_replay_rejects_symlinked_staging_directory(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "incoming" / "source.hbr2"
+    raw = tmp_path / "raw"
+    external = tmp_path / "external"
+    db = tmp_path / "state.sqlite3"
+    source.parent.mkdir()
+    raw.mkdir()
+    external.mkdir()
+    source.write_bytes(_valid_hbr2(payload=b"staging-symlink"))
+    (raw / ".staging").symlink_to(external, target_is_directory=True)
+
+    with RuntimeState(db) as state:
+        try:
+            archive_replay(source, raw, state)
+        except RuntimeError as exc:
+            assert str(exc) == "raw_archive_directory_unsafe:.staging"
+        else:
+            raise AssertionError("symlinked staging directory must fail closed")
+        count = state.connection.execute(
+            "SELECT COUNT(*) AS count FROM raw_replays"
+        ).fetchone()["count"]
+
+    assert count == 0
+    assert list(external.iterdir()) == []
+
+
+def test_archive_replay_rejects_symlinked_first_hash_directory(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "incoming" / "source.hbr2"
+    raw = tmp_path / "raw"
+    external = tmp_path / "external"
+    db = tmp_path / "state.sqlite3"
+    source.parent.mkdir()
+    raw.mkdir()
+    external.mkdir()
+    payload = _valid_hbr2(payload=b"first-prefix-symlink")
+    source.write_bytes(payload)
+    digest = hashlib.sha256(payload).hexdigest()
+    (raw / digest[:2]).symlink_to(external, target_is_directory=True)
+
+    with RuntimeState(db) as state:
+        try:
+            archive_replay(source, raw, state)
+        except RuntimeError as exc:
+            assert str(exc) == f"raw_archive_directory_unsafe:{digest[:2]}"
+        else:
+            raise AssertionError("symlinked first hash directory must fail closed")
+        count = state.connection.execute(
+            "SELECT COUNT(*) AS count FROM raw_replays"
+        ).fetchone()["count"]
+
+    assert count == 0
+    assert list(external.iterdir()) == []
+    assert not list((raw / ".staging").glob("*"))
+
+
+def test_archive_replay_rejects_symlinked_second_hash_directory(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "incoming" / "source.hbr2"
+    raw = tmp_path / "raw"
+    external = tmp_path / "external"
+    db = tmp_path / "state.sqlite3"
+    source.parent.mkdir()
+    raw.mkdir()
+    external.mkdir()
+    payload = _valid_hbr2(payload=b"second-prefix-symlink")
+    source.write_bytes(payload)
+    digest = hashlib.sha256(payload).hexdigest()
+    first = raw / digest[:2]
+    first.mkdir()
+    (first / digest[2:4]).symlink_to(external, target_is_directory=True)
+
+    with RuntimeState(db) as state:
+        try:
+            archive_replay(source, raw, state)
+        except RuntimeError as exc:
+            assert str(exc) == f"raw_archive_directory_unsafe:{digest[2:4]}"
+        else:
+            raise AssertionError("symlinked second hash directory must fail closed")
+        count = state.connection.execute(
+            "SELECT COUNT(*) AS count FROM raw_replays"
+        ).fetchone()["count"]
+
+    assert count == 0
+    assert list(external.iterdir()) == []
+    assert not list((raw / ".staging").glob("*"))
+
+
+def test_archive_replay_rejects_raw_root_swap_before_ledger_commit(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "incoming" / "source.hbr2"
+    raw = tmp_path / "raw"
+    moved_raw = tmp_path / "raw-original"
+    redirected = tmp_path / "redirected"
+    db = tmp_path / "state.sqlite3"
+    source.parent.mkdir()
+    redirected.mkdir()
+    payload = _valid_hbr2(payload=b"root-swap")
+    source.write_bytes(payload)
+
+    real_link = os.link
+    swapped = False
+
+    def swapping_link(src, dst, *args, **kwargs):
+        nonlocal swapped
+        result = real_link(src, dst, *args, **kwargs)
+        if not swapped:
+            swapped = True
+            raw.rename(moved_raw)
+            raw.symlink_to(redirected, target_is_directory=True)
+        return result
+
+    with RuntimeState(db) as state:
+        monkeypatch.setattr(archive_module.os, "link", swapping_link)
+        try:
+            archive_replay(source, raw, state)
+        except RuntimeError as exc:
+            assert str(exc) == "raw_archive_root_unsafe"
+        else:
+            raise AssertionError("raw-root replacement must fail before ledger commit")
+        count = state.connection.execute(
+            "SELECT COUNT(*) AS count FROM raw_replays"
+        ).fetchone()["count"]
+
+    assert swapped is True
+    assert count == 0
+    assert raw.is_symlink()
+    assert list(redirected.iterdir()) == []
+    digest = hashlib.sha256(payload).hexdigest()
+    assert archive_path_for(moved_raw, digest).read_bytes() == payload
+    assert not list((moved_raw / ".staging").glob("*"))

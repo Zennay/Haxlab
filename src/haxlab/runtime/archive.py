@@ -33,6 +33,120 @@ def _source_signature(value: os.stat_result) -> tuple[int, int, int, int, int]:
     )
 
 
+def _directory_open_flags() -> int:
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    directory = getattr(os, "O_DIRECTORY", None)
+    if nofollow is None or directory is None:
+        raise RuntimeError("raw_archive_directory_unsupported")
+    flags = os.O_RDONLY | nofollow | directory
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    return flags
+
+
+def _open_archive_root(raw_root: Path, *, create: bool) -> int:
+    """Open a logical archive root one component at a time without symlinks."""
+
+    absolute = Path(os.path.abspath(os.fspath(raw_root)))
+    parts = absolute.parts
+    if not parts or parts[0] != os.sep:
+        raise RuntimeError("raw_archive_root_unsafe")
+
+    flags = _directory_open_flags()
+    try:
+        current_fd = os.open(os.sep, flags)
+    except OSError as exc:
+        raise RuntimeError("raw_archive_root_unsafe") from exc
+
+    try:
+        for component in parts[1:]:
+            if component in {"", "."}:
+                continue
+            try:
+                next_fd = os.open(component, flags, dir_fd=current_fd)
+            except FileNotFoundError:
+                if not create:
+                    raise RuntimeError("raw_archive_root_unsafe")
+                try:
+                    os.mkdir(component, mode=0o755, dir_fd=current_fd)
+                except FileExistsError:
+                    pass
+                except OSError as exc:
+                    raise RuntimeError("raw_archive_root_unsafe") from exc
+                try:
+                    next_fd = os.open(component, flags, dir_fd=current_fd)
+                except OSError as exc:
+                    raise RuntimeError("raw_archive_root_unsafe") from exc
+            except OSError as exc:
+                raise RuntimeError("raw_archive_root_unsafe") from exc
+
+            opened = os.fstat(next_fd)
+            if not stat.S_ISDIR(opened.st_mode):
+                os.close(next_fd)
+                raise RuntimeError("raw_archive_root_unsafe")
+            os.close(current_fd)
+            current_fd = next_fd
+
+        return current_fd
+    except Exception:
+        os.close(current_fd)
+        raise
+
+
+def _open_archive_child_directory(
+    parent_fd: int,
+    component: str,
+    *,
+    create: bool,
+    missing_error: str | None = None,
+) -> int:
+    flags = _directory_open_flags()
+    error = f"raw_archive_directory_unsafe:{component}"
+    try:
+        child_fd = os.open(component, flags, dir_fd=parent_fd)
+    except FileNotFoundError as exc:
+        if not create:
+            raise RuntimeError(missing_error or error) from exc
+        try:
+            os.mkdir(component, mode=0o755, dir_fd=parent_fd)
+        except FileExistsError:
+            pass
+        except OSError as mkdir_exc:
+            raise RuntimeError(error) from mkdir_exc
+        try:
+            child_fd = os.open(component, flags, dir_fd=parent_fd)
+        except OSError as open_exc:
+            raise RuntimeError(error) from open_exc
+    except OSError as exc:
+        raise RuntimeError(error) from exc
+
+    opened = os.fstat(child_fd)
+    if not stat.S_ISDIR(opened.st_mode):
+        os.close(child_fd)
+        raise RuntimeError(error)
+    return child_fd
+
+
+def _directory_fd_path(fd: int) -> Path:
+    proc_fd_root = Path("/proc/self/fd")
+    if os.name != "posix" or not proc_fd_root.is_dir():
+        raise RuntimeError("raw_archive_directory_unsupported")
+    return proc_fd_root / str(fd)
+
+
+def _assert_archive_root_identity(raw_root: Path, expected_fd: int) -> None:
+    """Re-open the logical root and prove it still names the bound directory."""
+
+    reopened_fd = _open_archive_root(raw_root, create=False)
+    try:
+        expected = os.fstat(expected_fd)
+        current = os.fstat(reopened_fd)
+        if (expected.st_dev, expected.st_ino) != (current.st_dev, current.st_ino):
+            raise RuntimeError("raw_archive_root_changed")
+    finally:
+        os.close(reopened_fd)
+
+
 def _open_verified_source(source_path: Path) -> tuple[int, os.stat_result]:
     try:
         initial = source_path.lstat()
@@ -68,12 +182,9 @@ def _open_verified_source(source_path: Path) -> tuple[int, os.stat_result]:
 
 def _copy_to_staging_and_hash(
     source_path: Path,
-    raw_root: Path,
+    staging_root: Path,
 ) -> tuple[Path, str, int]:
-    """Copy one verified source inode to private staging while hashing exact bytes."""
-
-    staging_root = raw_root / ".staging"
-    staging_root.mkdir(parents=True, exist_ok=True)
+    """Copy one verified source inode to descriptor-bound staging while hashing."""
 
     staging_path: Path | None = None
     source_fd: int | None = None
@@ -230,13 +341,26 @@ def archive_replay(
 ) -> ArchiveResult:
     """Archive a settled replay without trusting mutable source/destination paths."""
 
-    source_before = source_path.stat()
-    staging_path, sha256, copied_bytes = _copy_to_staging_and_hash(
-        source_path,
-        raw_root,
-    )
+    raw_root_fd = _open_archive_root(raw_root, create=True)
+    staging_dir_fd: int | None = None
+    first_prefix_fd: int | None = None
+    second_prefix_fd: int | None = None
+    staging_path: Path | None = None
 
     try:
+        staging_dir_fd = _open_archive_child_directory(
+            raw_root_fd,
+            ".staging",
+            create=True,
+        )
+        staging_root = _directory_fd_path(staging_dir_fd)
+
+        source_before = source_path.stat()
+        staging_path, sha256, copied_bytes = _copy_to_staging_and_hash(
+            source_path,
+            staging_root,
+        )
+
         source_after = source_path.stat()
         if (
             copied_bytes != source_before.st_size
@@ -250,16 +374,38 @@ def archive_replay(
 
         destination = archive_path_for(raw_root, sha256)
         duplicate = state.raw_exists(sha256)
+        missing_error = f"raw_archive_missing:{sha256}"
+
+        first_prefix_fd = _open_archive_child_directory(
+            raw_root_fd,
+            sha256[:2],
+            create=not duplicate,
+            missing_error=missing_error,
+        )
+        second_prefix_fd = _open_archive_child_directory(
+            first_prefix_fd,
+            sha256[2:4],
+            create=not duplicate,
+            missing_error=missing_error,
+        )
+        destination_io = (
+            _directory_fd_path(second_prefix_fd) / f"{sha256}.hbr2"
+        )
 
         if duplicate:
             _verify_existing_archive(
-                destination,
+                destination_io,
                 sha256,
-                missing_error=f"raw_archive_missing:{sha256}",
+                missing_error=missing_error,
             )
+            _assert_archive_root_identity(raw_root, raw_root_fd)
         else:
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            _publish_archive_no_clobber(staging_path, destination, sha256)
+            _publish_archive_no_clobber(staging_path, destination_io, sha256)
+            # Bind the logical ledger path to the same directory inode
+            # immediately before committing the raw row. As with any
+            # persistent pathname, later administrative replacement is
+            # detected by downstream archive/analysis integrity checks.
+            _assert_archive_root_identity(raw_root, raw_root_fd)
             state.register_raw(
                 sha256=sha256,
                 archive_path=str(destination),
@@ -273,4 +419,12 @@ def archive_replay(
             duplicate=duplicate,
         )
     finally:
-        staging_path.unlink(missing_ok=True)
+        if staging_path is not None:
+            staging_path.unlink(missing_ok=True)
+        if second_prefix_fd is not None:
+            os.close(second_prefix_fd)
+        if first_prefix_fd is not None:
+            os.close(first_prefix_fd)
+        if staging_dir_fd is not None:
+            os.close(staging_dir_fd)
+        os.close(raw_root_fd)
