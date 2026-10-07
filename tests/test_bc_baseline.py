@@ -243,3 +243,45 @@ def test_baseline_rejects_non_finite_shard_values_before_model_publication(
         )
 
     assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    ("label", "invalid_value", "message"),
+    [
+        ("dir_x", 2.0, "invalid dir_x action label"),
+        ("dir_y", -2.0, "invalid dir_y action label"),
+        ("kick", 0.75, "invalid kick action label"),
+    ],
+)
+def test_baseline_rejects_noncanonical_action_labels_before_model_publication(
+    tmp_path: Path,
+    label: str,
+    invalid_value: float,
+    message: str,
+) -> None:
+    train_dir = tmp_path / "train"
+    holdout_dir = tmp_path / "holdout"
+    train_rows = _synthetic_rows(64, 31)
+    train_rows[0, COLUMNS.index(label)] = invalid_value
+    train_entry = _write_shard(train_dir, "train-a", train_rows)
+    holdout_entry = _write_shard(
+        holdout_dir,
+        "holdout-a",
+        _synthetic_rows(64, 32),
+    )
+
+    train_index = tmp_path / "train-index.json"
+    holdout_index = tmp_path / "holdout-index.json"
+    _write_index(train_index, [train_entry])
+    _write_index(holdout_index, [holdout_entry])
+    output = tmp_path / "model"
+
+    with pytest.raises(ValueError, match=message):
+        train_baseline(
+            train_index_path=train_index,
+            holdout_index_path=holdout_index,
+            output_dir=output,
+            epochs=1,
+        )
+
+    assert not output.exists()
