@@ -118,21 +118,6 @@ def _checkout_blocks(text: str) -> tuple[str, ...]:
 def _has_exact_head_guard(text: str) -> bool:
     lines = text.splitlines()
 
-    # Direct shell assertions such as:
-    # test "$(git rev-parse HEAD)" = "${{ github.sha }}"
-    for line in lines:
-        if "git rev-parse HEAD" not in line or "test " not in line:
-            continue
-        if any(marker in line for marker in SOURCE_SHA_MARKERS):
-            return True
-
-    actual_vars = {
-        match.group(1)
-        for match in re.finditer(
-            r'(?m)^\s*([A-Z_][A-Z0-9_]*)="\$\(git rev-parse HEAD\)"\s*$',
-            text,
-        )
-    }
     expected_vars: set[str] = set()
     for line in lines:
         if not any(marker in line for marker in SOURCE_SHA_MARKERS):
@@ -144,6 +129,26 @@ def _has_exact_head_guard(text: str) -> bool:
         if match:
             expected_vars.add(match.group(1))
 
+    # Direct shell assertions may compare HEAD with either the source expression
+    # itself or an environment variable bound to that expression.
+    for line in lines:
+        if "git rev-parse HEAD" not in line or "test " not in line:
+            continue
+        if any(marker in line for marker in SOURCE_SHA_MARKERS):
+            return True
+        if any(
+            f"${name}" in line or f"${{{name}}}" in line
+            for name in expected_vars
+        ):
+            return True
+
+    actual_vars = {
+        match.group(1)
+        for match in re.finditer(
+            r'(?m)^\s*([A-Z_][A-Z0-9_]*)="\$\(git rev-parse HEAD\)"\s*$',
+            text,
+        )
+    }
     for line in lines:
         if not ("[" in line or "test " in line):
             continue
