@@ -195,7 +195,10 @@ def test_reader_fails_closed_on_artifact_tamper(tmp_path: Path) -> None:
     with (current.root / "matches.jsonl").open("ab") as handle:
         handle.write(b'{"match_id":"tampered"}\n')
 
-    with pytest.raises(Exception):
+    with pytest.raises(
+        GenerationStoreError,
+        match="resolved generation artifacts do not match commit",
+    ):
         resolve_current_generation(store)
 
 
@@ -249,6 +252,87 @@ def test_republish_does_not_overwrite_corrupted_existing_generation(
     current = publish_generation(source, store)
     (current.root / GENERATION_COMMIT_FILE).write_bytes(b"{}\n")
 
-    with pytest.raises(Exception):
+    with pytest.raises(
+        GenerationStoreError,
+        match="existing generation evidence is invalid",
+    ):
         publish_generation(source, store)
     assert (current.root / GENERATION_COMMIT_FILE).read_bytes() == b"{}\n"
+
+
+def test_publish_never_mutates_source_dataset(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    store = tmp_path / "store"
+    _write_dataset(source, match_id="m-1")
+    before = {
+        path.name: path.read_bytes()
+        for path in source.iterdir()
+    }
+
+    publish_generation(source, store)
+
+    after = {
+        path.name: path.read_bytes()
+        for path in source.iterdir()
+    }
+    assert after == before
+    assert set(after) == set(M0_ARTIFACTS)
+
+
+@pytest.mark.parametrize(
+    "store_relative",
+    [
+        Path("."),
+        Path("nested-store"),
+        Path("nested") / "store",
+    ],
+)
+def test_publish_rejects_store_inside_source_before_mutation(
+    tmp_path: Path,
+    store_relative: Path,
+) -> None:
+    source = tmp_path / "source"
+    _write_dataset(source, match_id="m-1")
+    before_names = sorted(path.name for path in source.iterdir())
+    store = source if store_relative == Path(".") else source / store_relative
+
+    with pytest.raises(GenerationStoreError, match="outside source_root"):
+        publish_generation(source, store)
+
+    assert sorted(path.name for path in source.iterdir()) == before_names
+    if store != source:
+        assert not store.exists()
+
+
+def test_pointer_temp_is_cleaned_when_swap_is_not_reached(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    store = tmp_path / "store"
+    _write_dataset(source, match_id="old")
+    publish_generation(source, store)
+
+    _write_dataset(source, match_id="new")
+    with pytest.raises(InjectedCrash, match="after_pointer_temp"):
+        publish_generation(
+            source,
+            store,
+            _fault=_fault_at("after_pointer_temp"),
+        )
+
+    assert not any(
+        path.name.startswith(f".{CURRENT_GENERATION_POINTER_FILE}.")
+        and path.name.endswith(".tmp")
+        for path in store.iterdir()
+    )
+
+
+def test_reader_ignores_unreferenced_staging_directory(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    store = tmp_path / "store"
+    _write_dataset(source, match_id="m-1")
+    current = publish_generation(source, store)
+
+    stale = store / GENERATIONS_DIRECTORY / ".staging-unreferenced"
+    stale.mkdir()
+    (stale / "junk").write_text("partial", encoding="utf-8")
+
+    assert resolve_current_generation(store) == current
