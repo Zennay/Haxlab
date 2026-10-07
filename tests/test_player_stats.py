@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
+
+import pytest
 
 from haxlab.runtime.player_stats import add_proxy_score, collect
 
@@ -139,3 +142,133 @@ def test_collect_uses_auth_hash_across_name_changes(tmp_path: Path) -> None:
     assert len(rows) == 1
     assert rows[0]["matches"] == 3
     assert rows[0]["name"] == "New Name"
+
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("samples", "600"),
+        ("samples", True),
+        ("samples", -1),
+        ("nearestBallSamples", -1),
+        ("touchProgressionSum", math.nan),
+        ("touchProgressionSum", math.inf),
+    ],
+)
+def test_collect_rejects_malformed_metric_artifacts(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    player = {
+        "name": "Alice",
+        "samples": 600,
+        "nearestBallSamples": 120,
+        "closeBallSamples": 60,
+    }
+    player[field] = value
+    _write_replay(tmp_path, "bad", [player])
+
+    assert collect(tmp_path) == []
+
+
+def test_collect_rejects_sample_subcounts_above_total(tmp_path: Path) -> None:
+    _write_replay(
+        tmp_path,
+        "bad-bounds",
+        [
+            {
+                "name": "Alice",
+                "samples": 10,
+                "nearestBallSamples": 11,
+                "closeBallSamples": 5,
+            }
+        ],
+    )
+
+    assert collect(tmp_path) == []
+
+
+def test_collect_rejects_malformed_container_shapes(tmp_path: Path) -> None:
+    (tmp_path / "wrong-schema.json").write_text(
+        json.dumps({"schemaVersion": "3", "players": []}),
+        encoding="utf-8",
+    )
+    (tmp_path / "wrong-players.json").write_text(
+        json.dumps({"schemaVersion": 3, "players": {}}),
+        encoding="utf-8",
+    )
+    (tmp_path / "wrong-root.json").write_text(
+        json.dumps([]),
+        encoding="utf-8",
+    )
+
+    assert collect(tmp_path) == []
+
+
+def test_collect_rejects_entire_artifact_before_partial_aggregation(
+    tmp_path: Path,
+) -> None:
+    _write_replay(
+        tmp_path,
+        "valid",
+        [
+            {
+                "name": "Alice",
+                "samples": 600,
+                "nearestBallSamples": 120,
+                "closeBallSamples": 60,
+            }
+        ],
+    )
+    _write_replay(
+        tmp_path,
+        "partially-malformed",
+        [
+            {
+                "name": "Alice",
+                "samples": 600,
+                "nearestBallSamples": 120,
+                "closeBallSamples": 60,
+            },
+            {
+                "name": "Bob",
+                "samples": "600",
+            },
+        ],
+    )
+
+    rows = collect(tmp_path)
+
+    assert len(rows) == 1
+    assert rows[0]["name"] == "Alice"
+    assert rows[0]["matches"] == 1
+    assert rows[0]["samples"] == 600
+
+
+def test_collect_accepts_schema_v4_without_coercion(tmp_path: Path) -> None:
+    path = tmp_path / "v4.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 4,
+                "players": [
+                    {
+                        "name": "Alice",
+                        "samples": 600,
+                        "nearestBallSamples": 120,
+                        "closeBallSamples": 60,
+                        "touchProgressionSum": 2,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rows = collect(tmp_path)
+
+    assert len(rows) == 1
+    assert rows[0]["matches"] == 1
+    assert rows[0]["touch_progression_sum"] == 2.0
