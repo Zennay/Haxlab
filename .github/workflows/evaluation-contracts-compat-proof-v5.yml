@@ -1,4 +1,4 @@
-name: Evaluation validation compatibility v5
+name: Evaluation validation compatibility v5 diagnostic
 
 on:
   push:
@@ -196,6 +196,44 @@ jobs:
             tests/test_evaluation_runtime_output_purity_contract.py \
             tests/test_evaluation_mutable_defaults_contract.py
 
+      - name: Run valid exact #264 promotion regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" .evaluation-contract-compat-v5-venv/bin/pytest -q \
+            -k 'not test_regression_subclass_is_rejected_before_custom_attribute_behavior'
+
+      - name: Prove corrected hostile-subclass boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" .evaluation-contract-compat-v5-venv/bin/python - <<'PY'
+          from haxlab.evaluation.models import EvaluationEvidence, Regression
+          from haxlab.evaluation.promotion import decide_promotion
+
+          class SneakyRegression(Regression):
+              def __getattribute__(self, name):
+                  if name == "severity":
+                      raise AssertionError("severity attribute must not be evaluated")
+                  return super().__getattribute__(name)
+
+          evidence = EvaluationEvidence(
+              challenger_id="model-2",
+              champion_id="model-1",
+              games_vs_champion=1000,
+              score_rate_vs_champion=0.55,
+              score_rate_lower_bound=0.52,
+              frozen_scenarios_total=100,
+              frozen_scenarios_passed=100,
+              regressions=(SneakyRegression("x", "critical"),),
+              reproducible=True,
+          )
+          decision = decide_promotion(evidence)
+          assert not decision.promote
+          assert "invalid_evidence:regressions:0:object_type" in decision.reasons
+          print("HAXLAB_PROMOTION_HOSTILE_SUBCLASS_DIAGNOSTIC=green")
+          PY
+
       - name: Run adjacent canonical Arena v2 regressions
         shell: bash
         run: |
@@ -219,4 +257,4 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "HAXLAB_EVALUATION_CONTRACT_STACK_COMPAT_V5=green"
+          echo "HAXLAB_EVALUATION_CONTRACT_STACK_COMPAT_V5_DIAGNOSTIC=green"
