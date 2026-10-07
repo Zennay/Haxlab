@@ -39,6 +39,15 @@ haxlab_restore_update_services() {
   local index
   local unit
 
+  for unit in "${HAXLAB_UPDATE_MANAGED_SERVICES[@]}"; do
+    if haxlab_update_service_was_active "${unit}"; then
+      continue
+    fi
+    if ! systemctl stop "${unit}"; then
+      failed=1
+    fi
+  done
+
   for (( index=${#HAXLAB_UPDATE_ACTIVE_BEFORE[@]} - 1; index >= 0; index-- )); do
     unit="${HAXLAB_UPDATE_ACTIVE_BEFORE[index]}"
     if ! systemctl start "${unit}"; then
