@@ -1,0 +1,64 @@
+name: Evaluation dynamic loading validation
+
+on:
+  push:
+    branches:
+      - validation/evaluation-dynamic-loading-contract-20261007
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-evaluation-dynamic-loading-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Verify exact checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          echo "HAXLAB_EVALUATION_DYNAMIC_LOADING_HEAD=$(git rev-parse HEAD)"
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .evaluation-dynamic-loading-venv
+          python3 -m venv .evaluation-dynamic-loading-venv
+          .evaluation-dynamic-loading-venv/bin/pip install --upgrade pip
+          .evaluation-dynamic-loading-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile evaluation package and contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          .evaluation-dynamic-loading-venv/bin/python -m compileall -q \
+            src/haxlab/evaluation \
+            tests/test_evaluation_dynamic_loading_contract.py
+
+      - name: Run dynamic-loading contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .evaluation-dynamic-loading-venv/bin/pytest -q \
+              tests/test_evaluation_dynamic_loading_contract.py
+
+      - name: Record green result
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HAXLAB_EVALUATION_DYNAMIC_LOADING_RESULT=green"
