@@ -41,6 +41,20 @@ metadata first, then atomically replace only this small pointer. A reader that t
 the pointer can resolve one content-addressed generation and validate its commit and
 receipt rather than opening five mutable top-level files independently.
 
+## Canonical layout
+
+The contract fixes one relative filesystem layout:
+
+- generation directories live at `generations/<generation_id>/`;
+- each immutable generation stores its commit at
+  `generations/<generation_id>/generation-commit.json`;
+- the only mutable publication selector is the top-level
+  `current-generation.json` pointer.
+
+`generation_directory()` and `generation_commit_path()` derive those paths only from
+a fully validated commit, so a malformed generation ID cannot become a path traversal
+or alternate layout.
+
 ## Reader contract
 
 `parse_generation_commit_bytes()` and `parse_generation_pointer_bytes()` accept only
