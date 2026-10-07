@@ -5,6 +5,8 @@ import time
 import zlib
 from pathlib import Path
 
+import pytest
+
 import haxlab.runtime.archive as archive_module
 from haxlab.runtime.archive import archive_path_for
 from haxlab.runtime.scanner import scan_once
@@ -331,5 +333,35 @@ def test_scanner_rechecks_symlink_status_before_processing(
     assert summary.discovered == 0
     assert summary.archived == 0
     assert summary.failed == 0
+    assert snapshot["raw_unique_replays"] == 0
+    assert not list(raw.rglob("*.hbr2"))
+
+
+def test_scanner_rejects_symlinked_incoming_root(tmp_path: Path) -> None:
+    real_incoming = tmp_path / "real-incoming"
+    real_incoming.mkdir()
+    (real_incoming / "outside.hbr2").write_bytes(
+        _valid_hbr2(total_frames=902, payload=b"root-symlink")
+    )
+    incoming = tmp_path / "incoming"
+    incoming.symlink_to(real_incoming, target_is_directory=True)
+
+    raw = tmp_path / "raw"
+    db = tmp_path / "state.sqlite3"
+
+    with RuntimeState(db) as state:
+        with pytest.raises(
+            ValueError,
+            match="incoming_root_must_not_be_symlink",
+        ):
+            scan_once(
+                incoming,
+                raw,
+                state,
+                minimum_file_age_seconds=0,
+                now=time.time() + 10,
+            )
+        snapshot = state.status_snapshot()
+
     assert snapshot["raw_unique_replays"] == 0
     assert not list(raw.rglob("*.hbr2"))
