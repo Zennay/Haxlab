@@ -394,3 +394,32 @@ def parse_promotion_policy(payload: Any) -> PolicyParseResult:
         ),
         reasons=(),
     )
+
+
+def load_promotion_policy(path: Path) -> PolicyParseResult:
+    """Load one regular JSON policy file and parse it fail-closed."""
+    if not isinstance(path, Path):
+        return PolicyParseResult(
+            policy=None,
+            reasons=("invalid_policy:path:not_path",),
+        )
+    if path.is_symlink():
+        return PolicyParseResult(
+            policy=None,
+            reasons=("invalid_policy:path:symlink",),
+        )
+    if not path.is_file():
+        return PolicyParseResult(
+            policy=None,
+            reasons=("invalid_policy:path:not_file",),
+        )
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return PolicyParseResult(
+            policy=None,
+            reasons=("invalid_policy:path:unreadable_or_invalid_json",),
+        )
+
+    return parse_promotion_policy(payload)
