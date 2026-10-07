@@ -42,6 +42,8 @@ validation workflows.
 This explicit set is reviewable and prevents a surprising file elsewhere in the
 repository from silently entering evaluation acceptance evidence.
 
+A `workflow_dispatch` checkout using `inputs.ref` is treated as immutable only when that exact input variable is validated against lowercase 40-hex SHA syntax and invalid values fail non-zero. Merely accepting an input named `ref`, or mentioning a SHA regex elsewhere, remains a finding.
+
 ## Usage
 
 Report-only mode always returns zero unless the input itself is invalid:
