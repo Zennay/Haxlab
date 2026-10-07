@@ -237,6 +237,14 @@ def test_disappearing_candidate_does_not_crash_ingest(
             minimum_file_age_seconds=0,
             now=time.time() + 10,
         )
+        event = state.connection.execute(
+            """
+            SELECT event_type, subject, detail
+            FROM runtime_events
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
 
     assert summary.discovered == 1
     assert summary.disappeared == 1
@@ -271,14 +279,6 @@ def test_scanner_ignores_symlinked_replay_source(tmp_path: Path) -> None:
         source_count = state.connection.execute(
             "SELECT COUNT(*) FROM source_files"
         ).fetchone()[0]
-        event = state.connection.execute(
-            """
-            SELECT event_type, subject, detail
-            FROM runtime_events
-            ORDER BY id DESC
-            LIMIT 1
-            """
-        ).fetchone()
 
     assert summary.discovered == 0
     assert summary.archived == 0
@@ -329,14 +329,6 @@ def test_scanner_rechecks_symlink_status_before_processing(
             now=time.time() + 10,
         )
         snapshot = state.status_snapshot()
-        event = state.connection.execute(
-            """
-            SELECT event_type, subject, detail
-            FROM runtime_events
-            ORDER BY id DESC
-            LIMIT 1
-            """
-        ).fetchone()
 
     assert checks >= 2
     assert summary.discovered == 0
@@ -371,14 +363,6 @@ def test_scanner_rejects_symlinked_incoming_root(tmp_path: Path) -> None:
                 now=time.time() + 10,
             )
         snapshot = state.status_snapshot()
-        event = state.connection.execute(
-            """
-            SELECT event_type, subject, detail
-            FROM runtime_events
-            ORDER BY id DESC
-            LIMIT 1
-            """
-        ).fetchone()
 
     assert snapshot["raw_unique_replays"] == 0
     assert not list(raw.rglob("*.hbr2"))
@@ -462,14 +446,6 @@ def test_scanner_rejects_symlinked_nested_directory(tmp_path: Path) -> None:
         source_count = state.connection.execute(
             "SELECT COUNT(*) FROM source_files"
         ).fetchone()[0]
-        event = state.connection.execute(
-            """
-            SELECT event_type, subject, detail
-            FROM runtime_events
-            ORDER BY id DESC
-            LIMIT 1
-            """
-        ).fetchone()
 
     assert summary.discovered == 0
     assert summary.archived == 0
