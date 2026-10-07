@@ -23,11 +23,17 @@ def _mock_systemctl(
     active_units: tuple[str, ...],
     *,
     fail_start: str | None = None,
+    fail_stop: str | None = None,
 ) -> str:
     active_case = "|".join(active_units) or "__never__"
-    failure = (
+    start_failure = (
         f'if [[ "$2" == {shlex.quote(fail_start)} ]]; then return 1; fi'
         if fail_start is not None
+        else ""
+    )
+    stop_failure = (
+        f'if [[ "$2" == {shlex.quote(fail_stop)} ]]; then return 1; fi'
+        if fail_stop is not None
         else ""
     )
     return f"""
@@ -38,15 +44,21 @@ systemctl() {{
       *) return 3 ;;
     esac
   fi
+  if [[ "$1" == "stop" ]]; then
+    if declare -p STOP_CALLS >/dev/null 2>&1; then
+      printf '%s\\n' "$2" >> "$STOP_CALLS"
+    fi
+    {stop_failure}
+    return 0
+  fi
   if [[ "$1" == "start" ]]; then
     printf '%s\\n' "$2" >> "$CALLS"
-    {failure}
+    {start_failure}
     return 0
   fi
   return 97
 }}
 """
-
 
 def test_capture_and_restore_use_dependency_safe_reverse_stop_order(
     tmp_path: Path,
@@ -225,3 +237,75 @@ exit 31
 
     assert result.returncode == 31
     assert not calls.exists()
+
+
+def test_late_failure_restores_exact_preupdate_activation_state(
+    tmp_path: Path,
+) -> None:
+    calls = tmp_path / "start-calls"
+    stop_calls = tmp_path / "stop-calls"
+    active = ("haxlab-worker.service", "haxlab-ingest.service")
+    script = f"""
+set -euo pipefail
+source {shlex.quote(str(HELPER))}
+CALLS="$1"
+STOP_CALLS="$2"
+{_mock_systemctl(active)}
+haxlab_capture_update_service_state
+haxlab_install_update_recovery_trap
+exit 41
+"""
+
+    result = _run_bash(script, str(calls), str(stop_calls))
+
+    assert result.returncode == 41
+    assert stop_calls.read_text(encoding="utf-8").splitlines() == [
+        "haxlab-live-bot.service",
+        "haxlab-autonomy.timer",
+        "haxlab-autonomy.service",
+        "haxlab-analyzer.service",
+    ]
+    assert calls.read_text(encoding="utf-8").splitlines() == [
+        "haxlab-ingest.service",
+        "haxlab-worker.service",
+    ]
+
+
+def test_recovery_continues_after_stop_and_start_failures(
+    tmp_path: Path,
+) -> None:
+    calls = tmp_path / "start-calls"
+    stop_calls = tmp_path / "stop-calls"
+    active = (
+        "haxlab-live-bot.service",
+        "haxlab-analyzer.service",
+        "haxlab-ingest.service",
+    )
+    script = f"""
+set -euo pipefail
+source {shlex.quote(str(HELPER))}
+CALLS="$1"
+STOP_CALLS="$2"
+{_mock_systemctl(
+    active,
+    fail_start="haxlab-analyzer.service",
+    fail_stop="haxlab-autonomy.timer",
+)}
+haxlab_capture_update_service_state
+haxlab_install_update_recovery_trap
+exit 53
+"""
+
+    result = _run_bash(script, str(calls), str(stop_calls))
+
+    assert result.returncode == 53
+    assert stop_calls.read_text(encoding="utf-8").splitlines() == [
+        "haxlab-autonomy.timer",
+        "haxlab-autonomy.service",
+        "haxlab-worker.service",
+    ]
+    assert calls.read_text(encoding="utf-8").splitlines() == [
+        "haxlab-ingest.service",
+        "haxlab-analyzer.service",
+        "haxlab-live-bot.service",
+    ]
