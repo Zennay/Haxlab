@@ -268,6 +268,10 @@ def test_contract_rejects_representative_ambient_sources(
             "ambient_clock",
         ),
         (
+            "import builtins, time\nbuiltins_module = builtins\nga = builtins_module.getattr\nclock = ga(time, 'perf_counter')\nvalue = clock()",
+            "ambient_clock",
+        ),
+        (
             "import random\nentropy = getattr(random, 'random')\nvalue = entropy()",
             "random_entropy",
         ),
