@@ -102,11 +102,12 @@ def _read_regular_file_nofollow(path: Path) -> bytes:
     """Read one regular file without a symlink check/read race."""
 
     nofollow = getattr(os, "O_NOFOLLOW", None)
-    if nofollow is None:
-        raise ValueError("secure no-follow promotion policy reads are unsupported")
+    nonblock = getattr(os, "O_NONBLOCK", None)
+    if nofollow is None or nonblock is None:
+        raise ValueError("secure promotion policy file-open primitives are unsupported")
 
     try:
-        fd = os.open(path, os.O_RDONLY | nofollow)
+        fd = os.open(path, os.O_RDONLY | nofollow | nonblock)
     except OSError as exc:
         raise ValueError(
             "promotion policy path must be a readable regular non-symlink file"
