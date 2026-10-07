@@ -67,14 +67,67 @@ def test_retention_keeps_recent_rows_and_latest_floor(tmp_path: Path) -> None:
 
     assert receipt.rows_before == 7
     assert receipt.rows_eligible == 4
+    assert receipt.rows_selected == 4
     assert receipt.rows_deleted == 4
+    assert receipt.rows_remaining_eligible == 0
     assert receipt.rows_after == 3
-    assert receipt.first_eligible_id == 1
-    assert receipt.last_eligible_id == 4
+    assert receipt.first_selected_id == 1
+    assert receipt.last_selected_id == 4
     assert _ids(path) == [5, 6, 7]
 
 
-def test_dry_run_reports_same_deletion_set_without_mutation(tmp_path: Path) -> None:
+def test_delete_batch_is_bounded_and_oldest_first(tmp_path: Path) -> None:
+    path = _db(tmp_path)
+    _insert(path, "2026-08-01 00:00:00", 3)
+    _insert(path, "2026-09-01 00:00:00", 3)
+
+    first = apply_event_retention(
+        path,
+        keep_hours=24,
+        keep_latest=0,
+        max_delete=2,
+        evaluated_at=datetime(2026, 10, 7, 4, 0, tzinfo=timezone.utc),
+    )
+
+    assert first.rows_eligible == 6
+    assert first.rows_selected == 2
+    assert first.rows_deleted == 2
+    assert first.rows_remaining_eligible == 4
+    assert first.first_selected_id == 1
+    assert first.last_selected_id == 2
+    assert _ids(path) == [3, 4, 5, 6]
+
+    second = apply_event_retention(
+        path,
+        keep_hours=24,
+        keep_latest=0,
+        max_delete=2,
+        evaluated_at=datetime(2026, 10, 7, 4, 0, tzinfo=timezone.utc),
+    )
+    assert second.first_selected_id == 3
+    assert second.last_selected_id == 4
+    assert second.rows_remaining_eligible == 2
+    assert _ids(path) == [5, 6]
+
+
+def test_equal_timestamps_use_id_as_deterministic_tiebreaker(tmp_path: Path) -> None:
+    path = _db(tmp_path)
+    _insert(path, "2000-01-01 00:00:00", 5)
+
+    receipt = apply_event_retention(
+        path,
+        keep_hours=1,
+        keep_latest=0,
+        max_delete=3,
+        evaluated_at=datetime(2026, 10, 7, 4, 0, tzinfo=timezone.utc),
+    )
+
+    assert receipt.first_selected_id == 1
+    assert receipt.last_selected_id == 3
+    assert _ids(path) == [4, 5]
+
+
+def test_dry_run_reports_same_bounded_deletion_set_without_mutation(tmp_path: Path) -> None:
     path = _db(tmp_path)
     _insert(path, "2026-09-01 00:00:00", 4)
     now = datetime(2026, 10, 7, 4, 0, tzinfo=timezone.utc)
@@ -82,25 +135,31 @@ def test_dry_run_reports_same_deletion_set_without_mutation(tmp_path: Path) -> N
     dry = apply_event_retention(
         path,
         keep_hours=1,
-        keep_latest=1,
+        keep_latest=0,
+        max_delete=2,
         dry_run=True,
         evaluated_at=now,
     )
-    assert dry.rows_eligible == 3
+    assert dry.rows_eligible == 4
+    assert dry.rows_selected == 2
     assert dry.rows_deleted == 0
+    assert dry.rows_remaining_eligible == 2
     assert dry.rows_after == 4
+    assert dry.first_selected_id == 1
+    assert dry.last_selected_id == 2
     assert _ids(path) == [1, 2, 3, 4]
 
     live = apply_event_retention(
         path,
         keep_hours=1,
-        keep_latest=1,
+        keep_latest=0,
+        max_delete=2,
         evaluated_at=now,
     )
-    assert live.rows_eligible == dry.rows_eligible
-    assert live.first_eligible_id == dry.first_eligible_id
-    assert live.last_eligible_id == dry.last_eligible_id
-    assert _ids(path) == [4]
+    assert live.rows_selected == dry.rows_selected
+    assert live.first_selected_id == dry.first_selected_id
+    assert live.last_selected_id == dry.last_selected_id
+    assert _ids(path) == [3, 4]
 
 
 def test_boundary_row_at_cutoff_is_retained(tmp_path: Path) -> None:
@@ -119,20 +178,21 @@ def test_boundary_row_at_cutoff_is_retained(tmp_path: Path) -> None:
     assert _ids(path) == [1]
 
 
-def test_second_run_is_idempotent(tmp_path: Path) -> None:
+def test_second_run_is_idempotent_after_all_eligible_rows_removed(tmp_path: Path) -> None:
     path = _db(tmp_path)
     _insert(path, "2026-09-01 00:00:00", 3)
     now = datetime(2026, 10, 7, 4, 0, tzinfo=timezone.utc)
 
     first = apply_event_retention(
-        path, keep_hours=24, keep_latest=1, evaluated_at=now
+        path, keep_hours=24, keep_latest=1, max_delete=10, evaluated_at=now
     )
     second = apply_event_retention(
-        path, keep_hours=24, keep_latest=1, evaluated_at=now
+        path, keep_hours=24, keep_latest=1, max_delete=10, evaluated_at=now
     )
 
     assert first.rows_deleted == 2
     assert second.rows_deleted == 0
+    assert second.rows_selected == 0
     assert second.rows_before == 1
     assert second.rows_after == 1
 
@@ -188,13 +248,20 @@ def test_malformed_timestamp_fails_closed_without_deleting_rows(tmp_path: Path) 
         ("keep_latest", 1.5),
         ("keep_latest", True),
         ("keep_latest", -1),
+        ("max_delete", 1.5),
+        ("max_delete", True),
+        ("max_delete", 0),
     ],
 )
 def test_retention_rejects_non_integer_or_out_of_range_limits(
     tmp_path: Path, field: str, value: object
 ) -> None:
     path = _db(tmp_path)
-    kwargs: dict[str, object] = {"keep_hours": 24, "keep_latest": 10}
+    kwargs: dict[str, object] = {
+        "keep_hours": 24,
+        "keep_latest": 10,
+        "max_delete": 100,
+    }
     kwargs[field] = value
 
     with pytest.raises(EventRetentionError, match="must be an integer"):
@@ -208,17 +275,32 @@ def test_naive_evaluation_time_is_rejected(tmp_path: Path) -> None:
         apply_event_retention(path, evaluated_at=datetime(2026, 10, 7, 4, 0))
 
 
-def test_cli_emits_machine_readable_receipt(
+def test_cli_emits_machine_readable_bounded_receipt(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     path = _db(tmp_path)
-    _insert(path, "2000-01-01 00:00:00", 2)
+    _insert(path, "2000-01-01 00:00:00", 3)
 
-    code = main([str(path), "--keep-hours", "1", "--keep-latest", "1", "--dry-run"])
+    code = main(
+        [
+            str(path),
+            "--keep-hours",
+            "1",
+            "--keep-latest",
+            "0",
+            "--max-delete",
+            "2",
+            "--dry-run",
+        ]
+    )
     payload = json.loads(capsys.readouterr().out)
 
     assert code == 0
     assert payload["ok"] is True
     assert payload["schema_version"] == "haxlab-runtime-event-retention-v1"
     assert payload["dry_run"] is True
-    assert payload["rows_eligible"] == 1
+    assert payload["max_delete"] == 2
+    assert payload["rows_eligible"] == 3
+    assert payload["rows_selected"] == 2
+    assert payload["rows_deleted"] == 0
+    assert payload["rows_remaining_eligible"] == 1
