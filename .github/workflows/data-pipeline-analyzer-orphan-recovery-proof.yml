@@ -1,0 +1,57 @@
+name: HaxLab analyzer orphan recovery proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact branch SHA to prove
+        required: true
+        type: string
+  push:
+    branches:
+      - feature/data-pipeline-analyzer-orphan-recovery-20261007
+    paths:
+      - "src/haxlab/runtime/analyzer.py"
+      - "tests/test_analyzer_orphan_recovery.py"
+      - "docs/analyzer-orphan-recovery.md"
+      - ".github/workflows/data-pipeline-analyzer-orphan-recovery-proof.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-analyzer-orphan-recovery-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate exact-head analyzer orphan recovery
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    env:
+      EXPECTED_HEAD: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_sha || github.sha }}
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+
+      - name: Assert exact head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Run focused proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .analyzer-orphan-venv
+          python3 -m venv .analyzer-orphan-venv
+          .analyzer-orphan-venv/bin/pip install -q --upgrade pip
+          .analyzer-orphan-venv/bin/pip install -q -e '.[dev]'
+          .analyzer-orphan-venv/bin/python -m compileall -q src tests
+          .analyzer-orphan-venv/bin/pytest -q             tests/test_analyzer_orphan_recovery.py             tests/test_analysis_finalize.py             tests/test_runtime_entrypoint_limits.py
+          .analyzer-orphan-venv/bin/pytest --collect-only -q >/dev/null
+          echo "HAXLAB_ANALYZER_ORPHAN_RECOVERY_PROOF=success"
