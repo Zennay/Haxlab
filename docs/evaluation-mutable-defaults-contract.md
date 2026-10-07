@@ -15,8 +15,8 @@ The contract rejects positional and keyword-only defaults created from:
 - nested tuple defaults containing one of those mutable containers;
 - common mutable constructors such as `list`, `dict`, `dict.fromkeys`,
   `set`, `bytearray`, `collections.defaultdict`,
-  `collections.deque`, and `collections.OrderedDict`, including import
-  aliases.
+  `collections.deque`, and `collections.OrderedDict`, including import and
+  module-level assignment aliases.
 
 Immutable constants, tuples, `None`, frozen-set defaults, function objects,
 and intentionally immutable constructed defaults such as HaxLab's frozen policy
@@ -39,7 +39,7 @@ mutation (#248), and runtime output purity (#252).
 `tests/test_evaluation_mutable_defaults_contract.py` recursively parses every
 evaluation module and checks function, async-function, method, and lambda
 defaults. Focused regressions cover positional defaults, keyword-only defaults,
-aliases, nested containers, async functions, and lambdas.
+import aliases, assignment aliases, nested containers, async functions, and lambdas.
 
 The branch-scoped self-hosted proof additionally compiles the evaluation tree,
 runs the focused contract, and executes the adjacent canonical Arena-v2
