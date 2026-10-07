@@ -46,6 +46,24 @@ TRACKED_MODULES = {
 }
 
 
+def _simple_assignment(node: ast.AST) -> tuple[str, ast.AST] | None:
+    if (
+        isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+    ):
+        return node.targets[0].id, node.value
+    if (
+        isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.value is not None
+    ):
+        return node.target.id, node.value
+    if isinstance(node, ast.NamedExpr) and isinstance(node.target, ast.Name):
+        return node.target.id, node.value
+    return None
+
+
 def _canonical_name(node: ast.AST | None, aliases: dict[str, str]) -> str | None:
     if node is None:
         return None
@@ -85,17 +103,15 @@ def _aliases(tree: ast.AST) -> dict[str, str]:
     while changed:
         changed = False
         for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Assign)
-                and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-            ):
-                value = _canonical_name(node.value, aliases)
-                if value in DIRECT_BLOCKING_CALLS or value in BLOCKING_METHODS:
-                    local = node.targets[0].id
-                    if aliases.get(local) != value:
-                        aliases[local] = value
-                        changed = True
+            assignment = _simple_assignment(node)
+            if assignment is None:
+                continue
+            local, expression = assignment
+            value = _canonical_name(expression, aliases)
+            if value in DIRECT_BLOCKING_CALLS or value in BLOCKING_METHODS:
+                if aliases.get(local) != value:
+                    aliases[local] = value
+                    changed = True
     return aliases
 
 
@@ -121,15 +137,14 @@ def _objects(tree: ast.AST, aliases: dict[str, str]) -> dict[str, str]:
     while changed:
         changed = False
         for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Assign)
-                and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-            ):
-                value_type = _object_type(node.value, aliases, objects)
-                if value_type and objects.get(node.targets[0].id) != value_type:
-                    objects[node.targets[0].id] = value_type
-                    changed = True
+            assignment = _simple_assignment(node)
+            if assignment is None:
+                continue
+            local, expression = assignment
+            value_type = _object_type(expression, aliases, objects)
+            if value_type and objects.get(local) != value_type:
+                objects[local] = value_type
+                changed = True
     return objects
 
 
@@ -179,20 +194,19 @@ def _callable_aliases(
     while changed:
         changed = False
         for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Assign)
-                and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-            ):
-                value = _callable_name(
-                    node.value,
-                    aliases,
-                    objects,
-                    callable_aliases,
-                )
-                if value and callable_aliases.get(node.targets[0].id) != value:
-                    callable_aliases[node.targets[0].id] = value
-                    changed = True
+            assignment = _simple_assignment(node)
+            if assignment is None:
+                continue
+            local, expression = assignment
+            value = _callable_name(
+                expression,
+                aliases,
+                objects,
+                callable_aliases,
+            )
+            if value and callable_aliases.get(local) != value:
+                callable_aliases[local] = value
+                changed = True
     return callable_aliases
 
 
@@ -268,6 +282,16 @@ def test_evaluation_library_has_no_blocking_or_interactive_calls() -> None:
             "import multiprocessing as mp\ndef gate():\n"
             "    event = mp.Event()\n    getattr(event, 'wait')()\n",
             "multiprocessing.Event.wait",
+        ),
+        (
+            "from threading import Event\ndef gate():\n"
+            "    event: Event = Event()\n    event.wait()\n",
+            "threading.Event.wait",
+        ),
+        (
+            "import time\ndef gate():\n"
+            "    nap: object = time.sleep\n    nap(1)\n",
+            "time.sleep",
         ),
     ],
 )
