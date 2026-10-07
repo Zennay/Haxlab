@@ -1,0 +1,89 @@
+name: Replay scenario-state workflow provenance proof
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-replay-scenario-state-workflow-provenance-proof
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          clean: true
+          persist-credentials: false
+
+      - name: Verify exact and live branch head
+        shell: bash
+        run: |
+          set -euo pipefail
+          HEAD_SHA="$(git rev-parse HEAD)"
+          test "$HEAD_SHA" = "${GITHUB_SHA}"
+          case "${GITHUB_REF}" in
+            refs/heads/*) ;;
+            *)
+              echo "proof must be dispatched from a branch ref, got: ${GITHUB_REF}" >&2
+              exit 1
+              ;;
+          esac
+          LIVE_SHA="$(
+            git ls-remote --exit-code origin "${GITHUB_REF}" |
+              awk 'NR == 1 { print $1 }'
+          )"
+          test -n "$LIVE_SHA"
+          if [ "$LIVE_SHA" != "${GITHUB_SHA}" ]; then
+            echo "branch moved after dispatch: live=$LIVE_SHA dispatched=${GITHUB_SHA}" >&2
+            exit 1
+          fi
+
+      - name: Create isolated proof environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .replay-scenario-state-provenance-proof-venv
+          python3 -m venv .replay-scenario-state-provenance-proof-venv
+          .replay-scenario-state-provenance-proof-venv/bin/pip install --upgrade pip
+          .replay-scenario-state-provenance-proof-venv/bin/pip install -e '.[dev]'
+
+      - name: Run provenance contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          .replay-scenario-state-provenance-proof-venv/bin/python -m compileall -q tests/test_replay_scenario_state_workflow_provenance.py
+          PYTHONPATH="$GITHUB_WORKSPACE/src" .replay-scenario-state-provenance-proof-venv/bin/pytest -q tests/test_replay_scenario_state_workflow_provenance.py
+
+      - name: Validate replay-start syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check tools/sandbox_replay_start.js
+          node --check tests/test_replay_scenario_state_integrity.js
+
+      - name: Run replay-state integrity regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          NODE_PATH=/opt/haxlab/node_modules node tests/test_replay_scenario_state_integrity.js
+
+      - name: Run adjacent Arena v2 Node regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          NODE_PATH=/opt/haxlab/node_modules node tests/test_closed_loop_arena_v2.js
+
+      - name: Record exact-head evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "REPLAY_SCENARIO_STATE_PROVENANCE_HEAD=$(git rev-parse HEAD)"
+          echo "REPLAY_SCENARIO_STATE_PROVENANCE_RESULT=green"
