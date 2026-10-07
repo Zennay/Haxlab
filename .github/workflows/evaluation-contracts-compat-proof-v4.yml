@@ -1,6 +1,9 @@
 name: Evaluation validation compatibility v4
 
 on:
+  push:
+    branches:
+      - ops/evaluation-contracts-compat-v4-20261007
   pull_request:
     branches:
       - feature/arena-v2-current-main-20261004
