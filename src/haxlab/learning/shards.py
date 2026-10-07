@@ -130,6 +130,23 @@ def _extract_one(
     return summary
 
 
+def _validate_build_config(
+    *,
+    sample_every_ticks: int,
+    workers: int,
+    limit: int | None,
+    timeout_seconds: int,
+) -> None:
+    if type(sample_every_ticks) is not int or sample_every_ticks < 1:
+        raise ValueError("sample_every_ticks must be a native integer >= 1")
+    if type(workers) is not int or workers < 1:
+        raise ValueError("workers must be a native integer >= 1")
+    if limit is not None and (type(limit) is not int or limit < 0):
+        raise ValueError("limit must be None or a native integer >= 0")
+    if type(timeout_seconds) is not int or timeout_seconds < 30:
+        raise ValueError("timeout_seconds must be a native integer >= 30")
+
+
 def build_shards(
     *,
     manifest_path: Path,
@@ -142,6 +159,13 @@ def build_shards(
     timeout_seconds: int = 180,
     force: bool = False,
 ) -> dict[str, Any]:
+    _validate_build_config(
+        sample_every_ticks=sample_every_ticks,
+        workers=workers,
+        limit=limit,
+        timeout_seconds=timeout_seconds,
+    )
+
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("schema") != MANIFEST_SCHEMA:
         raise ValueError(
@@ -154,7 +178,7 @@ def build_shards(
     source_key = f"{split}_replays"
     entries = list(manifest.get(source_key) or [])
     if limit is not None:
-        entries = entries[: max(0, limit)]
+        entries = entries[:limit]
 
     output_dir = output_root / split
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -162,15 +186,15 @@ def build_shards(
     results: list[dict[str, Any]] = []
     failures: list[dict[str, str]] = []
 
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
+    with ThreadPoolExecutor(max_workers=workers) as executor:
         future_map = {
             executor.submit(
                 _extract_one,
                 entry,
                 node_script=node_script,
                 output_dir=output_dir,
-                sample_every_ticks=max(1, sample_every_ticks),
-                timeout_seconds=max(30, timeout_seconds),
+                sample_every_ticks=sample_every_ticks,
+                timeout_seconds=timeout_seconds,
                 force=force,
             ): entry
             for entry in entries
@@ -198,7 +222,7 @@ def build_shards(
         "manifest_schema": manifest.get("schema"),
         "analysis_version": manifest.get("analysis_version"),
         "split": split,
-        "sample_every_ticks": max(1, sample_every_ticks),
+        "sample_every_ticks": sample_every_ticks,
         "requested_replays": len(entries),
         "successful_replays": len(results),
         "failed_replays": len(failures),
@@ -258,10 +282,10 @@ def main() -> int:
         split=args.split,
         output_root=args.output_root,
         node_script=args.node_script,
-        sample_every_ticks=max(1, args.sample_every_ticks),
-        workers=max(1, args.workers),
+        sample_every_ticks=args.sample_every_ticks,
+        workers=args.workers,
         limit=args.limit,
-        timeout_seconds=max(30, args.timeout_seconds),
+        timeout_seconds=args.timeout_seconds,
         force=args.force,
     )
 
