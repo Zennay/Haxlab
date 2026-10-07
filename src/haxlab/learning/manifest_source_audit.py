@@ -199,7 +199,10 @@ def _open_identity_anchor(
         _fail(f"{label} secure open failed: {exc}")
 
     try:
-        opened = os.fstat(fd)
+        try:
+            opened = os.fstat(fd)
+        except OSError as exc:
+            _fail(f"{label} descriptor inspection failed: {exc}")
         if not stat.S_ISREG(opened.st_mode):
             _fail(
                 f"{label} descriptor must reference a regular file"
@@ -216,7 +219,7 @@ def _open_identity_anchor(
             label=label,
         )
         return fd, identity
-    except Exception:
+    except ManifestSourceAuditError:
         os.close(fd)
         raise
 
