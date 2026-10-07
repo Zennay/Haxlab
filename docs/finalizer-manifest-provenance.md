@@ -6,6 +6,7 @@ The runtime finalizer publishes a leaderboard, a human-imitation training manife
 
 Before returning `already_finalized`, `finalize_analysis_if_ready()` must prove all of the following:
 
+- the completion marker, leaderboard, and training manifest are regular non-symlink files before reuse is considered;
 - the completion marker still matches the current runtime snapshot;
 - the leaderboard still matches the current analyzer version, analysis root, and threshold contract;
 - the training manifest uses the current schema and analyzer version;
@@ -15,7 +16,7 @@ Before returning `already_finalized`, `finalize_analysis_if_ready()` must prove 
 - completion leaderboard/training counts match the currently loaded artifacts;
 - completion stores and matches SHA-256 + byte size for both leaderboard and training manifest.
 
-Any stale, malformed, swapped, or modified artifact makes reuse ineligible and forces a deterministic rebuild.
+Any stale, malformed, swapped, symlinked, or modified artifact makes reuse ineligible and forces a deterministic rebuild.
 
 ## Compatibility
 
