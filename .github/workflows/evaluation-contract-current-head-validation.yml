@@ -1,9 +1,7 @@
-name: Evaluation contract current-head validation
-
 on:
-  push:
+  pull_request:
     branches:
-      - validation/evaluation-contract-current-head-20261007
+      - feature/arena-v2-current-main-20261004
     paths:
       - "src/haxlab/evaluation/models.py"
       - "src/haxlab/evaluation/promotion.py"
@@ -15,12 +13,11 @@ on:
       - "tests/test_promotion.py"
       - ".github/workflows/*.yml"
   workflow_dispatch:
-
 permissions:
   contents: read
 
 concurrency:
-  group: haxlab-evaluation-contract-current-head-${{ github.ref }}
+  group: haxlab-evaluation-contract-current-head-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -33,13 +30,13 @@ jobs:
       - name: Checkout exact event SHA
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           clean: true
 
       - name: Verify exact source checkout
         shell: bash
         env:
-          EXPECTED_SHA: ${{ github.sha }}
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           ACTUAL_SHA="$(git rev-parse HEAD)"
