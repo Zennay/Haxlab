@@ -39,6 +39,13 @@ def test_duplicate_report_identity_fails_closed_with_both_provenances() -> None:
     with pytest.raises(DuplicateMatchIdError) as exc:
         validate_unique_match_ids(rows)
 
+    assert exc.value.conflicts == (
+        (
+            "league-round-7",
+            (("a" * 64, "111"), ("b" * 64, "222")),
+        ),
+    )
+
     message = str(exc.value)
     assert "league-round-7" in message
     assert "111" in message
@@ -62,6 +69,17 @@ def test_duplicate_diagnostics_are_identical_across_source_ordering() -> None:
     assert messages[0] == messages[1]
     assert messages[0].index("a" * 64) < messages[0].index("b" * 64)
 
+    expected_conflicts = (
+        (
+            "league-round-7",
+            (("a" * 64, "111"), ("b" * 64, "222")),
+        ),
+    )
+    for candidate in (rows, list(reversed(rows))):
+        with pytest.raises(DuplicateMatchIdError) as exc:
+            validate_unique_match_ids(candidate)
+        assert exc.value.conflicts == expected_conflicts
+
 
 def test_all_duplicate_identity_groups_are_reported_in_canonical_order() -> None:
     rows = [
@@ -73,6 +91,11 @@ def test_all_duplicate_identity_groups_are_reported_in_canonical_order() -> None
 
     with pytest.raises(DuplicateMatchIdError) as exc:
         validate_unique_match_ids(rows)
+
+    assert exc.value.conflicts == (
+        ("match-a", (("a" * 64, "100"), ("c" * 64, "300"))),
+        ("match-z", (("b" * 64, "200"), ("d" * 64, "400"))),
+    )
 
     message = str(exc.value)
     assert message.index("'match-a'") < message.index("'match-z'")
