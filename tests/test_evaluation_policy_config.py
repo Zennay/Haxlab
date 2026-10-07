@@ -88,6 +88,22 @@ def test_policy_config_fails_closed_without_nofollow_support(
         load_promotion_policy(path)
 
 
+def test_policy_config_fails_closed_without_nonblocking_support(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _write_policy(
+        tmp_path,
+        "minimum_games_vs_champion = 500\n"
+        "minimum_score_rate_lower_bound = 0.51\n"
+        "minimum_frozen_scenario_pass_rate = 0.98\n",
+    )
+    monkeypatch.delattr(policy_config_module.os, "O_NONBLOCK")
+
+    with pytest.raises(ValueError, match="non-blocking"):
+        load_promotion_policy(path)
+
+
 def test_semantically_equal_policy_records_byte_drift(tmp_path: Path) -> None:
     lines = (
         "minimum_games_vs_champion = 500\n"
