@@ -6,6 +6,7 @@ on:
       - ops/evaluation-haxlab-listener-start-only-20261007
     paths:
       - ".github/workflows/haxlab-listener-start-only-recovery-20261007.yml"
+      - "tests/test_haxlab_listener_start_only_recovery_contract.py"
 
 permissions:
   contents: read
@@ -19,6 +20,21 @@ jobs:
     runs-on: [self-hosted, zcloud, vps]
     timeout-minutes: 3
     steps:
+      - name: Checkout exact incident branch head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Prove start-only recovery contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 tests/test_haxlab_listener_start_only_recovery_contract.py
+
       - name: Start HaxLab listener only when inactive and worker-free
         shell: bash
         run: |
@@ -36,7 +52,7 @@ jobs:
 
           if [ "$worker_before" -eq 1 ]; then
             # An active job is authoritative even if systemd's listener state is stale.
-            # Recovery must never stop/restart/start around an existing Worker.
+            # Recovery must not change service state around an existing Worker.
             pgrep -u "$RUN_USER" -f 'Runner\.Worker' >/dev/null 2>&1
             echo "HAXLAB_START_ONLY_RECOVERY action=preserve-active-worker pre_state=$pre_state pre_pid=$pre_pid worker_before=1"
             exit 0
