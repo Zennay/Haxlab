@@ -23,9 +23,9 @@ FORBIDDEN_CALLS = {
     "locale.setlocale",
 }
 FORBIDDEN_MUTATING_METHODS = {
-    "sys.path": {"append", "clear", "extend", "insert", "pop", "remove", "reverse", "sort"},
-    "sys.modules": {"clear", "pop", "popitem", "setdefault", "update"},
-    "os.environ": {"clear", "pop", "popitem", "setdefault", "update"},
+    "sys.path": {"append", "clear", "extend", "insert", "pop", "remove", "reverse", "sort", "__setitem__", "__delitem__"},
+    "sys.modules": {"clear", "pop", "popitem", "setdefault", "update", "__setitem__", "__delitem__"},
+    "os.environ": {"clear", "pop", "popitem", "setdefault", "update", "__setitem__", "__delitem__"},
 }
 
 
@@ -87,6 +87,14 @@ def _violations(source: str) -> list[str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             target = _canonical_name(node.func, aliases)
+            if target in {"setattr", "delattr"} and node.args:
+                owner = _canonical_name(node.args[0], aliases)
+                if owner in {"os", "sys"} and len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
+                    attr = node.args[1].value
+                    guarded = {"os": {"environ"}, "sys": {"path", "modules"}}
+                    if isinstance(attr, str) and attr in guarded[owner]:
+                        findings.append(f"line:{node.lineno}:mutation:{owner}.{attr}")
+                        continue
             if target in FORBIDDEN_CALLS:
                 findings.append(f"line:{node.lineno}:call:{target}")
                 continue
@@ -141,6 +149,8 @@ def test_contract_rejects_process_global_state_mutation() -> None:
             os.environ["MODE"] = "unsafe"
             del os.environ["OLD"]
             os.environ.update({"X": "1"})
+            os.environ.__setitem__("Y", "2")
+            setattr(sys, "path", ["/tmp/plugin"])
             sys.path.append("/tmp/plugin")
             sys.modules.pop("haxlab.plugin", None)
             sig.signal(sig.SIGTERM, lambda *_: None)
@@ -154,6 +164,8 @@ def test_contract_rejects_process_global_state_mutation() -> None:
         "assignment:os.environ",
         "delete:os.environ",
         "mutation:os.environ.update",
+        "mutation:os.environ.__setitem__",
+        "mutation:sys.path",
         "mutation:sys.path.append",
         "mutation:sys.modules.pop",
         "call:signal.signal",
