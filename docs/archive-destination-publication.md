@@ -23,4 +23,4 @@ If the destination already exists, publication never replaces it. The existing w
 
 ## Scope
 
-This is only the destination publication/verification boundary in `runtime/archive.py`. Source inode snapshot hardening is completed by #199/#202. Published-object auditing is completed by #194/#196. Scanner, RuntimeState/schema, analyzer, M0, learning, evaluation, models and champion state are unchanged.
+This is only the destination publication/verification boundary in `runtime/archive.py`. Source inode snapshot hardening is completed by #199/#202. Published-object auditing is completed by #194/#196. Worker-side consumption of raw archive bytes is independently protected by #203/#205; this publication contract neither replaces nor modifies that worker boundary. Scanner, RuntimeState/schema, analyzer, M0, learning, evaluation, models and champion state are unchanged.
