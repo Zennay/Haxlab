@@ -1,0 +1,56 @@
+name: Arena integration test-manifest current-head proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Exact 40-character candidate SHA
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  prove:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    steps:
+      - name: Validate immutable candidate SHA
+        shell: bash
+        env:
+          TARGET_SHA: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error title=Mutable proof ref::exact 40-character lowercase commit SHA required"
+            exit 1
+          fi
+
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 1
+          clean: true
+
+      - name: Verify exact candidate
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          test "$ACTUAL_SHA" = "$EXPECTED_SHA"
+          echo "ARENA_INTEGRATION_MANIFEST_PROOF_HEAD=$ACTUAL_SHA"
+
+      - name: Run focused contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .arena-manifest-proof-venv
+          python3 -m venv .arena-manifest-proof-venv
+          .arena-manifest-proof-venv/bin/pip install --upgrade pip
+          .arena-manifest-proof-venv/bin/pip install -e '.[dev]'
+          .arena-manifest-proof-venv/bin/python -m compileall -q tests/test_arena_integration_test_manifest.py
+          PYTHONPATH="$GITHUB_WORKSPACE/src" .arena-manifest-proof-venv/bin/pytest -q tests/test_arena_integration_test_manifest.py
+          echo "ARENA_INTEGRATION_TEST_MANIFEST_RESULT=green"
