@@ -10,29 +10,30 @@ from haxlab.runtime.state import RuntimeState
 
 
 @pytest.mark.parametrize("raw_batch_size", ["0", "-1"])
-def test_worker_main_does_not_clamp_invalid_batch_size(
+def test_worker_main_rejects_invalid_batch_size_before_runtime_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     raw_batch_size: str,
 ) -> None:
+    state_path = tmp_path / "state.sqlite3"
     monkeypatch.setattr(
         sys,
         "argv",
         [
             "haxlab-worker",
             "--state-db",
-            str(tmp_path / "state.sqlite3"),
+            str(state_path),
             "--batch-size",
             raw_batch_size,
             "--once",
         ],
     )
 
-    with pytest.raises(
-        ValueError,
-        match="queue limit must be a native positive integer",
-    ):
+    with pytest.raises(SystemExit) as exc_info:
         worker_module.main()
+
+    assert exc_info.value.code == 2
+    assert not state_path.exists()
 
 
 @pytest.mark.parametrize("raw_batch_size", ["0", "-1"])
