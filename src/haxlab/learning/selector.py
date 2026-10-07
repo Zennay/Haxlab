@@ -166,6 +166,7 @@ def build_training_manifest(
     rejected = 0
     rejection_reasons: Counter[str] = Counter()
     scanned = 0
+    seen_replay_sha256: set[str] = set()
 
     for path in analysis_root.rglob("*.json"):
         if path.name.startswith("_"):
@@ -176,6 +177,11 @@ def build_training_manifest(
             rejected += 1
             rejection_reasons.update(["invalid_analysis_provenance"])
             continue
+        if replay_sha256 in seen_replay_sha256:
+            raise ValueError(
+                f"duplicate analysis provenance for replay {replay_sha256}"
+            )
+        seen_replay_sha256.add(replay_sha256)
         try:
             analysis_bytes = path.read_bytes()
             analysis_sha256 = hashlib.sha256(analysis_bytes).hexdigest()
