@@ -37,6 +37,7 @@ MAPPING_MUTATING_METHODS = {
     "update",
     "__setitem__",
     "__delitem__",
+    "__ior__",
 }
 
 MAPPING_FUNCTION_MUTATORS = {
@@ -54,6 +55,8 @@ MAPPING_FUNCTION_MUTATORS = {
     "builtins.dict.__setitem__",
     "dict.__delitem__",
     "builtins.dict.__delitem__",
+    "dict.__ior__",
+    "builtins.dict.__ior__",
     "operator.setitem",
     "operator.delitem",
 }
@@ -117,6 +120,9 @@ def _mapping_root(node: ast.AST | None, aliases: dict[str, str]) -> str | None:
         owner = _canonical_name(node.value, aliases) or "<expression>"
         return f"{owner}.__dict__"
     if isinstance(node, ast.Call):
+        canonical = _canonical_name(node, aliases)
+        if canonical and canonical.endswith(".__dict__"):
+            return canonical
         target = _canonical_name(node.func, aliases)
         if target in {"vars", "builtins.vars"} and len(node.args) == 1:
             return "vars(...)"
@@ -357,6 +363,8 @@ def test_contract_rejects_dunder_dict_and_vars_mapping_mutation() -> None:
             vars(policy).setdefault("y", 2)
             dict.__setitem__(vars(policy), "z", 3)
             operator.delitem(policy.__dict__, "z")
+            getattr(policy, "__dict__")["via_getattr"] = 4
+            dict.__ior__(vars(policy), {"via_ior": 5})
         """
     )
 
@@ -368,6 +376,8 @@ def test_contract_rejects_dunder_dict_and_vars_mapping_mutation() -> None:
         "setdefault",
         "dict.__setitem__",
         "operator.delitem",
+        "via_getattr",
+        "dict.__ior__",
     ):
         assert expected in findings
 
