@@ -87,6 +87,7 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONPATH="$GITHUB_WORKSPACE/src" .arena-ci-venv/bin/pytest -q \
+            tests/test_arena_integration_test_manifest.py \
             tests/test_closed_loop_arena.py \
             tests/test_duel_gate.py \
             tests/test_multisource_duel.py \
