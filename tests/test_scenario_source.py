@@ -173,15 +173,16 @@ def test_select_scenario_sources_returns_deterministic_disjoint_set(
 
 
 def _candidate_files(tmp_path: Path) -> tuple[Path, Path, str]:
-    raw = tmp_path / "replay.hbr2"
-    raw.write_bytes(b"haxlab-frozen-replay-bytes")
-    raw_sha = hashlib.sha256(raw.read_bytes()).hexdigest()
+    payload_bytes = b"haxlab-frozen-replay-bytes"
+    raw_sha = hashlib.sha256(payload_bytes).hexdigest()
+    raw = tmp_path / f"{raw_sha}.hbr2"
+    raw.write_bytes(payload_bytes)
 
     players = [
         {"id": index + 1, "teamId": 1 if index < 4 else 2, "samples": 100}
         for index in range(8)
     ]
-    analysis = tmp_path / "analysis.json"
+    analysis = tmp_path / f"{raw_sha}.json"
     analysis.write_text(
         json.dumps(
             {
@@ -660,4 +661,35 @@ def test_healthy_candidate_rejects_analysis_bound_to_other_source(
     )
 
     assert candidate is None
+
+def test_healthy_candidate_rejects_noncanonical_source_paths(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    raw, analysis, raw_sha = _candidate_files(tmp_path)
+    monkeypatch.setattr(scenario_source, "infer_roles_4v4", _fake_roles)
+
+    wrong_raw = tmp_path / "renamed.hbr2"
+    wrong_raw.write_bytes(raw.read_bytes())
+    wrong_analysis = tmp_path / "renamed.json"
+    wrong_analysis.write_bytes(analysis.read_bytes())
+
+    assert (
+        scenario_source._healthy_candidate(
+            sha256=raw_sha,
+            raw_path=str(wrong_raw),
+            analysis_path=str(analysis),
+            sampled_states=100,
+        )
+        is None
+    )
+    assert (
+        scenario_source._healthy_candidate(
+            sha256=raw_sha,
+            raw_path=str(raw),
+            analysis_path=str(wrong_analysis),
+            sampled_states=100,
+        )
+        is None
+    )
 
