@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: haxlab-evaluation-background-execution-validation
+  group: haxlab-evaluation-background-execution-validation-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:
@@ -31,6 +31,15 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "${{ github.sha }}"
           echo "HAXLAB_EVALUATION_BACKGROUND_EXECUTION_HEAD=$(git rev-parse HEAD)"
+
+      - name: Verify candidate is still the live branch head
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk 'NR == 1 {print $1}')"
+          test -n "$remote_head"
+          test "$remote_head" = "${{ github.sha }}"
+          echo "HAXLAB_EVALUATION_BACKGROUND_EXECUTION_LIVE_HEAD=$remote_head"
 
       - name: Create isolated test environment
         shell: bash
