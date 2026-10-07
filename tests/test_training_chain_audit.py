@@ -68,6 +68,7 @@ def _install_dependencies(
     holdout: dict | None = None,
     bundle_clean: bool = True,
     bundle_errors: list[str] | None = None,
+    bundle_inventory_sha: str = "d" * 64,
     mutate_manifest_on_recheck: bool = False,
 ) -> None:
     manifest = manifest or _manifest()
@@ -115,7 +116,7 @@ def _install_dependencies(
         lambda **kwargs: {
             "schema": shard_bundle_audit.AUDIT_SCHEMA,
             "clean": bundle_clean,
-            "inventory_sha256": "d" * 64,
+            "inventory_sha256": bundle_inventory_sha,
             "train": {"index_sha256": hashlib.sha256(train_bytes).hexdigest()},
             "holdout": {"index_sha256": hashlib.sha256(holdout_bytes).hexdigest()},
             "errors": bundle_errors or [],
@@ -152,7 +153,20 @@ def test_chain_audit_accepts_exact_success_and_failed_request_inventory(
     assert first["manifest_inventory_sha256"] == "c" * 64
     assert first["shard_bundle_inventory_sha256"] == "d" * 64
     assert len(first["inventory_sha256"]) == 64
-    assert len(first["chain_sha256"]) == 64
+    expected_chain = hashlib.sha256(
+        json.dumps(
+            {
+                "manifest_sha256": first["manifest_sha256"],
+                "manifest_inventory_sha256": first["manifest_inventory_sha256"],
+                "shard_bundle_inventory_sha256": first["shard_bundle_inventory_sha256"],
+                "inventory_sha256": first["inventory_sha256"],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    assert first["chain_sha256"] == expected_chain
     assert first["errors"] == []
 
 
@@ -238,6 +252,21 @@ def test_chain_audit_rejects_index_provenance_drift(
 
     assert receipt["clean"] is False
     assert any(error.startswith(expected) for error in receipt["errors"])
+
+
+def test_chain_root_digest_changes_with_bundle_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_dependencies(monkeypatch, bundle_inventory_sha="d" * 64)
+    first = _audit()
+
+    _install_dependencies(monkeypatch, bundle_inventory_sha="e" * 64)
+    second = _audit()
+
+    assert first["clean"] is True
+    assert second["clean"] is True
+    assert first["inventory_sha256"] == second["inventory_sha256"]
+    assert first["chain_sha256"] != second["chain_sha256"]
 
 
 def test_chain_audit_propagates_manifest_audit_failure(
