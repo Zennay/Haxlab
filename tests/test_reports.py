@@ -1,4 +1,5 @@
-from haxlab.ingestion.reports import parse_match_report
+from haxlab.ingestion.discord_export import read_discord_exports
+from haxlab.ingestion.reports import looks_like_match_report, parse_match_report
 
 
 def test_parses_scrim_report_fields() -> None:
@@ -109,3 +110,66 @@ def test_malformed_attachment_does_not_poison_valid_sibling() -> None:
     assert len(report.attachments) == 1
     assert report.attachments[0].file_name == "good.hbr2"
     assert report.attachments[0].size_bytes == 17
+
+
+
+def test_report_detection_ignores_malformed_attachment_container() -> None:
+    assert (
+        looks_like_match_report(
+            {
+                "id": "ordinary",
+                "content": "ordinary chat message",
+                "attachments": 17,
+            }
+        )
+        is False
+    )
+
+
+def test_report_parser_treats_malformed_attachment_container_as_empty() -> None:
+    report = parse_match_report(
+        {
+            "id": "report-with-bad-container",
+            "content": "MATCH REPORT #bad-container",
+            "attachments": {"fileName": "not-a-list.hbr2"},
+        }
+    )
+
+    assert report.report_id == "bad-container"
+    assert report.attachments == ()
+
+
+def test_malformed_attachment_container_does_not_abort_later_export_report(
+    tmp_path,
+) -> None:
+    export = tmp_path / "discord.json"
+    export.write_text(
+        __import__("json").dumps(
+            {
+                "channel": {"id": "channel-1"},
+                "messages": [
+                    {
+                        "id": "ordinary",
+                        "content": "ordinary chat message",
+                        "attachments": 17,
+                    },
+                    {
+                        "id": "valid-report",
+                        "content": (
+                            "MATCH REPORT #later\n"
+                            "Red Team 2 - 1 Blue Team\n"
+                            "Possession: 51% 49%"
+                        ),
+                        "attachments": [],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    reports, failures = read_discord_exports(tmp_path)
+
+    assert failures == []
+    assert [report.message_id for report in reports] == ["valid-report"]
+    assert reports[0].report_id == "later"
