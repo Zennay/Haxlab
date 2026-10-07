@@ -106,6 +106,19 @@ def _aliases(tree: ast.AST) -> dict[str, str]:
 
 
 def _canonical_name(node: ast.AST | None, aliases: dict[str, str]) -> str | None:
+    if isinstance(node, ast.Call):
+        accessor = _canonical_name(node.func, aliases)
+        if (
+            accessor in {"getattr", "builtins.getattr"}
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and isinstance(node.args[1].value, str)
+        ):
+            owner = _canonical_name(node.args[0], aliases)
+            if owner:
+                return f"{owner}.{node.args[1].value}"
+        return None
+
     name = _name(node)
     if name is None:
         return None
@@ -153,14 +166,13 @@ def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
                 )
                 continue
 
-            if isinstance(node.func, ast.Attribute):
-                owner = _canonical_name(node.func.value, aliases)
-                methods = FORBIDDEN_MUTATING_METHODS.get(owner or "")
-                if methods and node.func.attr in methods:
+            for owner, methods in FORBIDDEN_MUTATING_METHODS.items():
+                prefix = f"{owner}."
+                if target and target.startswith(prefix) and target[len(prefix):] in methods:
                     findings.append(
-                        f"line {node.lineno}: process-state mutation method: "
-                        f"{owner}.{node.func.attr}"
+                        f"line {node.lineno}: process-state mutation method: {target}"
                     )
+                    break
 
         if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
@@ -258,6 +270,28 @@ def test_contract_resolves_direct_import_and_builtin_aliases() -> None:
     assert "sys.modules.__delitem__" in findings
     assert "signal.signal" in findings
     assert "sys.path" in findings
+
+
+def test_contract_rejects_constant_getattr_mutation_bypasses() -> None:
+    source = textwrap.dedent(
+        """
+        import os
+        import sys
+        from builtins import getattr as read_attr
+
+        def probe():
+            getattr(os, "chdir")("/tmp")
+            getattr(os.environ, "update")({"MODE": "unsafe"})
+            read_attr(sys, "settrace")(lambda *args: None)
+            read_attr(sys, "path").append("/tmp/plugin")
+        """
+    )
+
+    findings = "\n".join(scan_source(source))
+    assert "os.chdir" in findings
+    assert "os.environ.update" in findings
+    assert "sys.settrace" in findings
+    assert "sys.path.append" in findings
 
 
 def test_contract_allows_read_only_process_state_access() -> None:
