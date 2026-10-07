@@ -1,4 +1,5 @@
 name: HaxLab baseline audit root-binding proof
+# Trigger note: current-main restack proof.
 
 on:
   workflow_dispatch:
