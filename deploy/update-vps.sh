@@ -18,7 +18,10 @@ if haxlab_update_service_was_active haxlab-live-bot.service; then
 fi
 
 haxlab_apply_verified_main_update() {
-  systemctl stop "${HAXLAB_UPDATE_MANAGED_SERVICES[@]}" 2>/dev/null || true
+  if ! systemctl stop "${HAXLAB_UPDATE_MANAGED_SERVICES[@]}"; then
+    echo "Failed to stop all managed HaxLab services; refusing to update checkout." >&2
+    return 1
+  fi
 
   apt-get install -y nodejs npm
 
