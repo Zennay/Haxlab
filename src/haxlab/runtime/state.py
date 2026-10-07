@@ -8,6 +8,7 @@ from pathlib import Path
 CURRENT_ANALYZER_VERSION = "state-pass-v4"
 ANALYSIS_WRITE_STATUSES = frozenset({"ok", "failed", "retry"})
 PROCESSING_WRITE_STATUSES = frozenset({"ok", "failed"})
+SOURCE_WRITE_STATUSES = frozenset({"archived", "duplicate", "failed"})
 
 
 SCHEMA = """
@@ -186,6 +187,11 @@ class RuntimeState:
         status: str,
         error: str | None = None,
     ) -> None:
+        if type(status) is not str or status not in SOURCE_WRITE_STATUSES:
+            raise ValueError(
+                "source status must be one of: archived, duplicate, failed"
+            )
+
         self.connection.execute(
             """
             INSERT INTO source_files (
