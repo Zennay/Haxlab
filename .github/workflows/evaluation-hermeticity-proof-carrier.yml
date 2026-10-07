@@ -23,14 +23,14 @@ jobs:
       - name: Checkout exact evaluation candidate
         uses: actions/checkout@v4
         with:
-          ref: be26fc84d5b9f11c6b7fca46f0b8ed79e4a2913d
+          ref: 9e82831b22e000c773284223bfa53a02f116a87f
           clean: true
 
       - name: Verify exact candidate SHA
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "be26fc84d5b9f11c6b7fca46f0b8ed79e4a2913d"
+          test "$(git rev-parse HEAD)" = "9e82831b22e000c773284223bfa53a02f116a87f"
           echo "HAXLAB_EVALUATION_HERMETICITY_HEAD=$(git rev-parse HEAD)"
 
       - name: Create isolated test environment
