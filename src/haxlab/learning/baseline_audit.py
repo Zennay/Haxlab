@@ -119,14 +119,16 @@ def _open_bundle_root(path: Path) -> tuple[int, tuple[int, int]]:
 
     try:
         opened = os.fstat(fd)
-        if not stat.S_ISDIR(opened.st_mode):
-            _fail("bundle directory descriptor is not a directory")
-        if (opened.st_dev, opened.st_ino) != (initial.st_dev, initial.st_ino):
-            _fail("bundle directory identity changed during secure open")
-        return fd, (opened.st_dev, opened.st_ino)
-    except Exception:
+    except OSError as exc:
         os.close(fd)
-        raise
+        _fail(f"bundle directory descriptor is not readable: {exc}")
+    if not stat.S_ISDIR(opened.st_mode):
+        os.close(fd)
+        _fail("bundle directory descriptor is not a directory")
+    if (opened.st_dev, opened.st_ino) != (initial.st_dev, initial.st_ino):
+        os.close(fd)
+        _fail("bundle directory identity changed during secure open")
+    return fd, (opened.st_dev, opened.st_ino)
 
 
 def _reconfirm_bundle_root(
