@@ -1,0 +1,57 @@
+name: HaxLab report possession integrity proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact branch SHA to prove
+        required: true
+        type: string
+  push:
+    branches:
+      - feature/data-pipeline-report-possession-integrity-20261007
+    paths:
+      - "src/haxlab/ingestion/reports.py"
+      - "tests/test_reports.py"
+      - "docs/discord-report-possession-integrity.md"
+      - ".github/workflows/data-pipeline-report-possession-integrity-proof.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-report-possession-integrity-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate exact-head report possession integrity
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    env:
+      EXPECTED_HEAD: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_sha || github.sha }}
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+
+      - name: Assert exact head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Run focused proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .report-possession-venv
+          python3 -m venv .report-possession-venv
+          .report-possession-venv/bin/pip install -q --upgrade pip
+          .report-possession-venv/bin/pip install -q -e '.[dev]'
+          .report-possession-venv/bin/python -m compileall -q src tests
+          .report-possession-venv/bin/pytest -q tests/test_reports.py
+          .report-possession-venv/bin/pytest --collect-only -q >/dev/null
+          echo "HAXLAB_REPORT_POSSESSION_INTEGRITY_RESULT=green"

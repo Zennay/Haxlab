@@ -176,3 +176,57 @@ def test_malformed_attachment_container_does_not_abort_later_export_report(
     assert failures == []
     assert [report.message_id for report in reports] == ["valid-report"]
     assert reports[0].report_id == "later"
+
+
+def test_rejects_incoherent_possession_percentages() -> None:
+    invalid_contents = [
+        "MATCH REPORT #bad-range Red Team 1 - 0 Blue Team\nPossession: 150% 20%",
+        "MATCH REPORT #bad-sum Red Team 1 - 0 Blue Team\nPossession: 60% 30%",
+    ]
+
+    for content in invalid_contents:
+        try:
+            parse_match_report(
+                {
+                    "id": "message-1",
+                    "content": content,
+                    "attachments": [],
+                }
+            )
+        except ValueError as exc:
+            assert str(exc) == "invalid_possession_percentages"
+        else:
+            raise AssertionError("expected ValueError")
+
+
+def test_accepts_rounded_possession_percentages() -> None:
+    report = parse_match_report(
+        {
+            "id": "message-1",
+            "content": (
+                "MATCH REPORT #rounded Red Team 1 - 0 Blue Team\n"
+                "Possession: 50.2% 49.7%"
+            ),
+            "attachments": [],
+        }
+    )
+
+    assert report.possession_red == 50.2
+    assert report.possession_blue == 49.7
+
+
+
+def test_accepts_possession_rounding_at_contract_boundary() -> None:
+    report = parse_match_report(
+        {
+            "id": "message-boundary",
+            "content": (
+                "MATCH REPORT #boundary Red Team 1 - 0 Blue Team\n"
+                "Possession: 50.25% 50.25%"
+            ),
+            "attachments": [],
+        }
+    )
+
+    assert report.possession_red == 50.25
+    assert report.possession_blue == 50.25
