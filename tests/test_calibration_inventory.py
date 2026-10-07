@@ -521,6 +521,46 @@ def test_request_bindings_are_snapshotted_before_validation(
     )
 
 
+def test_inventory_is_read_only_over_bound_evidence(
+    tmp_path: Path,
+) -> None:
+    request = _request(tmp_path)
+    result_root = request["result_root"]
+    assert isinstance(result_root, Path)
+
+    for label in ("champion-self", "candidate-d", "weak-zero"):
+        for source_id in ("01", "02", "03"):
+            path = result_root / f"{label}-source-{source_id}.json"
+            path.write_text(
+                json.dumps(
+                    _valid_payload(
+                        request,
+                        label=label,
+                        source_id=source_id,
+                    ),
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+    before = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in sorted(tmp_path.rglob("*"))
+        if path.is_file()
+    }
+
+    report = inventory_calibration_results(**request)
+
+    after = {
+        path.relative_to(tmp_path): path.read_bytes()
+        for path in sorted(tmp_path.rglob("*"))
+        if path.is_file()
+    }
+    assert report["complete"] is True
+    assert after == before
+
+
 def test_cli_require_complete_accepts_real_nine_of_nine_inventory(
     tmp_path: Path,
     capsys,
