@@ -10,11 +10,16 @@ from haxlab.ingestion.dataset_receipt import M0_ARTIFACTS, build_dataset_receipt
 from haxlab.ingestion.generation_commit import (
     GENERATION_COMMIT_SCHEMA,
     GENERATION_POINTER_SCHEMA,
+    MAX_GENERATION_COMMIT_BYTES,
+    MAX_GENERATION_POINTER_BYTES,
     GenerationCommitError,
     build_generation_commit,
     build_generation_pointer,
     generation_commit_bytes,
     generation_pointer_bytes,
+    parse_generation_commit_bytes,
+    parse_generation_pointer_bytes,
+    validate_generation_pointer,
 )
 
 
@@ -177,3 +182,91 @@ def test_pointer_rejects_tampered_commit_digest(tmp_path: Path) -> None:
 
     with pytest.raises(GenerationCommitError, match="commit digest mismatch"):
         build_generation_pointer(commit)
+
+
+def test_generation_commit_bytes_round_trip_strictly(tmp_path: Path) -> None:
+    receipt = _receipt(tmp_path)
+    payload = generation_commit_bytes(receipt)
+
+    assert parse_generation_commit_bytes(payload) == build_generation_commit(receipt)
+
+
+def test_generation_pointer_bytes_round_trip_strictly(tmp_path: Path) -> None:
+    commit = build_generation_commit(_receipt(tmp_path))
+    payload = generation_pointer_bytes(commit)
+
+    assert parse_generation_pointer_bytes(payload) == build_generation_pointer(commit)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda payload: payload[:-1],
+        lambda payload: b" " + payload,
+        lambda payload: payload + b" ",
+    ],
+)
+def test_noncanonical_generation_commit_bytes_fail_closed(
+    tmp_path: Path,
+    mutate,
+) -> None:
+    payload = generation_commit_bytes(_receipt(tmp_path))
+
+    with pytest.raises(GenerationCommitError, match="not canonical"):
+        parse_generation_commit_bytes(mutate(payload))
+
+
+def test_pretty_printed_generation_commit_fails_closed(tmp_path: Path) -> None:
+    commit = build_generation_commit(_receipt(tmp_path))
+    payload = (json.dumps(commit, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+    with pytest.raises(GenerationCommitError, match="not canonical"):
+        parse_generation_commit_bytes(payload)
+
+
+def test_duplicate_json_keys_fail_closed() -> None:
+    payload = (
+        b'{"schema":"haxlab-m0-generation-pointer-v1",'
+        b'"schema":"haxlab-m0-generation-pointer-v1",'
+        b'"generation_id":"m0-' + b"0" * 64 + b'",'
+        b'"receipt_sha256":"' + b"0" * 64 + b'",'
+        b'"commit_sha256":"' + b"0" * 64 + b'"}\n'
+    )
+
+    with pytest.raises(GenerationCommitError, match="duplicate JSON key: schema"):
+        parse_generation_pointer_bytes(payload)
+
+
+def test_generation_evidence_readers_are_bounded() -> None:
+    with pytest.raises(GenerationCommitError, match="byte size is invalid"):
+        parse_generation_commit_bytes(b"x" * (MAX_GENERATION_COMMIT_BYTES + 1))
+    with pytest.raises(GenerationCommitError, match="byte size is invalid"):
+        parse_generation_pointer_bytes(b"x" * (MAX_GENERATION_POINTER_BYTES + 1))
+
+
+def test_generation_evidence_requires_native_bytes() -> None:
+    with pytest.raises(GenerationCommitError, match="native bytes"):
+        parse_generation_pointer_bytes(bytearray(b"{}\n"))  # type: ignore[arg-type]
+
+
+def test_pointer_must_bind_the_exact_commit(tmp_path: Path) -> None:
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    _write_dataset(first_root)
+    _write_dataset(second_root, suffix=b'{"match_id":"m-2"}\n')
+
+    first_commit = build_generation_commit(build_dataset_receipt(first_root))
+    second_commit = build_generation_commit(build_dataset_receipt(second_root))
+    pointer = build_generation_pointer(first_commit)
+
+    assert validate_generation_pointer(pointer, first_commit) == pointer
+    with pytest.raises(GenerationCommitError, match="does not match commit"):
+        validate_generation_pointer(pointer, second_commit)
+
+
+def test_pointer_parser_rejects_noncanonical_bytes(tmp_path: Path) -> None:
+    commit = build_generation_commit(_receipt(tmp_path))
+    payload = generation_pointer_bytes(commit)
+
+    with pytest.raises(GenerationCommitError, match="not canonical"):
+        parse_generation_pointer_bytes(payload[:-1])
