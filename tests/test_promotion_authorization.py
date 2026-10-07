@@ -12,6 +12,8 @@ from haxlab.evaluation.promotion_authorization import (
     REQUIRED_GATES,
     SCHEMA_VERSION,
     authorize_promotion,
+    load_authorization_request,
+    main,
     render_authorization,
 )
 
@@ -350,3 +352,112 @@ def test_focused_workflow_is_read_only_self_hosted_and_exact_sha_bound() -> None
     assert '[[ ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]' in text
     assert 'ACTUAL_SHA="$(git rev-parse HEAD)"' in text
     assert ".promotion-auth-venv/bin/pytest -q tests/test_promotion_authorization.py" in text
+
+
+def request_payload() -> dict:
+    return {
+        "exact_head": HEAD,
+        "candidate_id": "candidate-d",
+        "champion_id": "champion-b",
+        "promotion_decision": {
+            "promote": True,
+            "reasons": [
+                "head_to_head_gate_passed",
+                "frozen_scenarios_passed",
+                "no_blocking_regressions",
+                "run_reproducible",
+            ],
+        },
+        "gate_receipt": gate_receipt(),
+        "evidence_sha256": EVIDENCE_SHA,
+        "policy_sha256": POLICY_SHA,
+    }
+
+
+def test_strict_json_request_loader_round_trips_authorization(tmp_path) -> None:
+    request = tmp_path / "request.json"
+    request.write_text(
+        json.dumps(request_payload(), sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    result = load_authorization_request(request)
+
+    assert result["authorized"] is True
+    assert result["exact_head"] == HEAD
+    assert result["evidence_sha256"] == EVIDENCE_SHA
+    assert result["policy_sha256"] == POLICY_SHA
+
+
+@pytest.mark.parametrize(
+    ("mutator", "match"),
+    [
+        (
+            lambda payload: payload.update({"unexpected": True}),
+            "unexpected fields",
+        ),
+        (
+            lambda payload: payload.pop("policy_sha256"),
+            "missing fields",
+        ),
+        (
+            lambda payload: payload.__setitem__(
+                "promotion_decision", {"promote": "true", "reasons": ["pass"]}
+            ),
+            "promote must be native boolean",
+        ),
+        (
+            lambda payload: payload.__setitem__(
+                "promotion_decision", {"promote": True, "reasons": "pass"}
+            ),
+            "reasons must be a JSON array",
+        ),
+        (
+            lambda payload: payload.__setitem__(
+                "promotion_decision",
+                {"promote": True, "reasons": ["pass"], "extra": 1},
+            ),
+            "unexpected fields",
+        ),
+    ],
+)
+def test_json_request_loader_rejects_ambiguous_shapes(
+    tmp_path,
+    mutator,
+    match: str,
+) -> None:
+    payload = request_payload()
+    mutator(payload)
+    request = tmp_path / "request.json"
+    request.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    with pytest.raises(PromotionAuthorizationError, match=match):
+        load_authorization_request(request)
+
+
+def test_cli_emits_canonical_authorization_json(tmp_path, capsys) -> None:
+    request = tmp_path / "request.json"
+    request.write_text(json.dumps(request_payload()) + "\n", encoding="utf-8")
+
+    assert main([str(request)]) == 0
+
+    rendered = capsys.readouterr().out
+    parsed = json.loads(rendered)
+    assert parsed["authorized"] is True
+    assert rendered == render_authorization(parsed)
+
+
+def test_cli_rejects_invalid_json_without_partial_authorization(
+    tmp_path,
+    capsys,
+) -> None:
+    request = tmp_path / "request.json"
+    request.write_text("{not-json}\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        main([str(request)])
+
+    assert exc.value.code == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "promotion authorization rejected" in captured.err
