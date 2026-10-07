@@ -10,14 +10,29 @@ MatchProvenance: TypeAlias = tuple[str, str | None]
 MatchIdConflict: TypeAlias = tuple[str, tuple[MatchProvenance, ...]]
 
 
+def _provenance_sort_key(
+    provenance: MatchProvenance,
+) -> tuple[str, str]:
+    replay_sha256, source_message_id = provenance
+    return replay_sha256, source_message_id or ""
+
+
 class DuplicateMatchIdError(ValueError):
     """Raised when canonical M0 match records contain duplicate identities."""
 
     def __init__(self, conflicts: tuple[MatchIdConflict, ...]) -> None:
-        self.conflicts = conflicts
+        self.conflicts = tuple(
+            sorted(
+                (
+                    (match_id, tuple(sorted(provenances, key=_provenance_sort_key)))
+                    for match_id, provenances in conflicts
+                ),
+                key=lambda item: item[0],
+            )
+        )
         rendered = "; ".join(
             f"{match_id!r} provenances={provenances!r}"
-            for match_id, provenances in conflicts
+            for match_id, provenances in self.conflicts
         )
         super().__init__(f"duplicate canonical match_id values: {rendered}")
 
@@ -32,13 +47,6 @@ def _require_replay_sha256(value: Any, *, field: str) -> str:
     if not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None:
         raise ValueError(f"{field} must be a lowercase 64-character SHA-256")
     return value
-
-
-def _provenance_sort_key(
-    provenance: MatchProvenance,
-) -> tuple[str, str]:
-    replay_sha256, source_message_id = provenance
-    return replay_sha256, source_message_id or ""
 
 
 def validate_unique_match_ids(
@@ -83,7 +91,6 @@ def validate_unique_match_ids(
         if len(provenances) > 1
     ]
     if duplicates:
-        duplicates.sort(key=lambda item: item[0])
         raise DuplicateMatchIdError(tuple(duplicates))
 
     return tuple(sorted(provenance_by_match_id))
