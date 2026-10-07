@@ -227,3 +227,86 @@ def test_frozen_suite_requires_strict_integer_scenario_count(
             [root, _source(tmp_path / "b", "b"), _source(tmp_path / "c", "c")],
             scenarios_per_source=4,
         )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("suite_seed", "1337"),
+        ("suite_seed", 1337.0),
+        ("suite_seed", True),
+        ("scenarios_per_source", "4"),
+        ("scenarios_per_source", 4.0),
+        ("scenarios_per_source", True),
+        ("rollout_seconds", "30"),
+        ("sample_every_ticks", 6.0),
+        ("history_window", False),
+        ("minimum_sources", "3"),
+    ],
+)
+def test_frozen_suite_rejects_coerced_config_integer_types(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    roots = [
+        _source(tmp_path / "a", "a"),
+        _source(tmp_path / "b", "b"),
+        _source(tmp_path / "c", "c"),
+    ]
+    kwargs = {
+        "suite_seed": 1337,
+        "scenarios_per_source": 4,
+        "rollout_seconds": 30,
+        "sample_every_ticks": 6,
+        "history_window": 8,
+        "minimum_sources": 3,
+    }
+    kwargs[field] = value
+
+    with pytest.raises(ValueError, match=f"{field} must be a native integer"):
+        build_frozen_multisource_suite(roots, **kwargs)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "minimum"),
+    [
+        ("scenarios_per_source", 0, 1),
+        ("rollout_seconds", 4, 5),
+        ("sample_every_ticks", 0, 1),
+        ("history_window", 1, 2),
+        ("minimum_sources", 0, 1),
+    ],
+)
+def test_frozen_suite_rejects_out_of_range_config(
+    tmp_path: Path,
+    field: str,
+    value: int,
+    minimum: int,
+) -> None:
+    roots = [
+        _source(tmp_path / "a", "a"),
+        _source(tmp_path / "b", "b"),
+        _source(tmp_path / "c", "c"),
+    ]
+    kwargs = {
+        "suite_seed": 1337,
+        "scenarios_per_source": 4,
+        "rollout_seconds": 30,
+        "sample_every_ticks": 6,
+        "history_window": 8,
+        "minimum_sources": 3,
+    }
+    kwargs[field] = value
+
+    with pytest.raises(ValueError, match=f"{field} must be >= {minimum}"):
+        build_frozen_multisource_suite(roots, **kwargs)
+
+
+def test_source_seed_rejects_coerced_inputs() -> None:
+    with pytest.raises(ValueError, match="suite_seed must be a native integer"):
+        source_seed("1337", "a" * 64, 1)
+    with pytest.raises(ValueError, match="source_index must be a native integer"):
+        source_seed(1337, "a" * 64, 1.0)
+    with pytest.raises(ValueError, match="source_index must be >= 1"):
+        source_seed(1337, "a" * 64, 0)

@@ -32,10 +32,25 @@ def canonical_sha256(payload: dict[str, Any]) -> str:
     return hashlib.sha256(rendered).hexdigest()
 
 
+def _strict_config_int(
+    value: Any,
+    label: str,
+    *,
+    minimum: int | None = None,
+) -> int:
+    if type(value) is not int:
+        raise ValueError(f"{label} must be a native integer")
+    if minimum is not None and value < minimum:
+        raise ValueError(f"{label} must be >= {minimum}")
+    return value
+
+
 def source_seed(suite_seed: int, replay_sha256: str, source_index: int) -> int:
+    seed = _strict_config_int(suite_seed, "suite_seed")
+    index = _strict_config_int(source_index, "source_index", minimum=1)
     material = (
-        f"haxlab-multisource-suite-v2\n{int(suite_seed)}\n"
-        f"{replay_sha256.lower()}\n{int(source_index)}"
+        f"haxlab-multisource-suite-v2\n{seed}\n"
+        f"{replay_sha256.lower()}\n{index}"
     ).encode("utf-8")
     # Keep seeds in a portable signed-32-bit range accepted by all current
     # JS/Python arena runners.
@@ -108,10 +123,37 @@ def build_frozen_multisource_suite(
     history_window: int = 8,
     minimum_sources: int = 3,
 ) -> dict[str, Any]:
+    seed = _strict_config_int(suite_seed, "suite_seed")
+    requested_scenarios = _strict_config_int(
+        scenarios_per_source,
+        "scenarios_per_source",
+        minimum=1,
+    )
+    seconds = _strict_config_int(
+        rollout_seconds,
+        "rollout_seconds",
+        minimum=5,
+    )
+    sample_every = _strict_config_int(
+        sample_every_ticks,
+        "sample_every_ticks",
+        minimum=1,
+    )
+    window = _strict_config_int(
+        history_window,
+        "history_window",
+        minimum=2,
+    )
+    required_sources = _strict_config_int(
+        minimum_sources,
+        "minimum_sources",
+        minimum=1,
+    )
+
     loaded = [_load_source_root(Path(root)) for root in source_roots]
-    if len(loaded) < max(1, int(minimum_sources)):
+    if len(loaded) < required_sources:
         raise ValueError(
-            f"multisource suite requires at least {max(1, int(minimum_sources))} "
+            f"multisource suite requires at least {required_sources} "
             f"sources; got {len(loaded)}"
         )
 
@@ -121,11 +163,6 @@ def build_frozen_multisource_suite(
     replay_hashes = [row["replay_sha256"] for row in loaded]
     if len(set(replay_hashes)) != len(replay_hashes):
         raise ValueError("multisource suite contains duplicate replay SHA-256")
-
-    requested_scenarios = max(1, int(scenarios_per_source))
-    seconds = max(5, int(rollout_seconds))
-    sample_every = max(1, int(sample_every_ticks))
-    window = max(2, int(history_window))
 
     sources: list[dict[str, Any]] = []
     for index, row in enumerate(loaded, start=1):
@@ -140,7 +177,7 @@ def build_frozen_multisource_suite(
                 "id": f"source-{index:02d}",
                 "replay_sha256": row["replay_sha256"],
                 "arena_seed": source_seed(
-                    int(suite_seed),
+                    seed,
                     row["replay_sha256"],
                     index,
                 ),
@@ -158,7 +195,7 @@ def build_frozen_multisource_suite(
         "schema": MULTISOURCE_SUITE_SCHEMA,
         "frozen": True,
         "selection_algorithm": SELECTION_ALGORITHM,
-        "suite_seed": int(suite_seed),
+        "suite_seed": seed,
         "source_count": len(sources),
         "replay_sha256s": [source["replay_sha256"] for source in sources],
         "evaluation": {
