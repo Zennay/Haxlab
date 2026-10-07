@@ -12,7 +12,7 @@ Python modules under `src/haxlab/evaluation/` must not mutate:
 - Python audit hooks through `sys.addaudithook(...)`;
 - faulthandler process handlers through `enable`, `disable`, `register`,
   `unregister`, delayed-dump scheduling or cancellation;
-- tracemalloc tracing state through `start`, `stop`, or `reset_peak`;
+- tracemalloc tracing state through `start`, `stop`, `reset_peak`, or `clear_traces`;
 - threading-wide trace/profile hooks;
 - Python 3.12+ `sys.monitoring` tool ids, callbacks, event masks or restart
   state.
