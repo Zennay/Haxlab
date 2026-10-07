@@ -86,10 +86,28 @@ def _live_validation_evidence_matches(
             or validations_root.name != "validations"
         ):
             return False
-        evidence_root = (
-            validations_root / version / source_stage
-        ).resolve()
-        if evidence_root.parent.parent != validations_root:
+
+        version_validation_path = validations_root / version
+        if (
+            version_validation_path.is_symlink()
+            or not version_validation_path.is_dir()
+        ):
+            return False
+        version_validation_root = version_validation_path.resolve()
+        if (
+            version_validation_root.parent != validations_root
+            or version_validation_root.name != version
+        ):
+            return False
+
+        source_stage_path = version_validation_root / source_stage
+        if source_stage_path.is_symlink() or not source_stage_path.is_dir():
+            return False
+        evidence_root = source_stage_path.resolve()
+        if (
+            evidence_root.parent != version_validation_root
+            or evidence_root.name != source_stage
+        ):
             return False
 
         raw_evidence_path = Path(raw_path)
@@ -115,9 +133,16 @@ def _live_validation_evidence_matches(
 
 def _promoted_live_version_from_pointer(root: Path) -> str | None:
     live_path = root / "live.json"
-    if not live_path.is_file():
+    if live_path.is_symlink() or not live_path.is_file():
         return None
     try:
+        registry_root = root.resolve()
+        resolved_live_path = live_path.resolve()
+        if (
+            resolved_live_path.parent != registry_root
+            or resolved_live_path.name != "live.json"
+        ):
+            return None
         payload = _load_json(live_path)
     except Exception:
         return None

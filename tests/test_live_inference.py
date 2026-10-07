@@ -428,3 +428,42 @@ def test_live_pointer_rejects_relative_artifact_paths(
     with pytest.raises(FileNotFoundError):
         resolve_version_dir(tmp_path)
 
+def test_live_pointer_rejects_symlinked_pointer_file(tmp_path: Path) -> None:
+    _version(tmp_path, "champion-v1")
+    _live_pointer(tmp_path, "champion-v1")
+    live_path = tmp_path / "live.json"
+    redirected = tmp_path / "redirected-live.json"
+    live_path.rename(redirected)
+    live_path.symlink_to(redirected)
+
+    with pytest.raises(FileNotFoundError):
+        resolve_version_dir(tmp_path)
+
+
+def test_live_pointer_rejects_symlinked_validation_version_dir(
+    tmp_path: Path,
+) -> None:
+    _version(tmp_path, "champion-v1")
+    _live_pointer(tmp_path, "champion-v1")
+    version_dir = tmp_path / "validations" / "champion-v1"
+    redirected = tmp_path / "validations" / "redirected-version"
+    version_dir.rename(redirected)
+    version_dir.symlink_to(redirected, target_is_directory=True)
+
+    with pytest.raises(FileNotFoundError):
+        resolve_version_dir(tmp_path)
+
+
+def test_live_pointer_rejects_symlinked_validation_stage_dir(
+    tmp_path: Path,
+) -> None:
+    _version(tmp_path, "champion-v1")
+    _live_pointer(tmp_path, "champion-v1")
+    stage_dir = tmp_path / "validations" / "champion-v1" / "canary"
+    redirected = stage_dir.parent / "redirected-canary"
+    stage_dir.rename(redirected)
+    stage_dir.symlink_to(redirected, target_is_directory=True)
+
+    with pytest.raises(FileNotFoundError):
+        resolve_version_dir(tmp_path)
+
