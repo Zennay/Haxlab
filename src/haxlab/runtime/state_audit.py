@@ -6,6 +6,7 @@ import math
 import re
 import sqlite3
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -81,6 +82,18 @@ def _nonempty_text(value: object) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
+def _parse_sqlite_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+    if parsed.strftime("%Y-%m-%d %H:%M:%S") != value:
+        return None
+    return parsed
+
+
 def _append_issue(
     issues: list[AuditIssue],
     code: str,
@@ -108,7 +121,9 @@ def _audit_source_files(
 ) -> None:
     for row in connection.execute(
         """
-        SELECT source_path, size_bytes, mtime_ns, sha256, status, error
+        SELECT
+            source_path, size_bytes, mtime_ns, sha256, status, error,
+            first_seen_at, last_seen_at
         FROM source_files
         ORDER BY source_path
         """
@@ -121,6 +136,31 @@ def _audit_source_files(
             _append_issue(issues, "source_size_invalid", subject, "size_bytes must be a non-negative integer")
         if not _valid_nonnegative_int(row["mtime_ns"]):
             _append_issue(issues, "source_mtime_invalid", subject, "mtime_ns must be a non-negative integer")
+
+        first_seen = _parse_sqlite_timestamp(row["first_seen_at"])
+        last_seen = _parse_sqlite_timestamp(row["last_seen_at"])
+        if first_seen is None:
+            _append_issue(
+                issues,
+                "source_first_seen_at_invalid",
+                subject,
+                "first_seen_at must use canonical SQLite CURRENT_TIMESTAMP format",
+            )
+        if last_seen is None:
+            _append_issue(
+                issues,
+                "source_last_seen_at_invalid",
+                subject,
+                "last_seen_at must use canonical SQLite CURRENT_TIMESTAMP format",
+            )
+        if first_seen is not None and last_seen is not None and last_seen < first_seen:
+            _append_issue(
+                issues,
+                "source_seen_time_reversed",
+                subject,
+                "last_seen_at must not precede first_seen_at",
+            )
+
         if status not in _SOURCE_STATUSES:
             _append_issue(
                 issues,
@@ -208,7 +248,7 @@ def _audit_raw_replays(
 ) -> None:
     for row in connection.execute(
         """
-        SELECT sha256, archive_path, size_bytes
+        SELECT sha256, archive_path, size_bytes, first_archived_at
         FROM raw_replays
         ORDER BY sha256
         """
@@ -235,6 +275,13 @@ def _audit_raw_replays(
                 subject,
                 "size_bytes must be a non-negative integer",
             )
+        if _parse_sqlite_timestamp(row["first_archived_at"]) is None:
+            _append_issue(
+                issues,
+                "raw_first_archived_at_invalid",
+                subject,
+                "first_archived_at must use canonical SQLite CURRENT_TIMESTAMP format",
+            )
 
 
 def _audit_processing(
@@ -245,7 +292,7 @@ def _audit_processing(
         """
         SELECT
             sha256, status, format_version, total_frames, duration_seconds,
-            decompressed_bytes, parser_stage, error
+            decompressed_bytes, parser_stage, error, updated_at
         FROM replay_processing
         ORDER BY sha256
         """
@@ -273,6 +320,13 @@ def _audit_processing(
                 "processing_stage_invalid",
                 subject,
                 "parser_stage must be non-empty",
+            )
+        if _parse_sqlite_timestamp(row["updated_at"]) is None:
+            _append_issue(
+                issues,
+                "processing_updated_at_invalid",
+                subject,
+                "updated_at must use canonical SQLite CURRENT_TIMESTAMP format",
             )
         if status == "ok":
             if not isinstance(row["format_version"], int) or isinstance(
@@ -323,7 +377,8 @@ def _audit_analysis(
         """
         SELECT
             sha256, analyzer_version, status, output_path,
-            sampled_state_count, player_count, raw_event_count, tick_count, error
+            sampled_state_count, player_count, raw_event_count, tick_count,
+            error, updated_at
         FROM replay_analysis_versions
         ORDER BY analyzer_version, sha256
         """
@@ -343,6 +398,13 @@ def _audit_analysis(
                 "analysis_version_invalid",
                 subject,
                 "analyzer_version must be non-empty",
+            )
+        if _parse_sqlite_timestamp(row["updated_at"]) is None:
+            _append_issue(
+                issues,
+                "analysis_updated_at_invalid",
+                subject,
+                "updated_at must use canonical SQLite CURRENT_TIMESTAMP format",
             )
         if status not in _ANALYSIS_STATUSES:
             _append_issue(
@@ -485,12 +547,12 @@ def _audit_runtime_events(
                 f"{event_type} requires non-empty detail evidence",
             )
 
-        if not _nonempty_text(row["created_at"]):
+        if _parse_sqlite_timestamp(row["created_at"]) is None:
             _append_issue(
                 issues,
                 "event_created_at_invalid",
                 event_id,
-                "runtime event requires non-empty created_at evidence",
+                "created_at must use canonical SQLite CURRENT_TIMESTAMP format",
             )
 
     placeholders = ", ".join("?" for _ in _REPLAY_SHA_EVENT_TYPES)
