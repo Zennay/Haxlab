@@ -75,6 +75,10 @@ def _require_runtime_policy_schema() -> None:
             f"missing={missing}, extra={extra}"
         )
 
+    dataclass_params = getattr(PromotionPolicy, "__dataclass_params__", None)
+    if dataclass_params is None or not dataclass_params.frozen:
+        raise ValueError("promotion policy runtime model must be a frozen dataclass")
+
     try:
         type_hints = get_type_hints(PromotionPolicy)
     except (NameError, TypeError) as exc:
