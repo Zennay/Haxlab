@@ -219,7 +219,12 @@ def test_duplicate_rejects_destination_replacement_during_verification(
 
         def swapping_open(target, flags, *args, **kwargs):
             nonlocal swapped
-            if not swapped and Path(target) == destination:
+            target_path = Path(target)
+            if (
+                not swapped
+                and target_path.name == destination.name
+                and str(target_path).startswith("/proc/self/fd/")
+            ):
                 swapped = True
                 replacement.replace(destination)
             return real_open(target, flags, *args, **kwargs)
