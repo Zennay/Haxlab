@@ -530,3 +530,67 @@ def test_training_manifest_rejects_invalid_holdout_partition_before_scan(
             holdout_modulus=modulus,
             holdout_bucket=bucket,
         )
+
+
+
+@pytest.mark.parametrize(
+    "mutated",
+    [
+        {"matches": "80"},
+        {"matches": True},
+        {"minutes": "500"},
+        {"minutes": float("nan")},
+        {"rating": "56"},
+        {"rating": float("inf")},
+        {"rating_uncertainty": "0.8"},
+        {"rating_uncertainty": float("nan")},
+        {"player_id": ""},
+        {"player_id": 123},
+    ],
+)
+def test_select_players_rejects_malformed_leaderboard_evidence(
+    mutated: dict,
+) -> None:
+    row = {
+        "player_id": "name:alpha",
+        "name": "Alpha",
+        "role": "forward",
+        "rating": 56.0,
+        "rating_uncertainty": 0.8,
+        "matches": 80,
+        "minutes": 500.0,
+    }
+    row.update(mutated)
+
+    assert select_players(
+        [row],
+        top_fraction_per_role=1.0,
+        min_players_per_role=1,
+        min_matches=1,
+        min_minutes=0.0,
+        max_uncertainty=10.0,
+    ) == []
+
+
+@pytest.mark.parametrize(
+    "leaderboard",
+    [
+        [],
+        {"analysis_version": "state-pass-v4"},
+        {"analysis_version": "state-pass-v4", "rows": {}},
+        {"analysis_version": "state-pass-v4", "rows": "not-a-list"},
+    ],
+)
+def test_training_manifest_rejects_malformed_leaderboard_container(
+    tmp_path: Path,
+    leaderboard: object,
+) -> None:
+    leaderboard_path = tmp_path / "leaderboard.json"
+    leaderboard_path.write_text(json.dumps(leaderboard), encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        build_training_manifest(
+            analysis_root=tmp_path / "analysis",
+            leaderboard_path=leaderboard_path,
+            raw_root=tmp_path / "raw",
+        )
