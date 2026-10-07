@@ -87,6 +87,10 @@ def test_all_duplicate_identity_groups_are_reported_in_canonical_order() -> None
         ("match_id", " match-1"),
         ("match_id", True),
         ("replay_sha256", ""),
+        ("replay_sha256", "A" * 64),
+        ("replay_sha256", "a" * 63),
+        ("replay_sha256", "g" * 64),
+        ("replay_sha256", None),
         ("replay_sha256", 123),
         ("source_message_id", ""),
         ("source_message_id", 123),
@@ -103,3 +107,19 @@ def test_malformed_identity_provenance_fails_closed(field: str, value: object) -
 def test_non_mapping_rows_fail_closed() -> None:
     with pytest.raises(ValueError):
         validate_unique_match_ids([object()])  # type: ignore[list-item]
+
+
+def test_duplicate_fallback_identity_reports_full_replay_provenance() -> None:
+    rows = [
+        _row("hbr2:deadbeefdeadbeef", "a" * 64, None),
+        _row("hbr2:deadbeefdeadbeef", "b" * 64, None),
+    ]
+
+    with pytest.raises(DuplicateMatchIdError) as exc:
+        validate_unique_match_ids(rows)
+
+    message = str(exc.value)
+    assert "hbr2:deadbeefdeadbeef" in message
+    assert "a" * 64 in message
+    assert "b" * 64 in message
+    assert "None" in message
