@@ -281,7 +281,7 @@ def test_audit_detects_index_change_during_scan(
 ) -> None:
     shard_dir = _fixture(tmp_path)
     index_path = shard_dir / "_index.json"
-    original = shard_audit._inspect_gzip_shard
+    original = shard_audit._inspect_gzip_shard_at
 
     def mutating_inspect(*args, **kwargs):
         result = original(*args, **kwargs)
@@ -294,7 +294,7 @@ def test_audit_detects_index_change_during_scan(
 
     monkeypatch.setattr(
         shard_audit,
-        "_inspect_gzip_shard",
+        "_inspect_gzip_shard_at",
         mutating_inspect,
     )
 
