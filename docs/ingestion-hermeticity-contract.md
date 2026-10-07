@@ -7,18 +7,24 @@ transformation layer: raw evidence in, deterministic derived evidence out.
 ## Protected boundary
 
 `tests/test_ingestion_hermeticity_contract.py` recursively scans every Python
-module below `src/haxlab/ingestion/`. The contract rejects network-capable
-imports, subprocess/process-launch surfaces and dynamic import entrypoints that
-could make ingestion depend on ambient external state.
+module below `src/haxlab/ingestion/`. The static contract rejects
+network-capable imports, subprocess/process-launch surfaces and dynamic import
+entrypoints that could make ingestion depend on ambient external state.
 
 The checker resolves normal import aliases, assignment aliases and constant
 `getattr(...)` aliases for guarded calls. Representative self-tests lock those
-resolution paths.
+resolution paths. It also rejects multiprocessing/process-creation surfaces so
+work cannot escape the calling ingestion process.
 
-Local filesystem reads/writes, hashing, JSON serialization, path handling and
-other deterministic ingestion primitives remain allowed. This contract does
-not change parser, matcher, discovery, archive, runtime, learning, evaluation,
-model, champion or threshold behavior.
+A second proof imports every ingestion module in a fresh isolated Python
+process with bytecode writes disabled and an audit hook installed. Import-time
+filesystem mutation, subprocess/socket activity, stdout/stderr and working
+directory artifacts fail closed.
+
+Local filesystem behavior during explicitly invoked ingestion operations,
+hashing, JSON serialization, path handling and other deterministic primitives
+remain allowed. This contract does not change parser, matcher, discovery,
+archive, runtime, learning, evaluation, model, champion or threshold behavior.
 
 ## Why this is separate from auditor hermeticity
 
