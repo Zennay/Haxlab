@@ -11,6 +11,7 @@ on:
     branches:
       - validation/data-pipeline-audit-determinism-contract-20261007
       - validation/data-pipeline-audit-determinism-aliases-20261007
+      - validation/data-pipeline-audit-numpy-entropy-20261007
 
 permissions:
   contents: read
@@ -29,9 +30,11 @@ jobs:
 
     steps:
       - name: Checkout exact candidate
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ env.EXPECTED_HEAD }}
+          clean: true
+          persist-credentials: false
 
       - name: Assert exact head
         shell: bash
