@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 
 from haxlab.runtime.state import CURRENT_ANALYZER_VERSION, RuntimeState
+from haxlab.runtime import state_audit
 from haxlab.runtime.state_audit import AUDIT_SCHEMA, audit_runtime_state, main
 
 
@@ -257,6 +258,54 @@ def test_runtime_state_audit_rejects_reused_success_output_path(
     assert result.ok is False
     assert len(reused) == 1
     assert reused[0].subject == str(shared_output)
+
+
+def test_runtime_state_audit_uses_one_consistent_live_snapshot(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db = tmp_path / "state.sqlite3"
+    _healthy_state(db, tmp_path)
+
+    original = state_audit._audit_source_files
+    injected = False
+
+    def inject_concurrent_write(connection, issues) -> None:
+        nonlocal injected
+        original(connection, issues)
+        with sqlite3.connect(db) as writer:
+            writer.execute(
+                """
+                INSERT INTO raw_replays (sha256, archive_path, size_bytes)
+                VALUES (?, ?, ?)
+                """,
+                ("NOT-A-SHA", str(tmp_path / "late.hbr2"), -1),
+            )
+            writer.commit()
+        injected = True
+
+    monkeypatch.setattr(
+        state_audit,
+        "_audit_source_files",
+        inject_concurrent_write,
+    )
+
+    first = audit_runtime_state(db)
+
+    assert injected is True
+    assert first.ok is True
+
+    monkeypatch.setattr(
+        state_audit,
+        "_audit_source_files",
+        original,
+    )
+    second = audit_runtime_state(db)
+    second_codes = {issue.code for issue in second.issues}
+
+    assert second.ok is False
+    assert "raw_sha256_invalid" in second_codes
+    assert "raw_size_invalid" in second_codes
 
 
 def test_runtime_state_audit_cli_is_machine_readable(
