@@ -1,0 +1,55 @@
+name: HaxLab source importer coverage proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact branch SHA to prove
+        required: true
+        type: string
+  push:
+    branches:
+      - validation/data-pipeline-source-coverage-contract-20261007
+    paths:
+      - "tests/test_source_bundle_import_coverage.py"
+      - "docs/source-bundle-import-coverage.md"
+      - ".github/workflows/data-pipeline-source-coverage-proof.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-source-coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate exact-head source coverage contract
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    env:
+      EXPECTED_HEAD: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_sha || github.sha }}
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+
+      - name: Assert exact head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Run focused proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .source-coverage-venv
+          python3 -m venv .source-coverage-venv
+          .source-coverage-venv/bin/pip install -q --upgrade pip
+          .source-coverage-venv/bin/pip install -q -e '.[dev]'
+          .source-coverage-venv/bin/python -m compileall -q src/haxlab/ingestion tests/test_source_bundle_import_coverage.py
+          .source-coverage-venv/bin/pytest -q tests/test_source_bundle_import_coverage.py
+          .source-coverage-venv/bin/pytest --collect-only -q >/dev/null
