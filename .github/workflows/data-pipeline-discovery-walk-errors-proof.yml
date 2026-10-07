@@ -1,0 +1,59 @@
+name: HaxLab discovery walk-error proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact branch SHA to prove
+        required: true
+        type: string
+  push:
+    branches:
+      - feature/data-pipeline-discovery-walk-errors-20261007
+    paths:
+      - "src/haxlab/ingestion/discovery.py"
+      - "tests/test_discovery.py"
+      - "tests/test_discovery_symlink_boundary.py"
+      - "tests/test_source_bundle_import_coverage.py"
+      - "docs/discovery-walk-errors.md"
+      - ".github/workflows/data-pipeline-discovery-walk-errors-proof.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-discovery-walk-errors-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate exact-head discovery traversal failures
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    env:
+      EXPECTED_HEAD: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_sha || github.sha }}
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+
+      - name: Assert exact head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Run focused proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .discovery-walk-venv
+          python3 -m venv .discovery-walk-venv
+          .discovery-walk-venv/bin/pip install -q --upgrade pip
+          .discovery-walk-venv/bin/pip install -q -e '.[dev]'
+          .discovery-walk-venv/bin/python -m compileall -q src tests
+          .discovery-walk-venv/bin/pytest -q             tests/test_discovery.py             tests/test_discovery_symlink_boundary.py             tests/test_source_bundle_import_coverage.py
+          .discovery-walk-venv/bin/pytest --collect-only -q >/dev/null
+          echo "HAXLAB_DISCOVERY_WALK_ERROR_PROOF=success"
