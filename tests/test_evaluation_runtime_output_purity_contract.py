@@ -96,7 +96,13 @@ class OutputVisitor(ast.NodeVisitor):
     def __init__(self, aliases: dict[str, str]) -> None:
         self.aliases = aliases
         self.function_stack: list[str] = []
+        self.class_depth = 0
         self.findings: list[str] = []
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self.class_depth += 1
+        self.generic_visit(node)
+        self.class_depth -= 1
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self.function_stack.append(node.name)
@@ -108,11 +114,13 @@ class OutputVisitor(ast.NodeVisitor):
         self.generic_visit(node)
         self.function_stack.pop()
 
+    def _inside_top_level_cli_main(self) -> bool:
+        return self.class_depth == 0 and self.function_stack == ["main"]
+
     def visit_Call(self, node: ast.Call) -> None:
-        current = self.function_stack[-1] if self.function_stack else None
         target = _canonical_name(node.func, self.aliases)
 
-        if current != "main":
+        if not self._inside_top_level_cli_main():
             if target in DIRECT_OUTPUT_CALLS:
                 self.findings.append(
                     f"line {node.lineno}: runtime output outside main(): {target}"
@@ -189,6 +197,23 @@ def test_contract_rejects_runtime_output_outside_main(
 ) -> None:
     findings = scan_source(source)
     assert any(expected in finding for finding in findings), findings
+
+
+def test_contract_rejects_method_or_nested_function_named_main() -> None:
+    class_method = """
+class Runner:
+    def main(self) -> None:
+        print("noise")
+"""
+    nested_helper = """
+def main() -> int:
+    def helper() -> None:
+        print("noise")
+    helper()
+    return 0
+"""
+    assert any("builtins.print" in finding for finding in scan_source(class_method))
+    assert any("builtins.print" in finding for finding in scan_source(nested_helper))
 
 
 def test_contract_preserves_cli_output_in_main() -> None:
