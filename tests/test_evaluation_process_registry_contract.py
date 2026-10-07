@@ -30,6 +30,25 @@ FORBIDDEN_LOGGER_MUTATORS = {
     "setLevel",
 }
 
+FORBIDDEN_LOGGER_ATTRIBUTES = {
+    "disabled",
+    "filters",
+    "handlers",
+    "level",
+    "propagate",
+}
+
+CONTAINER_MUTATORS = {
+    "append",
+    "clear",
+    "extend",
+    "insert",
+    "pop",
+    "remove",
+    "reverse",
+    "sort",
+}
+
 TRACKED_MODULES = {"builtins", "logging", "warnings"}
 
 
@@ -41,6 +60,10 @@ def _canonical_name(node: ast.AST | None, aliases: dict[str, str]) -> str | None
     if isinstance(node, ast.Attribute):
         parent = _canonical_name(node.value, aliases)
         return f"{parent}.{node.attr}" if parent else node.attr
+    if isinstance(node, ast.Subscript):
+        parent = _canonical_name(node.value, aliases)
+        if isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
+            return f"{parent}[{node.slice.value!r}]" if parent else None
     if isinstance(node, ast.Call):
         accessor = _canonical_name(node.func, aliases)
         if accessor == "logging.getLogger":
@@ -66,6 +89,24 @@ def _name_targets(node: ast.AST) -> list[str]:
             names.extend(_name_targets(element))
         return names
     return []
+
+
+def _is_process_logger_name(name: str | None) -> bool:
+    if not name:
+        return False
+    return name == "logging.root" or name.startswith("logging.getLogger()")
+
+
+def _is_forbidden_logger_target(name: str | None) -> bool:
+    if not name:
+        return False
+    if _is_process_logger_name(name):
+        return True
+    return any(
+        name == f"logging.root.{attribute}"
+        or name.startswith(f"logging.getLogger().{attribute}")
+        for attribute in FORBIDDEN_LOGGER_ATTRIBUTES
+    )
 
 
 def _aliases(tree: ast.Module) -> dict[str, str]:
@@ -111,13 +152,16 @@ def _aliases(tree: ast.Module) -> dict[str, str]:
             track = (
                 resolved in FORBIDDEN_PROCESS_REGISTRY_CALLS
                 or resolved in {"logging.getLogger", "logging.getLogger()", "logging.root"}
+                or _is_forbidden_logger_target(resolved)
                 or any(
                     resolved.endswith(f".{method}")
-                    and (
-                        resolved.startswith("logging.getLogger()")
-                        or resolved.startswith("logging.root")
-                    )
+                    and _is_process_logger_name(resolved[: -(len(method) + 1)])
                     for method in FORBIDDEN_LOGGER_MUTATORS
+                )
+                or any(
+                    resolved.endswith(f".{method}")
+                    and _is_forbidden_logger_target(resolved[: -(len(method) + 1)])
+                    for method in CONTAINER_MUTATORS
                 )
             )
             if not track:
@@ -134,12 +178,24 @@ def _aliases(tree: ast.Module) -> dict[str, str]:
 
 def _is_logger_mutator(target: str) -> bool:
     for method in FORBIDDEN_LOGGER_MUTATORS:
-        if not target.endswith(f".{method}"):
-            continue
-        receiver = target[: -(len(method) + 1)]
-        if receiver == "logging.root" or receiver.startswith("logging.getLogger()"):
-            return True
+        if target.endswith(f".{method}"):
+            receiver = target[: -(len(method) + 1)]
+            if _is_process_logger_name(receiver):
+                return True
+
+    for method in CONTAINER_MUTATORS:
+        if target.endswith(f".{method}"):
+            receiver = target[: -(len(method) + 1)]
+            if _is_forbidden_logger_target(receiver):
+                return True
+
     return False
+
+
+def _mutation_target_name(node: ast.AST, aliases: dict[str, str]) -> str | None:
+    if isinstance(node, (ast.Attribute, ast.Subscript, ast.Name)):
+        return _canonical_name(node, aliases)
+    return None
 
 
 def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
@@ -148,13 +204,34 @@ def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
     findings: list[str] = []
 
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
+        if isinstance(node, ast.Call):
+            target = _canonical_name(node.func, aliases)
+            if target in FORBIDDEN_PROCESS_REGISTRY_CALLS:
+                findings.append(
+                    f"line {node.lineno}: process-wide registry mutation: {target}"
+                )
+            elif target and _is_logger_mutator(target):
+                findings.append(
+                    f"line {node.lineno}: process-wide logger mutation: {target}"
+                )
             continue
-        target = _canonical_name(node.func, aliases)
-        if target in FORBIDDEN_PROCESS_REGISTRY_CALLS:
-            findings.append(f"line {node.lineno}: process-wide registry mutation: {target}")
-        elif target and _is_logger_mutator(target):
-            findings.append(f"line {node.lineno}: process-wide logger mutation: {target}")
+
+        targets: list[ast.AST] = []
+        if isinstance(node, ast.Assign):
+            targets = list(node.targets)
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        elif isinstance(node, ast.AugAssign):
+            targets = [node.target]
+        elif isinstance(node, ast.Delete):
+            targets = list(node.targets)
+
+        for target_node in targets:
+            target = _mutation_target_name(target_node, aliases)
+            if target and _is_forbidden_logger_target(target):
+                findings.append(
+                    f"line {node.lineno}: process-wide logger attribute mutation: {target}"
+                )
 
     return sorted(set(findings))
 
@@ -175,16 +252,59 @@ def test_evaluation_package_does_not_mutate_process_logging_or_warning_registrie
     [
         ("import logging\nlogging.basicConfig(level=logging.INFO)\n", "logging.basicConfig"),
         ("import logging as log\nlog.disable(20)\n", "logging.disable"),
-        ("from logging import captureWarnings as capture\ncapture(True)\n", "logging.captureWarnings"),
-        ("import logging\ngetattr(logging, 'setLoggerClass')(object)\n", "logging.setLoggerClass"),
+        (
+            "from logging import captureWarnings as capture\ncapture(True)\n",
+            "logging.captureWarnings",
+        ),
+        (
+            "import logging\ngetattr(logging, 'setLoggerClass')(object)\n",
+            "logging.setLoggerClass",
+        ),
         ("import warnings\nwarnings.simplefilter('ignore')\n", "warnings.simplefilter"),
-        ("from warnings import filterwarnings as fw\nfw('ignore')\n", "warnings.filterwarnings"),
-        ("import warnings\ngetattr(warnings, 'resetwarnings')()\n", "warnings.resetwarnings"),
-        ("import warnings\nwith warnings.catch_warnings():\n    pass\n", "warnings.catch_warnings"),
-        ("import logging\nlogging.getLogger().addHandler(logging.NullHandler())\n", "addHandler"),
-        ("import logging\nlog = logging.getLogger('gate')\nlog.setLevel(logging.INFO)\n", "setLevel"),
-        ("import logging\nlog = logging.getLogger('gate')\nmutate = log.removeHandler\nmutate(logging.NullHandler())\n", "removeHandler"),
-        ("import logging\nroot = logging.root\nroot.addFilter(object())\n", "addFilter"),
+        (
+            "from warnings import filterwarnings as fw\nfw('ignore')\n",
+            "warnings.filterwarnings",
+        ),
+        (
+            "import warnings\ngetattr(warnings, 'resetwarnings')()\n",
+            "warnings.resetwarnings",
+        ),
+        (
+            "import warnings\nwith warnings.catch_warnings():\n    pass\n",
+            "warnings.catch_warnings",
+        ),
+        (
+            "import logging\nlogging.getLogger().addHandler(logging.NullHandler())\n",
+            "addHandler",
+        ),
+        (
+            "import logging\nlog = logging.getLogger('gate')\nlog.setLevel(logging.INFO)\n",
+            "setLevel",
+        ),
+        (
+            "import logging\nlog = logging.getLogger('gate')\nmutate = log.removeHandler\nmutate(logging.NullHandler())\n",
+            "removeHandler",
+        ),
+        (
+            "import logging\nroot = logging.root\nroot.addFilter(object())\n",
+            "addFilter",
+        ),
+        (
+            "import logging\nlog = logging.getLogger('gate')\nlog.handlers.clear()\n",
+            "handlers.clear",
+        ),
+        (
+            "import logging\nlog = logging.getLogger('gate')\nmutate = log.filters.append\nmutate(object())\n",
+            "filters.append",
+        ),
+        (
+            "import logging\nlog = logging.getLogger('gate')\nlog.propagate = False\n",
+            "propagate",
+        ),
+        (
+            "import logging\nlogging.root.handlers = []\n",
+            "handlers",
+        ),
     ],
 )
 def test_detector_rejects_process_registry_mutation(source: str, expected: str) -> None:
@@ -200,6 +320,7 @@ def test_detector_rejects_process_registry_mutation(source: str, expected: str) 
         "import warnings\nwarnings.warn('diagnostic', RuntimeWarning)\n",
         "import warnings\nfilters = tuple(warnings.filters)\n",
         "import logging\nhandler = logging.NullHandler()\nhandler.setLevel(logging.INFO)\n",
+        "import logging\nlocal = logging.Logger('isolated')\nlocal.handlers.clear()\n",
         "class LocalLogger:\n    def addHandler(self, value):\n        return value\nLocalLogger().addHandler(object())\n",
     ],
 )
