@@ -9,6 +9,7 @@ import pytest
 from haxlab.evaluation import policy_config as policy_config_module
 from haxlab.evaluation.models import EvaluationEvidence, PromotionPolicy
 from haxlab.evaluation.policy_config import (
+    MAX_POLICY_CONFIG_BYTES,
     POLICY_CONFIG_SCHEMA,
     load_promotion_policy,
     load_promotion_policy_config,
@@ -382,6 +383,14 @@ def test_policy_config_rejects_invalid_utf8(tmp_path: Path) -> None:
     path.write_bytes(b"[evaluation]\nminimum_games_vs_champion = 500\n\xff")
 
     with pytest.raises(ValueError, match="invalid TOML"):
+        load_promotion_policy(path)
+
+
+def test_policy_config_rejects_oversized_file_before_parsing(tmp_path: Path) -> None:
+    path = tmp_path / "autonomy.toml"
+    path.write_bytes(b"#" * (MAX_POLICY_CONFIG_BYTES + 1))
+
+    with pytest.raises(ValueError, match="exceeds"):
         load_promotion_policy(path)
 
 
