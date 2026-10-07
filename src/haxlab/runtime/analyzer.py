@@ -274,6 +274,12 @@ def _analyze_one(
             os.fsync(handle.fileno())
         os.replace(temporary_name, output_path)
         os.fsync(directory_fd)
+    except OSError as exc:
+        try:
+            os.unlink(temporary_name)
+        except OSError:
+            pass
+        return replay, None, f"derived_output_publish_error:{exc}", None
     except Exception:
         try:
             os.unlink(temporary_name)
