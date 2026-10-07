@@ -197,3 +197,46 @@ def test_non_policy_object_fails_closed() -> None:
 
     assert not decision.promote
     assert decision.reasons == ("invalid_policy:object_type",)
+
+
+def test_non_tuple_regression_container_fails_closed() -> None:
+    decision = decide_promotion(_good_evidence(regressions=[]))
+
+    assert not decision.promote
+    assert "invalid_evidence:regressions:not_tuple" in decision.reasons
+
+
+def test_malformed_regression_entry_fails_closed_without_attribute_error() -> None:
+    decision = decide_promotion(_good_evidence(regressions=(object(),)))
+
+    assert not decision.promote
+    assert "invalid_evidence:regressions:0:object_type" in decision.reasons
+
+
+def test_regression_subclass_is_rejected_before_custom_attribute_behavior() -> None:
+    class SneakyRegression(Regression):
+        @property
+        def severity(self):
+            raise AssertionError("severity property must not be evaluated")
+
+    decision = decide_promotion(
+        _good_evidence(regressions=(SneakyRegression("x", "critical"),))
+    )
+
+    assert not decision.promote
+    assert "invalid_evidence:regressions:0:object_type" in decision.reasons
+
+
+def test_regression_fields_require_native_non_empty_strings() -> None:
+    malformed = (
+        Regression(scenario="", severity="critical"),
+        Regression(scenario="kickoff", severity=""),
+        Regression(scenario="kickoff", severity="critical", details=None),
+    )
+
+    decision = decide_promotion(_good_evidence(regressions=malformed))
+
+    assert not decision.promote
+    assert "invalid_evidence:regressions:0:scenario" in decision.reasons
+    assert "invalid_evidence:regressions:1:severity" in decision.reasons
+    assert "invalid_evidence:regressions:2:details" in decision.reasons
