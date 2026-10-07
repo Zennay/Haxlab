@@ -245,6 +245,51 @@ def test_inconsistent_validator_success_fails_closed(
     )
 
 
+def test_request_bindings_are_snapshotted_before_validation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    request = _request(tmp_path)
+    challengers = dict(request["challengers"])
+    partners = list(request["partners"])
+    request["challengers"] = challengers
+    request["partners"] = partners
+    original_candidate = challengers["candidate-d"]
+    original_partner = partners[1]
+    calls: list[tuple[Path, dict[str, object]]] = []
+
+    def mutating_validator(result_path: Path, **kwargs):
+        calls.append((result_path, kwargs))
+        if len(calls) == 1:
+            challengers["candidate-d"] = challengers["weak-zero"]
+            partners[1] = challengers["weak-zero"]
+        return True, ()
+
+    monkeypatch.setattr(
+        inventory_module,
+        "reusable_result_or_reasons",
+        mutating_validator,
+    )
+
+    report = inventory_calibration_results(**request)
+
+    assert report["complete"] is True
+    candidate_calls = [
+        kwargs
+        for result_path, kwargs in calls
+        if result_path.name.startswith("candidate-d-source-")
+    ]
+    assert len(candidate_calls) == 3
+    assert all(
+        kwargs["challenger"] == original_candidate
+        for kwargs in candidate_calls
+    )
+    assert all(
+        kwargs["partners"][1] == original_partner
+        for _, kwargs in calls
+    )
+
+
 def test_cli_require_complete_returns_nonzero_for_partial_inventory(
     tmp_path: Path,
     capsys,
