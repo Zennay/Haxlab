@@ -404,3 +404,35 @@ def test_non_reproducible_evidence_parses_but_cannot_promote() -> None:
 
     assert not decision.promote
     assert "run_not_reproducible" in decision.reasons
+
+
+def test_evidence_loader_rejects_duplicate_json_key(tmp_path) -> None:
+    path = tmp_path / "evidence.json"
+    serialized = json.dumps(_payload())
+    path.write_text(
+        serialized[:-1] + ', "reproducible": false}',
+        encoding="utf-8",
+    )
+
+    result = load_evaluation_evidence(path)
+
+    assert not result.valid
+    assert result.reasons == (
+        "invalid_evidence:path:duplicate_json_key:reproducible",
+    )
+
+
+def test_policy_loader_rejects_duplicate_json_key(tmp_path) -> None:
+    path = tmp_path / "policy.json"
+    serialized = json.dumps(_policy())
+    path.write_text(
+        serialized[:-1] + ', "minimum_games": 1}',
+        encoding="utf-8",
+    )
+
+    result = load_promotion_policy(path)
+
+    assert not result.valid
+    assert result.reasons == (
+        "invalid_policy:path:duplicate_json_key:minimum_games",
+    )
