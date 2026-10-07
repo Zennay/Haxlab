@@ -15,9 +15,10 @@ CI evidence and later publication-generation coordination.
 ## Contract
 
 A receipt is valid only when all five required names exist directly inside
-the supplied dataset root and each entry can be opened as a regular file
-without following the final path component as a symlink. The dataset root
-itself is also opened without following a symlink.
+the supplied dataset root and each entry can be opened non-blocking as a
+regular file without following the final path component as a symlink. This
+prevents FIFOs or other special files from blocking before the regular-file
+check. The dataset root itself is also opened without following a symlink.
 
 For every artifact the receipt records:
 
