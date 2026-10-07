@@ -576,3 +576,68 @@ def test_healthy_candidate_rejects_boolean_sample_count(
     )
 
     assert candidate is None
+
+@pytest.mark.parametrize("bad_value", [True, 1.5, "2", 0, -1])
+def test_select_scenario_sources_rejects_invalid_max_candidates(
+    tmp_path: Path,
+    bad_value,
+) -> None:
+    db_path = tmp_path / "state.sqlite3"
+    _db(db_path)
+
+    with pytest.raises(
+        ValueError,
+        match="max_candidates must be a native positive integer",
+    ):
+        scenario_source.select_scenario_sources(
+            db_path,
+            count=1,
+            max_candidates=bad_value,
+        )
+
+
+def test_selector_skips_malformed_database_replay_sha(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "state.sqlite3"
+    _db(db_path)
+    db = sqlite3.connect(db_path)
+    try:
+        db.execute(
+            "INSERT INTO raw_replays (sha256, archive_path) VALUES (?, ?)",
+            ("not-a-sha", "/raw/not-a-sha.hbr2"),
+        )
+        db.execute(
+            """
+            INSERT INTO replay_analysis_versions (
+                sha256, analyzer_version, status, output_path,
+                sampled_state_count, player_count
+            ) VALUES (?, 'state-pass-v4', 'ok', ?, ?, 8)
+            """,
+            ("not-a-sha", "/analysis/not-a-sha.json", 3000),
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    seen: list[str] = []
+
+    def fake_healthy_candidate(**kwargs):
+        seen.append(kwargs["sha256"])
+        return {
+            "schema": "haxlab-replay-scenario-source-v1",
+            "sha256": kwargs["sha256"],
+        }
+
+    monkeypatch.setattr(
+        scenario_source,
+        "_healthy_candidate",
+        fake_healthy_candidate,
+    )
+
+    result = scenario_source.select_scenario_source(db_path)
+
+    assert result["sha256"] == "a" * 64
+    assert "not-a-sha" not in seen
+
