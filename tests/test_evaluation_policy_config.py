@@ -69,6 +69,7 @@ def test_policy_config_uses_atomic_nofollow_file_open(
     assert load_promotion_policy(path) == PromotionPolicy()
     assert seen_flags
     assert all(flags & os.O_NOFOLLOW for flags in seen_flags)
+    assert all(flags & os.O_NONBLOCK for flags in seen_flags)
 
 
 def test_policy_config_fails_closed_without_nofollow_support(
@@ -383,6 +384,15 @@ def test_policy_config_rejects_invalid_utf8(tmp_path: Path) -> None:
     path.write_bytes(b"[evaluation]\nminimum_games_vs_champion = 500\n\xff")
 
     with pytest.raises(ValueError, match="invalid TOML"):
+        load_promotion_policy(path)
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFO creation unavailable")
+def test_policy_config_rejects_fifo_without_blocking(tmp_path: Path) -> None:
+    path = tmp_path / "policy.fifo"
+    os.mkfifo(path)
+
+    with pytest.raises(ValueError, match="regular non-symlink file"):
         load_promotion_policy(path)
 
 
