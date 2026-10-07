@@ -330,6 +330,18 @@ def _top_level_contents_read_only(text: str) -> bool:
     return values.get("contents") == "read"
 
 
+def _runner_is_haxlab_self_hosted(spec: str) -> bool:
+    value = spec.strip()
+    if not (value.startswith("[") and value.endswith("]")):
+        return False
+    labels = {
+        token.strip().strip('"').strip("'")
+        for token in value[1:-1].split(",")
+        if token.strip()
+    }
+    return labels == {"self-hosted", "haxlab"}
+
+
 def audit_workflow_text(path: str, text: str) -> dict[str, object]:
     actions = _action_tokens(text)
     external_actions = tuple(token for token in actions if not token.startswith("./"))
@@ -367,6 +379,17 @@ def audit_workflow_text(path: str, text: str) -> dict[str, object]:
         {match.group(0).strip() for match in WRITE_PERMISSION_LINE.finditer(text)}
     )
     contents_read_only = _top_level_contents_read_only(text)
+    runner_specs = RUNNER_LINE.findall(text)
+    self_hosted_haxlab_only = bool(runner_specs) and all(
+        _runner_is_haxlab_self_hosted(spec) for spec in runner_specs
+    )
+    timeout_minutes = [int(value) for value in TIMEOUT_LINE.findall(text)]
+    bounded_timeouts = (
+        bool(runner_specs)
+        and len(timeout_minutes) == len(runner_specs)
+        and all(1 <= value <= 480 for value in timeout_minutes)
+    )
+    continue_on_error_enabled = bool(CONTINUE_ON_ERROR_TRUE.search(text))
 
     findings: list[str] = []
     if mutable_actions:
@@ -383,6 +406,12 @@ def audit_workflow_text(path: str, text: str) -> dict[str, object]:
         findings.append("top_level_contents_not_read_only")
     if write_permissions:
         findings.append("write_permissions_present")
+    if not self_hosted_haxlab_only:
+        findings.append("unexpected_runner")
+    if not bounded_timeouts:
+        findings.append("unbounded_or_invalid_timeout")
+    if continue_on_error_enabled:
+        findings.append("continue_on_error_enabled")
 
     return {
         "path": path,
@@ -397,6 +426,11 @@ def audit_workflow_text(path: str, text: str) -> dict[str, object]:
         "has_exact_head_guard": exact_head_guard,
         "top_level_contents_read_only": contents_read_only,
         "write_permissions": write_permissions,
+        "runner_specs": runner_specs,
+        "self_hosted_haxlab_only": self_hosted_haxlab_only,
+        "timeout_minutes": timeout_minutes,
+        "bounded_timeouts": bounded_timeouts,
+        "continue_on_error_enabled": continue_on_error_enabled,
         "findings": findings,
     }
 
@@ -415,6 +449,11 @@ def _missing_workflow_report(path: str) -> dict[str, object]:
         "has_exact_head_guard": False,
         "top_level_contents_read_only": False,
         "write_permissions": [],
+        "runner_specs": [],
+        "self_hosted_haxlab_only": False,
+        "timeout_minutes": [],
+        "bounded_timeouts": False,
+        "continue_on_error_enabled": False,
         "findings": ["missing_workflow"],
     }
 
