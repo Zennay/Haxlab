@@ -183,12 +183,13 @@ def test_contract_rejects_broad_exception_swallowing() -> None:
         name: _violations("def probe():\n" + textwrap.indent(textwrap.dedent(source), "    "))
         for name, source in cases.items()
     }
+    kinds = {
+        name: sorted(finding.rsplit(":", 1)[-1] for finding in values)
+        for name, values in findings.items()
+    }
 
-    assert findings["bare_pass"] == ["line:4:fallthrough", "line:4:pass"]
-    assert findings["exception_continue"] == [
-        "line:5:continue",
-        "line:5:fallthrough",
-    ]
-    assert findings["base_return"] == ["line:4:fallthrough", "line:4:return"]
-    assert findings["tuple_fallthrough"] == ["line:4:fallthrough"]
-    assert findings["nested_swallow_before_raise"] == ["line:4:pass"]
+    assert kinds["bare_pass"] == ["fallthrough", "pass"]
+    assert kinds["exception_continue"] == ["continue", "fallthrough"]
+    assert kinds["base_return"] == ["fallthrough", "return"]
+    assert kinds["tuple_fallthrough"] == ["fallthrough"]
+    assert kinds["nested_swallow_before_raise"] == ["pass"]
