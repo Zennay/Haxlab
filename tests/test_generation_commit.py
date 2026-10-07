@@ -8,14 +8,19 @@ import pytest
 
 from haxlab.ingestion.dataset_receipt import M0_ARTIFACTS, build_dataset_receipt
 from haxlab.ingestion.generation_commit import (
+    CURRENT_GENERATION_POINTER_FILE,
+    GENERATION_COMMIT_FILE,
     GENERATION_COMMIT_SCHEMA,
     GENERATION_POINTER_SCHEMA,
+    GENERATIONS_DIRECTORY,
     MAX_GENERATION_COMMIT_BYTES,
     MAX_GENERATION_POINTER_BYTES,
     GenerationCommitError,
     build_generation_commit,
     build_generation_pointer,
     generation_commit_bytes,
+    generation_commit_path,
+    generation_directory,
     generation_pointer_bytes,
     parse_generation_commit_bytes,
     parse_generation_pointer_bytes,
@@ -270,3 +275,26 @@ def test_pointer_parser_rejects_noncanonical_bytes(tmp_path: Path) -> None:
 
     with pytest.raises(GenerationCommitError, match="not canonical"):
         parse_generation_pointer_bytes(payload[:-1])
+
+
+def test_generation_layout_is_content_addressed_and_relative(tmp_path: Path) -> None:
+    commit = build_generation_commit(_receipt(tmp_path))
+    expected_directory = f"{GENERATIONS_DIRECTORY}/{commit['generation_id']}"
+
+    assert generation_directory(commit) == expected_directory
+    assert generation_commit_path(commit) == (
+        f"{expected_directory}/{GENERATION_COMMIT_FILE}"
+    )
+    assert not generation_directory(commit).startswith("/")
+    assert ".." not in generation_directory(commit).split("/")
+    assert CURRENT_GENERATION_POINTER_FILE == "current-generation.json"
+
+
+def test_generation_layout_rejects_tampered_commit(tmp_path: Path) -> None:
+    commit = build_generation_commit(_receipt(tmp_path))
+    commit["receipt_sha256"] = "0" * 64
+
+    with pytest.raises(GenerationCommitError):
+        generation_directory(commit)
+    with pytest.raises(GenerationCommitError):
+        generation_commit_path(commit)
