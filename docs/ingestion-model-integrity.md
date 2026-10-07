@@ -23,7 +23,8 @@ Producer outputs must already be structurally valid when they cross the model bo
 
 - replay SHA-256 is exactly 64 lowercase hexadecimal characters;
 - replay byte size is a native non-negative integer;
-- replay path and file name are native non-empty strings.
+- replay path and file name are native non-empty strings;
+- replay file name is exactly the basename of the replay path, preventing contradictory source identity.
 
 ### Discord report evidence
 
