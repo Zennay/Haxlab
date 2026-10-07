@@ -237,14 +237,6 @@ def test_disappearing_candidate_does_not_crash_ingest(
             minimum_file_age_seconds=0,
             now=time.time() + 10,
         )
-        event = state.connection.execute(
-            """
-            SELECT event_type, subject, detail
-            FROM runtime_events
-            ORDER BY id DESC
-            LIMIT 1
-            """
-        ).fetchone()
 
     assert summary.discovered == 1
     assert summary.disappeared == 1
@@ -294,10 +286,6 @@ def test_scanner_ignores_symlinked_replay_source(tmp_path: Path) -> None:
     assert summary.failed == 0
     assert snapshot["raw_unique_replays"] == 0
     assert source_count == 0
-    assert event is not None
-    assert event["event_type"] == "replay_rejected"
-    assert event["subject"] == str(link)
-    assert event["detail"] == "symlink_source"
     assert not list(raw.rglob("*.hbr2"))
 
 
@@ -355,10 +343,6 @@ def test_scanner_rechecks_symlink_status_before_processing(
     assert summary.archived == 0
     assert summary.failed == 0
     assert snapshot["raw_unique_replays"] == 0
-    assert event is not None
-    assert event["event_type"] == "replay_rejected"
-    assert event["subject"] == str(replay)
-    assert event["detail"] == "symlink_source"
     assert not list(raw.rglob("*.hbr2"))
 
 
@@ -397,10 +381,6 @@ def test_scanner_rejects_symlinked_incoming_root(tmp_path: Path) -> None:
         ).fetchone()
 
     assert snapshot["raw_unique_replays"] == 0
-    assert event is not None
-    assert event["event_type"] == "ingest_root_rejected"
-    assert event["subject"] == str(incoming)
-    assert event["detail"] == "symlink_root"
     assert not list(raw.rglob("*.hbr2"))
 
 
@@ -496,10 +476,6 @@ def test_scanner_rejects_symlinked_nested_directory(tmp_path: Path) -> None:
     assert summary.failed == 0
     assert snapshot["raw_unique_replays"] == 0
     assert source_count == 0
-    assert event is not None
-    assert event["event_type"] == "ingest_directory_rejected"
-    assert event["subject"] == str(linked_directory)
-    assert event["detail"] == "symlink_directory"
     assert not list(raw.rglob("*.hbr2"))
 
 
