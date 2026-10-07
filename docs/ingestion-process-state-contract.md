@@ -19,8 +19,8 @@ module below `src/haxlab/ingestion/` and rejects mutation of:
 
 The contract resolves direct imports, imported aliases, assignment/chained
 aliases and constant `getattr(...)` spellings for guarded state and mutators.
-Assignments, deletes and mutating methods rooted in `os.environ`,
-`sys.path` and `sys.modules` fail closed.
+Assignments, deletes, bound mutators and unbound container mutators rooted in
+`os.environ`, `sys.path` and `sys.modules` fail closed.
 
 Read-only inspection such as `os.getcwd()`, `os.environ.get(...)`,
 `signal.getsignal(...)`, reading `sys.path`, checking `sys.modules` and
