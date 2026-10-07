@@ -12,6 +12,7 @@ from haxlab.runtime.daemon import _minimum_file_age_arg, _poll_interval_arg
     ("raw", "expected"),
     [
         ("1", 1.0),
+        ("1.0001", 1.0001),
         ("1.25", 1.25),
         ("60", 60.0),
         ("1e3", 1000.0),
@@ -53,6 +54,7 @@ def test_poll_interval_rejects_unsafe_values(raw: str) -> None:
     ("raw", "expected"),
     [
         ("0", 0.0),
+        ("1e-3", 0.001),
         ("0.25", 0.25),
         ("30", 30.0),
         ("1e3", 1000.0),
