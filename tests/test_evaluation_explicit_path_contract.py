@@ -164,21 +164,6 @@ def _path_annotation(node: ast.AST | None, aliases: dict[str, str]) -> bool:
 
 def _path_objects(tree: ast.AST, aliases: dict[str, str]) -> set[str]:
     objects: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        arguments = [
-            *node.args.posonlyargs,
-            *node.args.args,
-            *node.args.kwonlyargs,
-        ]
-        if node.args.vararg is not None:
-            arguments.append(node.args.vararg)
-        if node.args.kwarg is not None:
-            arguments.append(node.args.kwarg)
-        for argument in arguments:
-            if _path_annotation(argument.annotation, aliases):
-                objects.add(argument.arg)
     changed = True
     while changed:
         changed = False
@@ -191,6 +176,52 @@ def _path_objects(tree: ast.AST, aliases: dict[str, str]) -> set[str]:
                 objects.add(local)
                 changed = True
     return objects
+
+
+def _typed_path_parameters(
+    tree: ast.AST,
+    aliases: dict[str, str],
+) -> dict[ast.AST, set[str]]:
+    typed: dict[ast.AST, set[str]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        names: set[str] = set()
+        arguments = [
+            *node.args.posonlyargs,
+            *node.args.args,
+            *node.args.kwonlyargs,
+        ]
+        if node.args.vararg is not None:
+            arguments.append(node.args.vararg)
+        if node.args.kwarg is not None:
+            arguments.append(node.args.kwarg)
+        for argument in arguments:
+            if _path_annotation(argument.annotation, aliases):
+                names.add(argument.arg)
+        if names:
+            typed[node] = names
+    return typed
+
+
+def _parent_nodes(tree: ast.AST) -> dict[ast.AST, ast.AST]:
+    return {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+
+
+def _enclosing_function(
+    node: ast.AST,
+    parents: dict[ast.AST, ast.AST],
+) -> ast.AST | None:
+    current = node
+    while current in parents:
+        current = parents[current]
+        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return current
+    return None
 
 
 def _callable_name(
@@ -261,16 +292,20 @@ def _violations(source: str, *, filename: str = "<source>") -> list[str]:
     tree = ast.parse(source, filename=filename)
     aliases = _aliases(tree)
     path_objects = _path_objects(tree, aliases)
+    typed_path_parameters = _typed_path_parameters(tree, aliases)
+    parents = _parent_nodes(tree)
     callable_aliases = _callable_aliases(tree, aliases, path_objects)
 
     violations: list[str] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
+        scope = _enclosing_function(node, parents)
+        scoped_path_objects = path_objects | typed_path_parameters.get(scope, set())
         target = _callable_name(
             node.func,
             aliases,
-            path_objects,
+            scoped_path_objects,
             callable_aliases,
         )
         if target in DIRECT_DISCOVERY_CALLS or (
@@ -386,6 +421,20 @@ def test_contract_rejects_discovery_from_path_typed_parameters(source: str) -> N
 def test_contract_allows_explicit_evidence_paths_and_unrelated_methods(
     source: str,
 ) -> None:
+    assert _violations(source) == []
+
+
+def test_path_typed_parameter_does_not_leak_into_sibling_scope() -> None:
+    source = (
+        "from pathlib import Path\n"
+        "class ExplicitIndex:\n"
+        "    def glob(self, pattern):\n"
+        "        return ()\n"
+        "def explicit(path: Path):\n"
+        "    return path.read_text()\n"
+        "def unrelated(path: ExplicitIndex):\n"
+        "    return path.glob('*.json')\n"
+    )
     assert _violations(source) == []
 
 
