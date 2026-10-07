@@ -16,7 +16,7 @@ must remain free of stdlib function-object memoization through:
 - `functools.lru_cache`;
 - `functools.cached_property`.
 
-The contract rejects direct decorators, decorator factories and runtime wrappers. Import aliases, module aliases, assignment aliases, direct tuple/list alias unpacking, and constant `getattr(...)` spellings are resolved so the stateful capability cannot be hidden behind a local name. Wildcard imports from `functools` are rejected because they can introduce the memoizers without an explicit binding the scanner can safely resolve.
+The contract rejects direct decorators, decorator factories and runtime wrappers. Import aliases, module aliases, assignment aliases, direct tuple/list alias unpacking, and constant `getattr(...)` spellings are resolved so the stateful capability cannot be hidden behind a local name. Wildcard imports from `functools` are rejected because they can introduce the memoizers without an explicit binding the scanner can safely resolve. Dynamic `getattr(functools, name)` access is also rejected fail-closed because a non-constant attribute name could select a stateful memoizer at runtime.
 
 ## Why this is distinct
 
