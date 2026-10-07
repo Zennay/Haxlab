@@ -276,17 +276,21 @@ stack_size(262144)
 def test_computed_getattr_and_mapping_get_aliases_are_rejected() -> None:
     source = """
 import sys
+import threading
 computed = getattr(sys, "set" + "recursionlimit")
 mapped = vars(sys).get("setswitch" + "interval")
 reflected = sys.__dict__.get("set_int_max_str_digits")
+stack = getattr(threading, "stack_" + "size")
 computed(4096)
 mapped(0.01)
 reflected(10000)
+stack(262144)
 """
     assert [name for _, name in _scan(source)] == [
         "sys.setrecursionlimit",
         "sys.setswitchinterval",
         "sys.set_int_max_str_digits",
+        "threading.stack_size",
     ]
 
 
