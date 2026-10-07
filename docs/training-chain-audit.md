@@ -32,7 +32,13 @@ A clean receipt records:
 - the shard-bundle inventory digest;
 - train and holdout replay counts;
 - a deterministic cross-artifact inventory SHA-256 over split, replay identity,
-  success/failure status and copied training evidence.
+  success/failure status and copied training evidence;
+- one deterministic `chain_sha256` root digest over the exact manifest SHA-256,
+  manifest-audit inventory digest, shard-bundle inventory digest and
+  cross-artifact inventory digest.
+
+Changing any bound component therefore changes the root receipt even when the
+other publication evidence remains byte-identical.
 
 This receipt proves publication-chain consistency only. It does not modify the
 selector, manifest producer, shard producer, model, evaluation policy, runtime
