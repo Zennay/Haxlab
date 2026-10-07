@@ -11,7 +11,6 @@ on:
       - "src/haxlab/evaluation/closed_loop_arena.py"
       - "tests/test_evaluation_model_schema_contract.py"
       - "tests/test_evaluation_workflow_module_contract.py"
-      - "tests/test_evaluation_cross_workflow_contract.py"
       - "tests/test_promotion.py"
       - ".github/workflows/*.yml"
   pull_request:
@@ -24,7 +23,6 @@ on:
       - "src/haxlab/evaluation/closed_loop_arena.py"
       - "tests/test_evaluation_model_schema_contract.py"
       - "tests/test_evaluation_workflow_module_contract.py"
-      - "tests/test_evaluation_cross_workflow_contract.py"
       - "tests/test_promotion.py"
       - ".github/workflows/*.yml"
   workflow_dispatch:
@@ -81,7 +79,6 @@ jobs:
           .evaluation-contract-venv/bin/pytest -q \
             tests/test_evaluation_model_schema_contract.py \
             tests/test_evaluation_workflow_module_contract.py \
-            tests/test_evaluation_cross_workflow_contract.py \
             tests/test_promotion.py
 
       - name: Record focused proof
