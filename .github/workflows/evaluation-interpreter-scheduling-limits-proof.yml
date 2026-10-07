@@ -1,0 +1,71 @@
+name: Evaluation interpreter scheduling limits proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact 40-character candidate SHA to prove
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evaluation-interpreter-scheduling-limits-proof
+  cancel-in-progress: false
+
+jobs:
+  prove:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    steps:
+      - name: Validate requested immutable SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected='${{ inputs.expected_sha }}'
+          [[ "$expected" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "expected_sha must be an exact lowercase 40-character commit SHA" >&2
+            exit 2
+          }
+
+      - name: Checkout exact candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.expected_sha }}
+          clean: true
+          persist-credentials: false
+
+      - name: Verify exact and live branch identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected='${{ inputs.expected_sha }}'
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$expected"
+
+          branch="$GITHUB_REF_NAME"
+          live="$(git ls-remote origin "refs/heads/$branch" | awk '{print $1}')"
+          test -n "$live"
+          test "$live" = "$expected"
+
+      - name: Create isolated proof environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .proof-venv
+          python3 -m venv .proof-venv
+          .proof-venv/bin/python -m pip install --disable-pip-version-check pytest
+
+      - name: Run interpreter-limit contract and adjacent evaluation regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          .proof-venv/bin/python -m pytest -q \
+            tests/test_evaluation_interpreter_scheduling_limits_contract.py \
+            tests/test_closed_loop_arena.py \
+            tests/test_duel_gate.py \
+            tests/test_multisource_duel.py \
+            tests/test_promotion.py
+          echo "HAXLAB_EVALUATION_INTERPRETER_SCHEDULING_LIMITS_RESULT=green"
