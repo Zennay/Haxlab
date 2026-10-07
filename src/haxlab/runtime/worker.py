@@ -73,7 +73,7 @@ def main() -> int:
 
     with RuntimeState(args.state_db) as state:
         while True:
-            result = process_batch(state, batch_size=max(1, args.batch_size))
+            result = process_batch(state, batch_size=args.batch_size)
             print(json.dumps(result, sort_keys=True), flush=True)
 
             if args.once:
