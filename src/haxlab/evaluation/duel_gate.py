@@ -153,13 +153,13 @@ def decide_duel_gate(
     duel: dict[str, Any],
     policy: DuelGatePolicy = DuelGatePolicy(),
 ) -> DuelGateDecision:
-    if not isinstance(duel, dict):
+    if type(duel) is not dict:
         return DuelGateDecision(
             eligible_to_replace_champion=False,
             reasons=("invalid_duel:object_type",),
             checks={},
         )
-    if not isinstance(policy, DuelGatePolicy):
+    if type(policy) is not DuelGatePolicy:
         return DuelGateDecision(
             eligible_to_replace_champion=False,
             reasons=("invalid_policy:object_type",),
