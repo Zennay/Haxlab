@@ -61,40 +61,101 @@ def _declared_aggregate_score(
     return number
 
 
-def build_multisource_duel(duels: list[dict[str, Any]]) -> dict[str, Any]:
-    if not duels:
-        raise ValueError("at least one replay-seeded duel is required")
+def _builder_model_path(
+    duel: dict[str, Any],
+    key: str,
+    source_index: int,
+) -> str:
+    value = duel.get(key)
+    if type(value) is not str or not value.strip():
+        raise ValueError(
+            f"source {source_index}: {key} must be a non-empty string"
+        )
+    if value != value.strip():
+        raise ValueError(
+            f"source {source_index}: {key} must not contain outer whitespace"
+        )
+    return value
 
-    challenger_model = str(duels[0].get("challenger_model") or "")
-    champion_model = str(duels[0].get("champion_model") or "")
-    if not challenger_model or not champion_model:
-        raise ValueError("duel model paths are required")
+
+def _builder_count(
+    duel: dict[str, Any],
+    key: str,
+    source_index: int,
+) -> int:
+    value = duel.get(key)
+    if type(value) is not int or value < 0:
+        raise ValueError(
+            f"source {source_index}: {key} must be a non-negative integer"
+        )
+    return value
+
+
+def _builder_scenario_sha(duel: dict[str, Any], source_index: int) -> str:
+    value = duel.get("scenario_sha256")
+    if type(value) is not str:
+        raise ValueError(
+            f"source {source_index}: scenario_sha256 must be a string"
+        )
+    normalized = value.lower()
+    if (
+        len(normalized) != 64
+        or any(ch not in "0123456789abcdef" for ch in normalized)
+    ):
+        raise ValueError(f"source {source_index}: invalid scenario_sha256")
+    return normalized
+
+
+def build_multisource_duel(duels: list[dict[str, Any]]) -> dict[str, Any]:
+    if not isinstance(duels, list) or not duels:
+        raise ValueError("at least one replay-seeded duel list is required")
+    if not isinstance(duels[0], dict):
+        raise ValueError("source 1: duel payload must be an object")
+
+    challenger_model = _builder_model_path(
+        duels[0], "challenger_model", 1
+    )
+    champion_model = _builder_model_path(
+        duels[0], "champion_model", 1
+    )
 
     scenario_hashes: list[str] = []
     sources: list[dict[str, Any]] = []
     wins = draws = losses = matches = 0
 
     for index, duel in enumerate(duels, start=1):
+        if not isinstance(duel, dict):
+            raise ValueError(f"source {index}: duel payload must be an object")
         if duel.get("schema") != "haxlab-elite-replay-seeded-duel-v1":
             raise ValueError(
                 f"source {index}: unsupported duel schema {duel.get('schema')!r}"
             )
-        if str(duel.get("challenger_model") or "") != challenger_model:
+        if (
+            _builder_model_path(duel, "challenger_model", index)
+            != challenger_model
+        ):
             raise ValueError(f"source {index}: challenger model mismatch")
-        if str(duel.get("champion_model") or "") != champion_model:
+        if (
+            _builder_model_path(duel, "champion_model", index)
+            != champion_model
+        ):
             raise ValueError(f"source {index}: champion model mismatch")
 
-        scenario_sha = str(duel.get("scenario_sha256") or "")
-        if len(scenario_sha) != 64:
-            raise ValueError(f"source {index}: invalid scenario_sha256")
+        scenario_sha = _builder_scenario_sha(duel, index)
         if scenario_sha in scenario_hashes:
             raise ValueError(f"source {index}: duplicate scenario_sha256")
         scenario_hashes.append(scenario_sha)
 
-        source_matches = int(duel.get("matches") or 0)
-        source_wins = int(duel.get("wins") or 0)
-        source_draws = int(duel.get("draws") or 0)
-        source_losses = int(duel.get("losses") or 0)
+        source_matches = _builder_count(duel, "matches", index)
+        source_wins = _builder_count(duel, "wins", index)
+        source_draws = _builder_count(duel, "draws", index)
+        source_losses = _builder_count(duel, "losses", index)
+        if source_wins + source_draws + source_losses != source_matches:
+            raise ValueError(
+                f"source {index}: match tally mismatch:"
+                f"{source_wins}+{source_draws}+{source_losses}"
+                f"!={source_matches}"
+            )
         matches += source_matches
         wins += source_wins
         draws += source_draws
@@ -132,7 +193,30 @@ def decide_multisource_duel_gate(
     policy: MultisourceDuelPolicy = MultisourceDuelPolicy(),
     duel_policy: DuelGatePolicy = DuelGatePolicy(),
 ) -> MultisourceDuelDecision:
+    if not isinstance(payload, dict):
+        return MultisourceDuelDecision(
+            eligible_to_replace_champion=False,
+            reasons=("invalid_multisource_payload:object_type",),
+            checks={},
+        )
+    if not isinstance(policy, MultisourceDuelPolicy):
+        return MultisourceDuelDecision(
+            eligible_to_replace_champion=False,
+            reasons=("invalid_policy:object_type",),
+            checks={},
+        )
+
     failures: list[str] = []
+    minimum_sources = policy.minimum_sources
+    if type(minimum_sources) is not int:
+        failures.append("invalid_policy:minimum_sources:not_integer")
+        minimum_sources = 1
+    elif minimum_sources < 1:
+        failures.append(
+            f"invalid_policy:minimum_sources:below_minimum:{minimum_sources}<1"
+        )
+        minimum_sources = 1
+
     checks: dict[str, Any] = {
         "evaluation_schema": payload.get("schema"),
         "evaluation_mode": payload.get("evaluation_mode"),
@@ -154,21 +238,37 @@ def decide_multisource_duel_gate(
     else:
         sources = raw_sources
     declared_source_count = payload.get("source_count")
-    if declared_source_count != len(sources):
+    if type(declared_source_count) is not int or declared_source_count < 0:
+        failures.append("invalid_source_count")
+    elif declared_source_count != len(sources):
         failures.append(
             f"source_count_mismatch:{declared_source_count!r}!={len(sources)}"
         )
 
-    challenger_model = str(payload.get("challenger_model") or "")
-    champion_model = str(payload.get("champion_model") or "")
-    if not challenger_model:
-        failures.append("missing_challenger_model")
-    if not champion_model:
-        failures.append("missing_champion_model")
+    raw_challenger_model = payload.get("challenger_model")
+    raw_champion_model = payload.get("champion_model")
+    challenger_model = (
+        raw_challenger_model
+        if type(raw_challenger_model) is str
+        else ""
+    )
+    champion_model = (
+        raw_champion_model
+        if type(raw_champion_model) is str
+        else ""
+    )
+    if not challenger_model.strip():
+        failures.append("invalid_challenger_model")
+    elif challenger_model != challenger_model.strip():
+        failures.append("invalid_challenger_model:outer_whitespace")
+    if not champion_model.strip():
+        failures.append("invalid_champion_model")
+    elif champion_model != champion_model.strip():
+        failures.append("invalid_champion_model:outer_whitespace")
     checks["source_count"] = len(sources)
-    if len(sources) < policy.minimum_sources:
+    if len(sources) < minimum_sources:
         failures.append(
-            f"insufficient_sources:{len(sources)}<{policy.minimum_sources}"
+            f"insufficient_sources:{len(sources)}<{minimum_sources}"
         )
 
     scenario_hashes: list[str] = []
@@ -185,7 +285,12 @@ def decide_multisource_duel_gate(
             all_sources_passed = False
             continue
 
-        scenario_sha = str(source.get("scenario_sha256") or "").lower()
+        raw_scenario_sha = source.get("scenario_sha256")
+        scenario_sha = (
+            raw_scenario_sha.lower()
+            if type(raw_scenario_sha) is str
+            else ""
+        )
         if (
             len(scenario_sha) != 64
             or any(ch not in "0123456789abcdef" for ch in scenario_sha)
@@ -194,19 +299,39 @@ def decide_multisource_duel_gate(
         scenario_hashes.append(scenario_sha)
 
         declared_index = source.get("source_index")
-        if declared_index != index:
+        if type(declared_index) is not int or declared_index != index:
             failures.append(
                 f"source_{index}:source_index_mismatch:"
                 f"{declared_index!r}!={index}"
             )
 
-        duel = source.get("duel") or {}
-        duel_scenario_sha = str(duel.get("scenario_sha256") or "").lower()
+        raw_duel = source.get("duel")
+        if not isinstance(raw_duel, dict):
+            failures.append(f"source_{index}:invalid_duel_payload")
+            duel: dict[str, Any] = {}
+        else:
+            duel = raw_duel
+
+        raw_duel_scenario_sha = duel.get("scenario_sha256")
+        duel_scenario_sha = (
+            raw_duel_scenario_sha.lower()
+            if type(raw_duel_scenario_sha) is str
+            else ""
+        )
         if duel_scenario_sha != scenario_sha:
             failures.append(f"source_{index}:scenario_sha256_mismatch")
-        if str(duel.get("challenger_model") or "") != challenger_model:
+
+        duel_challenger_model = duel.get("challenger_model")
+        duel_champion_model = duel.get("champion_model")
+        if (
+            type(duel_challenger_model) is not str
+            or duel_challenger_model != challenger_model
+        ):
             failures.append(f"source_{index}:challenger_model_mismatch")
-        if str(duel.get("champion_model") or "") != champion_model:
+        if (
+            type(duel_champion_model) is not str
+            or duel_champion_model != champion_model
+        ):
             failures.append(f"source_{index}:champion_model_mismatch")
 
         decision: DuelGateDecision = decide_duel_gate(

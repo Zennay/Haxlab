@@ -1,0 +1,59 @@
+name: Multisource wrapper integrity validation
+
+on:
+  push:
+    branches:
+      - validation/multisource-builder-input-integrity-20261006
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-multisource-wrapper-integrity-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .multisource-wrapper-validation-venv
+          python3 -m venv .multisource-wrapper-validation-venv
+          .multisource-wrapper-validation-venv/bin/pip install --upgrade pip
+          .multisource-wrapper-validation-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile multisource evaluation code
+        shell: bash
+        run: |
+          set -euo pipefail
+          .multisource-wrapper-validation-venv/bin/python -m compileall -q \
+            src/haxlab/evaluation/multisource_duel.py \
+            src/haxlab/evaluation/duel_gate.py \
+            tests/test_multisource_duel.py
+
+      - name: Run multisource wrapper regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .multisource-wrapper-validation-venv/bin/pytest -q \
+              tests/test_multisource_duel.py \
+              tests/test_duel_gate.py
+
+      - name: Record exact-head validation evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "MULTISOURCE_WRAPPER_VALIDATION_HEAD=$(git rev-parse HEAD)"
+          echo "MULTISOURCE_WRAPPER_VALIDATION_RESULT=green"

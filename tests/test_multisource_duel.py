@@ -1,4 +1,5 @@
 from haxlab.evaluation.multisource_duel import (
+    MultisourceDuelPolicy,
     build_multisource_duel,
     decide_multisource_duel_gate,
 )
@@ -280,3 +281,123 @@ def test_multisource_gate_rejects_non_list_sources_payload() -> None:
     assert not decision.eligible_to_replace_champion
     assert "invalid_sources_payload" in decision.reasons
 
+
+
+def test_builder_rejects_coerced_count_types() -> None:
+    for invalid in ("12", 12.0, True):
+        duel = _duel("a")
+        duel["matches"] = invalid
+        try:
+            build_multisource_duel([duel])
+        except ValueError as exc:
+            assert "matches must be a non-negative integer" in str(exc)
+        else:
+            raise AssertionError("coerced match counts must be rejected")
+
+
+def test_builder_rejects_coerced_model_paths() -> None:
+    duel = _duel("a")
+    duel["challenger_model"] = {"path": "/tmp/challenger/runtime-model.json"}
+
+    try:
+        build_multisource_duel([duel])
+    except ValueError as exc:
+        assert "challenger_model must be a non-empty string" in str(exc)
+    else:
+        raise AssertionError("non-string model paths must be rejected")
+
+
+def test_builder_rejects_non_hex_scenario_hash() -> None:
+    duel = _duel("z")
+
+    try:
+        build_multisource_duel([duel])
+    except ValueError as exc:
+        assert "invalid scenario_sha256" in str(exc)
+    else:
+        raise AssertionError("non-hex scenario hashes must be rejected")
+
+
+def test_builder_rejects_inconsistent_source_tally() -> None:
+    duel = _duel("a")
+    duel["matches"] += 1
+
+    try:
+        build_multisource_duel([duel])
+    except ValueError as exc:
+        assert "match tally mismatch" in str(exc)
+    else:
+        raise AssertionError("inconsistent source tallies must be rejected")
+
+
+def test_builder_rejects_non_object_source_rows() -> None:
+    try:
+        build_multisource_duel([_duel("a"), "not-an-object"])
+    except ValueError as exc:
+        assert "source 2: duel payload must be an object" in str(exc)
+    else:
+        raise AssertionError("non-object source rows must be rejected")
+
+
+def test_multisource_gate_rejects_non_object_wrapper_without_exception() -> None:
+    decision = decide_multisource_duel_gate(None)
+
+    assert not decision.eligible_to_replace_champion
+    assert decision.reasons == ("invalid_multisource_payload:object_type",)
+
+
+def test_multisource_gate_rejects_invalid_policy_object_without_exception() -> None:
+    payload = build_multisource_duel([_duel("a"), _duel("b"), _duel("c")])
+
+    decision = decide_multisource_duel_gate(payload, policy=None)
+
+    assert not decision.eligible_to_replace_champion
+    assert decision.reasons == ("invalid_policy:object_type",)
+
+
+def test_multisource_gate_rejects_malformed_minimum_sources_policy() -> None:
+    payload = build_multisource_duel([_duel("a"), _duel("b"), _duel("c")])
+
+    for invalid in (True, "3", 0):
+        decision = decide_multisource_duel_gate(
+            payload,
+            policy=MultisourceDuelPolicy(minimum_sources=invalid),
+        )
+        assert not decision.eligible_to_replace_champion
+        assert any(
+            reason.startswith("invalid_policy:minimum_sources:")
+            for reason in decision.reasons
+        )
+
+
+def test_multisource_gate_rejects_coerced_wrapper_model_provenance() -> None:
+    payload = build_multisource_duel([_duel("a"), _duel("b"), _duel("c")])
+    payload["challenger_model"] = {"path": "/tmp/challenger/runtime-model.json"}
+
+    decision = decide_multisource_duel_gate(payload)
+
+    assert not decision.eligible_to_replace_champion
+    assert "invalid_challenger_model" in decision.reasons
+
+
+def test_multisource_gate_rejects_boolean_source_index() -> None:
+    payload = build_multisource_duel([_duel("a"), _duel("b"), _duel("c")])
+    payload["sources"][0]["source_index"] = True
+
+    decision = decide_multisource_duel_gate(payload)
+
+    assert not decision.eligible_to_replace_champion
+    assert any(
+        reason.startswith("source_1:source_index_mismatch:")
+        for reason in decision.reasons
+    )
+
+
+def test_multisource_gate_rejects_non_object_nested_duel_without_exception() -> None:
+    payload = build_multisource_duel([_duel("a"), _duel("b"), _duel("c")])
+    payload["sources"][1]["duel"] = ["not", "an", "object"]
+
+    decision = decide_multisource_duel_gate(payload)
+
+    assert not decision.eligible_to_replace_champion
+    assert "source_2:invalid_duel_payload" in decision.reasons
