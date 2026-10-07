@@ -334,8 +334,10 @@ def _validate_replay(
     if analysis_path.name != f"{replay_sha}.json":
         _fail(f"{prefix}.analysis_path filename does not match replay SHA")
     try:
-        analysis_path.relative_to(analysis_root)
+        relative_analysis_path = analysis_path.relative_to(analysis_root)
     except ValueError:
+        _fail(f"{prefix}.analysis_path escapes analysis_root")
+    if ".." in relative_analysis_path.parts:
         _fail(f"{prefix}.analysis_path escapes analysis_root")
 
     _canonical_sha256(row["analysis_sha256"], field=f"{prefix}.analysis_sha256")
@@ -441,6 +443,10 @@ def _validate_manifest(payload: dict[str, Any]) -> dict[str, Any]:
 
     analysis_root_text = _clean_string(payload["analysis_root"], field="analysis_root")
     raw_root_text = _clean_string(payload["raw_root"], field="raw_root")
+    if ".." in Path(analysis_root_text).parts:
+        _fail("analysis_root must not contain parent traversal")
+    if ".." in Path(raw_root_text).parts:
+        _fail("raw_root must not contain parent traversal")
     _clean_string(payload["leaderboard_path"], field="leaderboard_path")
     _canonical_sha256(payload["leaderboard_sha256"], field="leaderboard_sha256")
     _native_int(
