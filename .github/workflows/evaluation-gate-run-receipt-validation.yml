@@ -1,0 +1,77 @@
+name: Evaluation gate receipt exact-head validation
+
+on:
+  push:
+    branches:
+      - validation/evaluation-gate-run-receipt-20261007
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact immutable receipt branch SHA to validate
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-evaluation-gate-run-receipt-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.event.head_commit.message, '[receipt-proof]')
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Verify requested exact head
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$EXPECTED_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Create isolated validation environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .evaluation-gate-receipt-venv
+          python3 -m venv .evaluation-gate-receipt-venv
+          .evaluation-gate-receipt-venv/bin/pip install --upgrade pip
+          .evaluation-gate-receipt-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile receipt boundary and regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          .evaluation-gate-receipt-venv/bin/python -m compileall -q \
+            src/haxlab/evaluation/gate_run_receipt.py \
+            tests/test_evaluation_gate_run_receipt.py
+
+      - name: Run focused receipt regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .evaluation-gate-receipt-venv/bin/pytest -q \
+              tests/test_evaluation_gate_run_receipt.py
+
+      - name: Record exact-head evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$GITHUB_SHA" = "${{ inputs.expected_sha }}"
+          echo "EVALUATION_GATE_RECEIPT_HEAD=$(git rev-parse HEAD)"
+          echo "EVALUATION_GATE_RECEIPT_RESULT=green"
