@@ -915,3 +915,72 @@ def test_training_manifest_rejects_duplicate_valid_player_ids(
             min_matches=1,
             min_minutes=0.0,
         )
+
+
+
+def test_training_manifest_rejects_duplicate_selected_replay_player_id(
+    tmp_path: Path,
+) -> None:
+    analysis_root = tmp_path / "analysis"
+    analysis_root.mkdir()
+    leaderboard_path = tmp_path / "leaderboard.json"
+    leaderboard_path.write_text(
+        json.dumps(
+            {
+                "analysis_version": "state-pass-v4",
+                "rows": [
+                    {
+                        "player_id": "name:alpha",
+                        "name": "Alpha",
+                        "role": "forward",
+                        "rating": 56.0,
+                        "rating_uncertainty": 0.8,
+                        "matches": 80,
+                        "minutes": 500.0,
+                    },
+                    {
+                        "player_id": "name:beta",
+                        "name": "Beta",
+                        "role": "defender",
+                        "rating": 55.0,
+                        "rating_uncertainty": 0.7,
+                        "matches": 70,
+                        "minutes": 400.0,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    replay_sha = "d" * 64
+    payload = {
+        "schemaVersion": 4,
+        "totalFrames": 18000,
+        "simulation": {"sampledStateCount": 1200},
+        "featureSummary": {"touches": 100},
+        "players": [
+            {"id": 7, "name": "Alpha", "teamId": 1, "samples": 900},
+            {"id": 7, "name": "Beta", "teamId": 1, "samples": 800},
+            {"id": 9, "name": "Opp A", "teamId": 2, "samples": 900},
+            {"id": 10, "name": "Opp B", "teamId": 2, "samples": 900},
+        ],
+    }
+    (analysis_root / f"{replay_sha}.json").write_text(
+        json.dumps(payload),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=f"{replay_sha}: duplicate selected replay_player_id",
+    ):
+        build_training_manifest(
+            analysis_root=analysis_root,
+            leaderboard_path=leaderboard_path,
+            raw_root=tmp_path / "raw",
+            top_fraction_per_role=1.0,
+            min_players_per_role=1,
+            min_matches=1,
+            min_minutes=0.0,
+            max_uncertainty=10.0,
+        )
