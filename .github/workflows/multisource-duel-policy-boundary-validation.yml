@@ -1,0 +1,78 @@
+name: Multisource duel policy boundary validation
+
+on:
+  push:
+    branches:
+      - validation/multisource-duel-policy-boundary-20261007
+  pull_request:
+    branches:
+      - feature/arena-v2-current-main-20261004
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-multisource-duel-policy-boundary-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  prove:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      EXPECTED_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          clean: true
+          fetch-depth: 0
+
+      - name: Verify exact live head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          live="$(git ls-remote --heads origin "refs/heads/$EXPECTED_REF" | awk 'NR == 1 {print $1}')"
+          test -n "$live"
+          test "$live" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain)"
+          echo "HAXLAB_MULTISOURCE_DUEL_POLICY_HEAD=$live"
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .multisource-duel-policy-venv
+          python3 -m venv .multisource-duel-policy-venv
+          .multisource-duel-policy-venv/bin/pip install --upgrade pip
+          .multisource-duel-policy-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile changed evaluation surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          .multisource-duel-policy-venv/bin/python -m compileall -q             src/haxlab/evaluation/multisource_duel.py             tests/test_multisource_duel.py
+
+      - name: Run focused multisource duel regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" .multisource-duel-policy-venv/bin/pytest -q             tests/test_multisource_duel.py
+
+      - name: Run adjacent evaluation regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" .multisource-duel-policy-venv/bin/pytest -q             tests/test_duel_gate.py             tests/test_multisource_suite.py             tests/test_closed_loop_arena.py
+
+      - name: Record proof result
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HAXLAB_MULTISOURCE_DUEL_POLICY_BOUNDARY_RESULT=green"

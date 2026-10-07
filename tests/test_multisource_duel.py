@@ -1,4 +1,6 @@
+from haxlab.evaluation.duel_gate import DuelGatePolicy
 from haxlab.evaluation.multisource_duel import (
+    MultisourceDuelPolicy,
     build_multisource_duel,
     decide_multisource_duel_gate,
 )
@@ -280,3 +282,79 @@ def test_multisource_gate_rejects_non_list_sources_payload() -> None:
     assert not decision.eligible_to_replace_champion
     assert "invalid_sources_payload" in decision.reasons
 
+
+
+def test_multisource_gate_rejects_non_mapping_top_level_payload() -> None:
+    decision = decide_multisource_duel_gate([])  # type: ignore[arg-type]
+
+    assert not decision.eligible_to_replace_champion
+    assert decision.reasons == ("invalid_multisource_payload:object_type",)
+
+
+def test_multisource_gate_rejects_wrong_policy_object_type() -> None:
+    payload = build_multisource_duel([_duel("a"), _duel("b"), _duel("c")])
+
+    decision = decide_multisource_duel_gate(
+        payload,
+        policy=object(),  # type: ignore[arg-type]
+    )
+
+    assert not decision.eligible_to_replace_champion
+    assert decision.reasons == ("invalid_policy:object_type",)
+
+
+def test_multisource_gate_rejects_wrong_duel_policy_object_type() -> None:
+    payload = build_multisource_duel([_duel("a"), _duel("b"), _duel("c")])
+
+    decision = decide_multisource_duel_gate(
+        payload,
+        duel_policy=object(),  # type: ignore[arg-type]
+    )
+
+    assert not decision.eligible_to_replace_champion
+    assert decision.reasons == ("invalid_duel_policy:object_type",)
+
+
+def test_multisource_gate_requires_strict_positive_minimum_sources_policy() -> None:
+    payload = build_multisource_duel([_duel("a"), _duel("b"), _duel("c")])
+
+    invalid_values = (False, True, 0, -1, 3.0, "3")
+    for value in invalid_values:
+        decision = decide_multisource_duel_gate(
+            payload,
+            policy=MultisourceDuelPolicy(  # type: ignore[arg-type]
+                minimum_sources=value
+            ),
+        )
+
+        assert not decision.eligible_to_replace_champion
+        assert any(
+            reason.startswith("invalid_policy:minimum_sources:")
+            for reason in decision.reasons
+        )
+
+
+def test_multisource_gate_preserves_explicit_valid_source_minimum() -> None:
+    payload = build_multisource_duel([_duel("a")])
+
+    decision = decide_multisource_duel_gate(
+        payload,
+        policy=MultisourceDuelPolicy(minimum_sources=1),
+    )
+
+    assert decision.eligible_to_replace_champion
+    assert decision.checks["source_count"] == 1
+    assert decision.checks["minimum_sources"] == 1
+
+
+def test_multisource_gate_applies_valid_stricter_source_minimum() -> None:
+    payload = build_multisource_duel([_duel("a"), _duel("b"), _duel("c")])
+
+    decision = decide_multisource_duel_gate(
+        payload,
+        policy=MultisourceDuelPolicy(minimum_sources=4),
+    )
+
+    assert not decision.eligible_to_replace_champion
+    assert "insufficient_sources:3<4" in decision.reasons
+    assert decision.checks["minimum_sources"] == 4
