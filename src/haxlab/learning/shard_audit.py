@@ -66,6 +66,25 @@ class AuditInputError(ValueError):
     """Raised when the audit root/index cannot be read safely."""
 
 
+def _unique_object(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise AuditInputError(
+                f"duplicate_json_key:{key}"
+            )
+        result[key] = value
+    return result
+
+
+def _invalid_constant(value: str) -> None:
+    raise AuditInputError(
+        f"invalid_json_constant:{value}"
+    )
+
+
 def _native_int(value: Any, *, minimum: int = 0) -> bool:
     return type(value) is int and value >= minimum
 
@@ -111,7 +130,11 @@ def _read_regular_bytes(
 def _load_object(path: Path) -> tuple[dict[str, Any], bytes]:
     payload = _read_regular_bytes(path)
     try:
-        value = json.loads(payload)
+        value = json.loads(
+            payload,
+            object_pairs_hook=_unique_object,
+            parse_constant=_invalid_constant,
+        )
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise AuditInputError(f"invalid_json:{path.name}:{exc}") from exc
     if not isinstance(value, dict):

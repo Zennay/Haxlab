@@ -373,3 +373,92 @@ def test_audit_rejects_index_aggregate_count_drift(
         error.startswith("selected_players_seen_mismatch:")
         for error in receipt["errors"]
     )
+
+
+def test_audit_rejects_duplicate_index_json_keys(
+    tmp_path: Path,
+) -> None:
+    shard_dir = _fixture(tmp_path)
+    index_path = shard_dir / "_index.json"
+    text = index_path.read_text(encoding="utf-8")
+    text = text.replace(
+        '"split": "train"',
+        '"split": "train",\n  "split": "train"',
+        1,
+    )
+    index_path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(
+        shard_audit.AuditInputError,
+        match="duplicate_json_key:split",
+    ):
+        shard_audit.audit_shard_directory(shard_dir)
+
+
+def test_audit_rejects_duplicate_metadata_json_keys(
+    tmp_path: Path,
+) -> None:
+    shard_dir = _fixture(tmp_path)
+    meta_path = shard_dir / f"{SHA}.meta.json"
+    text = meta_path.read_text(encoding="utf-8")
+    text = text.replace(
+        '"samples": 2',
+        '"samples": 2,\n  "samples": 2',
+        1,
+    )
+    meta_path.write_text(text, encoding="utf-8")
+
+    receipt = shard_audit.audit_shard_directory(shard_dir)
+
+    assert receipt["clean"] is False
+    assert any(
+        f"{SHA}:meta:duplicate_json_key:samples" == error
+        for error in receipt["errors"]
+    )
+
+
+@pytest.mark.parametrize(
+    "constant",
+    ["NaN", "Infinity", "-Infinity"],
+)
+def test_audit_rejects_nonstandard_index_numeric_constants(
+    tmp_path: Path,
+    constant: str,
+) -> None:
+    shard_dir = _fixture(tmp_path)
+    index_path = shard_dir / "_index.json"
+    text = index_path.read_text(encoding="utf-8")
+    text = text.replace(
+        '"sample_every_ticks": 6',
+        f'"sample_every_ticks": {constant}',
+        1,
+    )
+    index_path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(
+        shard_audit.AuditInputError,
+        match=f"invalid_json_constant:{constant}",
+    ):
+        shard_audit.audit_shard_directory(shard_dir)
+
+
+def test_audit_rejects_nonstandard_metadata_numeric_constant(
+    tmp_path: Path,
+) -> None:
+    shard_dir = _fixture(tmp_path)
+    meta_path = shard_dir / f"{SHA}.meta.json"
+    text = meta_path.read_text(encoding="utf-8")
+    text = text.replace(
+        '"example_weight": 1.0',
+        '"example_weight": Infinity',
+        1,
+    )
+    meta_path.write_text(text, encoding="utf-8")
+
+    receipt = shard_audit.audit_shard_directory(shard_dir)
+
+    assert receipt["clean"] is False
+    assert any(
+        f"{SHA}:meta:invalid_json_constant:Infinity" == error
+        for error in receipt["errors"]
+    )
