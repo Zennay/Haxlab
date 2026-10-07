@@ -14,6 +14,13 @@ class _FloatSubclass(float):
     pass
 
 
+class _HostileMatchQualityEvidence(MatchQualityEvidence):
+    def __getattribute__(self, name: str) -> object:
+        if name == "replay_valid":
+            raise AssertionError("quality evidence was dereferenced")
+        return super().__getattribute__(name)
+
+
 def test_missing_evidence_cannot_accidentally_be_elite() -> None:
     assessment = assess_match_quality(
         MatchQualityEvidence(
@@ -149,4 +156,23 @@ def test_quality_evidence_accepts_valid_boundary_values() -> None:
         "high_parser_completeness",
         "uncertain_player_identity",
     )
+    assert assessment.missing_evidence == ()
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        object(),
+        {"replay_valid": True},
+        _HostileMatchQualityEvidence(replay_valid=True),
+    ],
+)
+def test_noncanonical_quality_evidence_fails_before_attribute_access(
+    evidence: object,
+) -> None:
+    assessment = assess_match_quality(evidence)  # type: ignore[arg-type]
+
+    assert assessment.tier == QualityTier.REJECTED
+    assert assessment.weight == 0.0
+    assert assessment.reasons == ("invalid_quality_evidence",)
     assert assessment.missing_evidence == ()
