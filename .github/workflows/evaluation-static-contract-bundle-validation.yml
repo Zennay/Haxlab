@@ -88,3 +88,4 @@ jobs:
         run: |
           set -euo pipefail
           echo "HAXLAB_EVALUATION_STATIC_CONTRACT_BUNDLE_RESULT=green"
+# five-contract compatibility proof trigger
