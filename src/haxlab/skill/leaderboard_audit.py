@@ -102,6 +102,22 @@ def _invalid_constant(value: str) -> None:
     _fail(f"invalid JSON numeric constant: {value}")
 
 
+def _read_bounded(fd: int) -> bytes:
+    chunks: list[bytes] = []
+    remaining = MAX_LEADERBOARD_BYTES + 1
+    while remaining > 0:
+        chunk = os.read(fd, min(1024 * 1024, remaining))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+
+    payload = b"".join(chunks)
+    if len(payload) > MAX_LEADERBOARD_BYTES:
+        _fail(f"leaderboard exceeds {MAX_LEADERBOARD_BYTES} byte limit")
+    return payload
+
+
 def _secure_read(path: Path) -> bytes:
     if not isinstance(path, Path):
         _fail("leaderboard path must be a pathlib.Path")
@@ -136,12 +152,10 @@ def _secure_read(path: Path) -> bytes:
         if before.st_size > MAX_LEADERBOARD_BYTES:
             _fail(f"leaderboard exceeds {MAX_LEADERBOARD_BYTES} byte limit")
 
-        first = os.read(fd, MAX_LEADERBOARD_BYTES + 1)
-        if len(first) > MAX_LEADERBOARD_BYTES:
-            _fail(f"leaderboard exceeds {MAX_LEADERBOARD_BYTES} byte limit")
+        first = _read_bounded(fd)
 
         os.lseek(fd, 0, os.SEEK_SET)
-        second = os.read(fd, MAX_LEADERBOARD_BYTES + 1)
+        second = _read_bounded(fd)
         after = os.fstat(fd)
         if first != second:
             _fail("leaderboard bytes changed during audit read")
