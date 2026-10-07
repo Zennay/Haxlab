@@ -16,6 +16,10 @@ DIRECT_DISCOVERY_CALLS = {
     "os.listdir",
     "os.scandir",
     "os.walk",
+    "pathlib.Path.glob",
+    "pathlib.Path.iterdir",
+    "pathlib.Path.rglob",
+    "pathlib.Path.walk",
 }
 PATH_DISCOVERY_METHODS = {"glob", "iterdir", "rglob", "walk"}
 TRACKED_MODULES = {"builtins", "glob", "os", "pathlib"}
@@ -216,6 +220,9 @@ def _violations(source: str, *, filename: str = "<source>") -> list[str]:
         "from pathlib import Path\nPath('/tmp').rglob('*.json')\n",
         "from pathlib import Path\nPath('/tmp').iterdir()\n",
         "from pathlib import Path\nPath('/tmp').walk()\n",
+        "from pathlib import Path\np = Path('/tmp')\nPath.glob(p, '*')\n",
+        "from pathlib import Path\np = Path('/tmp')\ndiscover = Path.rglob\ndiscover(p, '*')\n",
+        "from pathlib import Path\np = Path('/tmp')\ndiscover = getattr(Path, 'iterdir')\ndiscover(p)\n",
         "import pathlib as pl\np = pl.Path('/tmp')\np.rglob('*')\n",
         "import os\nos.walk('/tmp')\n",
         "import os\nos.fwalk('/tmp')\n",
