@@ -10,11 +10,11 @@ This is distinct from the ambient nondeterminism contract (#147/#148): that cont
 
 The recursive AST contract rejects:
 
-- Python module-global RNG mutation through `random.seed` and `random.setstate`;
-- legacy NumPy global RNG mutation through `numpy.random.seed` and `numpy.random.set_state`;
-- Torch process/global generator mutation through `torch.manual_seed`, `torch.seed`, `torch.set_rng_state`, the equivalent `torch.random.*` calls, and CUDA global-generator seed/state setters.
+- Python module-global RNG mutation through `random.seed` / `random.setstate`, including direct mutation of the module singleton `random._inst`;
+- legacy NumPy global RNG mutation through `numpy.random.seed` / `numpy.random.set_state`, including the legacy `mtrand._rand` singleton;
+- Torch process/global generator mutation through `torch.manual_seed`, `torch.seed`, `torch.set_rng_state`, the equivalent `torch.random.*` calls, `torch.default_generator`, and CUDA global/default-generator seed/state setters.
 
-Import aliases, module aliases, assignment/annotated/named aliases, bound callable aliases, and constant-`getattr(...)` spellings are resolved before checking. Wildcard imports from tracked RNG modules are rejected because their provenance is ambiguous.
+Import aliases, module aliases, assignment/annotated/named aliases, tuple/list unpacking, bound callable aliases, walrus expressions, constant-`getattr(...)` spellings, and indexed CUDA default-generator references are resolved before checking. Function/lambda/comprehension lexical shadowing is preserved. Wildcard imports from tracked RNG modules are rejected because their provenance is ambiguous.
 
 ## Preserved deterministic usage
 
