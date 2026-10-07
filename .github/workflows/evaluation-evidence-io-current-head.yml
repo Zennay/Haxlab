@@ -45,13 +45,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          /opt/haxlab/.venv/bin/python -m py_compile             src/haxlab/evaluation/evidence_io.py             src/haxlab/evaluation/models.py             src/haxlab/evaluation/promotion.py
+          .evaluation-evidence-io-venv/bin/python -m py_compile             src/haxlab/evaluation/evidence_io.py             src/haxlab/evaluation/models.py             src/haxlab/evaluation/promotion.py
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .evaluation-evidence-io-venv
+          python3 -m venv .evaluation-evidence-io-venv
+          .evaluation-evidence-io-venv/bin/pip install --upgrade pip
+          .evaluation-evidence-io-venv/bin/pip install -e '.[dev]'
 
       - name: Run evidence IO and adjacent promotion regressions
         shell: bash
         run: |
           set -euo pipefail
-          PYTHONPATH="$GITHUB_WORKSPACE/src"             /opt/haxlab/.venv/bin/python -m pytest -q               tests/test_evaluation_evidence_io.py               tests/test_promotion.py
+          PYTHONPATH="$GITHUB_WORKSPACE/src"             .evaluation-evidence-io-venv/bin/python -m pytest -q               tests/test_evaluation_evidence_io.py               tests/test_promotion.py
 
       - name: Record focused proof
         shell: bash
