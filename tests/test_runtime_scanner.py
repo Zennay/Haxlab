@@ -454,3 +454,77 @@ def test_scanner_rejects_invalid_now(
             )
 
     assert not list(raw.rglob("*.hbr2"))
+
+
+def test_scanner_rejects_symlinked_nested_directory(tmp_path: Path) -> None:
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "external.hbr2").write_bytes(
+        _valid_hbr2(total_frames=903, payload=b"nested-directory-link")
+    )
+    linked_directory = incoming / "linked-dir"
+    linked_directory.symlink_to(outside, target_is_directory=True)
+
+    raw = tmp_path / "raw"
+    db = tmp_path / "state.sqlite3"
+
+    with RuntimeState(db) as state:
+        summary = scan_once(
+            incoming,
+            raw,
+            state,
+            minimum_file_age_seconds=0,
+            now=time.time() + 10,
+        )
+        snapshot = state.status_snapshot()
+        source_count = state.connection.execute(
+            "SELECT COUNT(*) FROM source_files"
+        ).fetchone()[0]
+        event = state.connection.execute(
+            """
+            SELECT event_type, subject, detail
+            FROM runtime_events
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+
+    assert summary.discovered == 0
+    assert summary.archived == 0
+    assert summary.failed == 0
+    assert snapshot["raw_unique_replays"] == 0
+    assert source_count == 0
+    assert event is not None
+    assert event["event_type"] == "ingest_directory_rejected"
+    assert event["subject"] == str(linked_directory)
+    assert event["detail"] == "symlink_directory"
+    assert not list(raw.rglob("*.hbr2"))
+
+
+def test_scanner_keeps_regular_nested_directories(tmp_path: Path) -> None:
+    incoming = tmp_path / "incoming"
+    nested = incoming / "nested" / "deep"
+    nested.mkdir(parents=True)
+    replay = nested / "regular.hbr2"
+    replay.write_bytes(_valid_hbr2(total_frames=904, payload=b"nested-regular"))
+
+    raw = tmp_path / "raw"
+    db = tmp_path / "state.sqlite3"
+
+    with RuntimeState(db) as state:
+        summary = scan_once(
+            incoming,
+            raw,
+            state,
+            minimum_file_age_seconds=0,
+            now=time.time() + 10,
+        )
+        snapshot = state.status_snapshot()
+
+    assert summary.discovered == 1
+    assert summary.archived == 1
+    assert summary.failed == 0
+    assert snapshot["raw_unique_replays"] == 1
+    assert len(list(raw.rglob("*.hbr2"))) == 1
