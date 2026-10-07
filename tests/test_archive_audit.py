@@ -132,6 +132,44 @@ def test_archive_audit_rejects_regular_file_replacement_before_open(
     assert report["issues"][0]["reasons"] == ["archive_identity_changed"]
 
 
+def test_archive_audit_rejects_in_place_mutation_during_read(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db = tmp_path / "state.sqlite3"
+    raw = tmp_path / "raw"
+    expected_payload = b"A" * 4096
+    digest, path = _write_content_addressed(raw, expected_payload)
+
+    with RuntimeState(db) as state:
+        state.register_raw(
+            sha256=digest,
+            archive_path=str(path),
+            size_bytes=len(expected_payload),
+        )
+
+        real_read = os.read
+        mutated = False
+
+        def mutating_read(fd, count):
+            nonlocal mutated
+            chunk = real_read(fd, count)
+            if not mutated and chunk:
+                mutated = True
+                path.write_bytes(b"B" * len(expected_payload))
+            return chunk
+
+        monkeypatch.setattr(archive_audit.os, "read", mutating_read)
+        report = audit_raw_archive(state)
+
+    assert mutated is True
+    assert report["ok"] is False
+    assert report["existing_files"] == 0
+    assert report["read_failures"] == 1
+    assert report["hash_mismatches"] == 0
+    assert report["issues"][0]["reasons"] == ["archive_changed_during_read"]
+
+
 def test_archive_audit_rejects_symlink_replacement_before_open(
     tmp_path: Path,
     monkeypatch,
