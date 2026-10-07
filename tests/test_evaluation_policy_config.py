@@ -49,6 +49,24 @@ def test_policy_config_cli_emits_machine_readable_runtime_policy(
     }
 
 
+def test_policy_config_cli_fails_closed_on_invalid_config(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = _write_policy(
+        tmp_path,
+        "minimum_games_vs_champion = 0\n"
+        "minimum_score_rate_lower_bound = 0.51\n"
+        "minimum_frozen_scenario_pass_rate = 0.98\n",
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        main([str(path)])
+
+    assert exc_info.value.code == 2
+    assert "minimum_games_vs_champion must be >= 1" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize(
     "evaluation_lines",
     [
@@ -79,6 +97,7 @@ def test_policy_config_requires_exact_evaluation_keyset(
     [
         ("minimum_games_vs_champion", "true"),
         ("minimum_games_vs_champion", "0"),
+        ("minimum_games_vs_champion", "500.0"),
         ("minimum_score_rate_lower_bound", '"0.51"'),
         ("minimum_score_rate_lower_bound", "true"),
         ("minimum_score_rate_lower_bound", "1.01"),
@@ -103,6 +122,19 @@ def test_policy_config_rejects_coercible_or_out_of_range_values(
     )
 
     with pytest.raises(ValueError):
+        load_promotion_policy(path)
+
+
+def test_policy_config_rejects_duplicate_toml_keys(tmp_path: Path) -> None:
+    path = _write_policy(
+        tmp_path,
+        "minimum_games_vs_champion = 500\n"
+        "minimum_games_vs_champion = 750\n"
+        "minimum_score_rate_lower_bound = 0.51\n"
+        "minimum_frozen_scenario_pass_rate = 0.98\n",
+    )
+
+    with pytest.raises(ValueError, match="invalid TOML"):
         load_promotion_policy(path)
 
 
