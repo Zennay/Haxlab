@@ -62,6 +62,7 @@ def test_green_job_is_the_only_promotion_valid_classification() -> None:
         "job_id": 112580599451,
         "classification": "green",
         "promotion_evidence_valid": True,
+        "gate_rejection": False,
         "model_rejection": False,
         "reasons": [],
     }
@@ -103,7 +104,7 @@ def test_failed_summary_without_gate_marker_is_not_a_model_rejection() -> None:
     assert result["reasons"] == ["summary:failure:no_gate_marker"]
 
 
-def test_explicit_gate_marker_after_completed_batch_is_model_rejection() -> None:
+def test_explicit_gate_marker_after_completed_batch_is_gate_rejection_only() -> None:
     result = classify_calibration_job(
         _job(
             job_conclusion="failure",
@@ -116,9 +117,10 @@ def test_explicit_gate_marker_after_completed_batch_is_model_rejection() -> None
         job_log=f"prefix {MODEL_REJECTION_MARKER} candidate_d_failed suffix",
     )
 
-    assert result["classification"] == "evaluation_rejected"
+    assert result["classification"] == "evaluation_gate_rejected"
     assert result["promotion_evidence_valid"] is False
-    assert result["model_rejection"] is True
+    assert result["gate_rejection"] is True
+    assert result["model_rejection"] is False
     assert result["reasons"] == ["summary:gate_rejected"]
 
 
@@ -269,8 +271,9 @@ def test_cli_job_log_can_prove_explicit_gate_rejection(tmp_path, capsys) -> None
 
     assert main([str(job_path), "--job-log", str(log_path)]) == 0
     result = json.loads(capsys.readouterr().out)
-    assert result["classification"] == "evaluation_rejected"
-    assert result["model_rejection"] is True
+    assert result["classification"] == "evaluation_gate_rejected"
+    assert result["gate_rejection"] is True
+    assert result["model_rejection"] is False
 
 
 def test_cli_malformed_json_is_invalid(tmp_path, capsys) -> None:
