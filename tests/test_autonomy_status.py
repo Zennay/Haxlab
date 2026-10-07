@@ -278,7 +278,8 @@ def test_autonomy_tick_stops_on_incoherent_status_counts(
     status = json.loads((state_dir / "autonomy-status.json").read_text())
     assert status["state"] == "FAILED_RETRYABLE"
     assert status["action"] == "invalid_status_snapshot"
-    assert "analysis counters cannot exceed processing_ok" in status["detail"]
+    assert "downstream autonomy work was not started" in status["detail"]
+    assert "analysis counters cannot exceed processing_ok" in completed.stderr
     assert not derived_dir.exists()
     assert not models_dir.exists()
 
