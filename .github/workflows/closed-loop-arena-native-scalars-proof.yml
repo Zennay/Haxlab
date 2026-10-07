@@ -1,0 +1,62 @@
+name: Closed-loop Arena native scalar boundary proof
+
+on:
+  push:
+    branches:
+      - validation/closed-loop-arena-native-scalars-20261007
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-closed-loop-arena-native-scalars-proof
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Verify exact live branch head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          live="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          test -n "$live"
+          test "$live" = "${GITHUB_SHA}"
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .arena-native-scalars-venv
+          python3 -m venv .arena-native-scalars-venv
+          .arena-native-scalars-venv/bin/pip install --upgrade pip
+          .arena-native-scalars-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile gate and regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          .arena-native-scalars-venv/bin/python -m compileall -q             src/haxlab/evaluation/closed_loop_arena.py             tests/test_closed_loop_arena.py
+
+      - name: Run focused and adjacent Arena regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src"             .arena-native-scalars-venv/bin/pytest -q               tests/test_closed_loop_arena.py               tests/test_duel_gate.py               tests/test_multisource_duel.py
+
+      - name: Record exact-head evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HAXLAB_ARENA_NATIVE_SCALARS_HEAD=$(git rev-parse HEAD)"
+          echo "HAXLAB_ARENA_NATIVE_SCALARS_RESULT=green"
