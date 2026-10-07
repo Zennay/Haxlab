@@ -9,10 +9,15 @@ Class bodies recursively below `src/haxlab/evaluation/` must not initialize
 class attributes with mutable list/dict/set literals or comprehensions, nested
 tuple containers that contain those values, or common mutable constructors such
 as `list`, `dict`, `set`, `bytearray`, `collections.deque`,
-`collections.defaultdict`, and `collections.OrderedDict`.
+`collections.defaultdict`, `collections.OrderedDict`, `collections.Counter`,
+`collections.ChainMap`, `collections.UserDict`/`UserList`, `array.array`, in-memory
+`io` buffers, queue containers, `types.SimpleNamespace`, and weak-reference
+mapping containers.
 
 The detector resolves module/class imports, simple assignment aliases, and
-constant `getattr(...)` constructor aliases.
+constant `getattr(...)` constructor aliases. The standard-library constructor
+set is intentionally explicit so immutable wrappers such as `MappingProxyType`
+remain valid while common process-lifetime mutable containers fail closed.
 
 Per-instance state remains allowed. In particular, method-local containers and
 `dataclasses.field(default_factory=...)` are valid because they do not create one

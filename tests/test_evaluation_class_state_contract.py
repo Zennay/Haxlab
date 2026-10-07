@@ -11,18 +11,32 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 EVALUATION_ROOT = REPO_ROOT / "src" / "haxlab" / "evaluation"
 
 MUTABLE_CONSTRUCTORS = {
+    "array.array",
     "bytearray",
     "builtins.bytearray",
     "builtins.dict",
     "builtins.list",
     "builtins.set",
+    "collections.ChainMap",
+    "collections.Counter",
     "collections.OrderedDict",
+    "collections.UserDict",
+    "collections.UserList",
     "collections.defaultdict",
     "collections.deque",
     "dict",
     "dict.fromkeys",
+    "io.BytesIO",
+    "io.StringIO",
     "list",
+    "queue.LifoQueue",
+    "queue.PriorityQueue",
+    "queue.Queue",
+    "queue.SimpleQueue",
     "set",
+    "types.SimpleNamespace",
+    "weakref.WeakKeyDictionary",
+    "weakref.WeakValueDictionary",
 }
 
 
@@ -200,6 +214,14 @@ def test_evaluation_package_has_no_shared_mutable_class_state() -> None:
         "Factory = dict\nclass Gate:\n    cache = Factory()\n",
         "import collections\nFactory = getattr(collections, 'deque')\nclass Gate:\n    pending = Factory()\n",
         "class Outer:\n    Factory = list\n    cache = Factory()\n    class Inner:\n        seen = {}\n",
+        "from collections import Counter\nclass Gate:\n    counts = Counter()\n",
+        "import collections as c\nclass Gate:\n    layers = c.ChainMap()\n",
+        "from collections import UserDict as Bag\nclass Gate:\n    state = Bag()\n",
+        "import array\nclass Gate:\n    values = array.array('I')\n",
+        "from io import BytesIO\nclass Gate:\n    buffer = BytesIO()\n",
+        "import queue\nclass Gate:\n    pending = queue.SimpleQueue()\n",
+        "from types import SimpleNamespace\nclass Gate:\n    state = SimpleNamespace()\n",
+        "import weakref\nclass Gate:\n    cache = weakref.WeakKeyDictionary()\n",
     ],
 )
 def test_detector_rejects_shared_mutable_class_state(source: str) -> None:
