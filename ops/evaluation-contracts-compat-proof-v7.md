@@ -6,14 +6,14 @@ Canonical Arena-v2 base:
 - `ee5ab508e9d8504de12b7cbb5fdeca43a58ae1a4`
 
 This carrier extends the terminal-green v6 stack of 19 additive evaluation-validation contracts with:
-- memoization-state guard from #323/#326: `0372395d465ef5d86550212df7b4c35a8246b4fa`;
-- shared mutable class-state guard from #329/#335: `8f83595f0e1ce18730100c57b9ebc7ee626a762e`.
+- memoization-state guard from #323/#326: `9268422a1b9b99b6b12dc9432f41e41f287b6f70`;
+- shared mutable class-state guard from #329/#335: `9ea064929f744578ed16772c30c09df30da74a9c`.
 
-The two owner branches advanced after the original v7 carrier was prepared, so their earlier green heads are superseded. This carrier now pins the current live owner heads and supplies cross-contract compatibility evidence only; each owner still retains its own exact-head acceptance responsibility.
+Both new heads have independent exact-head self-hosted evidence: each focused contract passed 17 tests and the adjacent canonical Arena-v2 bundle passed 140 tests.
 
 The workflow:
 1. checks out the exact untouched canonical Arena-v2 commit;
-2. verifies all 21 owner branches still resolve to the recorded exact SHAs for this compatibility generation;
+2. verifies all 21 owner branches still resolve to their recorded exact green SHAs;
 3. materializes only their additive contract test/workflow files into the runner workspace;
 4. compiles and runs the full 21-contract synthetic stack;
 5. runs the adjacent canonical Arena-v2 regression bundle;
