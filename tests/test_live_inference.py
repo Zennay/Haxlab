@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from haxlab.live.inference import resolve_version_dir
+from haxlab.live.inference import _resolve_role_order, resolve_version_dir
 
 
 def _version(root: Path, name: str) -> Path:
@@ -596,4 +596,31 @@ def test_live_pointer_requires_evidence_artifact_digest_binding(
 
     with pytest.raises(FileNotFoundError):
         resolve_version_dir(tmp_path)
+
+def test_role_order_cannot_be_overridden_by_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HAXLAB_ROLE_ORDER", "st,am,dm,gk")
+
+    assert _resolve_role_order({}) == ["gk", "dm", "am", "st"]
+
+
+def test_runtime_role_order_remains_explicitly_supported() -> None:
+    assert _resolve_role_order(
+        {"role_order": ["st", "am", "dm", "gk"]}
+    ) == ["st", "am", "dm", "gk"]
+
+
+@pytest.mark.parametrize(
+    "role_order",
+    [
+        ["gk", "dm", "am", "xx"],
+        ["gk", "dm", "am", "am"],
+    ],
+)
+def test_runtime_role_order_requires_exact_canonical_role_set(
+    role_order: list[str],
+) -> None:
+    with pytest.raises(ValueError, match="invalid role order"):
+        _resolve_role_order({"role_order": role_order})
 
