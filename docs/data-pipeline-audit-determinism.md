@@ -20,9 +20,10 @@ Audit decision code may not depend on:
 - wall, monotonic, performance, process or thread clock getters;
 - `datetime.now()`, `utcnow()`, `today()` or `date.today()`;
 - `random` or `secrets` entropy;
+- the `numpy.random` namespace, including generator factories and distribution calls;
 - generated UUID APIs such as `uuid1`, `uuid4`, `uuid6`, `uuid7` or `uuid8`.
 
-Import aliases, chained assignment aliases and loaded callable/module references are resolved by the contract. Constant `getattr(...)` indirection is resolved as well, including an aliased `builtins.getattr`, so an ambient source cannot be hidden behind another local name before use. Direct tuple/list unpacking of aliasable references is covered. Wildcard imports from sensitive modules are rejected.
+Import aliases, chained assignment aliases and loaded callable/module references are resolved by the contract. Constant `getattr(...)` indirection is resolved as well, including an aliased `builtins.getattr`, so an ambient source cannot be hidden behind another local name before use. Direct tuple/list unpacking of aliasable references is covered. Wildcard imports from sensitive modules are rejected. NumPy itself remains allowed; only references/imports under `numpy.random` are treated as ambient entropy.
 
 ## Allowed deterministic operations
 
@@ -31,6 +32,7 @@ The contract deliberately permits deterministic transformations of explicit evid
 - `datetime.fromisoformat(...)` for timestamps supplied by the artifact being audited;
 - cryptographic hashes such as `hashlib.sha256(...)`;
 - parsing explicit UUID values with `uuid.UUID(...)`;
+- deterministic NumPy array/math operations outside `numpy.random`;
 - sorting, canonical serialization and other deterministic local computation.
 
 ## Separation from import hermeticity
