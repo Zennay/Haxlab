@@ -43,7 +43,8 @@ class AliasState:
     def resolve(self, name: str) -> str:
         for scope in reversed(self.scopes):
             if name in scope:
-                return scope[name] or name
+                target = scope[name]
+                return target if target is not None else f"<local:{name}>"
         return name
 
 
