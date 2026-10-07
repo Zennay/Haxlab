@@ -53,8 +53,12 @@ allowed.
 
 The branch-scoped self-hosted workflow verifies the exact event SHA, creates an
 isolated environment, compiles the evaluation package plus contract, runs the
-focused regression and emits
-`HAXLAB_EVALUATION_PROCESS_STATE_RESULT=green` only on success.
+focused regression, then reruns the 12 adjacent canonical Arena-v2 evaluation
+regression files previously proven by the static-contract verification bundle.
+The known owner-reserved runtime-budget collection blocker (#92) remains
+deliberately outside this compatibility set. The workflow emits
+`HAXLAB_EVALUATION_PROCESS_STATE_RESULT=green` only after both the focused
+contract and adjacent canonical regression set pass.
 
 A green result is narrow validation evidence only. It does not authorize
 canonical Arena-v2 PR #19 merge or champion promotion.

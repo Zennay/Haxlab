@@ -53,6 +53,25 @@ jobs:
           set -euo pipefail
           PYTHONPATH="$GITHUB_WORKSPACE/src"             .evaluation-process-state-venv/bin/pytest -q               tests/test_evaluation_process_state_contract.py
 
+      - name: Run adjacent canonical evaluation regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .evaluation-process-state-venv/bin/pytest -q \
+              tests/test_arena_v2_integration_workflow_contract.py \
+              tests/test_calibration_cross_sha_resume_contract.py \
+              tests/test_calibration_gate.py \
+              tests/test_calibration_resume.py \
+              tests/test_calibration_workflow_evidence_contract.py \
+              tests/test_closed_loop_arena.py \
+              tests/test_duel_gate.py \
+              tests/test_elite_gate_preflight.py \
+              tests/test_multisource_duel.py \
+              tests/test_multisource_suite.py \
+              tests/test_promotion.py \
+              tests/test_scenario_source.py
+
       - name: Record green result
         shell: bash
         run: |
