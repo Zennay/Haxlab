@@ -31,10 +31,18 @@ def _live_pointer(
         root / "validations" / version / source_validation_stage
     )
     evidence_dir.mkdir(parents=True, exist_ok=True)
+    model_sha256 = hashlib.sha256(
+        (version_dir / "model.npz").read_bytes()
+    ).hexdigest()
+    metrics_sha256 = hashlib.sha256(
+        (version_dir / "metrics.json").read_bytes()
+    ).hexdigest()
     evidence = {
         "validated": evidence_validated,
         "candidate": {
-            "version_id": version if evidence_version is None else evidence_version
+            "version_id": version if evidence_version is None else evidence_version,
+            "model_sha256": model_sha256,
+            "metrics_sha256": metrics_sha256,
         },
     }
     evidence_bytes = (
@@ -49,6 +57,8 @@ def _live_pointer(
         "version_id": version,
         "model_path": str(version_dir / "model.npz"),
         "metrics_path": str(version_dir / "metrics.json"),
+        "model_sha256": model_sha256,
+        "metrics_sha256": metrics_sha256,
         "validation_stage": validation_stage,
         "source_validation_stage": source_validation_stage,
         "validation_evidence_path": str(evidence_path),
@@ -519,6 +529,63 @@ def test_live_pointer_rejects_duplicate_validation_evidence_keys(
     original = evidence_path.read_text(encoding="utf-8")
     evidence_path.write_text(
         '{"validated":false,' + original.lstrip()[1:],
+        encoding="utf-8",
+    )
+    evidence_sha = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+    live_path = tmp_path / "live.json"
+    payload = json.loads(live_path.read_text(encoding="utf-8"))
+    payload["validation_evidence_sha256"] = evidence_sha
+    live_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    with pytest.raises(FileNotFoundError):
+        resolve_version_dir(tmp_path)
+
+def test_live_pointer_rejects_model_byte_drift_after_validation(
+    tmp_path: Path,
+) -> None:
+    version = _version(tmp_path, "champion-v1")
+    _live_pointer(tmp_path, "champion-v1")
+    (version / "model.npz").write_bytes(b"model-placeholder-mutated")
+
+    with pytest.raises(FileNotFoundError):
+        resolve_version_dir(tmp_path)
+
+
+def test_live_pointer_rejects_metrics_byte_drift_after_validation(
+    tmp_path: Path,
+) -> None:
+    version = _version(tmp_path, "champion-v1")
+    _live_pointer(tmp_path, "champion-v1")
+    (version / "metrics.json").write_text(
+        '{"mutated":true}\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(FileNotFoundError):
+        resolve_version_dir(tmp_path)
+
+
+def test_live_pointer_requires_artifact_digests(tmp_path: Path) -> None:
+    _version(tmp_path, "champion-v1")
+    _live_pointer(tmp_path, "champion-v1")
+    live_path = tmp_path / "live.json"
+    payload = json.loads(live_path.read_text(encoding="utf-8"))
+    del payload["model_sha256"]
+    live_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    with pytest.raises(FileNotFoundError):
+        resolve_version_dir(tmp_path)
+
+
+def test_live_pointer_requires_evidence_artifact_digest_binding(
+    tmp_path: Path,
+) -> None:
+    _version(tmp_path, "champion-v1")
+    evidence_path = _live_pointer(tmp_path, "champion-v1")
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    evidence["candidate"]["model_sha256"] = "0" * 64
+    evidence_path.write_text(
+        json.dumps(evidence, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     evidence_sha = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
