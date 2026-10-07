@@ -202,3 +202,18 @@ def test_receipt_rejects_dataset_root_changed_during_scan(
         match="dataset root changed while building receipt",
     ):
         build_dataset_receipt(root)
+
+
+
+def test_receipt_rejects_fifo_without_blocking(tmp_path: Path) -> None:
+    root = tmp_path / "dataset"
+    _write_dataset(root)
+    fifo = root / "reports.json"
+    fifo.unlink()
+    receipt_module.os.mkfifo(fifo)
+
+    with pytest.raises(
+        DatasetReceiptError,
+        match="artifact is not a regular file: reports.json",
+    ):
+        build_dataset_receipt(root)
