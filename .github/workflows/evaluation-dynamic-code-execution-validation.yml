@@ -1,0 +1,92 @@
+name: Evaluation dynamic code execution validation
+
+on:
+  push:
+    branches:
+      - validation/evaluation-dynamic-code-execution-contract-20261007
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-evaluation-dynamic-code-execution-${{ github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Verify exact checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          echo "HAXLAB_EVALUATION_DYNAMIC_CODE_EXECUTION_HEAD=$(git rev-parse HEAD)"
+
+      - name: Verify candidate is still the live branch head
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk 'NR == 1 {print $1}')"
+          test -n "$remote_head"
+          test "$remote_head" = "${{ github.sha }}"
+          echo "HAXLAB_EVALUATION_DYNAMIC_CODE_EXECUTION_LIVE_HEAD=$remote_head"
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .evaluation-dynamic-code-execution-venv
+          python3 -m venv .evaluation-dynamic-code-execution-venv
+          .evaluation-dynamic-code-execution-venv/bin/pip install --upgrade pip
+          .evaluation-dynamic-code-execution-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile evaluation package and contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          .evaluation-dynamic-code-execution-venv/bin/python -m compileall -q \
+            src/haxlab/evaluation \
+            tests/test_evaluation_dynamic_code_execution_contract.py
+
+      - name: Run dynamic code execution contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .evaluation-dynamic-code-execution-venv/bin/pytest -q \
+              tests/test_evaluation_dynamic_code_execution_contract.py
+
+      - name: Run adjacent canonical evaluation regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .evaluation-dynamic-code-execution-venv/bin/pytest -q \
+              tests/test_arena_v2_integration_workflow_contract.py \
+              tests/test_calibration_cross_sha_resume_contract.py \
+              tests/test_calibration_gate.py \
+              tests/test_calibration_resume.py \
+              tests/test_calibration_workflow_evidence_contract.py \
+              tests/test_closed_loop_arena.py \
+              tests/test_duel_gate.py \
+              tests/test_elite_gate_preflight.py \
+              tests/test_multisource_duel.py \
+              tests/test_multisource_suite.py \
+              tests/test_promotion.py \
+              tests/test_scenario_source.py
+
+      - name: Record green result
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HAXLAB_EVALUATION_DYNAMIC_CODE_EXECUTION_RESULT=green"
