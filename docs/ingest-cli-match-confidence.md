@@ -1,10 +1,16 @@
-# Ingest CLI match-confidence boundary
+# Ingest CLI input boundary
 
-The public `haxlab ingest` command validates `--minimum-match-confidence` before calling the ingestion producer.
+The public `haxlab ingest` command validates operator-controlled inputs before calling the ingestion producer.
 
-## Contract
+## Export-root contract
 
-Accepted values must:
+The positional `export_root` must already be an existing real directory. Missing paths, regular files, and symlinked directory roots are rejected by `argparse` with exit status 2 before `run_import()` is called.
+
+This is an operator-facing preflight, not the security authority for source traversal. Ingestion discovery still revalidates the root and individual replay paths so a filesystem race after argument parsing fails closed at the producer boundary.
+
+## Match-confidence contract
+
+Accepted `--minimum-match-confidence` values must:
 
 - be expressed without surrounding whitespace;
 - parse as a finite floating-point number;

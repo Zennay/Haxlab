@@ -3,9 +3,27 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import stat
 from pathlib import Path
 
 from haxlab.ingestion.pipeline import run_import
+
+
+
+def _export_root_arg(value: str) -> Path:
+    path = Path(value)
+    try:
+        mode = path.lstat().st_mode
+    except OSError as exc:
+        raise argparse.ArgumentTypeError(
+            "export root must be an existing non-symlink directory"
+        ) from exc
+
+    if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+        raise argparse.ArgumentTypeError(
+            "export root must be an existing non-symlink directory"
+        )
+    return path
 
 
 def _match_confidence_arg(value: str) -> float:
@@ -37,7 +55,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "ingest",
         help="Build a deterministic M0 dataset inventory from a Discord export.",
     )
-    ingest.add_argument("export_root", type=Path)
+    ingest.add_argument("export_root", type=_export_root_arg)
     ingest.add_argument(
         "--output",
         type=Path,
