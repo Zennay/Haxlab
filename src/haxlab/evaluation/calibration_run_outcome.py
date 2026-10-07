@@ -50,8 +50,10 @@ def classify_calibration_job(
     """Classify GitHub job semantics without treating interruption as model rejection.
 
     The contract is diagnostic only. promotion_evidence_valid is true only for a
-    fully successful calibration job. Model rejection additionally requires the
-    explicit deterministic calibration-gate marker from the job log.
+    fully successful calibration job. A deterministic calibration-gate rejection
+    additionally requires the explicit gate marker from the job log. That marker
+    does not prove that one particular model was rejected because calibration
+    sanity also covers the identity and negative controls.
     """
 
     reasons: list[str] = []
@@ -189,9 +191,10 @@ def classify_calibration_job(
             return _result(
                 run_id=run_id,
                 job_id=job_id,
-                classification="evaluation_rejected",
+                classification="evaluation_gate_rejected",
                 promotion_evidence_valid=False,
-                model_rejection=True,
+                gate_rejection=True,
+                model_rejection=False,
                 reasons=("summary:gate_rejected",),
             )
         return _result(
@@ -267,7 +270,8 @@ def _result(
     job_id: int | None,
     classification: str,
     promotion_evidence_valid: bool,
-    model_rejection: bool,
+    model_rejection: bool = False,
+    gate_rejection: bool = False,
     reasons: tuple[str, ...],
 ) -> dict[str, Any]:
     return {
@@ -276,6 +280,7 @@ def _result(
         "job_id": job_id,
         "classification": classification,
         "promotion_evidence_valid": promotion_evidence_valid,
+        "gate_rejection": gate_rejection,
         "model_rejection": model_rejection,
         "reasons": list(reasons),
     }
