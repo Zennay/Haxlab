@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from haxlab.evaluation.models import EvaluationEvidence, Regression
+from haxlab.evaluation.models import EvaluationEvidence, PromotionPolicy, Regression
 
 
 _ALLOWED_KEYS = {
@@ -276,3 +276,121 @@ def load_evaluation_evidence(path: Path) -> EvidenceParseResult:
         )
 
     return parse_evaluation_evidence(payload)
+
+
+@dataclass(frozen=True)
+class PolicyParseResult:
+    policy: PromotionPolicy | None
+    reasons: tuple[str, ...]
+
+    @property
+    def valid(self) -> bool:
+        return self.policy is not None and not self.reasons
+
+
+def _policy_integer(
+    failures: list[str],
+    value: Any,
+    label: str,
+    *,
+    minimum: int,
+) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        failures.append(f"invalid_policy:{label}:not_integer")
+        return minimum
+    if value < minimum:
+        failures.append(
+            f"invalid_policy:{label}:below_minimum:{value}<{minimum}"
+        )
+    return value
+
+
+def _policy_number(
+    failures: list[str],
+    value: Any,
+    label: str,
+    *,
+    minimum: float,
+    maximum: float,
+) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        failures.append(f"invalid_policy:{label}:not_number")
+        return minimum
+    number = float(value)
+    if not math.isfinite(number):
+        failures.append(f"invalid_policy:{label}:non_finite")
+        return minimum
+    if number < minimum:
+        failures.append(
+            f"invalid_policy:{label}:below_minimum:"
+            f"{number:.6f}<{minimum:.6f}"
+        )
+    if number > maximum:
+        failures.append(
+            f"invalid_policy:{label}:above_maximum:"
+            f"{number:.6f}>{maximum:.6f}"
+        )
+    return number
+
+
+def parse_promotion_policy(payload: Any) -> PolicyParseResult:
+    """Parse a complete machine-readable promotion policy fail-closed."""
+    if not isinstance(payload, dict):
+        return PolicyParseResult(
+            policy=None,
+            reasons=("invalid_policy:payload:not_object",),
+        )
+
+    required = {
+        "minimum_games",
+        "minimum_score_rate_lower_bound",
+        "minimum_scenario_pass_rate",
+        "allow_critical_regressions",
+    }
+    failures: list[str] = []
+    keys = set(payload)
+    for key in sorted(required - keys):
+        failures.append(f"invalid_policy:missing:{key}")
+    for key in sorted(keys - required):
+        failures.append(f"invalid_policy:unexpected:{key}")
+
+    minimum_games = _policy_integer(
+        failures,
+        payload.get("minimum_games"),
+        "minimum_games",
+        minimum=1,
+    )
+    minimum_score_rate_lower_bound = _policy_number(
+        failures,
+        payload.get("minimum_score_rate_lower_bound"),
+        "minimum_score_rate_lower_bound",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    minimum_scenario_pass_rate = _policy_number(
+        failures,
+        payload.get("minimum_scenario_pass_rate"),
+        "minimum_scenario_pass_rate",
+        minimum=0.0,
+        maximum=1.0,
+    )
+
+    allow_critical_regressions = payload.get("allow_critical_regressions")
+    if type(allow_critical_regressions) is not bool:
+        failures.append(
+            "invalid_policy:allow_critical_regressions:not_boolean"
+        )
+        allow_critical_regressions = False
+
+    if failures:
+        return PolicyParseResult(policy=None, reasons=tuple(failures))
+
+    return PolicyParseResult(
+        policy=PromotionPolicy(
+            minimum_games=minimum_games,
+            minimum_score_rate_lower_bound=minimum_score_rate_lower_bound,
+            minimum_scenario_pass_rate=minimum_scenario_pass_rate,
+            allow_critical_regressions=allow_critical_regressions,
+        ),
+        reasons=(),
+    )
