@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -27,12 +28,15 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def _load_index_snapshot(
+def _load_index_snapshot_at(
+    root_fd: int,
     shard_dir: Path,
 ) -> tuple[dict[str, Any], bytes]:
-    path = shard_dir / "_index.json"
     try:
-        payload = shard_audit._read_regular_bytes(path)
+        payload = shard_audit._read_regular_bytes_at(
+            root_fd,
+            "_index.json",
+        )
     except shard_audit.AuditInputError as exc:
         raise ShardBundleAuditError(
             f"{shard_dir.name}:index:{exc}"
@@ -112,16 +116,40 @@ def _inventory(
 def _directory_receipt(
     shard_dir: Path,
     *,
+    root_fd: int,
+    root_identity: tuple[int, int],
     label: str,
     index_bytes: bytes,
     errors: list[str],
 ) -> dict[str, Any]:
+    try:
+        shard_audit._reconfirm_shard_root(
+            shard_dir,
+            root_fd=root_fd,
+            identity=root_identity,
+        )
+    except shard_audit.AuditInputError as exc:
+        errors.append(f"{label}:root:{exc}")
+        return {}
+
+    receipt: dict[str, Any] = {}
     try:
         receipt = shard_audit.audit_shard_directory(
             shard_dir
         )
     except shard_audit.AuditInputError as exc:
         errors.append(f"{label}:directory:{exc}")
+
+    try:
+        shard_audit._reconfirm_shard_root(
+            shard_dir,
+            root_fd=root_fd,
+            identity=root_identity,
+        )
+    except shard_audit.AuditInputError as exc:
+        errors.append(f"{label}:root:{exc}")
+
+    if not receipt:
         return {}
 
     if not receipt.get("clean"):
@@ -146,166 +174,231 @@ def audit_shard_bundle(
     holdout_dir: Path,
 ) -> dict[str, Any]:
     errors: list[str] = []
-
-    if train_dir == holdout_dir:
-        errors.append(
-            "train_holdout_directory_alias"
-        )
+    train_root_fd: int | None = None
+    holdout_root_fd: int | None = None
 
     try:
-        train_index, train_before = _load_index_snapshot(
-            train_dir
-        )
-        holdout_index, holdout_before = _load_index_snapshot(
-            holdout_dir
-        )
-    except ShardBundleAuditError as exc:
-        return {
-            "schema": AUDIT_SCHEMA,
-            "clean": False,
-            "errors": [str(exc)],
-        }
+        try:
+            train_root_fd, train_root_identity = (
+                shard_audit._open_shard_root(train_dir)
+            )
+        except shard_audit.AuditInputError as exc:
+            return {
+                "schema": AUDIT_SCHEMA,
+                "clean": False,
+                "errors": [f"train:root:{exc}"],
+            }
 
-    train_receipt = _directory_receipt(
-        train_dir,
-        label="train",
-        index_bytes=train_before,
-        errors=errors,
-    )
-    holdout_receipt = _directory_receipt(
-        holdout_dir,
-        label="holdout",
-        index_bytes=holdout_before,
-        errors=errors,
-    )
+        try:
+            holdout_root_fd, holdout_root_identity = (
+                shard_audit._open_shard_root(holdout_dir)
+            )
+        except shard_audit.AuditInputError as exc:
+            return {
+                "schema": AUDIT_SCHEMA,
+                "clean": False,
+                "errors": [f"holdout:root:{exc}"],
+            }
 
-    if train_index.get("split") != "train":
-        errors.append(
-            f"train:split:{train_index.get('split')!r}"
-        )
-    if holdout_index.get("split") != "holdout":
-        errors.append(
-            f"holdout:split:{holdout_index.get('split')!r}"
-        )
-
-    for field in (
-        "schema",
-        "manifest_schema",
-        "analysis_version",
-        "manifest_path",
-        "sample_every_ticks",
-    ):
-        if train_index.get(field) != holdout_index.get(
-            field
-        ):
+        if train_root_identity == holdout_root_identity:
             errors.append(
-                f"cross_split_{field}_mismatch:"
-                f"{train_index.get(field)!r}!="
-                f"{holdout_index.get(field)!r}"
+                "train_holdout_directory_alias"
             )
 
-    train_ids, train_lines = _inventory(
-        train_index,
-        label="train",
-        errors=errors,
-    )
-    holdout_ids, holdout_lines = _inventory(
-        holdout_index,
-        label="holdout",
-        errors=errors,
-    )
+        try:
+            train_index, train_before = (
+                _load_index_snapshot_at(
+                    train_root_fd,
+                    train_dir,
+                )
+            )
+            holdout_index, holdout_before = (
+                _load_index_snapshot_at(
+                    holdout_root_fd,
+                    holdout_dir,
+                )
+            )
+        except ShardBundleAuditError as exc:
+            return {
+                "schema": AUDIT_SCHEMA,
+                "clean": False,
+                "errors": [str(exc)],
+            }
 
-    overlap = sorted(train_ids & holdout_ids)
-    for replay_sha in overlap:
-        errors.append(
-            f"cross_split_replay_leakage:{replay_sha}"
+        train_receipt = _directory_receipt(
+            train_dir,
+            root_fd=train_root_fd,
+            root_identity=train_root_identity,
+            label="train",
+            index_bytes=train_before,
+            errors=errors,
+        )
+        holdout_receipt = _directory_receipt(
+            holdout_dir,
+            root_fd=holdout_root_fd,
+            root_identity=holdout_root_identity,
+            label="holdout",
+            index_bytes=holdout_before,
+            errors=errors,
         )
 
-    try:
-        train_after = shard_audit._read_regular_bytes(
-            train_dir / "_index.json"
-        )
-        holdout_after = shard_audit._read_regular_bytes(
-            holdout_dir / "_index.json"
-        )
-    except shard_audit.AuditInputError as exc:
-        errors.append(f"index_recheck:{exc}")
-        train_after = b""
-        holdout_after = b""
+        if train_index.get("split") != "train":
+            errors.append(
+                f"train:split:{train_index.get('split')!r}"
+            )
+        if holdout_index.get("split") != "holdout":
+            errors.append(
+                f"holdout:split:{holdout_index.get('split')!r}"
+            )
 
-    if train_after != train_before:
-        errors.append(
-            "train:index_changed_during_bundle_audit"
+        for field in (
+            "schema",
+            "manifest_schema",
+            "analysis_version",
+            "manifest_path",
+            "sample_every_ticks",
+        ):
+            if train_index.get(field) != holdout_index.get(
+                field
+            ):
+                errors.append(
+                    f"cross_split_{field}_mismatch:"
+                    f"{train_index.get(field)!r}!="
+                    f"{holdout_index.get(field)!r}"
+                )
+
+        train_ids, train_lines = _inventory(
+            train_index,
+            label="train",
+            errors=errors,
         )
-    if holdout_after != holdout_before:
-        errors.append(
-            "holdout:index_changed_during_bundle_audit"
+        holdout_ids, holdout_lines = _inventory(
+            holdout_index,
+            label="holdout",
+            errors=errors,
         )
 
-    inventory_sha256 = hashlib.sha256(
-        "".join(
-            sorted(train_lines + holdout_lines)
-        ).encode("utf-8")
-    ).hexdigest()
+        overlap = sorted(train_ids & holdout_ids)
+        for replay_sha in overlap:
+            errors.append(
+                f"cross_split_replay_leakage:{replay_sha}"
+            )
 
-    errors = sorted(set(errors))
-    return {
-        "schema": AUDIT_SCHEMA,
-        "clean": not errors,
-        "analysis_version": train_index.get(
-            "analysis_version"
-        ),
-        "manifest_schema": train_index.get(
-            "manifest_schema"
-        ),
-        "manifest_path": train_index.get(
-            "manifest_path"
-        ),
-        "sample_every_ticks": train_index.get(
-            "sample_every_ticks"
-        ),
-        "train": {
-            "requested_replays": train_index.get(
-                "requested_replays"
+        try:
+            train_after = shard_audit._read_regular_bytes_at(
+                train_root_fd,
+                "_index.json",
+            )
+            holdout_after = shard_audit._read_regular_bytes_at(
+                holdout_root_fd,
+                "_index.json",
+            )
+        except shard_audit.AuditInputError as exc:
+            errors.append(f"index_recheck:{exc}")
+            train_after = b""
+            holdout_after = b""
+
+        for label, shard_dir, root_fd, identity in (
+            (
+                "train",
+                train_dir,
+                train_root_fd,
+                train_root_identity,
             ),
-            "successful_replays": train_index.get(
-                "successful_replays"
+            (
+                "holdout",
+                holdout_dir,
+                holdout_root_fd,
+                holdout_root_identity,
             ),
-            "failed_replays": train_index.get(
-                "failed_replays"
+        ):
+            try:
+                shard_audit._reconfirm_shard_root(
+                    shard_dir,
+                    root_fd=root_fd,
+                    identity=identity,
+                )
+            except shard_audit.AuditInputError as exc:
+                errors.append(f"{label}:root:{exc}")
+
+        if train_after != train_before:
+            errors.append(
+                "train:index_changed_during_bundle_audit"
+            )
+        if holdout_after != holdout_before:
+            errors.append(
+                "holdout:index_changed_during_bundle_audit"
+            )
+
+        inventory_sha256 = hashlib.sha256(
+            "".join(
+                sorted(train_lines + holdout_lines)
+            ).encode("utf-8")
+        ).hexdigest()
+
+        errors = sorted(set(errors))
+        return {
+            "schema": AUDIT_SCHEMA,
+            "clean": not errors,
+            "analysis_version": train_index.get(
+                "analysis_version"
             ),
-            "samples": train_receipt.get("samples"),
-            "index_sha256": hashlib.sha256(
-                train_before
-            ).hexdigest(),
-            "shard_inventory_sha256": (
-                train_receipt.get("inventory_sha256")
+            "manifest_schema": train_index.get(
+                "manifest_schema"
             ),
-        },
-        "holdout": {
-            "requested_replays": holdout_index.get(
-                "requested_replays"
+            "manifest_path": train_index.get(
+                "manifest_path"
             ),
-            "successful_replays": holdout_index.get(
-                "successful_replays"
+            "sample_every_ticks": train_index.get(
+                "sample_every_ticks"
             ),
-            "failed_replays": holdout_index.get(
-                "failed_replays"
+            "train": {
+                "requested_replays": train_index.get(
+                    "requested_replays"
+                ),
+                "successful_replays": train_index.get(
+                    "successful_replays"
+                ),
+                "failed_replays": train_index.get(
+                    "failed_replays"
+                ),
+                "samples": train_receipt.get("samples"),
+                "index_sha256": hashlib.sha256(
+                    train_before
+                ).hexdigest(),
+                "shard_inventory_sha256": (
+                    train_receipt.get("inventory_sha256")
+                ),
+            },
+            "holdout": {
+                "requested_replays": holdout_index.get(
+                    "requested_replays"
+                ),
+                "successful_replays": holdout_index.get(
+                    "successful_replays"
+                ),
+                "failed_replays": holdout_index.get(
+                    "failed_replays"
+                ),
+                "samples": holdout_receipt.get("samples"),
+                "index_sha256": hashlib.sha256(
+                    holdout_before
+                ).hexdigest(),
+                "shard_inventory_sha256": (
+                    holdout_receipt.get("inventory_sha256")
+                ),
+            },
+            "unique_replays": len(
+                train_ids | holdout_ids
             ),
-            "samples": holdout_receipt.get("samples"),
-            "index_sha256": hashlib.sha256(
-                holdout_before
-            ).hexdigest(),
-            "shard_inventory_sha256": (
-                holdout_receipt.get("inventory_sha256")
-            ),
-        },
-        "unique_replays": len(
-            train_ids | holdout_ids
-        ),
-        "inventory_sha256": inventory_sha256,
-        "errors": errors,
-    }
+            "inventory_sha256": inventory_sha256,
+            "errors": errors,
+        }
+    finally:
+        if holdout_root_fd is not None:
+            os.close(holdout_root_fd)
+        if train_root_fd is not None:
+            os.close(train_root_fd)
 
 
 def main() -> int:
