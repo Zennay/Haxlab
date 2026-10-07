@@ -326,6 +326,11 @@ def test_runtime_state_audit_validates_runtime_event_provenance(
             subject="",
             detail="missing source path",
         )
+        state.event(
+            "analysis_finalized",
+            subject=CURRENT_ANALYZER_VERSION,
+            detail="",
+        )
         state.event("", subject="", detail="empty event type")
 
     result = audit_runtime_state(db)
@@ -334,6 +339,7 @@ def test_runtime_state_audit_validates_runtime_event_provenance(
     assert result.ok is False
     assert "event_replay_missing_raw" in codes
     assert "event_source_subject_invalid" in codes
+    assert "event_detail_invalid" in codes
     assert "event_type_invalid" in codes
     assert "event_replay_sha_invalid" not in codes
 
