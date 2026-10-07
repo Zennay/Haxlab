@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from datetime import datetime
 from pathlib import Path
@@ -107,6 +108,13 @@ def match_replays_to_reports(
     minimum_confidence: float = 0.65,
 ) -> list[MatchCandidate]:
     """Greedy one-to-one matching using explicit evidence and confidence."""
+    if (
+        type(minimum_confidence) not in (int, float)
+        or not math.isfinite(float(minimum_confidence))
+        or not 0.0 <= float(minimum_confidence) <= 1.0
+    ):
+        raise ValueError("invalid_minimum_confidence")
+
     scored: list[tuple[float, str, str, ReplayFile, MatchReport, tuple[str, ...]]] = []
 
     for replay in replays:
