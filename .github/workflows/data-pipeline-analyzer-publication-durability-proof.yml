@@ -1,0 +1,68 @@
+name: Data-pipeline analyzer publication durability proof
+
+on:
+  push:
+    branches:
+      - feature/data-pipeline-analyzer-publication-durability-20261007
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-analyzer-publication-durability-${{ github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Verify exact checkout and live head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk 'NR == 1 {print $1}')"
+          test -n "$remote_head"
+          test "$remote_head" = "${{ github.sha }}"
+          echo "HAXLAB_ANALYZER_PUBLICATION_DURABILITY_HEAD=$remote_head"
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .analyzer-publication-durability-venv
+          python3 -m venv .analyzer-publication-durability-venv
+          .analyzer-publication-durability-venv/bin/pip install --upgrade pip
+          .analyzer-publication-durability-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile repository Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          .analyzer-publication-durability-venv/bin/python -m compileall -q src tests
+
+      - name: Run focused durability contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src"             .analyzer-publication-durability-venv/bin/pytest -q               tests/test_analyzer_publication_durability.py
+
+      - name: Run adjacent analyzer regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src"             .analyzer-publication-durability-venv/bin/pytest -q               tests/test_analyzer_archive_integrity.py               tests/test_analyzer_orphan_recovery.py
+
+      - name: Record green result
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HAXLAB_ANALYZER_PUBLICATION_DURABILITY_RESULT=green"
