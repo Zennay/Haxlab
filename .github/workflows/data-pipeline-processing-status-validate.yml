@@ -1,0 +1,50 @@
+name: HaxLab processing status integrity
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/haxlab/runtime/state.py"
+      - "tests/test_processing_status_write_contract.py"
+      - "docs/replay-processing-status-write-contract.md"
+      - ".github/workflows/data-pipeline-processing-status-validate.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-processing-status-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate exact-head processing status contract
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Assert exact head
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          echo "HAXLAB_PROCESSING_STATUS_EXACT_HEAD=$EXPECTED_HEAD"
+
+      - name: Run focused processing-status regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .processing-status-venv
+          python3 -m venv .processing-status-venv
+          .processing-status-venv/bin/pip install -q --upgrade pip
+          .processing-status-venv/bin/pip install -q -e '.[dev]'
+          .processing-status-venv/bin/python -m compileall -q src/haxlab
+          .processing-status-venv/bin/pytest -q             tests/test_processing_status_write_contract.py             tests/test_runtime_queue_limits.py
+          echo "HAXLAB_PROCESSING_STATUS_RESULT=green"
