@@ -23,10 +23,11 @@ object with `fstat` before reading bytes, so a path cannot pass a symlink check
 and then be swapped to a symlink before the read. Platforms without a no-follow
 open primitive fail closed rather than silently weakening this provenance
 boundary. Receipt
-v1 also requires the runtime `PromotionPolicy` dataclass to expose exactly the
-four bound fields with their current runtime types (`int`, `float`, `float`,
-`bool`); a future extra/defaulted or retyped field fails closed instead of being
-silently omitted or accepting a loader/runtime type mismatch.
+v1 also requires the runtime `PromotionPolicy` to remain a **frozen** dataclass
+and to expose exactly the four bound fields with their current runtime types
+(`int`, `float`, `float`, `bool`); a future mutable, extra/defaulted, or retyped
+policy fails closed instead of weakening the provenance contract or accepting a
+loader/runtime mismatch.
 
 ## Immutable source provenance
 
