@@ -21,7 +21,8 @@ The v1 audit checks:
   counts are non-negative and correctly typed;
 - successful rows contain the metadata needed to prove success and do not retain
   stale error text;
-- failed rows retain error evidence;
+- failed source rows cannot claim an archived replay SHA;
+- failed and retry analysis rows retain the original non-empty failure evidence;
 - statuses use the runtime's declared state vocabulary;
 - archived/duplicate source records resolve to a raw replay with the same byte size;
 - every versioned analysis row is backed by a successfully processed replay;
