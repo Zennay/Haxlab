@@ -14,8 +14,10 @@ SCHEMA = "haxlab-evaluation-workflow-provenance-inventory-v1"
 MAX_WORKFLOW_BYTES = 1_048_576
 IMMUTABLE_ACTION_REF = re.compile(r"^[0-9a-f]{40}$")
 USES_LINE = re.compile(r"""(?m)^[ \t]+uses:[ \t]*["']?([^"'\s#]+)["']?""")
-WRITE_PERMISSION_LINE = re.compile(
-    r"(?m)^[ \t]+[A-Za-z0-9_-]+:[ \t]*write[ \t]*$"
+RUNNER_LINE = re.compile(r"(?m)^\\s+runs-on:\\s*(.+?)\\s*$")
+TIMEOUT_LINE = re.compile(r"(?m)^\\s+timeout-minutes:\\s*([0-9]+)\\s*$")
+CONTINUE_ON_ERROR_TRUE = re.compile(
+    r"""(?m)^\\s+continue-on-error:\\s*(?:true|"true"|'true')\\s*$"""
 )
 EVENT_SHA_MARKERS = (
     "github.sha",
