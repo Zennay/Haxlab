@@ -42,6 +42,11 @@ def scan_once(
         raise ValueError("now_must_be_finite")
 
     if incoming_root.is_symlink():
+        state.event(
+            "ingest_root_rejected",
+            subject=str(incoming_root),
+            detail="symlink_root",
+        )
         raise ValueError("incoming_root_must_not_be_symlink")
     discovered = unchanged = archived = duplicates = failed = disappeared = 0
 
@@ -49,17 +54,22 @@ def scan_once(
         (
             path
             for path in incoming_root.rglob("*")
-            if not path.is_symlink()
-            and path.is_file()
-            and path.suffix.casefold() == ".hbr2"
+            if path.suffix.casefold() == ".hbr2"
         ),
         key=lambda path: str(path).casefold(),
     )
 
     for path in paths:
-        # Re-check after discovery/sorting so a source replaced by a symlink
-        # while queued is not handed to the archive boundary.
+        # Check before is_file() because that call follows symlinks. Re-checking
+        # here also catches a candidate replaced after discovery/sorting.
         if path.is_symlink():
+            state.event(
+                "replay_rejected",
+                subject=str(path),
+                detail="symlink_source",
+            )
+            continue
+        if not path.is_file():
             continue
 
         discovered += 1
