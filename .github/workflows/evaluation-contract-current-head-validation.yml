@@ -5,8 +5,14 @@ on:
     branches:
       - validation/evaluation-contract-current-head-20261007
     paths:
+      - "src/haxlab/evaluation/models.py"
+      - "src/haxlab/evaluation/promotion.py"
+      - "src/haxlab/evaluation/calibration_resume.py"
+      - "src/haxlab/evaluation/closed_loop_arena.py"
       - "tests/test_evaluation_model_schema_contract.py"
       - "tests/test_evaluation_workflow_module_contract.py"
+      - "tests/test_promotion.py"
+      - ".github/workflows/closed-loop-arena-v2-calibration.yml"
       - ".github/workflows/evaluation-contract-current-head-validation.yml"
   workflow_dispatch:
 
