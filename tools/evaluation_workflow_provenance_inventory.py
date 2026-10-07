@@ -134,17 +134,6 @@ def _checkout_blocks(text: str) -> tuple[str, ...]:
     return tuple(blocks)
 
 
-def _validates_exact_sha_input(text: str) -> bool:
-    if INPUT_REF_MARKER not in text:
-        return False
-    return bool(
-        re.search(
-            r"""\^\[0-9a-f\]\{40\}\$""",
-            text,
-        )
-    )
-
-
 def _checkout_ref_kind(block: str, *, exact_input_validated: bool) -> str:
     ref_lines = [
         line.strip()
@@ -209,6 +198,47 @@ def _block_exits_nonzero(lines: Sequence[str], start: int) -> bool:
         match = re.fullmatch(r"exit\s+([0-9]+)", stripped)
         if match and int(match.group(1)) != 0:
             return True
+    return False
+
+
+def _input_ref_vars(lines: Sequence[str]) -> set[str]:
+    variables: set[str] = set()
+    for line in lines:
+        if INPUT_REF_MARKER not in line:
+            continue
+        match = re.match(
+            r"^\s*(?:export\s+)?([A-Z_][A-Z0-9_]*)\s*(?::|=)",
+            line,
+        )
+        if match:
+            variables.add(match.group(1))
+    return variables
+
+
+def _validates_exact_sha_input(text: str) -> bool:
+    lines = text.splitlines()
+    input_vars = _input_ref_vars(lines)
+    if not input_vars:
+        return False
+
+    literal_pattern = "^[0-9a-f]{40}$"
+    for index, line in enumerate(lines):
+        if literal_pattern not in line or "=~" not in line:
+            continue
+        if not any(_shell_var_on_line(name, line) for name in input_vars):
+            continue
+
+        # Fail-closed if an invalid value enters a branch that exits nonzero.
+        if "if !" in line and _block_exits_nonzero(lines, index):
+            return True
+
+        # Or if a direct regex assertion explicitly exits nonzero on failure.
+        if "||" in line:
+            suffix = line.split("||", 1)[1].strip()
+            match = re.match(r"exit\s+([0-9]+)", suffix)
+            if match and int(match.group(1)) != 0:
+                return True
+
     return False
 
 
