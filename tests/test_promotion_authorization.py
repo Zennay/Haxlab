@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -331,3 +332,21 @@ def test_rendered_authorization_is_deterministic() -> None:
 
     assert first == second
     assert first.endswith("\n")
+
+
+def test_focused_workflow_is_read_only_self_hosted_and_exact_sha_bound() -> None:
+    path = Path(
+        ".github/workflows/promotion-authorization-contract-validation.yml"
+    )
+    text = path.read_text(encoding="utf-8")
+
+    assert "permissions:\n  contents: read" in text
+    assert "runs-on: [self-hosted, haxlab]" in text
+    assert "timeout-minutes: 15" in text
+    assert "ubuntu-latest" not in text
+    assert "workflow_dispatch:" in text
+    assert "github.event.pull_request.head.sha || inputs.ref" in text
+    assert "clean: true" in text
+    assert '[[ ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]' in text
+    assert 'ACTUAL_SHA="$(git rev-parse HEAD)"' in text
+    assert ".promotion-auth-venv/bin/pytest -q tests/test_promotion_authorization.py" in text
