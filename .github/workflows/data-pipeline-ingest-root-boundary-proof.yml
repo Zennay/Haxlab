@@ -24,18 +24,20 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - name: Checkout exact event head
+      - name: Checkout exact candidate head
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 1
 
-      - name: Verify immutable checkout
+      - name: Verify immutable candidate checkout
         shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           test "$(hostname)" = "vps-bb300bba"
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
       - name: Run focused ingest-root boundary proof
         shell: bash
