@@ -282,7 +282,14 @@ def audit_dataset(root: Path) -> DatasetAudit:
                 issues.append(f"{prefix}:duplicate_replay_match")
             else:
                 matched_replay_shas.add(sha)
-                canonical_source = replay_by_sha[sha].get("source_path")
+                canonical_replay = replay_by_sha[sha]
+                canonical_validation = canonical_replay.get("basic_validation")
+                if (
+                    type(canonical_validation) is not dict
+                    or canonical_validation.get("valid") is not True
+                ):
+                    issues.append(f"{prefix}:matched_invalid_replay")
+                canonical_source = canonical_replay.get("source_path")
                 if source_path != canonical_source:
                     issues.append(f"{prefix}:replay_source_mismatch")
                 elif _non_empty_string(source_path):
