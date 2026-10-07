@@ -4,13 +4,21 @@ on:
   push:
     branches:
       - validation/duel-policy-integrity-20261006
+      - validation/duel-policy-workflow-provenance-20261007
+  pull_request:
+    branches:
+      - feature/arena-v2-current-main-20261004
+    paths:
+      - .github/workflows/duel-policy-integrity-validation.yml
+      - tests/test_duel_policy_workflow_provenance_contract.py
+      - docs/duel-policy-workflow-provenance.md
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: haxlab-duel-policy-integrity-validation
+  group: haxlab-duel-policy-integrity-validation-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -19,10 +27,24 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout exact validation head
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           clean: true
+          persist-credentials: false
+
+      - name: Verify exact validation checkout
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          if [[ "$actual_sha" != "$EXPECTED_SHA" ]]; then
+            echo "duel-policy validation checkout mismatch: $actual_sha != $EXPECTED_SHA" >&2
+            exit 1
+          fi
+          echo "DUEL_POLICY_VALIDATION_EXACT_SHA=$actual_sha"
 
       - name: Create isolated test environment
         shell: bash
@@ -33,14 +55,23 @@ jobs:
           .duel-policy-validation-venv/bin/pip install --upgrade pip
           .duel-policy-validation-venv/bin/pip install -e '.[dev]'
 
-      - name: Compile duel gate
+      - name: Compile duel gate and provenance contract
         shell: bash
         run: |
           set -euo pipefail
           .duel-policy-validation-venv/bin/python -m compileall -q \
             src/haxlab/evaluation/duel_gate.py \
             src/haxlab/evaluation/multisource_duel.py \
-            tests/test_duel_gate.py
+            tests/test_duel_gate.py \
+            tests/test_duel_policy_workflow_provenance_contract.py
+
+      - name: Run workflow provenance contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .duel-policy-validation-venv/bin/pytest -q \
+              tests/test_duel_policy_workflow_provenance_contract.py
 
       - name: Run duel policy regressions
         shell: bash
