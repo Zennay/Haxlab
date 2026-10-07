@@ -508,11 +508,33 @@ function loadScenarioRows(filePath, maxScenarios) {
   const selected = rows.slice(0, maxScenarios);
   const seenScenarioIndices = new Set();
   for (let offset = 0; offset < selected.length; offset += 1) {
-    const scenarioIndex = scenarioIndexForRow(selected[offset], offset);
+    const scenario = selected[offset];
+    const scenarioIndex = scenarioIndexForRow(scenario, offset);
     if (seenScenarioIndices.has(scenarioIndex)) {
       throw new Error("duplicate scenario_index: " + scenarioIndex);
     }
     seenScenarioIndices.add(scenarioIndex);
+
+    if (
+      scenario.history !== undefined &&
+      scenario.history !== null &&
+      !Array.isArray(scenario.history)
+    ) {
+      throw new Error(
+        "scenario " + scenarioIndex + " history must be an array",
+      );
+    }
+    if (Array.isArray(scenario.history)) {
+      for (let frameIndex = 0; frameIndex < scenario.history.length; frameIndex += 1) {
+        const frame = scenario.history[frameIndex];
+        if (!frame || typeof frame !== "object" || Array.isArray(frame)) {
+          throw new Error(
+            "scenario " + scenarioIndex +
+            " history frame " + frameIndex + " must be an object",
+          );
+        }
+      }
+    }
   }
   return selected;
 }
@@ -869,7 +891,327 @@ function runArenaMatch({
   return result;
 }
 
+function requireArenaMetric(
+  value,
+  label,
+  { minimum = -Infinity, maximum = Infinity, integer = false } = {},
+) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(label + " must be a finite number");
+  }
+  if (integer && !Number.isSafeInteger(value)) {
+    throw new Error(label + " must be a safe integer");
+  }
+  if (value < minimum || value > maximum) {
+    throw new Error(label + " is out of range");
+  }
+  return value;
+}
+
+function requireArenaObject(value, label) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(label + " must be an object");
+  }
+  return value;
+}
+
+function requireArenaLineup(row, expectedKind, label) {
+  const lineup = requireArenaObject(row.lineup, label + " lineup");
+  for (const role of ROLES) {
+    const entry = requireArenaObject(
+      lineup[role],
+      label + " lineup." + role,
+    );
+    if (
+      typeof entry.model_path !== "string" ||
+      entry.model_path.trim().length === 0
+    ) {
+      throw new Error(label + " lineup." + role + " model_path is invalid");
+    }
+    const expectedRoleKind =
+      row.mode === "plug_and_play" && role !== row.tested_role
+        ? "partner"
+        : expectedKind;
+    if (entry.model_kind !== expectedRoleKind) {
+      throw new Error(
+        label + " lineup." + role + " model_kind must be " +
+        expectedRoleKind,
+      );
+    }
+  }
+  return lineup;
+}
+
+function requireArenaPairRow(row, expectedKind, label) {
+  requireArenaObject(row, label + " arena row");
+  if (row.tested_kind !== expectedKind) {
+    throw new Error(
+      label + " tested_kind must be " + expectedKind +
+      ", got " + String(row.tested_kind),
+    );
+  }
+  if (!(row.mode === "full_team" || row.mode === "plug_and_play")) {
+    throw new Error(label + " has invalid arena mode: " + String(row.mode));
+  }
+  if (row.mode === "full_team" && row.tested_role !== null) {
+    throw new Error(label + " full_team row must have tested_role=null");
+  }
+  if (
+    row.mode === "plug_and_play" &&
+    !ROLES.includes(row.tested_role)
+  ) {
+    throw new Error(
+      label + " plug_and_play row has invalid tested_role: " +
+      String(row.tested_role),
+    );
+  }
+  if (!Number.isSafeInteger(row.scenario_index) || row.scenario_index < 1) {
+    throw new Error(label + " has invalid scenario_index");
+  }
+  if (!(row.test_team_id === 1 || row.test_team_id === 2)) {
+    throw new Error(label + " has invalid test_team_id");
+  }
+  if (!Number.isSafeInteger(row.repeat_index) || row.repeat_index < 0) {
+    throw new Error(label + " has invalid repeat_index");
+  }
+
+  requireArenaLineup(row, expectedKind, label);
+
+  const proxy = requireArenaObject(row.proxy, label + " proxy");
+  const testProxyScore = requireArenaMetric(
+    proxy.test_score,
+    label + " proxy.test_score",
+    { minimum: 0, maximum: 1 },
+  );
+  const opponentProxyScore = requireArenaMetric(
+    proxy.opponent_score,
+    label + " proxy.opponent_score",
+    { minimum: 0, maximum: 1 },
+  );
+
+  const goals = requireArenaObject(row.goals, label + " goals");
+  const testGoals = requireArenaMetric(
+    goals.test,
+    label + " goals.test",
+    { minimum: 0, integer: true },
+  );
+  const opponentGoals = requireArenaMetric(
+    goals.opponent,
+    label + " goals.opponent",
+    { minimum: 0, integer: true },
+  );
+  const goalDifferential = requireArenaMetric(
+    goals.differential,
+    label + " goals.differential",
+    { integer: true },
+  );
+  if (goalDifferential !== testGoals - opponentGoals) {
+    throw new Error(label + " goals.differential is inconsistent");
+  }
+
+  const progression = requireArenaObject(
+    row.progression,
+    label + " progression",
+  );
+  const testProgression = requireArenaMetric(
+    progression.test_share,
+    label + " progression.test_share",
+    { minimum: 0, maximum: 1 },
+  );
+  const opponentProgression = requireArenaMetric(
+    progression.opponent_share,
+    label + " progression.opponent_share",
+    { minimum: 0, maximum: 1 },
+  );
+  if (
+    !Number.isFinite(testProgression + opponentProgression) ||
+    Math.abs(testProgression + opponentProgression - 1) > 1e-12
+  ) {
+    throw new Error(label + " progression shares must sum to 1");
+  }
+
+  const territory = requireArenaObject(row.territory, label + " territory");
+  const testHalfRate = requireArenaMetric(
+    territory.test_half_rate,
+    label + " territory.test_half_rate",
+    { minimum: 0, maximum: 1 },
+  );
+  const opponentHalfRate = requireArenaMetric(
+    territory.opponent_half_rate,
+    label + " territory.opponent_half_rate",
+    { minimum: 0, maximum: 1 },
+  );
+  const neutralRate = requireArenaMetric(
+    territory.neutral_rate,
+    label + " territory.neutral_rate",
+    { minimum: 0, maximum: 1 },
+  );
+  const testAttackRate = requireArenaMetric(
+    territory.test_attack_third_rate,
+    label + " territory.test_attack_third_rate",
+    { minimum: 0, maximum: 1 },
+  );
+  const opponentAttackRate = requireArenaMetric(
+    territory.opponent_attack_third_rate,
+    label + " territory.opponent_attack_third_rate",
+    { minimum: 0, maximum: 1 },
+  );
+  if (
+    Math.abs(testHalfRate + opponentHalfRate + neutralRate - 1) > 1e-12
+  ) {
+    throw new Error(label + " territory half rates must sum to 1");
+  }
+  if (testAttackRate + opponentAttackRate > 1 + 1e-12) {
+    throw new Error(label + " attack-third rates exceed 1");
+  }
+
+  const expectedTestProxy = proxyScore(
+    testProgression,
+    testHalfRate,
+    testAttackRate,
+  );
+  const expectedOpponentProxy = proxyScore(
+    opponentProgression,
+    opponentHalfRate,
+    opponentAttackRate,
+  );
+  if (Math.abs(testProxyScore - expectedTestProxy) > 1e-12) {
+    throw new Error(label + " proxy.test_score is inconsistent");
+  }
+  if (Math.abs(opponentProxyScore - expectedOpponentProxy) > 1e-12) {
+    throw new Error(label + " proxy.opponent_score is inconsistent");
+  }
+
+  const possession = requireArenaObject(
+    row.possession_proxy,
+    label + " possession_proxy",
+  );
+  requireArenaMetric(
+    possession.test_rate,
+    label + " possession_proxy.test_rate",
+    { minimum: 0, maximum: 1 },
+  );
+
+  const shape = requireArenaObject(row.team_shape, label + " team_shape");
+  for (const key of [
+    "formation_order_rate",
+    "collapsed_rate",
+    "overstretched_rate",
+  ]) {
+    requireArenaMetric(
+      shape[key],
+      label + " team_shape." + key,
+      { minimum: 0, maximum: 1 },
+    );
+  }
+
+  const team = requireArenaObject(row.test_team, label + " test_team");
+  const roles = requireArenaObject(team.roles, label + " test_team.roles");
+  let roleRuntimeErrors = 0;
+  for (const role of ROLES) {
+    const metrics = requireArenaObject(
+      roles[role],
+      label + " test_team.roles." + role,
+    );
+    const lineupEntry = row.lineup[role];
+    if (metrics.model_kind !== lineupEntry.model_kind) {
+      throw new Error(label + " " + role + ".model_kind mismatches lineup");
+    }
+    if (metrics.model_path !== lineupEntry.model_path) {
+      throw new Error(label + " " + role + ".model_path mismatches lineup");
+    }
+    const policySamples = requireArenaMetric(
+      metrics.policy_samples,
+      label + " " + role + ".policy_samples",
+      { minimum: 1, integer: true },
+    );
+    const kicks = requireArenaMetric(
+      metrics.kicks,
+      label + " " + role + ".kicks",
+      { minimum: 0, integer: true },
+    );
+    if (kicks > policySamples) {
+      throw new Error(label + " " + role + ".kicks exceeds policy_samples");
+    }
+
+    for (const key of [
+      "near_ball_rate",
+      "close_ball_rate",
+      "boundary_rate",
+      "ood_rate",
+      "far_stall_rate",
+      "context_adaptation_rate",
+    ]) {
+      requireArenaMetric(
+        metrics[key],
+        label + " " + role + "." + key,
+        { minimum: 0, maximum: 1 },
+      );
+    }
+    if (metrics.close_ball_rate > metrics.near_ball_rate) {
+      throw new Error(
+        label + " " + role + ".close_ball_rate exceeds near_ball_rate",
+      );
+    }
+
+    for (const key of [
+      "average_ball_distance",
+      "average_role_deviation",
+      "ood_max_abs_z",
+      "max_far_stall_seconds",
+      "max_held_action_seconds",
+    ]) {
+      requireArenaMetric(
+        metrics[key],
+        label + " " + role + "." + key,
+        { minimum: 0 },
+      );
+    }
+
+    const adaptations = requireArenaMetric(
+      metrics.context_adaptations,
+      label + " " + role + ".context_adaptations",
+      { minimum: 0, integer: true },
+    );
+    const misses = requireArenaMetric(
+      metrics.context_misses,
+      label + " " + role + ".context_misses",
+      { minimum: 0, integer: true },
+    );
+    if (adaptations + misses > policySamples) {
+      throw new Error(
+        label + " " + role +
+        ".context event count exceeds policy_samples",
+      );
+    }
+
+    roleRuntimeErrors += requireArenaMetric(
+      metrics.runtime_errors,
+      label + " " + role + ".runtime_errors",
+      { minimum: 0, integer: true },
+    );
+  }
+  const declaredRuntimeErrors = requireArenaMetric(
+    team.runtime_errors,
+    label + " test_team.runtime_errors",
+    { minimum: 0, integer: true },
+  );
+  if (declaredRuntimeErrors !== roleRuntimeErrors) {
+    throw new Error(label + " test_team.runtime_errors is inconsistent");
+  }
+}
+
 function pairArenaRows(candidate, reference, tieMargin = 0.025) {
+  requireArenaPairRow(candidate, "challenger", "candidate");
+  requireArenaPairRow(reference, "reference", "reference");
+  if (
+    typeof tieMargin !== "number" ||
+    !Number.isFinite(tieMargin) ||
+    tieMargin < 0 ||
+    tieMargin > 1
+  ) {
+    throw new Error("arena tie margin must be a finite rate");
+  }
   if (
     candidate.mode !== reference.mode ||
     candidate.tested_role !== reference.tested_role ||
@@ -879,9 +1221,22 @@ function pairArenaRows(candidate, reference, tieMargin = 0.025) {
   ) {
     throw new Error("arena candidate/reference row mismatch");
   }
+  if (candidate.mode === "plug_and_play") {
+    for (const role of ROLES) {
+      if (role === candidate.tested_role) continue;
+      if (
+        candidate.lineup[role].model_path !==
+        reference.lineup[role].model_path
+      ) {
+        throw new Error(
+          "arena paired partner lineup mismatch for role " + role,
+        );
+      }
+    }
+  }
   const delta =
-    Number(candidate.proxy.test_score || 0) -
-    Number(reference.proxy.test_score || 0);
+    candidate.proxy.test_score -
+    reference.proxy.test_score;
   return {
     mode: candidate.mode,
     tested_role: candidate.tested_role,

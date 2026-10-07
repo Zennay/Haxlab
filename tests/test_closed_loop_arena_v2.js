@@ -149,6 +149,36 @@ try {
     /invalid scenario_index/,
   );
 
+  fs.writeFileSync(
+    scenarioPath,
+    JSON.stringify({
+      scenarios: [{ scenario_index: 1, history: "not-an-array" }],
+    }),
+  );
+  assert.throws(
+    () => loadScenarioRows(scenarioPath, 1),
+    /scenario 1 history must be an array/,
+  );
+
+  fs.writeFileSync(
+    scenarioPath,
+    JSON.stringify({
+      scenarios: [{ scenario_index: 1, history: [null] }],
+    }),
+  );
+  assert.throws(
+    () => loadScenarioRows(scenarioPath, 1),
+    /scenario 1 history frame 0 must be an object/,
+  );
+
+  fs.writeFileSync(
+    scenarioPath,
+    JSON.stringify({
+      scenarios: [{ scenario_index: 1, history: [{}] }],
+    }),
+  );
+  assert.strictEqual(loadScenarioRows(scenarioPath, 1).length, 1);
+
   assert.throws(
     () => loadScenarioRows(scenarioPath, 0),
     /maxScenarios must be a positive safe integer/,
@@ -247,16 +277,413 @@ assert.ok(finished.context_adaptation_rate <= 1);
 
 
 
-const identityRow = {
+function pairLineup(kind, testedRole = null) {
+  return Object.fromEntries(
+    ["gk", "dm", "am", "st"].map((role) => [
+      role,
+      {
+        model_kind:
+          testedRole && role !== testedRole ? "partner" : kind,
+        model_path:
+          testedRole && role !== testedRole
+            ? "partner-" + role + ".json"
+            : kind + ".json",
+      },
+    ]),
+  );
+}
+
+function pairRoleMetrics(modelKind, modelPath) {
+  return {
+    model_kind: modelKind,
+    model_path: modelPath,
+    policy_samples: 10,
+    kicks: 1,
+    near_ball_rate: 0.2,
+    close_ball_rate: 0.1,
+    boundary_rate: 0.0,
+    ood_rate: 0.01,
+    ood_max_abs_z: 1.5,
+    far_stall_rate: 0.05,
+    max_far_stall_seconds: 0.4,
+    context_adaptations: 3,
+    context_misses: 1,
+    context_adaptation_rate: 0.75,
+    average_ball_distance: 200,
+    average_role_deviation: 120,
+    max_held_action_seconds: 1.5,
+    runtime_errors: 0,
+  };
+}
+
+function pairTeamRoles(kind, testedRole = null) {
+  const lineup = pairLineup(kind, testedRole);
+  return Object.fromEntries(
+    ["gk", "dm", "am", "st"].map((role) => [
+      role,
+      pairRoleMetrics(
+        lineup[role].model_kind,
+        lineup[role].model_path,
+      ),
+    ]),
+  );
+}
+
+const candidateIdentityRow = {
   mode: "full_team",
+  tested_kind: "challenger",
   tested_role: null,
   scenario_index: 1,
   test_team_id: 1,
   repeat_index: 0,
-  proxy: { test_score: 0.123 },
+  lineup: pairLineup("challenger"),
+  proxy: { test_score: 0.5, opponent_score: 0.5 },
+  goals: { test: 0, opponent: 0, differential: 0 },
+  territory: {
+    test_half_rate: 0.5,
+    opponent_half_rate: 0.5,
+    neutral_rate: 0,
+    test_attack_third_rate: 0.5,
+    opponent_attack_third_rate: 0.5,
+  },
+  progression: { test_share: 0.5, opponent_share: 0.5 },
+  possession_proxy: { test_rate: 0.5 },
+  team_shape: {
+    formation_order_rate: 0.8,
+    collapsed_rate: 0.1,
+    overstretched_rate: 0.05,
+  },
+  test_team: {
+    roles: pairTeamRoles("challenger"),
+    runtime_errors: 0,
+  },
 };
-const identityPair = pairArenaRows(identityRow, { ...identityRow });
+const referenceIdentityRow = {
+  ...candidateIdentityRow,
+  tested_kind: "reference",
+  lineup: pairLineup("reference"),
+  test_team: {
+    roles: pairTeamRoles("reference"),
+    runtime_errors: 0,
+  },
+};
+const identityPair = pairArenaRows(
+  candidateIdentityRow,
+  referenceIdentityRow,
+);
 assert.strictEqual(identityPair.result, "draw");
 assert.strictEqual(identityPair.proxy_delta, 0);
+
+assert.throws(
+  () => pairArenaRows(
+    { ...candidateIdentityRow, tested_kind: "reference" },
+    referenceIdentityRow,
+  ),
+  /candidate tested_kind must be challenger/,
+);
+assert.throws(
+  () => pairArenaRows(
+    candidateIdentityRow,
+    { ...referenceIdentityRow, tested_kind: "challenger" },
+  ),
+  /reference tested_kind must be reference/,
+);
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      proxy: { test_score: "0.123" },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate proxy\.test_score must be a finite number/,
+);
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      proxy: { test_score: Number.NaN },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate proxy\.test_score must be a finite number/,
+);
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      possession_proxy: { test_rate: "0.5" },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate possession_proxy\.test_rate must be a finite number/,
+);
+
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      proxy: { ...candidateIdentityRow.proxy, test_score: 0.6 },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate proxy\.test_score is inconsistent/,
+);
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      goals: { ...candidateIdentityRow.goals, differential: 1 },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate goals\.differential is inconsistent/,
+);
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      progression: {
+        ...candidateIdentityRow.progression,
+        opponent_share: 0.4,
+      },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate progression shares must sum to 1/,
+);
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      territory: {
+        ...candidateIdentityRow.territory,
+        neutral_rate: 0.1,
+      },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate territory half rates must sum to 1/,
+);
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      test_team: {
+        ...candidateIdentityRow.test_team,
+        runtime_errors: 1,
+      },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate test_team\.runtime_errors is inconsistent/,
+);
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      test_team: {
+        ...candidateIdentityRow.test_team,
+        roles: {
+          ...candidateIdentityRow.test_team.roles,
+          dm: {
+            ...candidateIdentityRow.test_team.roles.dm,
+            model_path: "wrong-model.json",
+          },
+        },
+      },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate dm\.model_path mismatches lineup/,
+);
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      team_shape: {
+        ...candidateIdentityRow.team_shape,
+        collapsed_rate: 1.01,
+      },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate team_shape\.collapsed_rate is out of range/,
+);
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      test_team: {
+        roles: {
+          ...candidateIdentityRow.test_team.roles,
+          gk: {
+            ...candidateIdentityRow.test_team.roles.gk,
+            runtime_errors: 0.5,
+          },
+        },
+      },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate gk\.runtime_errors must be a safe integer/,
+);
+
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      test_team: {
+        roles: {
+          ...candidateIdentityRow.test_team.roles,
+          dm: {
+            ...candidateIdentityRow.test_team.roles.dm,
+            policy_samples: 0,
+          },
+        },
+      },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate dm\.policy_samples is out of range/,
+);
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      test_team: {
+        roles: {
+          ...candidateIdentityRow.test_team.roles,
+          st: {
+            ...candidateIdentityRow.test_team.roles.st,
+            close_ball_rate: 0.3,
+            near_ball_rate: 0.2,
+          },
+        },
+      },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate st\.close_ball_rate exceeds near_ball_rate/,
+);
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      test_team: {
+        roles: {
+          ...candidateIdentityRow.test_team.roles,
+          am: {
+            ...candidateIdentityRow.test_team.roles.am,
+            context_adaptations: 8,
+            context_misses: 4,
+          },
+        },
+      },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate am\.context event count exceeds policy_samples/,
+);
+assert.throws(
+  () => pairArenaRows(
+    { ...candidateIdentityRow, test_team_id: 3 },
+    referenceIdentityRow,
+  ),
+  /candidate has invalid test_team_id/,
+);
+const candidatePlugRow = {
+  ...candidateIdentityRow,
+  mode: "plug_and_play",
+  tested_role: "am",
+  lineup: pairLineup("challenger", "am"),
+  test_team: {
+    roles: pairTeamRoles("challenger", "am"),
+    runtime_errors: 0,
+  },
+};
+const referencePlugRow = {
+  ...referenceIdentityRow,
+  mode: "plug_and_play",
+  tested_role: "am",
+  lineup: pairLineup("reference", "am"),
+  test_team: {
+    roles: pairTeamRoles("reference", "am"),
+    runtime_errors: 0,
+  },
+};
+const plugIdentityPair = pairArenaRows(
+  candidatePlugRow,
+  referencePlugRow,
+);
+assert.strictEqual(plugIdentityPair.result, "draw");
+
+assert.throws(
+  () => pairArenaRows(
+    candidatePlugRow,
+    {
+      ...referencePlugRow,
+      lineup: {
+        ...referencePlugRow.lineup,
+        gk: {
+          ...referencePlugRow.lineup.gk,
+          model_path: "different-partner.json",
+        },
+      },
+      test_team: {
+        ...referencePlugRow.test_team,
+        roles: {
+          ...referencePlugRow.test_team.roles,
+          gk: {
+            ...referencePlugRow.test_team.roles.gk,
+            model_path: "different-partner.json",
+          },
+        },
+      },
+    },
+  ),
+  /arena paired partner lineup mismatch for role gk/,
+);
+
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      lineup: {
+        ...candidateIdentityRow.lineup,
+        st: {
+          ...candidateIdentityRow.lineup.st,
+          model_kind: "partner",
+        },
+      },
+    },
+    referenceIdentityRow,
+  ),
+  /candidate lineup\.st model_kind must be challenger/,
+);
+
+assert.throws(
+  () => pairArenaRows(
+    {
+      ...candidateIdentityRow,
+      mode: "plug_and_play",
+      tested_role: "sweeper",
+    },
+    {
+      ...referenceIdentityRow,
+      mode: "plug_and_play",
+      tested_role: "sweeper",
+    },
+  ),
+  /candidate plug_and_play row has invalid tested_role/,
+);
+assert.throws(
+  () => pairArenaRows(
+    candidateIdentityRow,
+    referenceIdentityRow,
+    Number.NaN,
+  ),
+  /arena tie margin must be a finite rate/,
+);
 
 console.log("test_closed_loop_arena_v2: ok");
