@@ -162,6 +162,29 @@ def _audit_source_files(
             f"source references unknown raw replay sha256 {row['sha256']!r}",
         )
 
+    for row in connection.execute(
+        """
+        SELECT
+            s.source_path,
+            s.size_bytes AS source_size_bytes,
+            r.size_bytes AS raw_size_bytes
+        FROM source_files AS s
+        JOIN raw_replays AS r ON r.sha256 = s.sha256
+        WHERE s.status IN ('archived', 'duplicate')
+          AND s.size_bytes != r.size_bytes
+        ORDER BY s.source_path
+        """
+    ):
+        _append_issue(
+            issues,
+            "source_raw_size_mismatch",
+            row["source_path"],
+            (
+                f"source size {row['source_size_bytes']!r} does not match "
+                f"raw replay size {row['raw_size_bytes']!r}"
+            ),
+        )
+
 
 def _audit_raw_replays(
     connection: sqlite3.Connection,
