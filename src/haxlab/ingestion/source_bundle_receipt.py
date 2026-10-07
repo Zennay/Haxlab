@@ -193,6 +193,10 @@ def _inventory_paths(
             kind = _kind_for_name(name)
             if kind is None:
                 continue
+            if "\\" in relative:
+                raise SourceBundleReceiptError(
+                    f"source_file_path_not_canonical:{relative}"
+                )
             if not stat.S_ISREG(child_stat.st_mode):
                 raise SourceBundleReceiptError(
                     f"source_file_not_regular:{relative}"
