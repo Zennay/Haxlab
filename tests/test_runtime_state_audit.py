@@ -133,6 +133,49 @@ def test_runtime_state_audit_rejects_malformed_semantic_rows(tmp_path: Path) -> 
     } <= codes
 
 
+def test_runtime_state_audit_preserves_failure_provenance(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "state.sqlite3"
+    _healthy_state(db, tmp_path, sha="2" * 64)
+
+    with sqlite3.connect(db) as connection:
+        connection.execute(
+            """
+            INSERT INTO source_files (
+                source_path, size_bytes, mtime_ns, sha256, status, error
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(tmp_path / "failed-source.hbr2"),
+                1,
+                1,
+                "3" * 64,
+                "failed",
+                "hashing failed",
+            ),
+        )
+        connection.execute(
+            """
+            UPDATE replay_analysis_versions
+            SET status = 'retry',
+                error = NULL
+            WHERE sha256 = ?
+              AND analyzer_version = ?
+            """,
+            ("2" * 64, CURRENT_ANALYZER_VERSION),
+        )
+        connection.commit()
+
+    result = audit_runtime_state(db)
+    codes = {issue.code for issue in result.issues}
+
+    assert result.ok is False
+    assert "source_failure_has_sha256" in codes
+    assert "analysis_retry_missing_error" in codes
+
+
 def test_runtime_state_audit_reports_missing_and_unsafe_database_paths(
     tmp_path: Path,
 ) -> None:
