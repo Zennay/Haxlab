@@ -14,20 +14,22 @@ from haxlab.evaluation.models import EvaluationEvidence, PromotionPolicy, Regres
 _NATIVE_PATH_TYPE = type(Path("."))
 
 
-_ALLOWED_KEYS = {
-    "challenger_id",
-    "champion_id",
-    "games_vs_champion",
-    "score_rate_vs_champion",
-    "score_rate_lower_bound",
-    "goal_difference_per_game",
-    "frozen_scenarios_total",
-    "frozen_scenarios_passed",
-    "regressions",
-    "reproducible",
-}
+_ALLOWED_KEYS = frozenset(
+    {
+        "challenger_id",
+        "champion_id",
+        "games_vs_champion",
+        "score_rate_vs_champion",
+        "score_rate_lower_bound",
+        "goal_difference_per_game",
+        "frozen_scenarios_total",
+        "frozen_scenarios_passed",
+        "regressions",
+        "reproducible",
+    }
+)
 
-_REQUIRED_KEYS = _ALLOWED_KEYS - {"goal_difference_per_game"}
+_REQUIRED_KEYS = _ALLOWED_KEYS - frozenset({"goal_difference_per_game"})
 
 
 class _DuplicateJsonKeyError(ValueError):
