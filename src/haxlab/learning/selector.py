@@ -103,6 +103,15 @@ def _analysis_replay_sha256(path: Path) -> str | None:
     return stem if _CANONICAL_SHA256.fullmatch(stem) else None
 
 
+def _validate_holdout_partition(modulus: int, bucket: int) -> None:
+    if type(modulus) is not int or modulus < 2:
+        raise ValueError("holdout_modulus must be a native integer >= 2")
+    if type(bucket) is not int or bucket < 0 or bucket >= modulus:
+        raise ValueError(
+            "holdout_bucket must be a native integer in [0, holdout_modulus)"
+        )
+
+
 def _holdout_bucket(replay_sha256: str, modulus: int = 10) -> int:
     digest = hashlib.sha256(
         f"haxlab-holdout-v1:{replay_sha256}".encode("utf-8")
@@ -145,6 +154,7 @@ def build_training_manifest(
     holdout_modulus: int = 10,
     holdout_bucket: int = 0,
 ) -> dict[str, Any]:
+    _validate_holdout_partition(holdout_modulus, holdout_bucket)
     leaderboard_bytes = leaderboard_path.read_bytes()
     leaderboard_sha256 = hashlib.sha256(leaderboard_bytes).hexdigest()
     leaderboard = json.loads(leaderboard_bytes)
@@ -346,9 +356,6 @@ def main() -> int:
         holdout_modulus=max(2, args.holdout_modulus),
         holdout_bucket=max(0, args.holdout_bucket),
     )
-    if manifest["selection"]["holdout_bucket"] >= manifest["selection"]["holdout_modulus"]:
-        raise SystemExit("holdout-bucket must be smaller than holdout-modulus")
-
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
