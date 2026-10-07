@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -117,6 +118,72 @@ def _positive_queue_limit(limit: int) -> int:
     return limit
 
 
+def _require_non_negative_int(value: object, field: str) -> int:
+    if type(value) is not int or value < 0:
+        raise ValueError(f"{field} must be a native non-negative integer")
+    return value
+
+
+def _require_optional_non_negative_int(
+    value: object,
+    field: str,
+) -> int | None:
+    if value is None:
+        return None
+    return _require_non_negative_int(value, field)
+
+
+def _require_optional_non_negative_finite_number(
+    value: object,
+    field: str,
+) -> float | None:
+    if value is None:
+        return None
+    if type(value) not in {int, float}:
+        raise ValueError(f"{field} must be a native finite non-negative number")
+    try:
+        normalized = float(value)
+    except OverflowError as exc:
+        raise ValueError(
+            f"{field} must be a native finite non-negative number"
+        ) from exc
+    if not math.isfinite(normalized) or normalized < 0.0:
+        raise ValueError(f"{field} must be a native finite non-negative number")
+    return normalized
+
+
+def _require_non_empty_string(value: object, field: str) -> str:
+    if (
+        type(value) is not str
+        or not value
+        or not value.strip()
+        or value != value.strip()
+    ):
+        raise ValueError(
+            f"{field} must be a native non-empty string without "
+            "leading or trailing whitespace"
+        )
+    return value
+
+
+def _require_optional_string(value: object, field: str) -> str | None:
+    if value is None:
+        return None
+    if type(value) is not str:
+        raise ValueError(f"{field} must be a native string or None")
+    return value
+
+
+def _require_sha256(value: object, field: str = "sha256") -> str:
+    if (
+        type(value) is not str
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError(f"{field} must be a canonical lowercase SHA-256 hex digest")
+    return value
+
+
 class RuntimeState:
     def __init__(self, path: Path):
         self.path = path
@@ -187,6 +254,12 @@ class RuntimeState:
         status: str,
         error: str | None = None,
     ) -> None:
+        _require_non_empty_string(source_path, "source_path")
+        _require_non_negative_int(size_bytes, "size_bytes")
+        _require_non_negative_int(mtime_ns, "mtime_ns")
+        if sha256 is not None:
+            _require_sha256(sha256)
+        _require_optional_string(error, "error")
         if type(status) is not str or status not in SOURCE_WRITE_STATUSES:
             raise ValueError(
                 "source status must be one of: archived, duplicate, failed"
@@ -224,6 +297,9 @@ class RuntimeState:
         archive_path: str,
         size_bytes: int,
     ) -> None:
+        _require_sha256(sha256)
+        _require_non_empty_string(archive_path, "archive_path")
+        _require_non_negative_int(size_bytes, "size_bytes")
         self.connection.execute(
             """
             INSERT OR IGNORE INTO raw_replays (sha256, archive_path, size_bytes)
@@ -282,6 +358,19 @@ class RuntimeState:
         parser_stage: str = "probe",
         error: str | None = None,
     ) -> None:
+        _require_sha256(sha256)
+        _require_optional_non_negative_int(format_version, "format_version")
+        _require_optional_non_negative_int(total_frames, "total_frames")
+        _require_optional_non_negative_finite_number(
+            duration_seconds,
+            "duration_seconds",
+        )
+        _require_optional_non_negative_int(
+            decompressed_bytes,
+            "decompressed_bytes",
+        )
+        _require_non_empty_string(parser_stage, "parser_stage")
+        _require_optional_string(error, "error")
         if type(status) is not str or status not in PROCESSING_WRITE_STATUSES:
             raise ValueError("processing status must be one of: failed, ok")
 
@@ -328,6 +417,18 @@ class RuntimeState:
         tick_count: int | None = None,
         error: str | None = None,
     ) -> None:
+        _require_sha256(sha256)
+        _require_non_empty_string(analyzer_version, "analyzer_version")
+        if output_path is not None:
+            _require_non_empty_string(output_path, "output_path")
+        _require_optional_non_negative_int(
+            sampled_state_count,
+            "sampled_state_count",
+        )
+        _require_optional_non_negative_int(player_count, "player_count")
+        _require_optional_non_negative_int(raw_event_count, "raw_event_count")
+        _require_optional_non_negative_int(tick_count, "tick_count")
+        _require_optional_string(error, "error")
         if type(status) is not str or status not in ANALYSIS_WRITE_STATUSES:
             raise ValueError(
                 "analysis status must be one of: failed, ok, retry"
