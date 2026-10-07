@@ -81,3 +81,8 @@ Policy configuration is a small control-plane artifact. The loader fails closed 
 ## Special-file liveness
 
 The secure open uses both no-follow and non-blocking flags before inspecting the opened descriptor. This is required because a FIFO can otherwise block at open time before the regular-file check runs. After opening, the descriptor must still pass the regular-file `fstat` check; FIFOs, sockets, devices, directories and other special files are invalid policy inputs.
+
+
+## Read-time mutation
+
+The opened descriptor is fingerprinted with device, inode, byte size, modification time and change time before the bounded read, then checked again afterwards. The byte count must also equal the final descriptor size. Any drift fails closed instead of parsing a potentially torn policy snapshot. This complements no-follow path safety: path replacement and in-place mutation are separate hazards.
