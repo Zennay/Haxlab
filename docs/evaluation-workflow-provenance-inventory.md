@@ -71,7 +71,7 @@ finding to review, not an automatic instruction to edit that workflow. Before
 opening a fix lane, recheck open issues, PRs and branches for exact-path
 ownership.
 
-Recording `git rev-parse HEAD` by itself is deliberately not counted as a guard; the inventory requires a source-bound comparison so log-only provenance cannot look equivalent to fail-closed validation. Equality assertions are accepted directly. A `!=` comparison is accepted only when that mismatch branch exits non-zero; inverted or log-only mismatch checks remain findings.
+Recording `git rev-parse HEAD` by itself is deliberately not counted as a guard; the inventory requires a source-bound comparison so log-only provenance cannot look equivalent to fail-closed validation. Equality assertions count only when the same step enables shell errexit (for example `set -euo pipefail`) or the assertion explicitly exits non-zero on failure. A `!=` comparison is accepted only when that mismatch branch exits non-zero; inverted, non-enforcing, or log-only checks remain findings.
 
 Likewise, a clean inventory is only source-level provenance evidence. It does not
 prove calibration quality, multisource correctness, model strength, champion
