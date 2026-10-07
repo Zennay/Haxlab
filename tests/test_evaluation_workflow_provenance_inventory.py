@@ -59,11 +59,56 @@ def test_clean_pinned_workflow_has_no_findings() -> None:
     assert report["mutable_actions"] == []
     assert report["checkout_credentials_disabled"] is True
     assert report["checkout_clean"] is True
-    assert report["checkout_source_bound"] is True
+    assert report["checkout_ref_kinds"] == ["event_source"]
+    assert report["checkout_refs_bound"] is True
     assert report["has_exact_head_guard"] is True
     assert report["top_level_contents_read_only"] is True
 
 
+
+
+def test_immutable_secondary_checkout_is_provenance_bound() -> None:
+    text = _clean_workflow().replace(
+        "      - name: Verify exact source",
+        """      - name: Checkout frozen model source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 4dd926b1eef89509eb271088378f129aa7e72c57
+          path: .frozen-source
+          clean: true
+          persist-credentials: false
+      - name: Verify exact source""",
+    )
+    report = audit_workflow_text(".github/workflows/multi-checkout.yml", text)
+
+    assert report["checkout_ref_kinds"] == [
+        "event_source",
+        "immutable_commit",
+    ]
+    assert report["checkout_refs_bound"] is True
+    assert "checkout_ref_unbound" not in report["findings"]
+
+
+def test_mutable_secondary_checkout_ref_is_reported() -> None:
+    text = _clean_workflow().replace(
+        "      - name: Verify exact source",
+        """      - name: Checkout mutable model source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: model-candidate
+          path: .candidate
+          clean: true
+          persist-credentials: false
+      - name: Verify exact source""",
+    )
+    report = audit_workflow_text(".github/workflows/mutable-ref.yml", text)
+
+    assert report["checkout_ref_kinds"] == [
+        "event_source",
+        "mutable_or_unbound",
+    ]
+    assert report["checkout_refs_bound"] is False
+    assert "checkout_ref_unbound" in report["findings"]
 
 
 def test_recording_head_without_comparison_is_not_an_exact_head_guard() -> None:
