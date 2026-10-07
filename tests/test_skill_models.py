@@ -10,6 +10,7 @@ from haxlab.skill.models import (
     PerformanceVector,
     PlayerSkillEstimate,
     SkillDimensionEstimate,
+    SkillObservation,
 )
 
 
@@ -188,3 +189,106 @@ def test_estimator_dimensions_remain_mapping_compatible() -> None:
         field.name for field in fields(PerformanceVector)
     ]
     assert estimate.dimensions["retention"].mean == 0.0
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("retention", math.nan),
+        ("progression", math.inf),
+        ("creation", -math.inf),
+        ("finishing", True),
+        ("defending", "1.0"),
+    ],
+)
+def test_performance_vector_rejects_non_finite_or_non_native_values(
+    field_name: str,
+    value: object,
+) -> None:
+    kwargs = {field_name: value}
+
+    with pytest.raises(
+        ValueError,
+        match=f"invalid_performance_vector:{field_name}",
+    ):
+        PerformanceVector(**kwargs)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("overrides", "reason"),
+    [
+        ({"player_id": ""}, "player_id"),
+        ({"player_id": "   "}, "player_id"),
+        ({"player_id": 123}, "player_id"),
+        ({"performance": object()}, "performance"),
+        ({"match_quality_weight": -0.01}, "match_quality_weight"),
+        ({"match_quality_weight": 1.01}, "match_quality_weight"),
+        ({"match_quality_weight": math.nan}, "match_quality_weight"),
+        ({"match_quality_weight": True}, "match_quality_weight"),
+        (
+            {"minutes_or_possessions_weight": -0.01},
+            "minutes_or_possessions_weight",
+        ),
+        (
+            {"minutes_or_possessions_weight": math.inf},
+            "minutes_or_possessions_weight",
+        ),
+        (
+            {"minutes_or_possessions_weight": False},
+            "minutes_or_possessions_weight",
+        ),
+        ({"teammate_context": math.nan}, "teammate_context"),
+        ({"opponent_context": math.inf}, "opponent_context"),
+        ({"state_difficulty": True}, "state_difficulty"),
+        ({"role": ""}, "role"),
+        ({"role": "   "}, "role"),
+        ({"role": 1}, "role"),
+    ],
+)
+def test_skill_observation_rejects_malformed_evidence(
+    overrides: dict[str, object],
+    reason: str,
+) -> None:
+    values: dict[str, object] = {
+        "player_id": "player-a",
+        "performance": PerformanceVector(retention=0.5),
+        "match_quality_weight": 1.0,
+        "minutes_or_possessions_weight": 10.0,
+        "teammate_context": 0.0,
+        "opponent_context": 0.0,
+        "state_difficulty": 0.0,
+        "role": "defender",
+    }
+    values.update(overrides)
+
+    with pytest.raises(
+        ValueError,
+        match=f"invalid_skill_observation:{reason}",
+    ):
+        SkillObservation(**values)  # type: ignore[arg-type]
+
+
+def test_skill_observation_accepts_current_leaderboard_boundary_values() -> None:
+    observation = SkillObservation(
+        player_id="auth:abc123",
+        performance=PerformanceVector(
+            retention=-3.0,
+            progression=0.0,
+            creation=3.0,
+            finishing=None,
+            defending=1.25,
+            positioning=-0.5,
+            pressure_recovery=0.75,
+            risk_management=-1.0,
+        ),
+        match_quality_weight=0.15,
+        minutes_or_possessions_weight=2.0,
+        teammate_context=-1.0,
+        opponent_context=1.0,
+        state_difficulty=None,
+        role="midfield",
+    )
+
+    assert observation.performance.creation == 3.0
+    assert observation.match_quality_weight == 0.15
+    assert observation.minutes_or_possessions_weight == 2.0
