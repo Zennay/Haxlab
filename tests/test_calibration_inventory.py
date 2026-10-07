@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -57,6 +58,123 @@ def _request(tmp_path: Path) -> dict[str, object]:
     }
 
 
+def _sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _valid_payload(
+    request: dict[str, object],
+    *,
+    label: str,
+    source_id: str,
+) -> dict[str, object]:
+    challengers = request["challengers"]
+    champion = request["champion"]
+    partners = request["partners"]
+    source_root = request["source_root"]
+    assert isinstance(challengers, dict)
+    assert isinstance(champion, Path)
+    assert isinstance(partners, tuple)
+    assert isinstance(source_root, Path)
+    challenger = challengers[label]
+    assert isinstance(challenger, Path)
+    source = source_root / f"source-{source_id}"
+    stadium = source / "stadium.hbs"
+    scenarios = source / "scenarios.json"
+
+    team_rows = [
+        {
+            "mode": "full_team",
+            "tested_role": None,
+            "scenario_index": scenario,
+            "test_team_id": side,
+            "repeat_index": 0,
+            "result": "draw",
+        }
+        for scenario in range(1, 17)
+        for side in (1, 2)
+    ]
+    plug_rows = [
+        {
+            "mode": "plug_and_play",
+            "tested_role": role,
+            "scenario_index": scenario,
+            "test_team_id": side,
+            "repeat_index": 0,
+            "result": "draw",
+        }
+        for role in ("gk", "dm", "am", "st")
+        for scenario in range(1, 17)
+        for side in (1, 2)
+    ]
+
+    return {
+        "schema": "haxlab-closed-loop-arena-v2",
+        "evaluation_mode": (
+            "paired_raw_policy_full_team_plus_plug_and_play_context_generalization_v2"
+        ),
+        "raw_policy_only": True,
+        "safety_recovery_enabled": False,
+        "paired_reference_design": True,
+        "provenance": {
+            "challenger_model": str(challenger),
+            "challenger_sha256": _sha(challenger),
+            "champion_model": str(champion),
+            "champion_sha256": _sha(champion),
+            "partner_models": [str(path) for path in partners],
+            "partner_sha256s": [_sha(path) for path in partners],
+            "stadium": str(stadium),
+            "stadium_sha256": _sha(stadium),
+            "scenarios": str(scenarios),
+            "scenarios_sha256": _sha(scenarios),
+        },
+        "config": {
+            "seconds": 30,
+            "sample_every": 6,
+            "max_scenarios": 16,
+            "plug_repeats": 1,
+            "seed": 1337,
+            "scenario_count": 16,
+            "roles": ["gk", "dm", "am", "st"],
+            "pair_tie_margin": 0.025,
+        },
+        "team_mode": {
+            "summary": {
+                "matches": 32,
+                "wins": 0,
+                "draws": 32,
+                "losses": 0,
+                "proxy_match_score": 0.5,
+            }
+        },
+        "plug_and_play": {
+            "summary": {
+                "matches": 128,
+                "wins": 0,
+                "draws": 128,
+                "losses": 0,
+                "proxy_match_score": 0.5,
+            },
+            "by_role": {
+                role: {
+                    "team_outcome": {
+                        "matches": 32,
+                        "wins": 0,
+                        "draws": 32,
+                        "losses": 0,
+                        "proxy_match_score": 0.5,
+                    }
+                }
+                for role in ("gk", "dm", "am", "st")
+            },
+        },
+        "match_results": {
+            "team_mode": team_rows,
+            "plug_and_play": plug_rows,
+        },
+    }
+
+
 def test_inventory_classifies_all_nine_sources_in_stable_order(
     tmp_path: Path,
     monkeypatch,
@@ -107,6 +225,48 @@ def test_inventory_classifies_all_nine_sources_in_stable_order(
         source = source_root / f"source-{source_suffix}"
         assert kwargs["stadium"] == source / "stadium.hbs"
         assert kwargs["scenarios"] == source / "scenarios.json"
+
+
+def test_inventory_composes_with_real_resume_validator(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    request = _request(tmp_path)
+    result_root = request["result_root"]
+    assert isinstance(result_root, Path)
+    target = result_root / "champion-self-source-01.json"
+    target.write_text(
+        json.dumps(
+            _valid_payload(
+                request,
+                label="champion-self",
+                source_id="01",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    real_validator = inventory_module.reusable_result_or_reasons
+
+    def validator(result_path: Path, **kwargs):
+        if result_path == target:
+            return real_validator(result_path, **kwargs)
+        return True, ()
+
+    monkeypatch.setattr(
+        inventory_module,
+        "reusable_result_or_reasons",
+        validator,
+    )
+
+    report = inventory_calibration_results(**request)
+
+    assert report["complete"] is True
+    target_row = next(
+        row for row in report["results"] if row["result"] == str(target)
+    )
+    assert target_row["reusable"] is True
+    assert target_row["reasons"] == []
 
 
 def test_missing_challenger_blocks_only_its_three_sources(
