@@ -19,8 +19,28 @@ DEFAULT_CHAMPION_ROOT = Path("/var/lib/haxlab/derived/champions/elite-player")
 ROLE_KEYS = ("role_order", "role_names", "role_labels", "roles")
 
 
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"non-standard JSON constant: {value}")
+
+
+def _strict_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in payload:
+            raise ValueError(f"duplicate JSON key: {key}")
+        payload[key] = value
+    return payload
+
+
 def _load_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    payload = json.loads(
+        path.read_text(encoding="utf-8"),
+        object_pairs_hook=_strict_json_object,
+        parse_constant=_reject_json_constant,
+    )
+    if not isinstance(payload, dict):
+        raise ValueError("expected JSON object")
+    return payload
 
 
 def _safe_version_dir(root: Path, version: Any) -> Path | None:
