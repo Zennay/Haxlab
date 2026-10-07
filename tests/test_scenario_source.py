@@ -273,8 +273,11 @@ def test_healthy_candidate_rejects_symlinked_source_artifacts(
     raw, analysis, raw_sha = _candidate_files(tmp_path)
     monkeypatch.setattr(scenario_source, "infer_roles_4v4", _fake_roles)
 
-    raw_link = tmp_path / "raw-link.hbr2"
+    link_root = tmp_path / "links"
+    link_root.mkdir()
+    raw_link = link_root / f"{raw_sha}.hbr2"
     raw_link.symlink_to(raw)
+    assert raw_link.name == raw.name
     assert (
         scenario_source._healthy_candidate(
             sha256=raw_sha,
@@ -285,8 +288,9 @@ def test_healthy_candidate_rejects_symlinked_source_artifacts(
         is None
     )
 
-    analysis_link = tmp_path / "analysis-link.json"
+    analysis_link = link_root / f"{raw_sha}.json"
     analysis_link.symlink_to(analysis)
+    assert analysis_link.name == analysis.name
     assert (
         scenario_source._healthy_candidate(
             sha256=raw_sha,
@@ -302,23 +306,28 @@ def test_healthy_candidate_rejects_non_file_source_artifacts(
     tmp_path: Path,
 ) -> None:
     raw, analysis, raw_sha = _candidate_files(tmp_path)
-    directory = tmp_path / "not-a-file"
-    directory.mkdir()
 
+    raw_directory = tmp_path / "raw-directory" / f"{raw_sha}.hbr2"
+    raw_directory.mkdir(parents=True)
+    assert raw_directory.name == raw.name
     assert (
         scenario_source._healthy_candidate(
             sha256=raw_sha,
-            raw_path=str(directory),
+            raw_path=str(raw_directory),
             analysis_path=str(analysis),
             sampled_states=100,
         )
         is None
     )
+
+    analysis_directory = tmp_path / "analysis-directory" / f"{raw_sha}.json"
+    analysis_directory.mkdir(parents=True)
+    assert analysis_directory.name == analysis.name
     assert (
         scenario_source._healthy_candidate(
             sha256=raw_sha,
             raw_path=str(raw),
-            analysis_path=str(directory),
+            analysis_path=str(analysis_directory),
             sampled_states=100,
         )
         is None
