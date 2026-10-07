@@ -79,6 +79,41 @@ def test_ingest_cli_accepts_existing_real_export_directory(tmp_path: Path) -> No
     assert args.export_root == export_root
 
 
+def test_ingest_cli_accepts_relative_real_export_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    export_root = workspace / "export"
+    export_root.mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    args = _build_parser().parse_args(
+        ["ingest", "workspace/export", "--output", "output"]
+    )
+
+    assert args.export_root == Path("workspace/export")
+
+
+def test_ingest_cli_accepts_normalized_parent_segments_without_symlinks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    export_root = workspace / "export"
+    export_root.mkdir()
+    (tmp_path / "other").mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    args = _build_parser().parse_args(
+        ["ingest", "other/../workspace/export", "--output", "output"]
+    )
+
+    assert args.export_root == Path("other/../workspace/export")
+
+
 @pytest.mark.parametrize("kind", ["missing", "file", "symlink"])
 def test_ingest_cli_rejects_invalid_export_root(
     kind: str,
@@ -98,6 +133,64 @@ def test_ingest_cli_rejects_invalid_export_root(
         )
 
     assert exc_info.value.code == 2
+
+
+def test_ingest_cli_rejects_export_root_through_symlinked_parent(
+    tmp_path: Path,
+) -> None:
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    export_root = real_parent / "export"
+    export_root.mkdir()
+
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+    indirect_export = linked_parent / "export"
+
+    with pytest.raises(SystemExit) as exc_info:
+        _build_parser().parse_args(
+            ["ingest", str(indirect_export), "--output", str(tmp_path / "output")]
+        )
+
+    assert exc_info.value.code == 2
+
+
+def test_ingest_main_rejects_symlinked_export_parent_before_run_import(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    export_root = real_parent / "export"
+    export_root.mkdir()
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+
+    called = False
+
+    def fail_if_called(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("run_import must not be called")
+
+    monkeypatch.setattr(cli_module, "run_import", fail_if_called)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "haxlab",
+            "ingest",
+            str(linked_parent / "export"),
+            "--output",
+            str(tmp_path / "output"),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli_module.main()
+
+    assert exc_info.value.code == 2
+    assert called is False
 
 
 def test_ingest_main_rejects_invalid_export_root_before_run_import(
