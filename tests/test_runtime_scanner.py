@@ -1,4 +1,5 @@
 import hashlib
+import math
 import os
 import struct
 import time
@@ -364,4 +365,56 @@ def test_scanner_rejects_symlinked_incoming_root(tmp_path: Path) -> None:
         snapshot = state.status_snapshot()
 
     assert snapshot["raw_unique_replays"] == 0
+    assert not list(raw.rglob("*.hbr2"))
+
+
+@pytest.mark.parametrize(
+    "minimum_file_age_seconds",
+    [math.nan, math.inf, -math.inf, -1.0, True, "30"],
+)
+def test_scanner_rejects_invalid_minimum_file_age(
+    tmp_path: Path,
+    minimum_file_age_seconds: object,
+) -> None:
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    raw = tmp_path / "raw"
+    db = tmp_path / "state.sqlite3"
+
+    with RuntimeState(db) as state:
+        with pytest.raises(
+            ValueError,
+            match="minimum_file_age_seconds_must_be_finite_and_nonnegative",
+        ):
+            scan_once(
+                incoming,
+                raw,
+                state,
+                minimum_file_age_seconds=minimum_file_age_seconds,  # type: ignore[arg-type]
+                now=time.time(),
+            )
+
+    assert not list(raw.rglob("*.hbr2"))
+
+
+@pytest.mark.parametrize("now", [math.nan, math.inf, -math.inf, True, "0"])
+def test_scanner_rejects_invalid_now(
+    tmp_path: Path,
+    now: object,
+) -> None:
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    raw = tmp_path / "raw"
+    db = tmp_path / "state.sqlite3"
+
+    with RuntimeState(db) as state:
+        with pytest.raises(ValueError, match="now_must_be_finite"):
+            scan_once(
+                incoming,
+                raw,
+                state,
+                minimum_file_age_seconds=0,
+                now=now,  # type: ignore[arg-type]
+            )
+
     assert not list(raw.rglob("*.hbr2"))
