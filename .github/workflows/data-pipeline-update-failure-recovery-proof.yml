@@ -1,0 +1,52 @@
+name: HaxLab VPS update failure recovery proof
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "deploy/update-service-recovery.sh"
+      - "deploy/update-vps.sh"
+      - "tests/test_update_service_recovery.py"
+      - "docs/vps-update-failure-recovery.md"
+      - ".github/workflows/data-pipeline-update-failure-recovery-proof.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-update-failure-recovery-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate exact-head VPS update recovery
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Assert exact head
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          echo "HAXLAB_UPDATE_RECOVERY_EXACT_HEAD=$EXPECTED_HEAD"
+
+      - name: Validate shell syntax and focused recovery contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n deploy/update-service-recovery.sh
+          bash -n deploy/update-vps.sh
+          rm -rf .update-recovery-venv
+          python3 -m venv .update-recovery-venv
+          .update-recovery-venv/bin/pip install -q --upgrade pip
+          .update-recovery-venv/bin/pip install -q -e '.[dev]'
+          .update-recovery-venv/bin/pytest -q tests/test_update_service_recovery.py
+          echo "HAXLAB_UPDATE_RECOVERY_RESULT=green"
