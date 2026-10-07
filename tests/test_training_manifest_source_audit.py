@@ -259,6 +259,7 @@ def test_source_audit_rejects_symlinked_raw_replay(tmp_path: Path) -> None:
     ):
         audit_manifest_sources(manifest_path)
 
+
 def test_source_audit_rejects_byte_identical_manifest_handoff_replacement(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
