@@ -199,7 +199,9 @@ class _AuditMutationVisitor(ast.NodeVisitor):
 
         if attr in {"execute", "executemany", "executescript"}:
             sql = _literal_sql(node)
-            if sql is not None:
+            if sql is None:
+                self._add(node, "dynamic_sql")
+            else:
                 stripped = sql.lstrip()
                 first = stripped.split(None, 1)[0].upper() if stripped else ""
                 if first in _SQL_MUTATION_PREFIXES:
@@ -266,6 +268,9 @@ def test_data_pipeline_auditors_are_statically_read_only() -> None:
         ('connection.execute("DELETE FROM evidence")', "mutating_sql:DELETE"),
         ('connection.executescript("CREATE TABLE repaired(id INTEGER)")', "mutating_sql:CREATE"),
         ('connection.execute("PRAGMA journal_mode=WAL")', "mutating_sql:PRAGMA"),
+        ("connection.execute(sql)", "dynamic_sql"),
+        ("connection.executemany(query, rows)", "dynamic_sql"),
+        ("connection.executescript(script)", "dynamic_sql"),
     ],
 )
 def test_contract_rejects_representative_mutation_surfaces(
@@ -289,6 +294,7 @@ with os.fdopen(fd, "rb", closefd=True) as handle:
 with Path("manifest.json").open("r", encoding="utf-8") as handle:
     manifest = json.load(handle)
 rows = connection.execute("SELECT sha256 FROM evidence").fetchall()
+cte_rows = connection.execute("WITH stable AS (SELECT 1) SELECT * FROM stable").fetchall()
 quick_check = connection.execute("PRAGMA quick_check").fetchone()
 connection.execute("PRAGMA query_only=ON")
 """
