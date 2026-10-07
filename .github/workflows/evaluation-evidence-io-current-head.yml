@@ -1,0 +1,60 @@
+name: Evaluation Evidence IO Current-Head
+
+on:
+  push:
+    branches:
+      - validation/evaluation-evidence-io-current-head-20261007
+    paths:
+      - src/haxlab/evaluation/evidence_io.py
+      - tests/test_evaluation_evidence_io.py
+      - .github/workflows/evaluation-evidence-io-current-head.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-evaluation-evidence-io-current-head
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Verify exact validation head
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "::error title=Evidence IO validation provenance mismatch::checked out $ACTUAL_SHA, expected $EXPECTED_SHA"
+            exit 1
+          fi
+          echo "HAXLAB_EVALUATION_EVIDENCE_IO_HEAD=$ACTUAL_SHA"
+
+      - name: Compile evidence boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          /opt/haxlab/.venv/bin/python -m py_compile             src/haxlab/evaluation/evidence_io.py             src/haxlab/evaluation/models.py             src/haxlab/evaluation/promotion.py
+
+      - name: Run evidence IO and adjacent promotion regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src"             /opt/haxlab/.venv/bin/python -m pytest -q               tests/test_evaluation_evidence_io.py               tests/test_promotion.py
+
+      - name: Record focused proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HAXLAB_EVALUATION_EVIDENCE_IO_CONTRACT=success"
