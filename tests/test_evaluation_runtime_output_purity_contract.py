@@ -111,14 +111,42 @@ class OutputVisitor(ast.NodeVisitor):
         self.generic_visit(node)
         self.class_depth -= 1
 
+    def _visit_function_signature(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        for decorator in node.decorator_list:
+            self.visit(decorator)
+        for argument in [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]:
+            if argument.annotation is not None:
+                self.visit(argument.annotation)
+        if node.args.vararg is not None and node.args.vararg.annotation is not None:
+            self.visit(node.args.vararg.annotation)
+        if node.args.kwarg is not None and node.args.kwarg.annotation is not None:
+            self.visit(node.args.kwarg.annotation)
+        for default in [*node.args.defaults, *node.args.kw_defaults]:
+            if default is not None:
+                self.visit(default)
+        if node.returns is not None:
+            self.visit(node.returns)
+
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._visit_function_signature(node)
         self.function_stack.append(node.name)
-        self.generic_visit(node)
+        for statement in node.body:
+            self.visit(statement)
         self.function_stack.pop()
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._visit_function_signature(node)
         self.function_stack.append(node.name)
-        self.generic_visit(node)
+        for statement in node.body:
+            self.visit(statement)
+        self.function_stack.pop()
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        for default in [*node.args.defaults, *node.args.kw_defaults]:
+            if default is not None:
+                self.visit(default)
+        self.function_stack.append("<lambda>")
+        self.visit(node.body)
         self.function_stack.pop()
 
     def _inside_top_level_cli_main(self) -> bool:
@@ -246,8 +274,20 @@ def main() -> int:
     helper()
     return 0
 """
+    nested_lambda = """
+def main() -> int:
+    emit = lambda: print("noise")
+    emit()
+    return 0
+"""
+    default_side_effect = """
+def main(value: str = print("noise")) -> int:
+    return 0
+"""
     assert any("builtins.print" in finding for finding in scan_source(class_method))
     assert any("builtins.print" in finding for finding in scan_source(nested_helper))
+    assert any("builtins.print" in finding for finding in scan_source(nested_lambda))
+    assert any("builtins.print" in finding for finding in scan_source(default_side_effect))
 
 
 def test_contract_preserves_cli_output_in_main() -> None:
