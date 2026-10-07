@@ -1,8 +1,11 @@
 import json
+import math
 import struct
 from pathlib import Path
 
-from haxlab.ingestion.pipeline import run_import
+import pytest
+
+from haxlab.ingestion.pipeline import _write_json, _write_jsonl, run_import
 
 
 def test_import_is_idempotent(tmp_path: Path) -> None:
@@ -51,3 +54,83 @@ def test_import_is_idempotent(tmp_path: Path) -> None:
     assert first.match_count == 1
     assert not first.unmatched_replays
     assert not first.unmatched_reports
+    assert not list(out.glob(".*.tmp"))
+
+
+def test_atomic_json_write_preserves_previous_artifact_on_failure(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "manifest.json"
+    previous = b'{"stable": true}\n'
+    path.write_bytes(previous)
+
+    with pytest.raises(TypeError):
+        _write_json(path, {"bad": object()})
+
+    assert path.read_bytes() == previous
+    assert not list(tmp_path.glob(".manifest.json.*.tmp"))
+
+
+def test_atomic_jsonl_write_preserves_previous_artifact_on_failure(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "matches.jsonl"
+    previous = b'{"match_id": "stable"}\n'
+    path.write_bytes(previous)
+
+    with pytest.raises(TypeError):
+        _write_jsonl(path, [{"match_id": "next"}, {"bad": object()}])
+
+    assert path.read_bytes() == previous
+    assert not list(tmp_path.glob(".matches.jsonl.*.tmp"))
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        -0.01,
+        1.01,
+        math.nan,
+        math.inf,
+        -math.inf,
+        True,
+        False,
+        "0.65",
+        None,
+    ],
+)
+def test_import_rejects_invalid_minimum_match_confidence(
+    tmp_path: Path,
+    value: object,
+) -> None:
+    raw = tmp_path / "raw"
+    raw.mkdir()
+
+    with pytest.raises(
+        ValueError,
+        match=r"minimum_match_confidence must be a finite native number in \[0, 1\]",
+    ):
+        run_import(
+            raw,
+            tmp_path / "derived",
+            minimum_match_confidence=value,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("value", [0, 0.65, 1])
+def test_import_accepts_bounded_native_minimum_match_confidence(
+    tmp_path: Path,
+    value: int | float,
+) -> None:
+    raw = tmp_path / "raw"
+    raw.mkdir()
+
+    manifest = run_import(
+        raw,
+        tmp_path / f"derived-{value}",
+        minimum_match_confidence=value,
+    )
+
+    assert manifest.replay_count == 0
+    assert manifest.report_count == 0
+    assert manifest.match_count == 0
