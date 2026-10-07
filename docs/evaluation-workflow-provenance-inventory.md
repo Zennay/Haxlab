@@ -26,7 +26,10 @@ For every explicitly listed workflow the report includes:
 - whether every checkout ref is provenance-bound, either to the exact event/source expression or to a literal 40-character immutable commit (for frozen secondary sources);
 - whether the workflow merely records HEAD and whether it contains a real source-bound exact-HEAD comparison guard;
 - whether top-level `contents: read` is present;
-- any explicit `*: write` permission lines;
+- any top-level or job-level permission entries that grant `write` (parsed from real `permissions:` blocks, not shell text);
+- runner specifications and whether every job is exactly `[self-hosted, haxlab]`;
+- job timeouts and whether every runner job has a bounded 1–480 minute timeout;
+- any explicit `continue-on-error: true` failure masking;
 - a deterministic list of findings.
 
 The tool does not parse or execute workflow expressions, dispatch Actions, inspect
