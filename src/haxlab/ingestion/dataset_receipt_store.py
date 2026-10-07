@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from haxlab.ingestion.dataset_receipt import (
+    M0_ARTIFACTS,
     DatasetReceiptError,
     build_dataset_receipt,
 )
@@ -46,6 +47,46 @@ def _open_output_parent(path: Path) -> int:
         ) from exc
 
 
+def _reject_dataset_artifact_destination(
+    dataset_root: Path,
+    parent_fd: int,
+    output_name: str,
+) -> None:
+    if output_name not in M0_ARTIFACTS:
+        return
+
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    odirectory = getattr(os, "O_DIRECTORY", None)
+    if nofollow is None or odirectory is None:
+        raise DatasetReceiptStoreError(
+            "O_NOFOLLOW and O_DIRECTORY are required for receipt publication"
+        )
+
+    root_fd = -1
+    try:
+        root_fd = os.open(
+            Path(dataset_root),
+            os.O_RDONLY | nofollow | odirectory,
+        )
+        root_stat = os.fstat(root_fd)
+        parent_stat = os.fstat(parent_fd)
+    except OSError as exc:
+        raise DatasetReceiptStoreError(
+            "dataset root changed before receipt publication"
+        ) from exc
+    finally:
+        if root_fd >= 0:
+            os.close(root_fd)
+
+    if (
+        root_stat.st_dev == parent_stat.st_dev
+        and root_stat.st_ino == parent_stat.st_ino
+    ):
+        raise DatasetReceiptStoreError(
+            f"receipt output would overwrite dataset artifact: {output_name}"
+        )
+
+
 def _create_temp_file(parent_fd: int, output_name: str) -> tuple[int, str]:
     for _ in range(16):
         temp_name = f".{output_name}.{secrets.token_hex(8)}.tmp"
@@ -76,6 +117,11 @@ def store_dataset_receipt(
     payload = receipt_file_bytes(receipt)
 
     parent_fd = _open_output_parent(output_path)
+    _reject_dataset_artifact_destination(
+        Path(dataset_root),
+        parent_fd,
+        output_path.name,
+    )
     temp_fd = -1
     temp_name: str | None = None
     try:
