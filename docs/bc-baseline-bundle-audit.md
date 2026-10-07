@@ -15,7 +15,8 @@ A clean audit exits 0 and emits schema `haxlab-bc-baseline-audit-v1`. Contract f
 The verifier independently checks:
 
 - the bundle directory, `metrics.json` and `model.npz` are non-symlink regular objects; metrics/model hard-link aliasing is rejected;
-- both files are read through bounded no-follow descriptors and must remain byte/identity stable during the read;
+- the bundle root is pinned to one `O_DIRECTORY|O_NOFOLLOW` descriptor, both files are opened relative to that descriptor, and the logical bundle path must still resolve to the same directory identity before success;
+- both files are read through bounded no-follow descriptors, must remain byte/identity stable during the read, and each logical member path must still resolve to the descriptor-bound inode after reading;
 - metrics JSON is valid UTF-8/JSON with no duplicate object keys or non-finite JSON constants;
 - the NPZ is a bounded ZIP with exactly the eight baseline arrays and no duplicate/encrypted/unsupported members;
 - all parameters are float32, finite and architecture-shape compatible;
