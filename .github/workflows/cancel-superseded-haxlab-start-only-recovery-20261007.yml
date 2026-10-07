@@ -1,0 +1,76 @@
+name: Cancel superseded HaxLab start-only recovery
+
+on:
+  push:
+    branches:
+      - ops/evaluation-cancel-stale-start-only-recovery-20261007
+    paths:
+      - ".github/workflows/cancel-superseded-haxlab-start-only-recovery-20261007.yml"
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: cancel-superseded-haxlab-start-only-recovery-20261007
+  cancel-in-progress: true
+
+jobs:
+  cancel-one:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_RUN_ID: "37646677027"
+      TARGET_SHA: "fe31ab22b0f50492af0f284af5b56ade50a5ee9a"
+      TARGET_BRANCH: "ops/evaluation-haxlab-listener-start-only-20261007"
+      TARGET_PATH: ".github/workflows/haxlab-listener-start-only-recovery-20261007.yml"
+      CURRENT_RECOVERY_RUN_ID: "37660401778"
+    steps:
+      - name: Verify exact stale recovery identity and cancel only that run
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "$TARGET_RUN_ID" != "$CURRENT_RECOVERY_RUN_ID"
+
+          payload="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/$TARGET_RUN_ID")"
+          actual_repo="$(jq -r '.repository.full_name' <<<"$payload")"
+          actual_sha="$(jq -r '.head_sha' <<<"$payload")"
+          actual_branch="$(jq -r '.head_branch' <<<"$payload")"
+          actual_path="$(jq -r '.path' <<<"$payload")"
+          actual_status="$(jq -r '.status' <<<"$payload")"
+
+          test "$actual_repo" = "$GITHUB_REPOSITORY"
+          test "$actual_sha" = "$TARGET_SHA"
+          test "$actual_branch" = "$TARGET_BRANCH"
+          test "$actual_path" = "$TARGET_PATH"
+
+          case "$actual_status" in
+            queued|pending|waiting|requested)
+              gh api --method POST                 "repos/${GITHUB_REPOSITORY}/actions/runs/$TARGET_RUN_ID/cancel"                 >/dev/null
+              echo "HAXLAB_STALE_START_ONLY_CANCEL action=cancel-requested run_id=$TARGET_RUN_ID status=$actual_status sha=$actual_sha"
+              ;;
+            completed)
+              conclusion="$(jq -r '.conclusion // "unknown"' <<<"$payload")"
+              echo "HAXLAB_STALE_START_ONLY_CANCEL action=already-terminal run_id=$TARGET_RUN_ID conclusion=$conclusion sha=$actual_sha"
+              ;;
+            in_progress)
+              echo "::error title=Refusing active recovery cancellation::target recovery is in_progress"
+              exit 1
+              ;;
+            *)
+              echo "::error title=Unexpected recovery status::$actual_status"
+              exit 1
+              ;;
+          esac
+
+      - name: Verify current recovery identity is untouched
+        shell: bash
+        run: |
+          set -euo pipefail
+          current="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/$CURRENT_RECOVERY_RUN_ID")"
+          test "$(jq -r '.head_sha' <<<"$current")" = "15170c5b6ee0edc90ffcabc26a5041775d5f4173"
+          test "$(jq -r '.head_branch' <<<"$current")" = "ops/evaluation-haxlab-listener-start-only-20261007"
+          test "$(jq -r '.path' <<<"$current")" = ".github/workflows/haxlab-listener-start-only-recovery-20261007.yml"
+          echo "HAXLAB_CURRENT_START_ONLY_PRESERVED run_id=$CURRENT_RECOVERY_RUN_ID status=$(jq -r '.status' <<<"$current")"
