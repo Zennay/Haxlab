@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,14 +51,33 @@ def scan_once(
         raise ValueError("incoming_root_must_not_be_symlink")
     discovered = unchanged = archived = duplicates = failed = disappeared = 0
 
-    paths = sorted(
-        (
-            (path, path.is_symlink())
-            for path in incoming_root.rglob("*")
-            if path.suffix.casefold() == ".hbr2"
-        ),
-        key=lambda item: str(item[0]).casefold(),
-    )
+    candidates: list[tuple[Path, bool]] = []
+    for root, dir_names, file_names in os.walk(
+        incoming_root,
+        topdown=True,
+        followlinks=False,
+    ):
+        root_path = Path(root)
+
+        retained_dirs: list[str] = []
+        for name in dir_names:
+            directory = root_path / name
+            if directory.is_symlink():
+                state.event(
+                    "ingest_directory_rejected",
+                    subject=str(directory),
+                    detail="symlink_directory",
+                )
+                continue
+            retained_dirs.append(name)
+        dir_names[:] = retained_dirs
+
+        for name in file_names:
+            path = root_path / name
+            if path.suffix.casefold() == ".hbr2":
+                candidates.append((path, path.is_symlink()))
+
+    paths = sorted(candidates, key=lambda item: str(item[0]).casefold())
 
     for path, was_symlink in paths:
         # is_file() follows symlinks, so retain the discovery-time observation
