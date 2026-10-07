@@ -41,6 +41,11 @@ Read-only lookup and ordinary builtin calls remain valid. Reading
 `sys.modules["builtins"]` lookup, importing a builtin symbol for read-only use,
 and mutating ordinary local dictionaries are all allowed.
 
+The bound module hooks `builtins.__setattr__` and `builtins.__delattr__`
+are treated as writes too. This includes constant `getattr` lookup and
+assignment aliases of those bound methods; they mutate the same shared module
+without going through the standalone `setattr` / `delattr` builtins.
+
 ## Why this is separate
 
 The existing evaluation process-state lane protects OS environment state,
