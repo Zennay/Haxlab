@@ -323,6 +323,32 @@ def test_continue_on_error_true_is_reported() -> None:
     assert "continue_on_error_enabled" in report["findings"]
 
 
+def test_job_level_write_permission_is_reported() -> None:
+    text = _clean_workflow().replace(
+        "    runs-on: [self-hosted, haxlab]",
+        "    permissions:\n"
+        "      contents: read\n"
+        "      checks: write\n"
+        "    runs-on: [self-hosted, haxlab]",
+    )
+    report = audit_workflow_text(".github/workflows/job-write.yml", text)
+
+    assert report["write_permissions"] == ["checks: write"]
+    assert "write_permissions_present" in report["findings"]
+
+
+def test_permission_like_shell_text_is_not_reported() -> None:
+    text = _clean_workflow().replace(
+        'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"',
+        'echo "issues: write"\n'
+        '          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"',
+    )
+    report = audit_workflow_text(".github/workflows/script-text.yml", text)
+
+    assert report["write_permissions"] == []
+    assert "write_permissions_present" not in report["findings"]
+
+
 def test_inventory_is_sorted_deduplicated_and_deterministic(tmp_path: Path) -> None:
     workflow_dir = tmp_path / ".github" / "workflows"
     workflow_dir.mkdir(parents=True)
