@@ -17,6 +17,9 @@ FORBIDDEN_CALLS = {
     "sys.setrecursionlimit",
     "sys.setswitchinterval",
     "sys.set_int_max_str_digits",
+    "sys.setdlopenflags",
+    "sys.set_asyncgen_hooks",
+    "sys.set_coroutine_origin_tracking_depth",
 }
 
 
@@ -181,6 +184,15 @@ def test_data_pipeline_auditors_do_not_mutate_interpreter_tuning_state() -> None
     ("source", "expected"),
     [
         ("import sys\nsys.setrecursionlimit(2000)\n", "sys.setrecursionlimit"),
+        ("import sys\nsys.setdlopenflags(0)\n", "sys.setdlopenflags"),
+        (
+            "from sys import set_asyncgen_hooks as hooks\nhooks(firstiter=None)\n",
+            "sys.set_asyncgen_hooks",
+        ),
+        (
+            "import sys\nsys.set_coroutine_origin_tracking_depth(4)\n",
+            "sys.set_coroutine_origin_tracking_depth",
+        ),
         (
             "from sys import setswitchinterval as tune\ntune(0.001)\n",
             "sys.setswitchinterval",
