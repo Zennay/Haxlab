@@ -183,6 +183,35 @@ def test_runtime_state_audit_requires_successful_source_to_resolve_raw_replay(
     assert "source_without_raw_replay" in codes
 
 
+def test_runtime_state_audit_rejects_source_raw_size_mismatch(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "state.sqlite3"
+    replay = tmp_path / "size-mismatch.hbr2"
+    replay.write_bytes(b"x")
+    sha = "1" * 64
+
+    with RuntimeState(db) as state:
+        state.register_raw(
+            sha256=sha,
+            archive_path=str(replay),
+            size_bytes=1,
+        )
+        state.mark_seen(
+            source_path=str(replay),
+            size_bytes=2,
+            mtime_ns=123,
+            sha256=sha,
+            status="duplicate",
+        )
+
+    result = audit_runtime_state(db)
+    codes = {issue.code for issue in result.issues}
+
+    assert result.ok is False
+    assert "source_raw_size_mismatch" in codes
+
+
 def test_runtime_state_audit_rejects_reused_success_output_path(
     tmp_path: Path,
 ) -> None:
