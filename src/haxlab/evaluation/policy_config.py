@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import argparse
+import json
 import math
 import tomllib
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -85,3 +88,24 @@ def load_promotion_policy(path: Path) -> PromotionPolicy:
         ),
         allow_critical_regressions=False,
     )
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="python -m haxlab.evaluation.policy_config",
+        description="Validate and render the strict HaxLab promotion policy config.",
+    )
+    parser.add_argument("config", type=Path)
+    args = parser.parse_args(argv)
+
+    try:
+        policy = load_promotion_policy(args.config)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    print(json.dumps(asdict(policy), sort_keys=True, separators=(",", ":")))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
