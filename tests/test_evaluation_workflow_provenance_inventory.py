@@ -1,14 +1,26 @@
+import importlib.util
 from pathlib import Path
 
 import pytest
 
-from tools.evaluation_workflow_provenance_inventory import (
-    DEFAULT_WORKFLOWS,
-    audit_workflow_text,
-    build_inventory,
-    main,
-)
 
+MODULE_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "tools"
+    / "evaluation_workflow_provenance_inventory.py"
+)
+SPEC = importlib.util.spec_from_file_location(
+    "haxlab_evaluation_workflow_provenance_inventory",
+    MODULE_PATH,
+)
+assert SPEC is not None and SPEC.loader is not None
+MODULE = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(MODULE)
+
+DEFAULT_WORKFLOWS = MODULE.DEFAULT_WORKFLOWS
+audit_workflow_text = MODULE.audit_workflow_text
+build_inventory = MODULE.build_inventory
+main = MODULE.main
 
 PINNED_CHECKOUT = "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
 
@@ -126,7 +138,10 @@ def test_inventory_rejects_parent_traversal(tmp_path: Path) -> None:
         build_inventory(tmp_path, ("../outside.yml",))
 
 
-def test_strict_mode_returns_two_for_findings(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_strict_mode_returns_two_for_findings(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     workflow_dir = tmp_path / ".github" / "workflows"
     workflow_dir.mkdir(parents=True)
     target = workflow_dir / "mutable.yml"
