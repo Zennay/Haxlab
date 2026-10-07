@@ -40,6 +40,7 @@ FORBIDDEN_CALLS = {
 TRACKED_MODULE_PREFIXES = (
     "_thread",
     "asyncio",
+    "builtins",
     "concurrent",
     "multiprocessing",
     "os",
@@ -83,6 +84,13 @@ def _canonical_name(node: ast.AST | None, aliases: dict[str, str]) -> str | None
     return None
 
 
+TRACKED_OWNER_RESULTS = {
+    "asyncio.get_event_loop()",
+    "asyncio.get_running_loop()",
+    "multiprocessing.get_context()",
+}
+
+
 def _aliases(tree: ast.AST) -> dict[str, str]:
     aliases: dict[str, str] = {}
     for node in ast.walk(tree):
@@ -106,7 +114,11 @@ def _aliases(tree: ast.AST) -> dict[str, str]:
                 and isinstance(node.targets[0], ast.Name)
             ):
                 target = _canonical_name(node.value, aliases)
-                if target in FORBIDDEN_CALLS:
+                if target and (
+                    target in FORBIDDEN_CALLS
+                    or target in TRACKED_OWNER_RESULTS
+                    or _tracked_module(target)
+                ):
                     local = node.targets[0].id
                     if aliases.get(local) != target:
                         aliases[local] = target
@@ -120,13 +132,24 @@ def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
     findings: list[str] = []
 
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        target = _canonical_name(node.func, aliases)
-        if target in FORBIDDEN_CALLS:
-            findings.append(
-                f"line {node.lineno}: hidden background/concurrent execution: {target}"
-            )
+        if isinstance(node, ast.Call):
+            target = _canonical_name(node.func, aliases)
+            if target in FORBIDDEN_CALLS:
+                findings.append(
+                    f"line {node.lineno}: hidden background/concurrent execution: {target}"
+                )
+        elif isinstance(node, ast.ClassDef):
+            for base in node.bases:
+                target = _canonical_name(base, aliases)
+                if target in {
+                    "concurrent.futures.ProcessPoolExecutor",
+                    "concurrent.futures.ThreadPoolExecutor",
+                    "multiprocessing.Process",
+                    "threading.Thread",
+                }:
+                    findings.append(
+                        f"line {node.lineno}: forbidden concurrent execution base: {target}"
+                    )
 
     return sorted(set(findings))
 
@@ -195,6 +218,8 @@ def test_contract_rejects_detached_asyncio_scheduling() -> None:
             return 1
 
         async def probe():
+            loop = aio.get_running_loop()
+            loop.create_task(work())
             aio.create_task(work())
             detach(work())
             aio.to_thread(lambda: None)
@@ -207,6 +232,7 @@ def test_contract_rejects_detached_asyncio_scheduling() -> None:
 
     findings = "\n".join(scan_source(source))
     for expected in (
+        "asyncio.get_running_loop().create_task",
         "asyncio.create_task",
         "asyncio.ensure_future",
         "asyncio.to_thread",
@@ -239,6 +265,25 @@ def test_contract_resolves_assignment_and_constant_getattr_aliases() -> None:
     assert "asyncio.create_task" in findings
     assert "threading.Thread" in findings
     assert "asyncio.ensure_future" in findings
+
+
+def test_contract_rejects_thread_and_executor_subclasses() -> None:
+    source = textwrap.dedent(
+        """
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+
+        class Worker(threading.Thread):
+            pass
+
+        class Pool(ThreadPoolExecutor):
+            pass
+        """
+    )
+
+    findings = "\n".join(scan_source(source))
+    assert "threading.Thread" in findings
+    assert "concurrent.futures.ThreadPoolExecutor" in findings
 
 
 def test_contract_allows_synchronous_and_unscheduled_async_code() -> None:
