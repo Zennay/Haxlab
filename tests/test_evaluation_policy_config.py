@@ -219,6 +219,33 @@ def test_policy_config_fails_closed_on_runtime_policy_type_drift(
         policy_config_module.load_promotion_policy_config(path)
 
 
+def test_policy_config_fails_closed_on_mutable_runtime_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    @dataclass
+    class MutablePromotionPolicy:
+        minimum_games: int = 500
+        minimum_score_rate_lower_bound: float = 0.51
+        minimum_scenario_pass_rate: float = 0.98
+        allow_critical_regressions: bool = False
+
+    path = _write_policy(
+        tmp_path,
+        "minimum_games_vs_champion = 500\n"
+        "minimum_score_rate_lower_bound = 0.51\n"
+        "minimum_frozen_scenario_pass_rate = 0.98\n",
+    )
+    monkeypatch.setattr(
+        policy_config_module,
+        "PromotionPolicy",
+        MutablePromotionPolicy,
+    )
+
+    with pytest.raises(ValueError, match="frozen dataclass"):
+        policy_config_module.load_promotion_policy_config(path)
+
+
 def test_policy_config_cli_emits_versioned_policy_and_source_provenance(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
