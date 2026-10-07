@@ -99,7 +99,7 @@ def _policy_number(
 
 
 def _validate_policy(policy: Any) -> tuple[str, ...]:
-    if not isinstance(policy, ClosedLoopArenaPolicy):
+    if type(policy) is not ClosedLoopArenaPolicy:
         return ("invalid_policy:object_type",)
 
     failures: list[str] = []
