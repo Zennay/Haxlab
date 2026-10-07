@@ -23,6 +23,15 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _SOURCE_STATUSES = {"archived", "duplicate", "failed"}
 _PROCESSING_STATUSES = {"ok", "failed"}
 _ANALYSIS_STATUSES = {"ok", "failed", "retry"}
+_REPLAY_SHA_EVENT_TYPES = {
+    "replay_archived",
+    "replay_duplicate",
+    "replay_probe_ok",
+    "replay_probe_failed",
+    "replay_analysis_ok",
+    "replay_analysis_failed",
+}
+_PATH_EVENT_TYPES = {"replay_failed", "replay_disappeared"}
 
 
 @dataclass(frozen=True)
@@ -420,6 +429,81 @@ def _audit_analysis(
         )
 
 
+def _audit_runtime_events(
+    connection: sqlite3.Connection,
+    issues: list[AuditIssue],
+) -> None:
+    for row in connection.execute(
+        """
+        SELECT id, event_type, subject, detail, created_at
+        FROM runtime_events
+        ORDER BY id
+        """
+    ):
+        event_id = row["id"]
+        event_type = row["event_type"]
+        subject = row["subject"]
+
+        if not _nonempty_text(event_type):
+            _append_issue(
+                issues,
+                "event_type_invalid",
+                event_id,
+                "runtime event type must be non-empty",
+            )
+            continue
+
+        if event_type in _REPLAY_SHA_EVENT_TYPES and not _valid_sha256(subject):
+            _append_issue(
+                issues,
+                "event_replay_sha_invalid",
+                event_id,
+                f"{event_type} requires canonical replay sha256 subject",
+            )
+        elif event_type in _PATH_EVENT_TYPES and not _nonempty_text(subject):
+            _append_issue(
+                issues,
+                "event_source_subject_invalid",
+                event_id,
+                f"{event_type} requires non-empty source-path subject",
+            )
+        elif event_type == "analysis_finalized" and not _nonempty_text(subject):
+            _append_issue(
+                issues,
+                "event_analysis_version_invalid",
+                event_id,
+                "analysis_finalized requires non-empty analyzer-version subject",
+            )
+
+        if not _nonempty_text(row["created_at"]):
+            _append_issue(
+                issues,
+                "event_created_at_invalid",
+                event_id,
+                "runtime event requires non-empty created_at evidence",
+            )
+
+    placeholders = ", ".join("?" for _ in _REPLAY_SHA_EVENT_TYPES)
+    for row in connection.execute(
+        f"""
+        SELECT e.id, e.event_type, e.subject
+        FROM runtime_events AS e
+        LEFT JOIN raw_replays AS r ON r.sha256 = e.subject
+        WHERE e.event_type IN ({placeholders})
+          AND e.subject IS NOT NULL
+          AND r.sha256 IS NULL
+        ORDER BY e.id
+        """,
+        tuple(sorted(_REPLAY_SHA_EVENT_TYPES)),
+    ):
+        _append_issue(
+            issues,
+            "event_replay_missing_raw",
+            row["id"],
+            f"{row['event_type']} references unknown raw replay {row['subject']!r}",
+        )
+
+
 def audit_runtime_state(path: Path) -> RuntimeStateAudit:
     database_path = str(path)
     issues: list[AuditIssue] = []
@@ -501,6 +585,8 @@ def audit_runtime_state(path: Path) -> RuntimeStateAudit:
                 _audit_processing(connection, issues)
             if "replay_analysis_versions" in tables:
                 _audit_analysis(connection, issues)
+            if "runtime_events" in tables:
+                _audit_runtime_events(connection, issues)
         finally:
             if connection.in_transaction:
                 connection.rollback()
