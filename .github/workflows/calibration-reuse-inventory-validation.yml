@@ -1,0 +1,79 @@
+name: Calibration reuse inventory validation
+
+on:
+  push:
+    branches:
+      - validation/calibration-reuse-inventory-20261007
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-calibration-reuse-inventory-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+          fetch-depth: 1
+
+      - name: Verify exact live branch head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk 'NR == 1 {print $1}')"
+          test -n "$remote_head"
+          test "$remote_head" = "${GITHUB_SHA}"
+          echo "HAXLAB_CALIBRATION_REUSE_INVENTORY_HEAD=$remote_head"
+
+      - name: Create isolated proof environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .calibration-inventory-venv
+          python3 -m venv .calibration-inventory-venv
+          .calibration-inventory-venv/bin/pip install --upgrade pip
+          .calibration-inventory-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile inventory and resume validator
+        shell: bash
+        run: |
+          set -euo pipefail
+          .calibration-inventory-venv/bin/python -m py_compile \
+            src/haxlab/evaluation/calibration_inventory.py \
+            src/haxlab/evaluation/calibration_resume.py \
+            tests/test_calibration_inventory.py \
+            tests/test_calibration_resume.py
+
+      - name: Run focused and adjacent regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .calibration-inventory-venv/bin/pytest -q \
+              tests/test_calibration_inventory.py \
+              tests/test_calibration_resume.py
+
+      - name: Prove CLI surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .calibration-inventory-venv/bin/python -m \
+              haxlab.evaluation.calibration_inventory --help >/dev/null
+
+      - name: Record green result
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HAXLAB_CALIBRATION_REUSE_INVENTORY_RESULT=green"
