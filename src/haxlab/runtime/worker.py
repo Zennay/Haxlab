@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import time
 from pathlib import Path
 
@@ -11,6 +12,26 @@ from haxlab.replay.header import (
     read_replay_header,
 )
 from haxlab.runtime.state import RuntimeState
+
+
+def _poll_interval_arg(value: str) -> float:
+    if type(value) is not str or value != value.strip() or value == "":
+        raise argparse.ArgumentTypeError(
+            "interval must be a finite number greater than or equal to 1 second"
+        )
+
+    try:
+        interval = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "interval must be a finite number greater than or equal to 1 second"
+        ) from exc
+
+    if not math.isfinite(interval) or interval < 1.0:
+        raise argparse.ArgumentTypeError(
+            "interval must be a finite number greater than or equal to 1 second"
+        )
+    return interval
 
 
 def process_batch(state: RuntimeState, *, batch_size: int = 50) -> dict[str, int]:
@@ -66,7 +87,7 @@ def process_batch(state: RuntimeState, *, batch_size: int = 50) -> dict[str, int
 def main() -> int:
     parser = argparse.ArgumentParser(prog="haxlab-worker")
     parser.add_argument("--state-db", type=Path, required=True)
-    parser.add_argument("--interval", type=float, default=5.0)
+    parser.add_argument("--interval", type=_poll_interval_arg, default=5.0)
     parser.add_argument("--batch-size", type=int, default=50)
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
@@ -80,7 +101,7 @@ def main() -> int:
                 return 0
 
             if result["selected"] == 0:
-                time.sleep(max(1.0, args.interval))
+                time.sleep(args.interval)
 
 
 if __name__ == "__main__":
