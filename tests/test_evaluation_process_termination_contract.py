@@ -112,7 +112,7 @@ def _is_canonical_cli_exit(node: ast.Raise, aliases: dict[str, str]) -> bool:
     exc = node.exc
     if not isinstance(exc, ast.Call):
         return False
-    if _canonical_name(exc.func, aliases) not in {"SystemExit", "builtins.SystemExit"}:
+    if not isinstance(exc.func, ast.Name) or exc.func.id != "SystemExit":
         return False
     if len(exc.args) != 1 or exc.keywords:
         return False
@@ -235,6 +235,13 @@ def main() -> int:
     return 0
 if __name__ == "__main__":
     raise SystemExit(7)
+""",
+        """
+from builtins import SystemExit as Stop
+def main() -> int:
+    return 0
+if __name__ == "__main__":
+    raise Stop(main())
 """,
         """
 def wrapper() -> None:
