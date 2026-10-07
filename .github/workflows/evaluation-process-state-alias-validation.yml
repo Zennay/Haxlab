@@ -11,7 +11,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: haxlab-evaluation-process-state-alias-${{ github.sha }}
+  group: haxlab-evaluation-process-state-alias-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
