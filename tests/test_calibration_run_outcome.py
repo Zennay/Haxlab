@@ -5,6 +5,7 @@ import json
 from haxlab.evaluation.calibration_run_outcome import (
     BATCH_STEP,
     EVIDENCE_STEPS,
+    MODEL_REJECTION_MARKER,
     POINTER_STEP,
     PREP_STEPS,
     SCHEMA,
@@ -84,7 +85,7 @@ def test_runner_interrupted_batch_is_not_a_model_rejection() -> None:
     assert result["reasons"] == ["batch:cancelled"]
 
 
-def test_completed_batch_then_failed_summary_is_an_evaluation_rejection() -> None:
+def test_failed_summary_without_gate_marker_is_not_a_model_rejection() -> None:
     result = classify_calibration_job(
         _job(
             job_conclusion="failure",
@@ -96,10 +97,29 @@ def test_completed_batch_then_failed_summary_is_an_evaluation_rejection() -> Non
         )
     )
 
+    assert result["classification"] == "summary_failed"
+    assert result["promotion_evidence_valid"] is False
+    assert result["model_rejection"] is False
+    assert result["reasons"] == ["summary:failure:no_gate_marker"]
+
+
+def test_explicit_gate_marker_after_completed_batch_is_model_rejection() -> None:
+    result = classify_calibration_job(
+        _job(
+            job_conclusion="failure",
+            batch="success",
+            summary="failure",
+            pointer="skipped",
+            collect="skipped",
+            upload="skipped",
+        ),
+        job_log=f"prefix {MODEL_REJECTION_MARKER} candidate_d_failed suffix",
+    )
+
     assert result["classification"] == "evaluation_rejected"
     assert result["promotion_evidence_valid"] is False
     assert result["model_rejection"] is True
-    assert result["reasons"] == ["summary:failure"]
+    assert result["reasons"] == ["summary:gate_rejected"]
 
 
 def test_preflight_failure_is_not_a_model_rejection() -> None:
@@ -131,7 +151,8 @@ def test_batch_execution_failure_is_not_promoted_to_model_rejection() -> None:
             pointer="skipped",
             collect="skipped",
             upload="skipped",
-        )
+        ),
+        job_log=f"{MODEL_REJECTION_MARKER} must_be_ignored_before_summary",
     )
 
     assert result["classification"] == "execution_failed"
@@ -190,6 +211,13 @@ def test_nonterminal_job_cannot_claim_a_terminal_conclusion() -> None:
     assert "job:nonterminal_with_conclusion" in result["reasons"]
 
 
+def test_non_string_log_fails_closed() -> None:
+    result = classify_calibration_job(_job(), job_log=object())
+
+    assert result["classification"] == "invalid"
+    assert "job_log:not_string" in result["reasons"]
+
+
 def test_cli_require_green_distinguishes_valid_diagnostic_from_green_gate(
     tmp_path,
     capsys,
@@ -216,6 +244,33 @@ def test_cli_require_green_distinguishes_valid_diagnostic_from_green_gate(
     assert main([str(path), "--require-green"]) == 2
     strict = json.loads(capsys.readouterr().out)
     assert strict["promotion_evidence_valid"] is False
+
+
+def test_cli_job_log_can_prove_explicit_gate_rejection(tmp_path, capsys) -> None:
+    job_path = tmp_path / "job.json"
+    log_path = tmp_path / "job.log"
+    job_path.write_text(
+        json.dumps(
+            _job(
+                job_conclusion="failure",
+                batch="success",
+                summary="failure",
+                pointer="skipped",
+                collect="skipped",
+                upload="skipped",
+            )
+        ),
+        encoding="utf-8",
+    )
+    log_path.write_text(
+        f"error: {MODEL_REJECTION_MARKER} candidate_d_failed\n",
+        encoding="utf-8",
+    )
+
+    assert main([str(job_path), "--job-log", str(log_path)]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["classification"] == "evaluation_rejected"
+    assert result["model_rejection"] is True
 
 
 def test_cli_malformed_json_is_invalid(tmp_path, capsys) -> None:
