@@ -91,6 +91,31 @@ def test_ci_style_actual_expected_comparison_is_an_exact_head_guard() -> None:
     assert "missing_exact_head_guard" not in report["findings"]
 
 
+def test_inverted_direct_head_test_is_not_a_guard() -> None:
+    text = _clean_workflow().replace(
+        'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"',
+        'test "$(git rev-parse HEAD)" != "$EXPECTED_SHA"',
+    )
+    report = audit_workflow_text(".github/workflows/inverted.yml", text)
+
+    assert report["has_exact_head_guard"] is False
+    assert "missing_exact_head_guard" in report["findings"]
+
+
+def test_mismatch_branch_without_nonzero_exit_is_not_a_guard() -> None:
+    text = _clean_workflow().replace(
+        'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"',
+        'ACTUAL_SHA="$(git rev-parse HEAD)"\n'
+        '          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then\n'
+        '            echo mismatch\n'
+        '          fi',
+    )
+    report = audit_workflow_text(".github/workflows/nonfailing-mismatch.yml", text)
+
+    assert report["has_exact_head_guard"] is False
+    assert "missing_exact_head_guard" in report["findings"]
+
+
 def test_mutable_checkout_and_missing_guard_are_reported() -> None:
     text = """name: mutable fixture
 
