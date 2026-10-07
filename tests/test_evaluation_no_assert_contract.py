@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import ast
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 
 EVALUATION_ROOT = Path("src/haxlab/evaluation")
@@ -25,3 +28,35 @@ def test_evaluation_product_code_is_python_optimization_safe() -> None:
         "constructs: "
         + ", ".join(violations)
     )
+
+
+def test_all_evaluation_modules_import_under_python_optimization() -> None:
+    script = """
+import pkgutil
+import haxlab.evaluation
+
+modules = sorted(
+    module.name
+    for module in pkgutil.walk_packages(
+        haxlab.evaluation.__path__,
+        haxlab.evaluation.__name__ + ".",
+    )
+)
+if not modules:
+    raise SystemExit("no evaluation modules discovered")
+for name in modules:
+    __import__(name)
+print(len(modules))
+"""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(Path("src").resolve())
+    result = subprocess.run(
+        [sys.executable, "-O", "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert int(result.stdout.strip()) > 0
