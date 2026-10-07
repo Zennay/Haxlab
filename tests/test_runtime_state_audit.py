@@ -303,6 +303,61 @@ def test_runtime_state_audit_rejects_reused_success_output_path(
     assert reused[0].subject == str(shared_output)
 
 
+def test_runtime_state_audit_validates_runtime_event_provenance(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "state.sqlite3"
+    known_sha = "4" * 64
+    _healthy_state(db, tmp_path, sha=known_sha)
+
+    with RuntimeState(db) as state:
+        state.event(
+            "replay_probe_ok",
+            subject=known_sha,
+            detail="frames=600",
+        )
+        state.event(
+            "replay_analysis_failed",
+            subject="5" * 64,
+            detail="missing raw replay",
+        )
+        state.event(
+            "replay_failed",
+            subject="",
+            detail="missing source path",
+        )
+        state.event("", subject="", detail="empty event type")
+
+    result = audit_runtime_state(db)
+    codes = {issue.code for issue in result.issues}
+
+    assert result.ok is False
+    assert "event_replay_missing_raw" in codes
+    assert "event_source_subject_invalid" in codes
+    assert "event_type_invalid" in codes
+    assert "event_replay_sha_invalid" not in codes
+
+
+def test_runtime_state_audit_rejects_malformed_replay_event_sha(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "state.sqlite3"
+    _healthy_state(db, tmp_path)
+
+    with RuntimeState(db) as state:
+        state.event(
+            "replay_duplicate",
+            subject="NOT-A-SHA",
+            detail="bad replay event identity",
+        )
+
+    result = audit_runtime_state(db)
+    codes = {issue.code for issue in result.issues}
+
+    assert result.ok is False
+    assert "event_replay_sha_invalid" in codes
+
+
 def test_runtime_state_audit_uses_one_consistent_live_snapshot(
     tmp_path: Path,
     monkeypatch,
