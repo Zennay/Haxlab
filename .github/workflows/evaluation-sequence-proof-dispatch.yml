@@ -17,6 +17,7 @@ concurrency:
 
 jobs:
   dispatch-next:
+    if: ${{ false }}
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 5
     env:
@@ -26,6 +27,7 @@ jobs:
       TARGET_SHA: "730c8d6146e2feb4e95f0cdd3396788000db9d49"
       TARGET_WORKFLOW: "arena-integration-test-manifest-current-proof.yml"
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      HOLD_REASON: "#100 proof lacks live-branch-head guard"
     steps:
       - name: Verify prerequisite and target live head
         shell: bash
