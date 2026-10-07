@@ -1,0 +1,81 @@
+name: Finalizer manifest provenance proof
+
+on:
+  push:
+    branches:
+      - fix/data-pipeline-finalizer-manifest-provenance-current-main-20261007
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-finalizer-manifest-provenance-${{ github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Verify exact checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          echo "HAXLAB_FINALIZER_PROVENANCE_HEAD=$(git rev-parse HEAD)"
+
+      - name: Verify candidate is still the live branch head
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk 'NR == 1 {print $1}')"
+          test -n "$remote_head"
+          test "$remote_head" = "${{ github.sha }}"
+          echo "HAXLAB_FINALIZER_PROVENANCE_LIVE_HEAD=$remote_head"
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .finalizer-provenance-venv
+          python3 -m venv .finalizer-provenance-venv
+          .finalizer-provenance-venv/bin/pip install --upgrade pip
+          .finalizer-provenance-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile repository Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          .finalizer-provenance-venv/bin/python -m compileall -q src tests
+
+      - name: Run focused finalizer regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .finalizer-provenance-venv/bin/pytest -q \
+              tests/test_analysis_finalize.py
+
+      - name: Run adjacent manifest chain regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .finalizer-provenance-venv/bin/pytest -q \
+              tests/test_training_selector.py \
+              tests/test_training_manifest_audit.py \
+              tests/test_training_manifest_source_audit.py
+
+      - name: Record green result
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HAXLAB_FINALIZER_MANIFEST_PROVENANCE_RESULT=green"
