@@ -22,6 +22,7 @@ Every other host-process termination/control path is rejected, including:
 - `sys.exit` and aliases;
 - builtin `exit` / `quit`;
 - `os._exit` and `os.abort`;
+- `os.exec*` current-process image replacement;
 - `os.kill` / `os.killpg`;
 - `signal.raise_signal` / `signal.pthread_kill`;
 - library-level `SystemExit` or `KeyboardInterrupt`, including imported
