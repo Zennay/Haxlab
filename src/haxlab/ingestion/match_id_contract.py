@@ -49,6 +49,19 @@ def _require_replay_sha256(value: Any, *, field: str) -> str:
     return value
 
 
+def derive_canonical_match_id(
+    *,
+    report_id: Any,
+    replay_sha256: Any,
+) -> str:
+    """Derive the canonical M0 match identity from report/replay provenance."""
+
+    replay_sha256 = _require_replay_sha256(replay_sha256, field="replay_sha256")
+    if report_id is not None:
+        return _require_non_empty_string(report_id, field="report_id")
+    return f"hbr2:{replay_sha256[:16]}"
+
+
 def validate_unique_match_ids(
     records: Iterable[Mapping[str, Any]],
 ) -> tuple[str, ...]:
