@@ -26,6 +26,18 @@ def _content_address_path_matches(path: Path, sha256: str) -> bool:
     )
 
 
+def _ledger_diagnostic_text(value: object) -> str:
+    """Render an untrusted SQLite scalar without leaking it into trusted logic."""
+
+    if type(value) is str:
+        return value
+    if type(value) is bytes:
+        return f"<blob:{value.hex()}>"
+    if value is None:
+        return "<null>"
+    return f"<{type(value).__name__}:{value!r}>"
+
+
 def _validated_archive_ledger_row(row) -> tuple[str, str, int]:
     """Validate persisted raw_replays evidence before filesystem trust."""
 
@@ -272,8 +284,8 @@ def audit_raw_archive(
             if len(issues) < max(0, max_issues):
                 issues.append(
                     {
-                        "sha256": raw_sha256,
-                        "archive_path": raw_archive_path,
+                        "sha256": _ledger_diagnostic_text(raw_sha256),
+                        "archive_path": _ledger_diagnostic_text(raw_archive_path),
                         "reasons": [str(exc)],
                     }
                 )
