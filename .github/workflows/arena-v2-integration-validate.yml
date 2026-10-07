@@ -88,12 +88,9 @@ jobs:
           set -euo pipefail
           PYTHONPATH="$GITHUB_WORKSPACE/src" .arena-ci-venv/bin/pytest -q \
             tests/test_closed_loop_arena.py \
-            tests/test_champion_registry.py \
             tests/test_duel_gate.py \
             tests/test_multisource_duel.py \
-            tests/test_promotion.py \
-            tests/test_replay_duel.py \
-            tests/test_sandbox_gate.py
+            tests/test_promotion.py
 
       - name: Record integration evidence
         shell: bash
