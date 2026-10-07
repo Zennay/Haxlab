@@ -24,7 +24,7 @@ For every explicitly listed workflow the report includes:
 - whether checkout disables persisted credentials;
 - whether checkout requests a clean working tree;
 - whether checkout is bound to an exact source expression;
-- whether the workflow contains an exact-HEAD verification guard;
+- whether the workflow merely records HEAD and whether it contains a real source-bound exact-HEAD comparison guard;
 - whether top-level `contents: read` is present;
 - any explicit `*: write` permission lines;
 - a deterministic list of findings.
@@ -68,6 +68,8 @@ A mutable action ref, write permission, or missing provenance property is a
 finding to review, not an automatic instruction to edit that workflow. Before
 opening a fix lane, recheck open issues, PRs and branches for exact-path
 ownership.
+
+Recording `git rev-parse HEAD` by itself is deliberately not counted as a guard; the inventory requires a source-bound comparison so log-only provenance cannot look equivalent to fail-closed validation.
 
 Likewise, a clean inventory is only source-level provenance evidence. It does not
 prove calibration quality, multisource correctness, model strength, champion
