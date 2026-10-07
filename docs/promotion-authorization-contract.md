@@ -64,3 +64,16 @@ Historical green evidence from a different SHA never authorizes a later head.
 This lane is intentionally additive: it adds a new consumer module and focused regressions without editing `promotion.py`, calibration logic, multisource logic, scenario-source selection, resync guards, champion pointers, or workflow files. It can therefore remain isolated while the canonical calibration runner is occupied.
 
 The companion gate-receipt lane may eventually be imported directly after both contracts are proven, but this consumer still revalidates security-critical receipt fields so a malformed or hand-constructed object fails closed at the authorization boundary.
+
+
+## CLI
+
+The contract is also available as a strict read-only CLI:
+
+```bash
+python -m haxlab.evaluation.promotion_authorization request.json
+```
+
+The request must contain exactly `exact_head`, `candidate_id`, `champion_id`, `promotion_decision`, `gate_receipt`, `evidence_sha256`, and `policy_sha256`. The nested decision must contain exactly a native JSON boolean `promote` and a JSON array `reasons`.
+
+Successful output is one canonical compact JSON line. Invalid JSON, missing or unexpected fields, malformed decision evidence, a mismatched gate receipt, or any failed gate exits with status 2 and emits no authorization payload to stdout. The CLI does not perform network access or mutate champion state.
