@@ -9,7 +9,13 @@ from typing import Any
 
 
 ARENA_SCHEMA = "haxlab-closed-loop-arena-v2"
+EVALUATION_MODE = (
+    "paired_raw_policy_full_team_plus_plug_and_play_context_generalization_v2"
+)
 ROLES = ("gk", "dm", "am", "st")
+CALIBRATED_MIN_SECONDS = 30.0
+CALIBRATED_SAMPLE_EVERY = 6
+PAIR_TIE_MARGIN = 0.025
 
 
 @dataclass(frozen=True)
@@ -119,6 +125,233 @@ def _require_mapping(
     return value
 
 
+def _reject_unexpected_role_keys(
+    failures: list[str],
+    *,
+    mapping: dict[Any, Any],
+    label: str,
+) -> None:
+    for key in mapping:
+        if type(key) is not str or key not in ROLES:
+            failures.append(f"{label}:unexpected_role")
+
+
+def _raw_outcome_tally(
+    failures: list[str],
+    *,
+    rows: Any,
+    label: str,
+    expected_mode: str,
+    expected_role: str | None | object,
+) -> tuple[int, int, int, int, float]:
+    if not isinstance(rows, list):
+        failures.append(f"invalid_object:{label}:rows")
+        return 0, 0, 0, 0, 0.0
+
+    outcomes = {"win": 0, "draw": 0, "loss": 0}
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            failures.append(f"invalid_object:{label}:row:{index}")
+            continue
+
+        mode = row.get("mode")
+        if type(mode) is not str or mode != expected_mode:
+            failures.append(f"{label}:row:{index}:invalid_mode")
+
+        role = row.get("tested_role")
+        if expected_role is _ANY_ROLE:
+            if type(role) is not str or role not in ROLES:
+                failures.append(f"{label}:row:{index}:invalid_role")
+        elif expected_role is None:
+            if role is not None:
+                failures.append(f"{label}:row:{index}:invalid_role")
+        elif type(role) is not str or role != expected_role:
+            failures.append(f"{label}:row:{index}:invalid_role")
+
+        result = row.get("result")
+        if type(result) is not str or result not in outcomes:
+            failures.append(f"{label}:row:{index}:invalid_result")
+            continue
+        outcomes[result] += 1
+
+    matches = len(rows)
+    score = (
+        (outcomes["win"] + 0.5 * outcomes["draw"]) / matches
+        if matches
+        else 0.0
+    )
+    return matches, outcomes["win"], outcomes["draw"], outcomes["loss"], score
+
+
+def _require_raw_outcomes_match(
+    failures: list[str],
+    *,
+    label: str,
+    raw: tuple[int, int, int, int, float],
+    declared: tuple[int, int, int, int, float],
+) -> None:
+    raw_counts = raw[:4]
+    declared_counts = declared[:4]
+    if raw_counts != declared_counts or not math.isclose(
+        raw[4],
+        declared[4],
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    ):
+        failures.append(f"{label}:raw_outcome_mismatch")
+
+
+_ANY_ROLE = object()
+
+
+def _native_number_value(
+    failures: list[str],
+    value: Any,
+    label: str,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float | None:
+    if isinstance(value, bool) or type(value) not in (int, float):
+        failures.append(f"invalid_metric:{label}:non_numeric")
+        return None
+    number = float(value)
+    if not math.isfinite(number):
+        failures.append(f"invalid_metric:{label}:non_finite")
+        return None
+    if minimum is not None and number < minimum:
+        failures.append(f"invalid_metric:{label}:below_minimum")
+        return None
+    if maximum is not None and number > maximum:
+        failures.append(f"invalid_metric:{label}:above_maximum")
+        return None
+    return number
+
+
+def _native_integer_value(
+    failures: list[str],
+    value: Any,
+    label: str,
+    *,
+    minimum: int,
+) -> int | None:
+    if type(value) is not int:
+        failures.append(f"invalid_metric:{label}:not_integer")
+        return None
+    if value < minimum:
+        failures.append(f"invalid_metric:{label}:below_minimum")
+        return None
+    return value
+
+
+def _validate_raw_grid(
+    failures: list[str],
+    *,
+    team_rows: Any,
+    plug_rows: Any,
+    scenario_count: int,
+    plug_repeats: int,
+) -> None:
+    if not isinstance(team_rows, list) or not isinstance(plug_rows, list):
+        return
+
+    team_coordinates: set[tuple[int, int, int]] = set()
+    team_scenarios: set[int] = set()
+    for index, row in enumerate(team_rows):
+        if not isinstance(row, dict):
+            continue
+        scenario = _native_integer_value(
+            failures,
+            row.get("scenario_index"),
+            f"team:row:{index}:scenario_index",
+            minimum=1,
+        )
+        side = _native_integer_value(
+            failures,
+            row.get("test_team_id"),
+            f"team:row:{index}:test_team_id",
+            minimum=1,
+        )
+        repeat = _native_integer_value(
+            failures,
+            row.get("repeat_index"),
+            f"team:row:{index}:repeat_index",
+            minimum=0,
+        )
+        if side is not None and side not in (1, 2):
+            failures.append(f"team:row:{index}:invalid_side")
+            side = None
+        if repeat is not None and repeat != 0:
+            failures.append(f"team:row:{index}:invalid_repeat")
+            repeat = None
+        if scenario is None or side is None or repeat is None:
+            continue
+        coordinate = (scenario, side, repeat)
+        if coordinate in team_coordinates:
+            failures.append(f"team:row:{index}:duplicate_coordinate")
+        team_coordinates.add(coordinate)
+        team_scenarios.add(scenario)
+
+    expected_team_rows = scenario_count * 2
+    if len(team_rows) != expected_team_rows:
+        failures.append(
+            f"team:grid_count_mismatch:{len(team_rows)}!={expected_team_rows}"
+        )
+    if len(team_scenarios) != scenario_count:
+        failures.append(
+            "team:scenario_count_mismatch:"
+            f"{len(team_scenarios)}!={scenario_count}"
+        )
+
+    plug_coordinates: set[tuple[str, int, int, int]] = set()
+    plug_scenarios: set[int] = set()
+    for index, row in enumerate(plug_rows):
+        if not isinstance(row, dict):
+            continue
+        role = row.get("tested_role")
+        if type(role) is not str or role not in ROLES:
+            continue
+        scenario = _native_integer_value(
+            failures,
+            row.get("scenario_index"),
+            f"plug:row:{index}:scenario_index",
+            minimum=1,
+        )
+        side = _native_integer_value(
+            failures,
+            row.get("test_team_id"),
+            f"plug:row:{index}:test_team_id",
+            minimum=1,
+        )
+        repeat = _native_integer_value(
+            failures,
+            row.get("repeat_index"),
+            f"plug:row:{index}:repeat_index",
+            minimum=0,
+        )
+        if side is not None and side not in (1, 2):
+            failures.append(f"plug:row:{index}:invalid_side")
+            side = None
+        if repeat is not None and repeat >= plug_repeats:
+            failures.append(f"plug:row:{index}:invalid_repeat")
+            repeat = None
+        if scenario is None or side is None or repeat is None:
+            continue
+        coordinate = (role, scenario, side, repeat)
+        if coordinate in plug_coordinates:
+            failures.append(f"plug:row:{index}:duplicate_coordinate")
+        plug_coordinates.add(coordinate)
+        plug_scenarios.add(scenario)
+
+    expected_plug_rows = scenario_count * 2 * len(ROLES) * plug_repeats
+    if len(plug_rows) != expected_plug_rows:
+        failures.append(
+            f"plug:grid_count_mismatch:{len(plug_rows)}!={expected_plug_rows}"
+        )
+    if plug_scenarios != team_scenarios:
+        failures.append("plug:scenario_set_mismatch")
+
+
 def _validate_outcome_summary(
     failures: list[str],
     *,
@@ -225,15 +458,18 @@ def decide_closed_loop_arena(
         "policy_version": policy.policy_version,
         "policy_calibrated": policy.calibrated,
         "schema": payload.get("schema"),
+        "evaluation_mode": payload.get("evaluation_mode"),
         "raw_policy_only": payload.get("raw_policy_only"),
         "safety_recovery_enabled": payload.get("safety_recovery_enabled"),
         "paired_reference_design": payload.get("paired_reference_design"),
     }
 
-    if payload.get("schema") != ARENA_SCHEMA:
-        structural_failures.append(
-            f"unsupported_schema:{payload.get('schema') or 'missing'}"
-        )
+    schema = payload.get("schema")
+    if type(schema) is not str or schema != ARENA_SCHEMA:
+        structural_failures.append("unsupported_schema")
+    evaluation_mode = payload.get("evaluation_mode")
+    if type(evaluation_mode) is not str or evaluation_mode != EVALUATION_MODE:
+        structural_failures.append("unsupported_evaluation_mode")
     if payload.get("raw_policy_only") is not True:
         structural_failures.append("arena_must_measure_raw_policy")
     if payload.get("safety_recovery_enabled") is not False:
@@ -255,6 +491,11 @@ def decide_closed_loop_arena(
         structural_failures,
         team_mode.get("roles"),
         "team_mode:roles",
+    )
+    _reject_unexpected_role_keys(
+        structural_failures,
+        mapping=team_roles,
+        label="team_mode:roles",
     )
     (
         team_matches,
@@ -346,7 +587,26 @@ def decide_closed_loop_arena(
         label="plug",
     )
     partner_model_count = _integer(plug.get("partner_model_count"))
+    provenance = _require_mapping(
+        structural_failures,
+        payload.get("provenance"),
+        "provenance",
+    )
+    partner_models = provenance.get("partner_models")
+    unique_partner_model_count: int | None = None
+    if not isinstance(partner_models, list):
+        structural_failures.append("invalid_provenance:partner_models:not_list")
+    elif any(type(path) is not str or not path for path in partner_models):
+        structural_failures.append("invalid_provenance:partner_models:invalid_path")
+    else:
+        unique_partner_model_count = len(set(partner_models))
+        if unique_partner_model_count != partner_model_count:
+            structural_failures.append(
+                "partner_model_count_provenance_mismatch:"
+                f"{partner_model_count}!={unique_partner_model_count}"
+            )
     checks["partner_model_count"] = partner_model_count
+    checks["provenance_partner_model_count"] = unique_partner_model_count
     checks["plug_matches"] = plug_matches
     checks["plug_wins"] = plug_wins
     checks["plug_draws"] = plug_draws
@@ -363,7 +623,13 @@ def decide_closed_loop_arena(
         plug.get("by_role"),
         "plug_and_play:by_role",
     )
+    _reject_unexpected_role_keys(
+        structural_failures,
+        mapping=by_role,
+        label="plug_and_play:by_role",
+    )
     role_checks: dict[str, Any] = {}
+    role_outcomes: dict[str, tuple[int, int, int, int, float]] = {}
     for role in ROLES:
         role_row = _require_mapping(
             structural_failures,
@@ -401,6 +667,13 @@ def decide_closed_loop_arena(
             structural_failures,
             mapping=outcome,
             label=role,
+        )
+        role_outcomes[role] = (
+            matches,
+            wins,
+            draws,
+            losses,
+            role_proxy_score,
         )
         _require_numeric_field(
             structural_failures,
@@ -583,6 +856,168 @@ def decide_closed_loop_arena(
                 )
 
     checks["roles"] = role_checks
+
+    config = _require_mapping(
+        structural_failures,
+        payload.get("config"),
+        "config",
+    )
+    seconds = _native_number_value(
+        structural_failures,
+        config.get("seconds"),
+        "config:seconds",
+        minimum=5.0,
+    )
+    sample_every = _native_integer_value(
+        structural_failures,
+        config.get("sample_every"),
+        "config:sample_every",
+        minimum=1,
+    )
+    seed = _native_integer_value(
+        structural_failures,
+        config.get("seed"),
+        "config:seed",
+        minimum=1,
+    )
+    pair_tie_margin = _native_number_value(
+        structural_failures,
+        config.get("pair_tie_margin"),
+        "config:pair_tie_margin",
+        minimum=0.0,
+        maximum=1.0,
+    )
+    scenario_count = _native_integer_value(
+        structural_failures,
+        config.get("scenario_count"),
+        "config:scenario_count",
+        minimum=1,
+    )
+    max_scenarios = _native_integer_value(
+        structural_failures,
+        config.get("max_scenarios"),
+        "config:max_scenarios",
+        minimum=1,
+    )
+    plug_repeats = _native_integer_value(
+        structural_failures,
+        config.get("plug_repeats"),
+        "config:plug_repeats",
+        minimum=1,
+    )
+    config_roles = config.get("roles")
+    if (
+        type(config_roles) is not list
+        or len(config_roles) != len(ROLES)
+        or any(type(role) is not str for role in config_roles)
+        or tuple(config_roles) != ROLES
+    ):
+        structural_failures.append("invalid_config:roles")
+    if (
+        scenario_count is not None
+        and max_scenarios is not None
+        and scenario_count > max_scenarios
+    ):
+        structural_failures.append("invalid_config:scenario_count_exceeds_max")
+    if policy.calibrated:
+        if seconds is not None and seconds < CALIBRATED_MIN_SECONDS:
+            structural_failures.append(
+                "calibrated_config:seconds_below_minimum"
+            )
+        if sample_every is not None and sample_every != CALIBRATED_SAMPLE_EVERY:
+            structural_failures.append(
+                "calibrated_config:sample_every_mismatch"
+            )
+        if (
+            pair_tie_margin is not None
+            and not math.isclose(
+                pair_tie_margin,
+                PAIR_TIE_MARGIN,
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+        ):
+            structural_failures.append(
+                "calibrated_config:pair_tie_margin_mismatch"
+            )
+
+    match_results = _require_mapping(
+        structural_failures,
+        payload.get("match_results"),
+        "match_results",
+    )
+    team_rows = match_results.get("team_mode")
+    plug_rows = match_results.get("plug_and_play")
+    raw_team = _raw_outcome_tally(
+        structural_failures,
+        rows=team_rows,
+        label="team",
+        expected_mode="full_team",
+        expected_role=None,
+    )
+    _require_raw_outcomes_match(
+        structural_failures,
+        label="team",
+        raw=raw_team,
+        declared=(
+            team_matches,
+            team_wins,
+            team_draws,
+            team_losses,
+            team_proxy_match_score,
+        ),
+    )
+    raw_plug = _raw_outcome_tally(
+        structural_failures,
+        rows=plug_rows,
+        label="plug",
+        expected_mode="plug_and_play",
+        expected_role=_ANY_ROLE,
+    )
+    _require_raw_outcomes_match(
+        structural_failures,
+        label="plug",
+        raw=raw_plug,
+        declared=(
+            plug_matches,
+            plug_wins,
+            plug_draws,
+            plug_losses,
+            plug_proxy_match_score,
+        ),
+    )
+    if scenario_count is not None and plug_repeats is not None:
+        _validate_raw_grid(
+            structural_failures,
+            team_rows=team_rows,
+            plug_rows=plug_rows,
+            scenario_count=scenario_count,
+            plug_repeats=plug_repeats,
+        )
+    if isinstance(plug_rows, list):
+        for role in ROLES:
+            role_rows = [
+                row
+                for row in plug_rows
+                if (
+                    isinstance(row, dict)
+                    and type(row.get("tested_role")) is str
+                    and row.get("tested_role") == role
+                )
+            ]
+            raw_role = _raw_outcome_tally(
+                structural_failures,
+                rows=role_rows,
+                label=role,
+                expected_mode="plug_and_play",
+                expected_role=role,
+            )
+            _require_raw_outcomes_match(
+                structural_failures,
+                label=role,
+                raw=raw_role,
+                declared=role_outcomes[role],
+            )
 
     total_plug_role_matches = sum(
         int(row.get("matches", 0))
