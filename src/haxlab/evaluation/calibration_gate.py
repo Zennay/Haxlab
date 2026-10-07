@@ -8,6 +8,56 @@ CALIBRATION_LABELS = ("champion-self", "candidate-d", "weak-zero")
 EXPECTED_SOURCES = 3
 
 
+class _FrozenSanity(dict[str, Any]):
+    """JSON-serializable mapping that rejects ordinary post-build mutation."""
+
+    def __new__(cls, values: dict[str, Any]) -> "_FrozenSanity":
+        instance = dict.__new__(cls)
+        dict.update(instance, values)
+        return instance
+
+    def __init__(self, values: dict[str, Any]) -> None:
+        # Population happens once in __new__. Re-running __init__ on the
+        # published evidence object must not provide a mutation backdoor.
+        del values
+
+    @staticmethod
+    def _immutable() -> None:
+        raise TypeError("calibration sanity evidence is immutable")
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        del key, value
+        self._immutable()
+
+    def __delitem__(self, key: str) -> None:
+        del key
+        self._immutable()
+
+    def clear(self) -> None:
+        self._immutable()
+
+    def pop(self, key: str, default: Any = None) -> Any:
+        del key, default
+        self._immutable()
+
+    def popitem(self) -> tuple[str, Any]:
+        self._immutable()
+        raise AssertionError("unreachable")
+
+    def setdefault(self, key: str, default: Any = None) -> Any:
+        del key, default
+        self._immutable()
+
+    def update(self, *args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        self._immutable()
+
+    def __ior__(self, other: object) -> "_FrozenSanity":
+        del other
+        self._immutable()
+        raise AssertionError("unreachable")
+
+
 @dataclass(frozen=True)
 class CalibrationGateDecision:
     passed: bool
@@ -47,15 +97,17 @@ def decide_calibration_gate(
         return CalibrationGateDecision(
             passed=False,
             reasons=("invalid_calibration_aggregate",),
-            sanity={
-                "all_labels_have_three_sources": False,
-                "all_runs_structurally_valid": False,
-                "champion_identity_all_behavior_pass": False,
-                "champion_identity_all_promotion_eligible": False,
-                "negative_control_discriminated": False,
-                "candidate_d_rejected": False,
-                "candidate_d_behavior_passes": -1,
-            },
+            sanity=_FrozenSanity(
+                {
+                    "all_labels_have_three_sources": False,
+                    "all_runs_structurally_valid": False,
+                    "champion_identity_all_behavior_pass": False,
+                    "champion_identity_all_promotion_eligible": False,
+                    "negative_control_discriminated": False,
+                    "candidate_d_rejected": False,
+                    "candidate_d_behavior_passes": -1,
+                }
+            ),
         )
 
     for label in CALIBRATION_LABELS:
@@ -117,15 +169,19 @@ def decide_calibration_gate(
     if not candidate_rejected:
         failures.append("candidate_d_not_rejected")
 
-    sanity = {
-        "all_labels_have_three_sources": all_three_sources,
-        "all_runs_structurally_valid": all_structural,
-        "champion_identity_all_behavior_pass": champion_behavior,
-        "champion_identity_all_promotion_eligible": champion_eligible,
-        "negative_control_discriminated": weak_discriminated,
-        "candidate_d_rejected": candidate_rejected,
-        "candidate_d_behavior_passes": counts["candidate-d"]["behavior_passes"],
-    }
+    sanity = _FrozenSanity(
+        {
+            "all_labels_have_three_sources": all_three_sources,
+            "all_runs_structurally_valid": all_structural,
+            "champion_identity_all_behavior_pass": champion_behavior,
+            "champion_identity_all_promotion_eligible": champion_eligible,
+            "negative_control_discriminated": weak_discriminated,
+            "candidate_d_rejected": candidate_rejected,
+            "candidate_d_behavior_passes": counts["candidate-d"][
+                "behavior_passes"
+            ],
+        }
+    )
     return CalibrationGateDecision(
         passed=not failures,
         reasons=tuple(dict.fromkeys(failures)),

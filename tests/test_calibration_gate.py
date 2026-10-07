@@ -1,4 +1,7 @@
+import json
 from pathlib import Path
+
+import pytest
 
 from haxlab.evaluation.calibration_gate import decide_calibration_gate
 
@@ -85,6 +88,46 @@ def test_malformed_aggregate_fails_closed_without_exception() -> None:
 
     assert not decision.passed
     assert decision.reasons == ("invalid_calibration_aggregate",)
+
+
+def test_calibration_sanity_is_an_immutable_json_snapshot() -> None:
+    decision = decide_calibration_gate(_aggregate())
+    sanity = decision.sanity
+    expected = dict(sanity)
+
+    with pytest.raises(TypeError, match="immutable"):
+        sanity["candidate_d_rejected"] = False
+    with pytest.raises(TypeError, match="immutable"):
+        del sanity["candidate_d_rejected"]
+    with pytest.raises(TypeError, match="immutable"):
+        sanity.clear()
+    with pytest.raises(TypeError, match="immutable"):
+        sanity.pop("candidate_d_rejected")
+    with pytest.raises(TypeError, match="immutable"):
+        sanity.popitem()
+    with pytest.raises(TypeError, match="immutable"):
+        sanity.setdefault("extra", True)
+    with pytest.raises(TypeError, match="immutable"):
+        sanity.update({"candidate_d_rejected": False})
+    with pytest.raises(TypeError, match="immutable"):
+        sanity |= {"candidate_d_rejected": False}
+
+    sanity.__init__({"candidate_d_rejected": False})
+    assert dict(sanity) == expected
+    assert json.loads(json.dumps({"sanity": sanity}))["sanity"] == expected
+
+    copied = sanity.copy()
+    copied["candidate_d_rejected"] = False
+    assert sanity["candidate_d_rejected"] is True
+
+
+def test_malformed_aggregate_sanity_is_immutable_too() -> None:
+    decision = decide_calibration_gate(["bad"])  # type: ignore[arg-type]
+
+    with pytest.raises(TypeError, match="immutable"):
+        decision.sanity["all_runs_structurally_valid"] = True
+
+    assert not decision.sanity["all_runs_structurally_valid"]
 
 
 def test_calibration_workflow_uses_fail_closed_aggregate_gate() -> None:
