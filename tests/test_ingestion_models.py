@@ -255,6 +255,84 @@ def test_import_manifest_rejects_count_invariants_and_type_coercion() -> None:
         )
 
 
+def test_import_manifest_binds_unmatched_evidence_to_counts() -> None:
+    manifest = ImportManifest(
+        replay_count=2,
+        unique_replay_count=2,
+        report_count=2,
+        match_count=1,
+        unmatched_replays=["unmatched.hbr2"],
+        unmatched_reports=["message-2"],
+    )
+    assert manifest.unmatched_reports == ["message-2"]
+
+    with pytest.raises(
+        ValueError,
+        match="unmatched_reports length must equal report_count - match_count",
+    ):
+        ImportManifest(
+            replay_count=2,
+            unique_replay_count=2,
+            report_count=2,
+            match_count=1,
+            unmatched_replays=["unmatched.hbr2"],
+            unmatched_reports=[],
+        )
+
+    with pytest.raises(
+        ValueError,
+        match="unmatched_replays length must not exceed unique_replay_count - match_count",
+    ):
+        ImportManifest(
+            replay_count=2,
+            unique_replay_count=2,
+            report_count=1,
+            match_count=1,
+            unmatched_replays=["one.hbr2", "two.hbr2"],
+            unmatched_reports=[],
+        )
+
+
+def test_import_manifest_allows_invalid_replay_failure_outside_unmatched_valid_set() -> None:
+    manifest = ImportManifest(
+        replay_count=2,
+        unique_replay_count=2,
+        report_count=1,
+        match_count=1,
+        unmatched_replays=[],
+        unmatched_reports=[],
+        failures=[
+            ImportFailure(
+                source="invalid.hbr2",
+                stage="hbr2_validation",
+                error="too_small",
+            )
+        ],
+    )
+
+    assert manifest.as_dict()["unmatched_replays"] == []
+    assert manifest.as_dict()["failures"][0]["stage"] == "hbr2_validation"
+
+
+def test_import_manifest_as_dict_revalidates_unmatched_count_invariants() -> None:
+    manifest = ImportManifest(
+        replay_count=2,
+        unique_replay_count=2,
+        report_count=2,
+        match_count=1,
+        unmatched_replays=["unmatched.hbr2"],
+        unmatched_reports=["message-2"],
+    )
+
+    manifest.unmatched_reports.clear()
+
+    with pytest.raises(
+        ValueError,
+        match="unmatched_reports length must equal report_count - match_count",
+    ):
+        manifest.as_dict()
+
+
 def test_import_manifest_as_dict_fails_closed_after_mutation() -> None:
     manifest = ImportManifest(
         replay_count=2,
