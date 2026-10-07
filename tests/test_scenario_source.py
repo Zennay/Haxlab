@@ -382,3 +382,75 @@ def test_healthy_candidate_rejects_boolean_sample_count(
     )
 
     assert candidate is None
+
+
+def test_single_source_selector_requires_strict_positive_max_candidates(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "state.sqlite3"
+    for value in (False, True, 0, -1, 1.0, "1"):
+        with pytest.raises(ValueError, match="max_candidates must"):
+            scenario_source.select_scenario_source(
+                db_path,
+                max_candidates=value,  # type: ignore[arg-type]
+            )
+
+
+def test_multisource_selector_requires_strict_positive_count(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "state.sqlite3"
+    for value in (False, True, 0, -1, 2.0, "2"):
+        with pytest.raises(ValueError, match="count must"):
+            scenario_source.select_scenario_sources(
+                db_path,
+                count=value,  # type: ignore[arg-type]
+            )
+
+
+def test_multisource_selector_requires_strict_positive_max_candidates(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "state.sqlite3"
+    for value in (False, True, 0, -1, 1000.0, "1000"):
+        with pytest.raises(ValueError, match="max_candidates must"):
+            scenario_source.select_scenario_sources(
+                db_path,
+                count=1,
+                max_candidates=value,  # type: ignore[arg-type]
+            )
+
+
+def test_selector_preserves_valid_explicit_limits(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "state.sqlite3"
+    _db(db_path)
+
+    def fake_healthy_candidate(**kwargs):
+        return {
+            "schema": "haxlab-replay-scenario-source-v1",
+            "sha256": kwargs["sha256"],
+        }
+
+    monkeypatch.setattr(
+        scenario_source,
+        "_healthy_candidate",
+        fake_healthy_candidate,
+    )
+
+    single = scenario_source.select_scenario_source(
+        db_path,
+        max_candidates=1,
+    )
+    multi = scenario_source.select_scenario_sources(
+        db_path,
+        count=1,
+        max_candidates=1,
+    )
+
+    assert single["sha256"] == "a" * 64
+    assert multi["requested_source_count"] == 1
+    assert multi["source_count"] == 1
+    assert multi["sources"][0]["sha256"] == "a" * 64
