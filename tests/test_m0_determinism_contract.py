@@ -120,3 +120,37 @@ def test_m0_rerun_restores_canonical_bytes_after_derived_tamper(
 
     for name, expected in canonical.items():
         assert (out / name).read_bytes() == expected
+
+
+def test_m0_duplicate_inventory_is_byte_deterministic_across_creation_order(
+    tmp_path: Path,
+) -> None:
+    roots = [tmp_path / "duplicates-a", tmp_path / "duplicates-b"]
+    outputs = [tmp_path / "duplicates-out-a", tmp_path / "duplicates-out-b"]
+    replay_bytes = struct.pack(">4sII", b"HBR2", 3, 600) + b"same-replay"
+
+    for reverse, root in enumerate(roots):
+        root.mkdir()
+        (root / "copies").mkdir()
+        paths = [root / "canonical.hbr2", root / "copies" / "duplicate.hbr2"]
+        if reverse:
+            paths.reverse()
+        for path in paths:
+            path.write_bytes(replay_bytes)
+        (root / "channel.json").write_text(
+            json.dumps({"channel": {"id": "c"}, "messages": []}),
+            encoding="utf-8",
+        )
+
+    first = run_import(roots[0], outputs[0])
+    second = run_import(roots[1], outputs[1])
+
+    assert first.as_dict() == second.as_dict()
+    assert first.replay_count == 2
+    assert first.unique_replay_count == 1
+    assert first.duplicate_replay_count == 1
+
+    for artifact in ARTIFACTS:
+        assert (outputs[0] / artifact).read_bytes() == (
+            outputs[1] / artifact
+        ).read_bytes()
