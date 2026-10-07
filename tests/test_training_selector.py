@@ -534,21 +534,6 @@ def test_training_manifest_rejects_invalid_holdout_partition_before_scan(
 
 
 
-@pytest.mark.parametrize(
-    "mutated",
-    [
-        {"matches": "80"},
-        {"matches": True},
-        {"minutes": "500"},
-        {"minutes": float("nan")},
-        {"rating": "56"},
-        {"rating": float("inf")},
-        {"rating_uncertainty": "0.8"},
-        {"rating_uncertainty": float("nan")},
-        {"player_id": ""},
-        {"player_id": 123},
-    ],
-)
 def test_select_players_rejects_unrepresentable_native_integer_evidence() -> None:
     huge = 10**10000
     base = {
@@ -628,6 +613,21 @@ def test_select_players_preserves_large_but_representable_native_integer() -> No
     assert selected[0]["rating"] == float(large)
 
 
+@pytest.mark.parametrize(
+    "mutated",
+    [
+        {"matches": "80"},
+        {"matches": True},
+        {"minutes": "500"},
+        {"minutes": float("nan")},
+        {"rating": "56"},
+        {"rating": float("inf")},
+        {"rating_uncertainty": "0.8"},
+        {"rating_uncertainty": float("nan")},
+        {"player_id": ""},
+        {"player_id": 123},
+    ],
+)
 def test_select_players_rejects_malformed_leaderboard_evidence(
     mutated: dict,
 ) -> None:
