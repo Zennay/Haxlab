@@ -4,6 +4,7 @@ import pytest
 
 from haxlab.evaluation.evidence_io import (
     load_evaluation_evidence,
+    load_promotion_policy,
     parse_evaluation_evidence,
     parse_promotion_policy,
 )
@@ -282,3 +283,26 @@ def test_serialized_policy_rejects_out_of_range_thresholds() -> None:
         )
         for reason in result.reasons
     )
+
+
+def test_policy_loader_rejects_symlink(tmp_path) -> None:
+    source = tmp_path / "policy-source.json"
+    source.write_text(json.dumps(_policy()), encoding="utf-8")
+    link = tmp_path / "policy.json"
+    link.symlink_to(source)
+
+    result = load_promotion_policy(link)
+
+    assert not result.valid
+    assert result.reasons == ("invalid_policy:path:symlink",)
+
+
+def test_policy_loader_parses_regular_file(tmp_path) -> None:
+    path = tmp_path / "policy.json"
+    path.write_text(json.dumps(_policy()), encoding="utf-8")
+
+    result = load_promotion_policy(path)
+
+    assert result.valid
+    assert result.policy is not None
+    assert result.policy.minimum_scenario_pass_rate == 0.98
