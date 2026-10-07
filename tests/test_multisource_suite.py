@@ -227,3 +227,60 @@ def test_frozen_suite_requires_strict_integer_scenario_count(
             [root, _source(tmp_path / "b", "b"), _source(tmp_path / "c", "c")],
             scenarios_per_source=4,
         )
+
+
+@pytest.mark.parametrize(
+    ("suite_seed", "source_index", "message"),
+    [
+        (True, 1, "suite_seed must be an integer"),
+        (1.5, 1, "suite_seed must be an integer"),
+        ("1337", 1, "suite_seed must be an integer"),
+        (1337, True, "source_index must be an integer"),
+        (1337, 1.0, "source_index must be an integer"),
+        (1337, "1", "source_index must be an integer"),
+        (1337, 0, "source_index must be >= 1"),
+    ],
+)
+def test_source_seed_requires_strict_integer_inputs(
+    suite_seed: object,
+    source_index: object,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        source_seed(suite_seed, "a" * 64, source_index)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("suite_seed", True, "suite_seed must be an integer"),
+        ("suite_seed", 1337.0, "suite_seed must be an integer"),
+        ("scenarios_per_source", True, "scenarios_per_source must be an integer"),
+        ("scenarios_per_source", 4.0, "scenarios_per_source must be an integer"),
+        ("rollout_seconds", "30", "rollout_seconds must be an integer"),
+        ("sample_every_ticks", 6.0, "sample_every_ticks must be an integer"),
+        ("history_window", False, "history_window must be an integer"),
+        ("minimum_sources", "3", "minimum_sources must be an integer"),
+        ("scenarios_per_source", 0, "scenarios_per_source must be >= 1"),
+        ("rollout_seconds", 4, "rollout_seconds must be >= 5"),
+        ("sample_every_ticks", 0, "sample_every_ticks must be >= 1"),
+        ("history_window", 1, "history_window must be >= 2"),
+        ("minimum_sources", 0, "minimum_sources must be >= 1"),
+    ],
+)
+def test_frozen_suite_rejects_ambiguous_integer_config(
+    tmp_path: Path,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    roots = [
+        _source(tmp_path / "a", "a"),
+        _source(tmp_path / "b", "b"),
+        _source(tmp_path / "c", "c"),
+    ]
+    kwargs: dict[str, object] = {"scenarios_per_source": 4}
+    kwargs[field] = value
+
+    with pytest.raises(ValueError, match=message):
+        build_frozen_multisource_suite(roots, **kwargs)  # type: ignore[arg-type]
