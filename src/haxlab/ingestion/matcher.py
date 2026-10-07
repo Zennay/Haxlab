@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -106,16 +107,49 @@ def match_replays_to_reports(
     *,
     minimum_confidence: float = 0.65,
 ) -> list[MatchCandidate]:
-    """Greedy one-to-one matching using explicit evidence and confidence."""
+    """Match only reciprocal unique-best replay/report pairs.
+
+    A greedy one-to-one pass can silently attach the wrong report when two replays or
+    reports have equally strong evidence. Derived data must fail closed instead: a pair
+    is accepted only when it is the single highest-scoring candidate for both the replay
+    and the report. Ambiguous or fallback candidates remain unmatched for later review.
+    Reports without a stable message id are never eligible for canonical matching.
+    """
     scored: list[tuple[float, str, str, ReplayFile, MatchReport, tuple[str, ...]]] = []
 
     for replay in replays:
         for report in reports:
+            if not report.message_id:
+                continue
             score, reasons = score_pair(replay, report)
             if score >= minimum_confidence:
                 scored.append(
                     (score, replay.sha256, report.message_id, replay, report, reasons)
                 )
+
+    if not scored:
+        return []
+
+    best_by_replay: dict[str, float] = {}
+    best_by_report: dict[str, float] = {}
+    for score, replay_sha256, message_id, _, _, _ in scored:
+        best_by_replay[replay_sha256] = max(
+            score, best_by_replay.get(replay_sha256, float("-inf"))
+        )
+        best_by_report[message_id] = max(
+            score, best_by_report.get(message_id, float("-inf"))
+        )
+
+    replay_top_counts = Counter(
+        replay_sha256
+        for score, replay_sha256, _, _, _, _ in scored
+        if score == best_by_replay[replay_sha256]
+    )
+    report_top_counts = Counter(
+        message_id
+        for score, _, message_id, _, _, _ in scored
+        if score == best_by_report[message_id]
+    )
 
     scored.sort(key=lambda item: (-item[0], item[1], item[2]))
 
@@ -123,12 +157,20 @@ def match_replays_to_reports(
     used_reports: set[str] = set()
     matches: list[MatchCandidate] = []
 
-    for score, _, _, replay, report, reasons in scored:
-        if replay.sha256 in used_replays or report.message_id in used_reports:
+    for score, replay_sha256, message_id, replay, report, reasons in scored:
+        if score != best_by_replay[replay_sha256]:
+            continue
+        if score != best_by_report[message_id]:
+            continue
+        if replay_top_counts[replay_sha256] != 1:
+            continue
+        if report_top_counts[message_id] != 1:
+            continue
+        if replay_sha256 in used_replays or message_id in used_reports:
             continue
 
-        used_replays.add(replay.sha256)
-        used_reports.add(report.message_id)
+        used_replays.add(replay_sha256)
+        used_reports.add(message_id)
         matches.append(
             MatchCandidate(
                 replay_sha256=replay.sha256,
