@@ -15,12 +15,32 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ github.sha }}
+          fetch-depth: 1
 
-      - name: Verify exact checkout
+      - name: Verify exact and live branch head
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          HEAD_SHA="$(git rev-parse HEAD)"
+          test "$HEAD_SHA" = "${GITHUB_SHA}"
+
+          case "${GITHUB_REF}" in
+            refs/heads/*) ;;
+            *)
+              echo "proof must be dispatched from a branch ref, got: ${GITHUB_REF}" >&2
+              exit 1
+              ;;
+          esac
+
+          LIVE_SHA="$(
+            git ls-remote --exit-code origin "${GITHUB_REF}" |
+              awk 'NR == 1 { print $1 }'
+          )"
+          test -n "$LIVE_SHA"
+          if [ "$LIVE_SHA" != "${GITHUB_SHA}" ]; then
+            echo "branch moved after dispatch: live=$LIVE_SHA dispatched=${GITHUB_SHA}" >&2
+            exit 1
+          fi
 
       - name: Create isolated proof environment
         shell: bash
