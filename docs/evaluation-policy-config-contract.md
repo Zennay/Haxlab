@@ -17,7 +17,10 @@
 
 The `[evaluation]` table is an exact contract. Missing or unknown keys are
 rejected. Counts must be native integers, probabilities must be native finite
-numbers in `[0, 1]`, and the config must be a regular non-symlink file.
+numbers in `[0, 1]`, and the config must be a regular non-symlink file. Receipt
+v1 also requires the runtime `PromotionPolicy` dataclass to expose exactly the
+four bound fields; a future extra/defaulted field fails closed instead of being
+silently omitted from the config contract.
 
 ## Immutable source provenance
 
@@ -46,8 +49,8 @@ Any malformed policy config exits non-zero through the CLI parser.
 `tests/test_evaluation_policy_config.py` binds the repository's canonical
 `configs/autonomy.toml` values to the current `PromotionPolicy` defaults,
 binds provenance to the exact file bytes, proves semantically equal byte-drift
-changes the provenance hash, locks the versioned deterministic JSON receipt, and
-covers the fail-closed input boundary.
+changes the provenance hash, locks the versioned deterministic JSON receipt,
+rejects runtime policy-schema drift, and covers the fail-closed input boundary.
 
 ## Runtime wiring status
 
