@@ -43,6 +43,26 @@ def _poll_interval_arg(value: str) -> float:
     return interval
 
 
+def _batch_size_arg(value: str) -> int:
+    if type(value) is not str or value != value.strip() or value == "":
+        raise argparse.ArgumentTypeError(
+            "batch size must be a positive integer"
+        )
+
+    try:
+        batch_size = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "batch size must be a positive integer"
+        ) from exc
+
+    if batch_size <= 0:
+        raise argparse.ArgumentTypeError(
+            "batch size must be a positive integer"
+        )
+    return batch_size
+
+
 def _archive_open_failure(path: Path) -> ReplayFormatError:
     try:
         current = path.lstat()
@@ -219,13 +239,17 @@ def process_batch(state: RuntimeState, *, batch_size: int = 50) -> dict[str, int
     }
 
 
-def main() -> int:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="haxlab-worker")
     parser.add_argument("--state-db", type=Path, required=True)
     parser.add_argument("--interval", type=_poll_interval_arg, default=5.0)
-    parser.add_argument("--batch-size", type=int, default=50)
+    parser.add_argument("--batch-size", type=_batch_size_arg, default=50)
     parser.add_argument("--once", action="store_true")
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> int:
+    args = _build_parser().parse_args()
 
     with RuntimeState(args.state_db) as state:
         while True:
