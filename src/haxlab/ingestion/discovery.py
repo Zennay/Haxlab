@@ -108,17 +108,33 @@ def _candidate_paths(root: Path) -> list[Path]:
     if not stat.S_ISDIR(root_stat.st_mode):
         raise ValueError(f"discovery_root_not_directory:{root}")
 
+    def walk_error(exc: OSError) -> None:
+        raise ValueError(f"discovery_walk_failed:{root}:{exc}") from exc
+
     candidates: list[Path] = []
-    for current, dirnames, filenames in os.walk(root, followlinks=False):
+    for current, dirnames, filenames in os.walk(
+        root,
+        topdown=True,
+        onerror=walk_error,
+        followlinks=False,
+    ):
         current_path = Path(current)
-        dirnames[:] = sorted(
-            (
-                name
-                for name in dirnames
-                if not (current_path / name).is_symlink()
-            ),
-            key=str.casefold,
-        )
+        safe_dirnames: list[str] = []
+        for name in sorted(dirnames, key=str.casefold):
+            child = current_path / name
+            try:
+                child_stat = child.lstat()
+            except OSError as exc:
+                raise ValueError(
+                    f"discovery_directory_unreadable:{child}"
+                ) from exc
+            if stat.S_ISLNK(child_stat.st_mode):
+                continue
+            if not stat.S_ISDIR(child_stat.st_mode):
+                raise ValueError(f"discovery_directory_not_directory:{child}")
+            safe_dirnames.append(name)
+        dirnames[:] = safe_dirnames
+
         for name in sorted(filenames, key=str.casefold):
             path = current_path / name
             if path.suffix.casefold() != ".hbr2":
