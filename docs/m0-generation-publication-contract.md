@@ -149,3 +149,22 @@ pointer swap resolves the new complete generation.
 
 Staging failures are cleaned best-effort; stale/unreferenced staging directories are
 never reader-visible. Pointer temp files are removed when the swap is not reached.
+
+
+## Publisher serialization
+
+Publishers acquire an advisory exclusive lock on the no-follow regular file
+`.generation-publish.lock` before they inspect or mutate generation-store state. The
+lock descriptor is held through the final pointer swap **and** the immediate
+pointer→commit→receipt read-back, then released by closing the descriptor. Kernel
+descriptor cleanup releases the lock automatically on process exit/crash.
+
+This prevents two otherwise-safe publishers from racing their pointer swaps and makes
+the return value meaningful: every successful `publish_generation()` call has
+re-resolved the exact generation it selected while still holding the writer lock.
+Concurrent same-content publishers converge on one content-addressed generation;
+concurrent distinct publishers serialize and may change which complete generation is
+current, but cannot expose a mixed artifact set.
+
+The lock path itself is opened with `O_NOFOLLOW` and required to be a regular file,
+so a symlink cannot redirect the writer lock outside the store.
