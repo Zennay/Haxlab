@@ -49,3 +49,8 @@ regressions before emitting
 
 A green result proves only this narrow invariant. It does not authorize canonical
 Arena-v2 PR #19 integration/resync or champion promotion.
+
+
+## Scope-awareness hardening
+
+The detector distinguishes persistent module-level function bindings from parameters or local variables that shadow the same name. It also resolves module-level function aliases, state-container aliases, bound mutator aliases (including constant `getattr(...)`), builtins mutator aliases, and explicit `global` access. This avoids both false positives on ephemeral locals and false negatives through simple indirection.
