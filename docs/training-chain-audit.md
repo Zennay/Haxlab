@@ -21,8 +21,17 @@ For every successful shard request, the index must copy the manifest's
 evidence, but their replay identity must still belong to the correct manifest
 split.
 
+Before either shard index snapshot, the chain audit opens the train and holdout
+directories through the shard auditor's no-follow root primitive and records
+their exact device/inode identities. The logical split paths must still name
+those held identities after the initial snapshots, after the nested shard-bundle
+audit, and before chain success. Train and holdout may not alias the same
+physical root.
+
 The manifest and both shard indexes are re-read after cross-artifact validation.
-Any byte change during the chain audit fails closed.
+Any byte change during the chain audit fails closed. A persistent byte-identical
+split-directory replacement also fails because the logical root identity no
+longer matches the root captured by the chain audit.
 
 ## Receipt
 
@@ -46,6 +55,7 @@ state or champion pointer.
 
 ## Scope
 
-This implements GitHub issue #163 as a standalone post-publication verifier. It
-reuses the integrated manifest and shard-bundle auditors and intentionally leaves
-their owned implementations unchanged.
+This implements GitHub issue #163 as a standalone post-publication verifier.
+The chain-level root binding is hardened by GitHub issue #365. It reuses the
+integrated manifest and shard-bundle auditors and intentionally leaves their
+owned implementations unchanged.
