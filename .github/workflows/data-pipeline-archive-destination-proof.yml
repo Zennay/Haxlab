@@ -1,0 +1,56 @@
+name: HaxLab archive destination publication proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact branch SHA to prove
+        required: true
+        type: string
+  push:
+    branches:
+      - feature/data-pipeline-archive-destination-noclobber-20261007
+    paths:
+      - "src/haxlab/runtime/archive.py"
+      - "tests/test_runtime_archive.py"
+      - "docs/archive-destination-publication.md"
+      - ".github/workflows/data-pipeline-archive-destination-proof.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-archive-destination-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate exact-head archive destination publication
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    env:
+      EXPECTED_HEAD: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_sha || github.sha }}
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+
+      - name: Assert exact head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Run focused proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .archive-destination-venv
+          python3 -m venv .archive-destination-venv
+          .archive-destination-venv/bin/pip install -q --upgrade pip
+          .archive-destination-venv/bin/pip install -q -e '.[dev]'
+          .archive-destination-venv/bin/python -m compileall -q src tests
+          .archive-destination-venv/bin/pytest -q tests/test_runtime_archive.py tests/test_runtime_scanner.py
+          .archive-destination-venv/bin/pytest --collect-only -q >/dev/null
