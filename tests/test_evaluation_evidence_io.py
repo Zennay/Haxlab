@@ -5,6 +5,7 @@ import pytest
 from haxlab.evaluation.evidence_io import (
     load_evaluation_evidence,
     parse_evaluation_evidence,
+    parse_promotion_policy,
 )
 
 
@@ -182,3 +183,102 @@ def test_loader_parses_regular_file(tmp_path) -> None:
     assert result.valid
     assert result.evidence is not None
     assert result.evidence.champion_id == "model-1"
+
+
+def _policy(**overrides):
+    value = {
+        "minimum_games": 500,
+        "minimum_score_rate_lower_bound": 0.51,
+        "minimum_scenario_pass_rate": 0.98,
+        "allow_critical_regressions": False,
+    }
+    value.update(overrides)
+    return value
+
+
+def test_valid_serialized_policy_builds_policy() -> None:
+    result = parse_promotion_policy(_policy())
+
+    assert result.valid
+    assert result.reasons == ()
+    assert result.policy is not None
+    assert result.policy.minimum_games == 500
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    [
+        (
+            "minimum_games",
+            "500",
+            "invalid_policy:minimum_games:not_integer",
+        ),
+        (
+            "minimum_games",
+            True,
+            "invalid_policy:minimum_games:not_integer",
+        ),
+        (
+            "minimum_score_rate_lower_bound",
+            "0.51",
+            "invalid_policy:minimum_score_rate_lower_bound:not_number",
+        ),
+        (
+            "minimum_scenario_pass_rate",
+            float("inf"),
+            "invalid_policy:minimum_scenario_pass_rate:non_finite",
+        ),
+        (
+            "allow_critical_regressions",
+            "false",
+            "invalid_policy:allow_critical_regressions:not_boolean",
+        ),
+    ],
+)
+def test_serialized_policy_rejects_coercible_values(
+    field: str, value: object, reason: str
+) -> None:
+    result = parse_promotion_policy(_policy(**{field: value}))
+
+    assert not result.valid
+    assert result.policy is None
+    assert reason in result.reasons
+
+
+def test_serialized_policy_requires_exact_complete_shape() -> None:
+    payload = _policy(extra="unexpected")
+    del payload["minimum_games"]
+
+    result = parse_promotion_policy(payload)
+
+    assert not result.valid
+    assert "invalid_policy:missing:minimum_games" in result.reasons
+    assert "invalid_policy:unexpected:extra" in result.reasons
+
+
+def test_serialized_policy_rejects_out_of_range_thresholds() -> None:
+    result = parse_promotion_policy(
+        _policy(
+            minimum_games=0,
+            minimum_score_rate_lower_bound=-0.01,
+            minimum_scenario_pass_rate=1.01,
+        )
+    )
+
+    assert not result.valid
+    assert any(
+        reason.startswith("invalid_policy:minimum_games:below_minimum")
+        for reason in result.reasons
+    )
+    assert any(
+        reason.startswith(
+            "invalid_policy:minimum_score_rate_lower_bound:below_minimum"
+        )
+        for reason in result.reasons
+    )
+    assert any(
+        reason.startswith(
+            "invalid_policy:minimum_scenario_pass_rate:above_maximum"
+        )
+        for reason in result.reasons
+    )
