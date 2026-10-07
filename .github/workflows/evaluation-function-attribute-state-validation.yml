@@ -113,3 +113,24 @@ jobs:
                 "- marker: `HAXLAB_EVALUATION_FUNCTION_ATTRIBUTE_STATE_RESULT=green`",
               ].join("\n"),
             });
+
+
+      - name: Publish failure receipt
+        if: ${{ failure() }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 342,
+              body: [
+                "Exact-head self-hosted proof: **FAILURE**",
+                "",
+                `- run: \`${context.runId}\``,
+                `- exact head: \`${context.sha}\``,
+                `- branch: \`${context.ref.replace("refs/heads/", "")}\``,
+                "- inspect the failed job before changing or accepting this lane",
+                "- no green marker / acceptance is authorized",
+              ].join("\n"),
+            });
