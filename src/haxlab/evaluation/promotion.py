@@ -7,6 +7,7 @@ from haxlab.evaluation.models import (
     EvaluationEvidence,
     PromotionDecision,
     PromotionPolicy,
+    Regression,
 )
 
 
@@ -117,6 +118,43 @@ def _policy_bool(
     return value
 
 
+def _validated_regressions(
+    failures: list[str],
+    value: Any,
+) -> tuple[Regression, ...]:
+    if type(value) is not tuple:
+        failures.append("invalid_evidence:regressions:not_tuple")
+        return ()
+
+    valid: list[Regression] = []
+    for index, item in enumerate(value):
+        if type(item) is not Regression:
+            failures.append(
+                f"invalid_evidence:regressions:{index}:object_type"
+            )
+            continue
+
+        if type(item.scenario) is not str or not item.scenario.strip():
+            failures.append(
+                f"invalid_evidence:regressions:{index}:scenario"
+            )
+            continue
+        if type(item.severity) is not str or not item.severity.strip():
+            failures.append(
+                f"invalid_evidence:regressions:{index}:severity"
+            )
+            continue
+        if type(item.details) is not str:
+            failures.append(
+                f"invalid_evidence:regressions:{index}:details"
+            )
+            continue
+
+        valid.append(item)
+
+    return tuple(valid)
+
+
 def decide_promotion(
     evidence: EvaluationEvidence,
     policy: PromotionPolicy = PromotionPolicy(),
@@ -199,6 +237,7 @@ def decide_promotion(
         evidence.frozen_scenarios_passed,
         "frozen_scenarios_passed",
     )
+    regressions = _validated_regressions(failures, evidence.regressions)
 
     if evidence.goal_difference_per_game is not None:
         _finite_number(
@@ -242,13 +281,13 @@ def decide_promotion(
 
     critical = [
         regression
-        for regression in evidence.regressions
-        if str(regression.severity).casefold() == "critical"
+        for regression in regressions
+        if regression.severity.casefold() == "critical"
     ]
     if critical and not allow_critical_regressions:
         failures.append(
             "critical_regressions:"
-            + ",".join(str(item.scenario) for item in critical)
+            + ",".join(item.scenario for item in critical)
         )
 
     if evidence.reproducible is not True:
