@@ -245,3 +245,17 @@ def test_audit_rejects_empty_duplicate_group(tmp_path: Path) -> None:
 
     assert result.ok is False
     assert f"duplicates:{SHA}:empty_group" in result.issues
+
+
+def test_audit_rejects_stale_embedded_report_payload(tmp_path: Path) -> None:
+    root = tmp_path / "m0"
+    _write_dataset(root)
+
+    match = json.loads((root / "matches.jsonl").read_text(encoding="utf-8"))
+    match["report"]["content"] = "tampered"
+    (root / "matches.jsonl").write_text(json.dumps(match) + "\n", encoding="utf-8")
+
+    result = audit_dataset(root)
+
+    assert result.ok is False
+    assert "matches:0:report_payload_mismatch" in result.issues
