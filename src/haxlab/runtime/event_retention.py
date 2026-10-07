@@ -24,14 +24,17 @@ class RetentionReceipt:
     dry_run: bool
     keep_hours: int
     keep_latest: int
+    max_delete: int
     evaluated_at_utc: str
     cutoff_utc: str
     rows_before: int
     rows_eligible: int
+    rows_selected: int
     rows_deleted: int
+    rows_remaining_eligible: int
     rows_after: int
-    first_eligible_id: int | None
-    last_eligible_id: int | None
+    first_selected_id: int | None
+    last_selected_id: int | None
 
     def as_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -108,21 +111,25 @@ def apply_event_retention(
     *,
     keep_hours: int = 168,
     keep_latest: int = 10_000,
+    max_delete: int = 5_000,
     dry_run: bool = False,
     evaluated_at: datetime | None = None,
 ) -> RetentionReceipt:
-    """Delete only old runtime events outside the newest-row safety floor."""
+    """Delete a bounded batch of old events outside the newest-row safety floor."""
 
     if not isinstance(keep_hours, int) or isinstance(keep_hours, bool) or keep_hours < 1:
         raise EventRetentionError("keep_hours must be an integer >= 1")
     if not isinstance(keep_latest, int) or isinstance(keep_latest, bool) or keep_latest < 0:
         raise EventRetentionError("keep_latest must be an integer >= 0")
+    if not isinstance(max_delete, int) or isinstance(max_delete, bool) or max_delete < 1:
+        raise EventRetentionError("max_delete must be an integer >= 1")
     if not isinstance(dry_run, bool):
         raise EventRetentionError("dry_run must be a boolean")
 
     database = _validate_db_path(Path(state_db))
     now = _canonical_utc(evaluated_at or datetime.now(timezone.utc))
     cutoff = now - timedelta(hours=keep_hours)
+    cutoff_sql = _format_sqlite_timestamp(cutoff)
 
     connection = sqlite3.connect(database, timeout=30.0)
     try:
@@ -134,27 +141,8 @@ def apply_event_retention(
             connection.execute("SELECT COUNT(*) FROM runtime_events").fetchone()[0]
         )
 
-        eligible = connection.execute(
-            """
-            WITH newest AS (
-                SELECT id
-                FROM runtime_events
-                ORDER BY created_at DESC, id DESC
-                LIMIT ?
-            )
-            SELECT COUNT(*), MIN(id), MAX(id)
-            FROM runtime_events
-            WHERE created_at < ?
-              AND id NOT IN (SELECT id FROM newest)
-            """,
-            (keep_latest, _format_sqlite_timestamp(cutoff)),
-        ).fetchone()
-        rows_eligible = int(eligible[0])
-        first_eligible_id = int(eligible[1]) if eligible[1] is not None else None
-        last_eligible_id = int(eligible[2]) if eligible[2] is not None else None
-
-        if not dry_run and rows_eligible:
-            cursor = connection.execute(
+        rows_eligible = int(
+            connection.execute(
                 """
                 WITH newest AS (
                     SELECT id
@@ -162,13 +150,46 @@ def apply_event_retention(
                     ORDER BY created_at DESC, id DESC
                     LIMIT ?
                 )
-                DELETE FROM runtime_events
+                SELECT COUNT(*)
+                FROM runtime_events
                 WHERE created_at < ?
                   AND id NOT IN (SELECT id FROM newest)
                 """,
-                (keep_latest, _format_sqlite_timestamp(cutoff)),
+                (keep_latest, cutoff_sql),
+            ).fetchone()[0]
+        )
+
+        selected_ids = [
+            int(row[0])
+            for row in connection.execute(
+                """
+                WITH newest AS (
+                    SELECT id
+                    FROM runtime_events
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT ?
+                )
+                SELECT id
+                FROM runtime_events
+                WHERE created_at < ?
+                  AND id NOT IN (SELECT id FROM newest)
+                ORDER BY created_at ASC, id ASC
+                LIMIT ?
+                """,
+                (keep_latest, cutoff_sql, max_delete),
+            ).fetchall()
+        ]
+        rows_selected = len(selected_ids)
+        first_selected_id = selected_ids[0] if selected_ids else None
+        last_selected_id = selected_ids[-1] if selected_ids else None
+
+        if not dry_run and selected_ids:
+            placeholders = ",".join("?" for _ in selected_ids)
+            cursor = connection.execute(
+                f"DELETE FROM runtime_events WHERE id IN ({placeholders})",
+                selected_ids,
             )
-            if cursor.rowcount not in (-1, rows_eligible):
+            if cursor.rowcount not in (-1, rows_selected):
                 raise EventRetentionError(
                     "runtime_events deletion count changed inside retention transaction"
                 )
@@ -177,8 +198,12 @@ def apply_event_retention(
             connection.execute("SELECT COUNT(*) FROM runtime_events").fetchone()[0]
         )
         rows_after = rows_before if dry_run else rows_after_actual
-        if not dry_run and rows_after != rows_before - rows_eligible:
+        if not dry_run and rows_after != rows_before - rows_selected:
             raise EventRetentionError("runtime_events row-count invariant failed")
+
+        rows_remaining_eligible = rows_eligible - rows_selected
+        if rows_remaining_eligible < 0:
+            raise EventRetentionError("runtime_events eligibility invariant failed")
 
         if dry_run:
             connection.rollback()
@@ -190,14 +215,17 @@ def apply_event_retention(
             dry_run=dry_run,
             keep_hours=keep_hours,
             keep_latest=keep_latest,
+            max_delete=max_delete,
             evaluated_at_utc=_format_receipt_timestamp(now),
             cutoff_utc=_format_receipt_timestamp(cutoff),
             rows_before=rows_before,
             rows_eligible=rows_eligible,
-            rows_deleted=0 if dry_run else rows_eligible,
+            rows_selected=rows_selected,
+            rows_deleted=0 if dry_run else rows_selected,
+            rows_remaining_eligible=rows_remaining_eligible,
             rows_after=rows_after,
-            first_eligible_id=first_eligible_id,
-            last_eligible_id=last_eligible_id,
+            first_selected_id=first_selected_id,
+            last_selected_id=last_selected_id,
         )
     except Exception:
         if connection.in_transaction:
@@ -214,6 +242,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("state_db", type=Path)
     parser.add_argument("--keep-hours", type=int, default=168)
     parser.add_argument("--keep-latest", type=int, default=10_000)
+    parser.add_argument("--max-delete", type=int, default=5_000)
     parser.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -225,6 +254,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.state_db,
             keep_hours=args.keep_hours,
             keep_latest=args.keep_latest,
+            max_delete=args.max_delete,
             dry_run=args.dry_run,
         )
     except (EventRetentionError, sqlite3.Error, OSError) as exc:
