@@ -31,8 +31,9 @@ Producer outputs must already be structurally valid when they cross the model bo
 - optional timestamp, channel and report IDs use native strings when present;
 - attachments are an immutable tuple of `AttachmentRef` values;
 - attachment size is a native non-negative integer when present;
-- scores are native non-negative integers when present;
-- possession is finite and within 0..100 when present.
+- scores are native non-negative integers when present, and red/blue scores are both present or both absent;
+- possession is finite and within 0..100 when present, and red/blue possession values are both present or both absent;
+- possession values are not required to sum exactly to 100, so the model does not invent precision beyond the source evidence.
 
 ### Match evidence
 

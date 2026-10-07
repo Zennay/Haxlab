@@ -202,6 +202,11 @@ class MatchReport:
         )
         _require_optional_nonnegative_int(self.red_score, "MatchReport.red_score")
         _require_optional_nonnegative_int(self.blue_score, "MatchReport.blue_score")
+        if (self.red_score is None) != (self.blue_score is None):
+            raise ValueError(
+                "MatchReport red_score and blue_score must be both present or both absent"
+            )
+
         _require_optional_finite_number(
             self.possession_red,
             "MatchReport.possession_red",
@@ -214,6 +219,10 @@ class MatchReport:
             minimum=0.0,
             maximum=100.0,
         )
+        if (self.possession_red is None) != (self.possession_blue is None):
+            raise ValueError(
+                "MatchReport possession_red and possession_blue must be both present or both absent"
+            )
 
 
 @dataclass(frozen=True)

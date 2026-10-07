@@ -109,6 +109,63 @@ def test_match_report_possession_is_finite_percentage(possession: object) -> Non
         )
 
 
+@pytest.mark.parametrize(
+    ("red_score", "blue_score"),
+    [(3, None), (None, 2)],
+)
+def test_match_report_requires_paired_score_evidence(
+    red_score: int | None,
+    blue_score: int | None,
+) -> None:
+    with pytest.raises(ValueError, match="red_score and blue_score must be both present"):
+        MatchReport(
+            message_id="message-1",
+            timestamp=None,
+            channel_id=None,
+            content="MATCH REPORT",
+            red_score=red_score,
+            blue_score=blue_score,
+        )
+
+
+@pytest.mark.parametrize(
+    ("possession_red", "possession_blue"),
+    [(52.0, None), (None, 48.0)],
+)
+def test_match_report_requires_paired_possession_evidence(
+    possession_red: float | None,
+    possession_blue: float | None,
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match="possession_red and possession_blue must be both present",
+    ):
+        MatchReport(
+            message_id="message-1",
+            timestamp=None,
+            channel_id=None,
+            content="MATCH REPORT",
+            possession_red=possession_red,
+            possession_blue=possession_blue,
+        )
+
+
+def test_match_report_accepts_complete_score_and_possession_pairs() -> None:
+    report = MatchReport(
+        message_id="message-1",
+        timestamp=None,
+        channel_id=None,
+        content="MATCH REPORT",
+        red_score=3,
+        blue_score=2,
+        possession_red=52.34,
+        possession_blue=47.66,
+    )
+
+    assert (report.red_score, report.blue_score) == (3, 2)
+    assert (report.possession_red, report.possession_blue) == (52.34, 47.66)
+
+
 def test_match_report_rejects_container_and_identity_drift() -> None:
     with pytest.raises(TypeError):
         MatchReport(
