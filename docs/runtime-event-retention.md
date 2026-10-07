@@ -19,9 +19,10 @@ maintenance boundary for that table.
 - Independently, the newest `--keep-latest N` rows are retained even when older than
   the horizon. Ordering is `created_at DESC, id DESC`.
 - A row exactly on the cutoff is retained; only `created_at < cutoff` is eligible.
-- `--dry-run` calculates the exact same deletion set, then rolls the transaction back.
-- The operation is idempotent: running again at the same evaluation time has no further
-  effect once all eligible rows are gone.
+- `--max-delete N` bounds each write transaction; the default is 5,000 rows. The oldest eligible rows are selected first with `id` as the deterministic tie-breaker.
+- Selection and deletion use bounded SQL subqueries rather than one bind parameter per row, so batches larger than SQLite's traditional variable limit remain valid.
+- `--dry-run` calculates the exact same bounded deletion set, then rolls the transaction back.
+- Repeated bounded runs converge deterministically; once all eligible rows are gone, another run at the same evaluation time is idempotent.
 - This module touches only `runtime_events`; it does not mutate source, raw replay,
   processing, analysis, M0, training, evaluation, or champion state.
 
@@ -38,6 +39,7 @@ python -m haxlab.runtime.event_retention \
   /var/lib/haxlab/state/runtime.sqlite3 \
   --keep-hours 168 \
   --keep-latest 10000 \
+  --max-delete 5000 \
   --dry-run
 ```
 
@@ -45,8 +47,9 @@ python -m haxlab.runtime.event_retention \
 
 Success emits one canonical compact JSON object with schema
 `haxlab-runtime-event-retention-v1`. It records the evaluated timestamp, cutoff,
-rows before/eligible/deleted/after, and the first/last eligible IDs. Dry-run receipts
-report `rows_deleted=0` while preserving the same eligibility evidence.
+rows before/eligible/selected/deleted/remaining/after, the configured batch cap, and
+the first/last selected IDs. Dry-run receipts report `rows_deleted=0` while preserving
+the same bounded selection evidence.
 
 Failure emits `{"ok":false,...}` and exits 2. Unexpected schema or unsafe path
 conditions are failures rather than best-effort cleanup.
