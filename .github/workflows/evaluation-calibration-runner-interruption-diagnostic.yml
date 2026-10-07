@@ -93,15 +93,16 @@ jobs:
           capture_window second "2026-10-07 15:06:00 UTC" "2026-10-07 15:08:30 UTC"
 
           # Extra authentication-log evidence is restricted to the exact runner
-          # service control command; no unrelated sudo/auth lines are retained.
+          # service control command and kept window-local so one incident cannot
+          # contaminate the other incident's classification.
           if sudo -n test -r /var/log/auth.log; then
-            sudo -n grep -E 'Oct[[:space:]]+7 (14:2[4-9]|15:0[6-8]).*COMMAND=.*systemctl (restart|stop|start) actions\.runner\.Zennay-Haxlab\.vps-bb300bba-haxlab\.service' \
-              /var/log/auth.log > "$out/runner-control-auth.log" || true
-          else
-            : > "$out/runner-control-auth.log"
+            sudo -n grep -E 'Oct[[:space:]]+7 14:2[4-9].*COMMAND=.*systemctl (restart|stop|start) actions\.runner\.Zennay-Haxlab\.vps-bb300bba-haxlab\.service' \
+              /var/log/auth.log >> "$out/runner-control-first.log" || true
+            sudo -n grep -E 'Oct[[:space:]]+7 15:0[6-8].*COMMAND=.*systemctl (restart|stop|start) actions\.runner\.Zennay-Haxlab\.vps-bb300bba-haxlab\.service' \
+              /var/log/auth.log >> "$out/runner-control-second.log" || true
           fi
 
-          cat "$out/runner-control-first.log" "$out/runner-control-second.log" "$out/runner-control-auth.log" \
+          cat "$out/runner-control-first.log" "$out/runner-control-second.log" \
             > "$out/runner-control.log"
           cat "$out/kernel-memory-first.log" "$out/kernel-memory-second.log" \
             > "$out/kernel-memory.log"
@@ -122,8 +123,6 @@ jobs:
             echo "=== $tag window explicit runner control lines ==="
             cat "$out/runner-control-$tag.log" || true
           done
-          echo "=== bounded auth-log runner control lines ==="
-          cat "$out/runner-control-auth.log" || true
 
       - name: Classify interruption evidence
         shell: bash
@@ -145,7 +144,7 @@ jobs:
               service = read(f"runner-service-{tag}.log")
               kernel = read(f"kernel-memory-{tag}.log")
               oomd = read(f"systemd-oomd-{tag}.log")
-              control = read(f"runner-control-{tag}.log") + "\n" + read("runner-control-auth.log")
+              control = read(f"runner-control-{tag}.log")
 
               memory_text = (kernel + "\n" + oomd).lower()
               control_lower = control.lower()
