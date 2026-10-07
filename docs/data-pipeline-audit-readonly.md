@@ -20,7 +20,8 @@ The contract rejects:
 - direct `write`, `writelines` and `truncate` calls;
 - common serializer/save APIs such as `json.dump`, `pickle.dump`, NumPy save functions and `torch.save`;
 - temporary-file creation used as a hidden output channel;
-- literal mutating SQL passed to `execute`, `executemany` or `executescript`;
+- dynamic SQL passed to `execute`, `executemany` or `executescript`, because its read-only nature cannot be proven statically;
+- literal mutating SQL passed to those SQL execution APIs;
 - mutating PRAGMA assignments, except the defensive connection-local `PRAGMA query_only=ON`.
 
 ## Allowed read-only behavior
@@ -31,7 +32,7 @@ Auditors may still:
 - wrap descriptors with `os.fdopen(..., "rb")`;
 - use normal `open(..., "r"/"rb")` and `Path.open(...)` reads;
 - parse JSON or other deterministic local evidence;
-- run read-only SQL such as `SELECT`, `PRAGMA quick_check` and integrity checks;
+- run literal read-only SQL such as `SELECT`, read-only CTEs, `PRAGMA quick_check` and integrity checks;
 - set SQLite `query_only` defensively for the current connection.
 
 The contract intentionally checks both imported aliases and direct API spellings. Regression snippets keep the guard itself honest.
