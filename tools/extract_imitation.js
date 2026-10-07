@@ -6,6 +6,7 @@ const os = require("os");
 const path = require("path");
 const zlib = require("zlib");
 const initAPI = require("node-haxball");
+const { parseSelectedPlayerMapJson } = require("./extract_imitation_args");
 
 const API = initAPI();
 const { Replay, Utils } = API;
@@ -31,11 +32,7 @@ if (os.endianness() !== "LE") {
   throw new Error("haxlab imitation shards currently require little-endian host");
 }
 
-const selectedByReplayId = new Map(
-  Object.entries(JSON.parse(selectedPlayerMapJson)).map(
-    ([playerId, identity]) => [Number(playerId), String(identity)],
-  ),
-);
+const selectedByReplayId = parseSelectedPlayerMapJson(selectedPlayerMapJson);
 const selectedIdentities = Array.from(
   new Set(selectedByReplayId.values()),
 ).sort();
