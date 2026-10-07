@@ -15,18 +15,28 @@ TRACKED_ROOTS = {"builtins", "numpy", "random", "torch"}
 FORBIDDEN_CALLS = {
     "random.seed",
     "random.setstate",
+    "random._inst.seed",
+    "random._inst.setstate",
     "numpy.random.seed",
     "numpy.random.set_state",
+    "numpy.random.mtrand._rand.seed",
+    "numpy.random.mtrand._rand.set_state",
     "torch.manual_seed",
     "torch.seed",
     "torch.set_rng_state",
+    "torch.default_generator.manual_seed",
+    "torch.default_generator.set_state",
     "torch.random.manual_seed",
     "torch.random.seed",
     "torch.random.set_rng_state",
     "torch.cuda.manual_seed",
     "torch.cuda.manual_seed_all",
+    "torch.cuda.seed",
+    "torch.cuda.seed_all",
     "torch.cuda.set_rng_state",
     "torch.cuda.set_rng_state_all",
+    "torch.cuda.default_generators.manual_seed",
+    "torch.cuda.default_generators.set_state",
 }
 
 TRACKABLE_OBJECTS = {
@@ -207,6 +217,8 @@ class RngStateVisitor(ast.NodeVisitor):
                 attribute = _constant_string(node.args[1])
                 if owner and attribute:
                     return f"{owner}.{attribute}"
+        if isinstance(node, ast.Subscript):
+            return self.canonical(node.value)
         if isinstance(node, ast.NamedExpr):
             return self.canonical(node.value)
         return None
@@ -410,6 +422,23 @@ def test_evaluation_package_has_no_process_global_rng_state_mutation() -> None:
         ("from torch.cuda import set_rng_state as restore\nrestore(state)\n", "torch.cuda.set_rng_state"),
         ("import torch\n(getattr(torch.cuda, 'set_rng_state_all'))(states)\n", "torch.cuda.set_rng_state_all"),
         ("import torch\n(mut := torch.manual_seed)(7)\n", "torch.manual_seed"),
+        ("import random\nrandom._inst.setstate(state)\n", "random._inst.setstate"),
+        (
+            "import numpy as np\n"
+            "np.random.mtrand._rand.seed(7)\n",
+            "numpy.random.mtrand._rand.seed",
+        ),
+        (
+            "import torch\n"
+            "torch.default_generator.manual_seed(7)\n",
+            "torch.default_generator.manual_seed",
+        ),
+        ("import torch\ntorch.cuda.seed_all()\n", "torch.cuda.seed_all"),
+        (
+            "import torch\n"
+            "torch.cuda.default_generators[0].set_state(state)\n",
+            "torch.cuda.default_generators.set_state",
+        ),
         (
             "import random\n"
             "(seed, restore) = (random.seed, random.setstate)\n"
