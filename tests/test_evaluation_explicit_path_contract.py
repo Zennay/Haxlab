@@ -8,6 +8,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 EVALUATION_ROOT = ROOT / "src" / "haxlab" / "evaluation"
+PROOF_WORKFLOW = ROOT / ".github" / "workflows" / "evaluation-explicit-path-contract-proof.yml"
 
 DIRECT_DISCOVERY_CALLS = {
     "glob.glob",
@@ -22,6 +23,16 @@ DIRECT_DISCOVERY_CALLS = {
     "pathlib.Path.walk",
 }
 PATH_DISCOVERY_METHODS = {"glob", "iterdir", "rglob", "walk"}
+PATH_CLASS_FACTORIES = {"pathlib.Path.cwd", "pathlib.Path.home"}
+PATH_RETURNING_METHODS = {
+    "absolute",
+    "expanduser",
+    "joinpath",
+    "resolve",
+    "with_name",
+    "with_stem",
+    "with_suffix",
+}
 TRACKED_MODULES = {"builtins", "glob", "os", "pathlib"}
 
 
@@ -103,7 +114,29 @@ def _path_object(
     if isinstance(node, ast.Name):
         return node.id in path_objects
     if isinstance(node, ast.Call):
-        return _canonical_name(node.func, aliases) == "pathlib.Path"
+        canonical = _canonical_name(node.func, aliases)
+        if canonical == "pathlib.Path" or canonical in PATH_CLASS_FACTORIES:
+            return True
+        if (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr in PATH_RETURNING_METHODS
+            and _path_object(node.func.value, aliases, path_objects)
+        ):
+            return True
+    if isinstance(node, ast.Attribute):
+        return node.attr == "parent" and _path_object(
+            node.value,
+            aliases,
+            path_objects,
+        )
+    if (
+        isinstance(node, ast.Subscript)
+        and isinstance(node.value, ast.Attribute)
+        and node.value.attr == "parents"
+    ):
+        return _path_object(node.value.value, aliases, path_objects)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        return _path_object(node.left, aliases, path_objects)
     return False
 
 
@@ -240,6 +273,27 @@ def _violations(source: str, *, filename: str = "<source>") -> list[str]:
     ],
 )
 def test_contract_rejects_ambient_filesystem_discovery(source: str) -> None:
+    assert _violations(source)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from pathlib import Path\nPath.cwd().glob('*.json')\n",
+        "from pathlib import Path\nPath.home().iterdir()\n",
+        "from pathlib import Path\nPath('/tmp').parent.rglob('*.json')\n",
+        "from pathlib import Path\nPath('/tmp').resolve().walk()\n",
+        (
+            "from pathlib import Path\np = Path('/tmp')\n"
+            "child = p / 'cache'\nchild.glob('*.json')\n"
+        ),
+        (
+            "from pathlib import Path\np = Path('/tmp')\n"
+            "p.parents[0].iterdir()\n"
+        ),
+    ],
+)
+def test_contract_rejects_discovery_from_derived_path_objects(source: str) -> None:
     assert _violations(source)
 
 
