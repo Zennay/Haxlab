@@ -42,6 +42,7 @@ def test_promotion_policy_workflow_verifies_exact_head_before_test_setup() -> No
     assert checkout < verify < environment < regressions
     assert "ref: ${{ github.sha }}" in text
     assert "clean: true" in text
+    assert "persist-credentials: false" in text
     assert "EXPECTED_SHA: ${{ github.sha }}" in text
     assert 'ACTUAL_SHA="$(git rev-parse HEAD)"' in text
     assert 'if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then' in text
@@ -70,6 +71,7 @@ def test_proof_workflow_is_manual_and_exact_live_head_bound() -> None:
     )
     assert "ref: ${{ github.sha }}" in workflow
     assert "clean: true" in workflow
+    assert "persist-credentials: false" in workflow
     assert 'test "$HEAD_SHA" = "${GITHUB_SHA}"' in workflow
     assert 'case "${GITHUB_REF}" in' in workflow
     assert "refs/heads/*)" in workflow
