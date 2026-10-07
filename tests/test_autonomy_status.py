@@ -180,3 +180,54 @@ def test_autonomy_tick_records_retryable_state_and_stops_on_invalid_snapshot(
     assert "downstream autonomy work was not started" in status["detail"]
     assert not (tmp_path / "derived").exists()
     assert not (tmp_path / "models").exists()
+
+
+
+def test_autonomy_tick_records_retryable_state_on_status_command_failure(
+    tmp_path: Path,
+) -> None:
+    app_dir = tmp_path / "app"
+    bin_dir = app_dir / ".venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "python").symlink_to(sys.executable)
+
+    status_cmd = bin_dir / "haxlab-status"
+    status_cmd.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' 'simulated status failure' >&2\n"
+        "exit 23\n",
+        encoding="utf-8",
+    )
+    status_cmd.chmod(0o755)
+
+    state_dir = tmp_path / "state"
+    derived_dir = tmp_path / "derived"
+    models_dir = tmp_path / "models"
+    env = os.environ.copy()
+    env.update(
+        {
+            "HAXLAB_APP_DIR": str(app_dir),
+            "HAXLAB_STATE_DIR": str(state_dir),
+            "HAXLAB_DERIVED_DIR": str(derived_dir),
+            "HAXLAB_MODELS_DIR": str(models_dir),
+            "PYTHONPATH": str(Path.cwd() / "src"),
+        }
+    )
+
+    completed = subprocess.run(
+        ["bash", "deploy/haxlab-autonomy-tick.sh"],
+        cwd=Path.cwd(),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    assert "simulated status failure" in completed.stderr
+    status = json.loads((state_dir / "autonomy-status.json").read_text())
+    assert status["state"] == "FAILED_RETRYABLE"
+    assert status["action"] == "status_command_failed"
+    assert "downstream autonomy work was not started" in status["detail"]
+    assert not derived_dir.exists()
+    assert not models_dir.exists()
