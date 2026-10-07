@@ -19,10 +19,24 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout exact validation head
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ github.sha }}
           clean: true
+          persist-credentials: false
+
+      - name: Verify exact validation checkout
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          if [[ "$actual_sha" != "$EXPECTED_SHA" ]]; then
+            echo "Arena metric-bounds checkout mismatch: $actual_sha != $EXPECTED_SHA" >&2
+            exit 1
+          fi
+          echo "ARENA_METRIC_BOUNDS_EXACT_SHA=$actual_sha"
 
       - name: Create isolated test environment
         shell: bash
@@ -33,13 +47,22 @@ jobs:
           .arena-metric-bounds-venv/bin/pip install --upgrade pip
           .arena-metric-bounds-venv/bin/pip install -e '.[dev]'
 
-      - name: Compile bounded evaluation gate
+      - name: Compile bounded evaluation gate and provenance contract
         shell: bash
         run: |
           set -euo pipefail
           .arena-metric-bounds-venv/bin/python -m compileall -q \
             src/haxlab/evaluation/closed_loop_arena.py \
-            tests/test_closed_loop_arena.py
+            tests/test_closed_loop_arena.py \
+            tests/test_arena_metric_bounds_workflow_provenance_contract.py
+
+      - name: Run workflow provenance contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .arena-metric-bounds-venv/bin/pytest -q \
+              tests/test_arena_metric_bounds_workflow_provenance_contract.py
 
       - name: Run bounded Arena v2 regressions
         shell: bash
