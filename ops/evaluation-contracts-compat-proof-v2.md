@@ -22,8 +22,13 @@ Exact additive contract inputs:
 - #220 immutable evidence-object bypasses: `0d75bda2a496a1d84ea9f2b01084fef56d374cff`
 - #222 foreground liveness/non-interactivity: `8fa40c0748f6130d2ac3f51be4dda9b5bb0206e8`
 
-The workflow materializes only each PR's additive contract test file into an untouched canonical checkout. It does not merge product code, workflows, docs, thresholds, models, champion pointers, or owner branches.
+The workflow materializes each PR's exact additive contract test plus its branch-scoped proof workflow into an untouched canonical checkout. These are synthetic test inputs only; it does not merge product code, thresholds, models, champion pointers, or owner branches.
 
 It then runs all 15 contract tests together plus adjacent canonical Arena-v2 Python regression suites. The owner-reserved syntax-broken `tests/test_calibration_workflow_runtime_budget.py` from #92 is deliberately not collected.
 
 This branch is proof-only and must not be merged into PR #19. A green result is compatibility evidence, not merge or champion-promotion authorization.
+
+Self-review evidence:
+- run `37603036836` proved live-head binding, exact materialization, environment setup and compile; the combined contract step produced **142 passed / 2 failed**.
+- both failures were proof-carrier dependency misses only: the background-execution and immutability tests read their own branch-scoped workflow files.
+- the carrier now materializes all 15 exact test/workflow pairs before rerunning the same combined proof.
