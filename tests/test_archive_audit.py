@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
+import haxlab.runtime.archive_audit as archive_audit
 from haxlab.runtime.archive import archive_path_for
 from haxlab.runtime.archive_audit import AUDIT_SCHEMA, audit_raw_archive, main
 from haxlab.runtime.state import RuntimeState
@@ -80,6 +82,7 @@ def test_archive_audit_reports_missing_hash_and_path_failures(
     assert report["hash_mismatches"] == 1
     assert report["path_mismatches"] == 1
     assert report["symlink_entries"] == 0
+    assert report["read_failures"] == 0
     assert report["objects_with_issues"] == 3
     assert report["issues_truncated"] is False
 
@@ -87,6 +90,87 @@ def test_archive_audit_reports_missing_hash_and_path_failures(
     assert by_sha[missing_sha] == ["archive_missing"]
     assert by_sha[misplaced_sha] == ["content_address_path_mismatch"]
     assert by_sha[corrupt_sha][0].startswith("sha256_mismatch:")
+
+
+def test_archive_audit_rejects_regular_file_replacement_before_open(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db = tmp_path / "state.sqlite3"
+    raw = tmp_path / "raw"
+    expected_payload = b"expected stable replay"
+    digest, path = _write_content_addressed(raw, expected_payload)
+
+    replacement = tmp_path / "replacement.hbr2"
+    replacement.write_bytes(b"replacement replay bytes")
+
+    with RuntimeState(db) as state:
+        state.register_raw(
+            sha256=digest,
+            archive_path=str(path),
+            size_bytes=len(expected_payload),
+        )
+
+        real_open = os.open
+        swapped = False
+
+        def swapping_open(target, flags, *args, **kwargs):
+            nonlocal swapped
+            if not swapped and Path(target) == path:
+                swapped = True
+                replacement.replace(path)
+            return real_open(target, flags, *args, **kwargs)
+
+        monkeypatch.setattr(archive_audit.os, "open", swapping_open)
+        report = audit_raw_archive(state)
+
+    assert swapped is True
+    assert report["ok"] is False
+    assert report["existing_files"] == 0
+    assert report["read_failures"] == 1
+    assert report["hash_mismatches"] == 0
+    assert report["issues"][0]["reasons"] == ["archive_identity_changed"]
+
+
+def test_archive_audit_rejects_symlink_replacement_before_open(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db = tmp_path / "state.sqlite3"
+    raw = tmp_path / "raw"
+    expected_payload = b"expected replay"
+    digest, path = _write_content_addressed(raw, expected_payload)
+
+    other = tmp_path / "other.hbr2"
+    other.write_bytes(expected_payload)
+
+    with RuntimeState(db) as state:
+        state.register_raw(
+            sha256=digest,
+            archive_path=str(path),
+            size_bytes=len(expected_payload),
+        )
+
+        real_open = os.open
+        swapped = False
+
+        def swapping_open(target, flags, *args, **kwargs):
+            nonlocal swapped
+            if not swapped and Path(target) == path:
+                swapped = True
+                path.unlink()
+                path.symlink_to(other)
+            return real_open(target, flags, *args, **kwargs)
+
+        monkeypatch.setattr(archive_audit.os, "open", swapping_open)
+        report = audit_raw_archive(state)
+
+    assert swapped is True
+    assert report["ok"] is False
+    assert report["existing_files"] == 0
+    assert report["symlink_entries"] == 1
+    assert report["read_failures"] == 0
+    assert report["issues"][0]["reasons"] == ["symlink_not_allowed"]
 
 
 def test_archive_audit_cli_fails_closed_and_can_truncate_details(
@@ -122,6 +206,7 @@ def test_archive_audit_cli_fails_closed_and_can_truncate_details(
 
     assert report["ok"] is False
     assert report["missing_files"] == 1
+    assert report["read_failures"] == 0
     assert report["objects_with_issues"] == 1
     assert report["issues"] == []
     assert report["issues_truncated"] is True
