@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 from haxlab.ingestion.discord_export import read_discord_exports
 from haxlab.ingestion.reports import looks_like_match_report, parse_match_report
 
@@ -140,11 +143,11 @@ def test_report_parser_treats_malformed_attachment_container_as_empty() -> None:
 
 
 def test_malformed_attachment_container_does_not_abort_later_export_report(
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     export = tmp_path / "discord.json"
     export.write_text(
-        __import__("json").dumps(
+        json.dumps(
             {
                 "channel": {"id": "channel-1"},
                 "messages": [
