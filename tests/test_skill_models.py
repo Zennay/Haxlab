@@ -10,6 +10,7 @@ from haxlab.skill.models import (
     PerformanceVector,
     PlayerSkillEstimate,
     SkillDimensionEstimate,
+    SkillObservation,
 )
 
 
