@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -791,3 +792,42 @@ def test_select_players_rejects_invalid_selection_config(
 
     with pytest.raises(ValueError):
         select_players([], **defaults)
+
+
+
+@pytest.mark.parametrize(
+    "flag_value",
+    [
+        ("--min-players-per-role", "0"),
+        ("--min-matches", "0"),
+        ("--min-minutes", "-1"),
+        ("--max-uncertainty", "-1"),
+        ("--holdout-modulus", "1"),
+        ("--holdout-bucket", "-1"),
+        ("--top-fraction-per-role", "nan"),
+    ],
+)
+def test_training_manifest_cli_rejects_invalid_values_without_clamping(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    flag_value: tuple[str, str],
+) -> None:
+    from haxlab.learning.selector import main
+
+    flag, value = flag_value
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "haxlab-training-manifest",
+            "--leaderboard",
+            str(tmp_path / "missing.json"),
+            flag,
+            value,
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        main()
+
+    assert exc.value.code == 2
