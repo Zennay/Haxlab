@@ -33,6 +33,7 @@ PATH_RETURNING_METHODS = {
     "with_stem",
     "with_suffix",
 }
+ALIASABLE_TARGETS = DIRECT_DISCOVERY_CALLS | {"pathlib.Path"} | PATH_CLASS_FACTORIES
 TRACKED_MODULES = {"builtins", "glob", "os", "pathlib"}
 
 
@@ -98,7 +99,7 @@ def _aliases(tree: ast.AST) -> dict[str, str]:
                 continue
             local, expression = assignment
             value = _canonical_name(expression, aliases)
-            if value in DIRECT_DISCOVERY_CALLS and aliases.get(local) != value:
+            if value in ALIASABLE_TARGETS and aliases.get(local) != value:
                 aliases[local] = value
                 changed = True
     return aliases
@@ -136,7 +137,11 @@ def _path_object(
     ):
         return _path_object(node.value.value, aliases, path_objects)
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
-        return _path_object(node.left, aliases, path_objects)
+        return _path_object(node.left, aliases, path_objects) or _path_object(
+            node.right,
+            aliases,
+            path_objects,
+        )
     return False
 
 
@@ -291,6 +296,15 @@ def test_contract_rejects_ambient_filesystem_discovery(source: str) -> None:
             "from pathlib import Path\np = Path('/tmp')\n"
             "p.parents[0].iterdir()\n"
         ),
+        (
+            "from pathlib import Path\nP = Path\n"
+            "P('/tmp').glob('*.json')\n"
+        ),
+        (
+            "from pathlib import Path\nhere = Path.cwd\n"
+            "here().iterdir()\n"
+        ),
+        "from pathlib import Path\n('/tmp' / Path('cache')).rglob('*.json')\n",
     ],
 )
 def test_contract_rejects_discovery_from_derived_path_objects(source: str) -> None:
