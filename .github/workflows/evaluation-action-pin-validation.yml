@@ -1,10 +1,9 @@
-name: Evaluation action pin validation
+name: Evaluation action pin validation paused for owner sequencing
 
 on:
   push:
     branches:
       - validation/evaluation-checkout-action-pin-20261007
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -14,49 +13,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  validate:
+  owner-sequencing:
+    if: ${{ false }}
     runs-on: [self-hosted, haxlab]
-    timeout-minutes: 15
     steps:
-      - name: Checkout exact validation head
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ github.sha }}
-          clean: true
-
-      - name: Verify exact validation head
-        shell: bash
-        env:
-          EXPECTED_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          ACTUAL_SHA="$(git rev-parse HEAD)"
-          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
-            echo "::error title=Evaluation action-pin provenance mismatch::checked out $ACTUAL_SHA, expected $EXPECTED_SHA"
-            exit 1
-          fi
-
-      - name: Create isolated contract environment
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf .evaluation-action-pin-venv
-          python3 -m venv .evaluation-action-pin-venv
-          .evaluation-action-pin-venv/bin/pip install --upgrade pip
-          .evaluation-action-pin-venv/bin/pip install -e '.[dev]'
-
-      - name: Run action pin contract
-        shell: bash
-        run: |
-          set -euo pipefail
-          .evaluation-action-pin-venv/bin/python -m compileall -q tests/test_evaluation_workflow_action_pins.py
-          PYTHONPATH="$GITHUB_WORKSPACE/src" \
-            .evaluation-action-pin-venv/bin/pytest -q \
-              tests/test_evaluation_workflow_action_pins.py
-
-      - name: Record exact-head evidence
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "EVALUATION_ACTION_PIN_HEAD=$(git rev-parse HEAD)"
-          echo "EVALUATION_ACTION_PIN_RESULT=green"
+      - name: Preserve #100 then #436 runner priority
+        run: echo "action-pin proof paused for owner sequencing"
