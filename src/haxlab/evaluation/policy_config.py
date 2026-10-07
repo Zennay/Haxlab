@@ -12,6 +12,8 @@ from typing import Any
 from haxlab.evaluation.models import PromotionPolicy
 
 
+POLICY_CONFIG_SCHEMA = "haxlab-promotion-policy-config-v1"
+
 _EVALUATION_KEYS = {
     "minimum_games_vs_champion",
     "minimum_score_rate_lower_bound",
@@ -21,6 +23,7 @@ _EVALUATION_KEYS = {
 
 @dataclass(frozen=True)
 class LoadedPromotionPolicy:
+    schema: str
     policy: PromotionPolicy
     source_sha256: str
     source_size_bytes: int
@@ -96,6 +99,7 @@ def load_promotion_policy_config(path: Path) -> LoadedPromotionPolicy:
         allow_critical_regressions=False,
     )
     return LoadedPromotionPolicy(
+        schema=POLICY_CONFIG_SCHEMA,
         policy=policy,
         source_sha256=hashlib.sha256(raw).hexdigest(),
         source_size_bytes=len(raw),
@@ -124,6 +128,7 @@ def main(argv: list[str] | None = None) -> int:
     print(
         json.dumps(
             {
+                "schema": loaded.schema,
                 "policy": asdict(loaded.policy),
                 "source": {
                     "sha256": loaded.source_sha256,
