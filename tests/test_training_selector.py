@@ -594,3 +594,112 @@ def test_training_manifest_rejects_malformed_leaderboard_container(
             leaderboard_path=leaderboard_path,
             raw_root=tmp_path / "raw",
         )
+
+
+
+@pytest.mark.parametrize(
+    "mutated",
+    [
+        {"schemaVersion": "4"},
+        {"schemaVersion": True},
+        {"totalFrames": "18000"},
+        {"totalFrames": True},
+        {"simulation": []},
+        {"simulation": {"sampledStateCount": "1200"}},
+        {"players": {}},
+        {"players": [{}, {}, {}, "bad"]},
+        {"featureSummary": []},
+        {"featureSummary": {"touches": "100"}},
+    ],
+)
+def test_replay_quality_rejects_coercible_analysis_evidence(
+    mutated: dict,
+) -> None:
+    from haxlab.learning.selector import _replay_quality
+
+    payload = {
+        "schemaVersion": 4,
+        "totalFrames": 18000,
+        "simulation": {"sampledStateCount": 1200},
+        "featureSummary": {"touches": 100},
+        "players": [{}, {}, {}, {}],
+    }
+    payload.update(mutated)
+
+    ok, reasons = _replay_quality(payload)
+
+    assert ok is False
+    assert reasons
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("teamId", "1"),
+        ("teamId", True),
+        ("samples", "900"),
+        ("samples", True),
+        ("id", "7"),
+        ("id", True),
+        ("id", -1),
+    ],
+)
+def test_training_manifest_does_not_coerce_selected_player_evidence(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    analysis_root = tmp_path / "analysis"
+    analysis_root.mkdir()
+    leaderboard_path = tmp_path / "leaderboard.json"
+    leaderboard_path.write_text(
+        json.dumps(
+            {
+                "analysis_version": "state-pass-v4",
+                "rows": [
+                    {
+                        "player_id": "name:alpha",
+                        "name": "Alpha",
+                        "role": "forward",
+                        "rating": 56.0,
+                        "rating_uncertainty": 0.8,
+                        "matches": 80,
+                        "minutes": 500.0,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    selected = {"id": 7, "name": "Alpha", "teamId": 1, "samples": 900}
+    selected[field] = value
+    payload = {
+        "schemaVersion": 4,
+        "totalFrames": 18000,
+        "simulation": {"sampledStateCount": 1200},
+        "featureSummary": {"touches": 100},
+        "players": [
+            selected,
+            {"id": 8, "name": "Mate", "teamId": 1, "samples": 900},
+            {"id": 9, "name": "Opp A", "teamId": 2, "samples": 900},
+            {"id": 10, "name": "Opp B", "teamId": 2, "samples": 900},
+        ],
+    }
+    (analysis_root / ("c" * 64 + ".json")).write_text(
+        json.dumps(payload),
+        encoding="utf-8",
+    )
+
+    manifest = build_training_manifest(
+        analysis_root=analysis_root,
+        leaderboard_path=leaderboard_path,
+        raw_root=tmp_path / "raw",
+        top_fraction_per_role=1.0,
+        min_players_per_role=1,
+        min_matches=1,
+        min_minutes=0.0,
+        max_uncertainty=10.0,
+    )
+
+    assert manifest["train_replays"] == []
+    assert manifest["holdout_replays"] == []
