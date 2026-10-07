@@ -34,6 +34,10 @@ def test_probe_counts_large_payload_through_bounded_output_chunks(
         def unconsumed_tail(self) -> bytes:
             return self._inner.unconsumed_tail
 
+        @property
+        def unused_data(self) -> bytes:
+            return self._inner.unused_data
+
         def decompress(self, data: bytes, max_length: int = 0) -> bytes:
             max_lengths.append(max_length)
             return self._inner.decompress(data, max_length)
