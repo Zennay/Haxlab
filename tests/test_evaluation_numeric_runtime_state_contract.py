@@ -18,6 +18,9 @@ FORBIDDEN_CALLS = {
     "numpy.set_printoptions",
     "torch.set_default_device",
     "torch.set_default_dtype",
+    "torch.set_default_tensor_type",
+    "torch.set_float32_matmul_precision",
+    "torch.set_flush_denormal",
     "torch.set_grad_enabled",
     "torch.set_num_interop_threads",
     "torch.set_num_threads",
@@ -163,9 +166,15 @@ def _decimal_context_root(
         return None
 
     canonical = _canonical(node, aliases, value_aliases)
-    if canonical and (
-        canonical == "decimal.getcontext()"
-        or canonical.startswith("decimal.getcontext().")
+    decimal_context_roots = (
+        "decimal.getcontext()",
+        "decimal.DefaultContext",
+        "decimal.BasicContext",
+        "decimal.ExtendedContext",
+    )
+    if canonical and any(
+        canonical == root or canonical.startswith(f"{root}.")
+        for root in decimal_context_roots
     ):
         return canonical
 
@@ -387,8 +396,11 @@ def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
                 )
                 continue
 
+            normalized_target = (
+                target.removeprefix("builtins.") if target is not None else None
+            )
             if (
-                target in UNBOUND_CONTEXT_CONTAINER_MUTATORS
+                normalized_target in UNBOUND_CONTEXT_CONTAINER_MUTATORS
                 and node.args
             ):
                 root = _context_root(
@@ -399,7 +411,7 @@ def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
                 ):
                     findings.append(
                         f"line {node.lineno}: decimal context container mutation: "
-                        f"{target}({root}, ...)"
+                        f"{normalized_target}({root}, ...)"
                     )
                     continue
 
@@ -511,6 +523,8 @@ def test_evaluation_package_has_no_numeric_runtime_state_mutation() -> None:
         ("import numpy as np\nnp.seterr(all='raise')\n", "numpy.seterr"),
         ("from numpy import set_printoptions as tune\ntune(precision=3)\n", "numpy.set_printoptions"),
         ("import torch as t\nt.set_default_dtype(t.float64)\n", "torch.set_default_dtype"),
+        ("import torch\ntorch.set_float32_matmul_precision('high')\n", "torch.set_float32_matmul_precision"),
+        ("import torch\ntorch.set_flush_denormal(True)\n", "torch.set_flush_denormal"),
         ("import torch\ntorch.set_num_threads(1)\n", "torch.set_num_threads"),
         ("import torch\ntorch.backends.cudnn.benchmark = True\n", "torch.backends.cudnn.benchmark"),
         ("import torch\nsetattr(torch.backends.cudnn, 'deterministic', True)\n", "torch.backends.cudnn.deterministic"),
@@ -520,6 +534,8 @@ def test_evaluation_package_has_no_numeric_runtime_state_mutation() -> None:
         ("import decimal\nctx = decimal.getcontext()\nmutate = ctx.flags.clear\nmutate()\n", "decimal.getcontext().flags.clear"),
         ("import decimal\nctx = decimal.getcontext()\nmutate = getattr(ctx.traps, 'update')\nmutate({ValueError: True})\n", "decimal.getcontext().traps.update"),
         ("import decimal\nctx = decimal.getcontext()\ndict.update(ctx.flags, {ValueError: True})\n", "dict.update(decimal.getcontext().flags"),
+        ("import decimal\nfrom builtins import dict as Mapping\nctx = decimal.getcontext()\nMapping.update(ctx.flags, {ValueError: True})\n", "dict.update(decimal.getcontext().flags"),
+        ("import decimal\ndecimal.DefaultContext.prec = 64\n", "decimal.DefaultContext.prec"),
         ("import decimal\nimport operator\nctx = decimal.getcontext()\noperator.setitem(ctx.traps, ValueError, True)\n", "operator.setitem(decimal.getcontext().traps"),
         ("import decimal\nctx = decimal.getcontext()\nsetattr(ctx, 'prec', 64)\n", "decimal.getcontext().prec"),
         ("import decimal\ngetattr(decimal, 'setcontext')(decimal.Context())\n", "decimal.setcontext"),
