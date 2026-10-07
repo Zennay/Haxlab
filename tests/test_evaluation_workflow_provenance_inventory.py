@@ -312,6 +312,30 @@ def test_inventory_is_sorted_deduplicated_and_deterministic(tmp_path: Path) -> N
         ".github/workflows/b.yml",
     ]
     assert first["finding_count"] == 0
+    assert first["workflows_with_findings"] == 0
+    assert first["finding_totals"] == {}
+
+
+def test_inventory_summarizes_findings_by_category(tmp_path: Path) -> None:
+    workflow_dir = tmp_path / ".github" / "workflows"
+    workflow_dir.mkdir(parents=True)
+    (workflow_dir / "clean.yml").write_text(_clean_workflow(), encoding="utf-8")
+    (workflow_dir / "mutable.yml").write_text(
+        _clean_workflow().replace(PINNED_CHECKOUT, "actions/checkout@v4"),
+        encoding="utf-8",
+    )
+
+    report = build_inventory(
+        tmp_path,
+        (
+            ".github/workflows/clean.yml",
+            ".github/workflows/mutable.yml",
+        ),
+    )
+
+    assert report["workflows_with_findings"] == 1
+    assert report["finding_count"] == 1
+    assert report["finding_totals"] == {"mutable_action_refs": 1}
 
 
 def test_inventory_rejects_parent_traversal(tmp_path: Path) -> None:
