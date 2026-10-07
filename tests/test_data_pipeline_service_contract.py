@@ -94,6 +94,8 @@ def test_pipeline_services_use_expected_runtime_modules_and_identity() -> None:
         assert "Group=haxlab" in text
         assert "WorkingDirectory=/opt/haxlab" in text
         assert f"ExecStart=/opt/haxlab/.venv/bin/python -m {module}" in text
+        assert "Restart=always" in text
+        assert "RestartSec=5" in text
         assert "NoNewPrivileges=true" in text
         assert "ProtectSystem=strict" in text
         assert "ProtectHome=true" in text
@@ -187,3 +189,22 @@ def test_fresh_install_and_update_copy_the_same_systemd_units() -> None:
         "haxlab-autonomy.service",
         "haxlab-autonomy.timer",
     } <= fresh_units
+
+
+def test_pipeline_service_runtime_values_are_strictly_positive() -> None:
+    numeric_arguments = {
+        "ingest": ("--interval", "--minimum-file-age"),
+        "worker": ("--batch-size", "--interval"),
+        "analyzer": (
+            "--workers",
+            "--batch-size",
+            "--sample-every-ticks",
+            "--timeout-seconds",
+            "--interval",
+        ),
+    }
+
+    for service, flags in numeric_arguments.items():
+        for flag in flags:
+            value = float(_argument(service, flag))
+            assert value > 0, f"{service} has non-positive {flag}: {value}"
