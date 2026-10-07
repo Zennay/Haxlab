@@ -50,6 +50,9 @@ MUTATING_EVENTS = {
     "os.symlink",
     "os.truncate",
     "os.unlink",
+    "os.utime",
+    "os.setxattr",
+    "os.removexattr",
 }
 
 
