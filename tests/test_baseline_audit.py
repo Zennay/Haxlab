@@ -388,3 +388,37 @@ def test_audit_rejects_metrics_model_hardlink_alias(
         match="must not alias",
     ):
         audit_baseline_bundle(bundle)
+
+
+def test_audit_normalizes_corrupt_npz_member_failure(
+    tmp_path: Path,
+) -> None:
+    bundle = _write_bundle(tmp_path)
+    path = bundle / "model.npz"
+
+    import zipfile
+
+    with zipfile.ZipFile(path, "r") as archive:
+        info = archive.getinfo("mean.npy")
+        header_offset = info.header_offset
+        compressed_size = info.compress_size
+
+    payload = bytearray(path.read_bytes())
+    name_len = int.from_bytes(
+        payload[header_offset + 26 : header_offset + 28],
+        "little",
+    )
+    extra_len = int.from_bytes(
+        payload[header_offset + 28 : header_offset + 30],
+        "little",
+    )
+    data_start = header_offset + 30 + name_len + extra_len
+    flip_at = data_start + max(0, compressed_size // 2)
+    payload[flip_at] ^= 0x01
+    path.write_bytes(payload)
+
+    with pytest.raises(
+        BaselineAuditError,
+        match="model.npz: cannot load arrays",
+    ):
+        audit_baseline_bundle(bundle)
