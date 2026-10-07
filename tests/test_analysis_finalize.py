@@ -756,3 +756,37 @@ def test_finalize_rebuilds_when_completion_cross_artifact_counts_drift(
         == manifest["stats"]["train_replay_count"]
     )
     assert refreshed_completion["leaderboard_players"] == 0
+
+
+@pytest.mark.parametrize(
+    "artifact",
+    ["leaderboard", "training_manifest", "completion"],
+)
+def test_finalize_rebuilds_symlinked_reuse_artifacts(
+    tmp_path: Path,
+    artifact: str,
+) -> None:
+    db, derived = _seed_finalized_artifacts(tmp_path)
+    paths = {
+        "leaderboard": (
+            derived / "leaderboards" / f"{CURRENT_ANALYZER_VERSION}.json"
+        ),
+        "training_manifest": (
+            derived
+            / "training"
+            / f"human-imitation-{CURRENT_ANALYZER_VERSION}.json"
+        ),
+        "completion": derived / CURRENT_ANALYZER_VERSION / "_complete.json",
+    }
+    artifact_path = paths[artifact]
+    source_copy = artifact_path.with_name(f"{artifact_path.name}.source")
+    source_copy.write_bytes(artifact_path.read_bytes())
+    artifact_path.unlink()
+    artifact_path.symlink_to(source_copy)
+
+    with RuntimeState(db) as state:
+        second = finalize_analysis_if_ready(state, derived_root=derived)
+
+    assert second["status"] == "finalized"
+    assert artifact_path.is_file()
+    assert not artifact_path.is_symlink()
