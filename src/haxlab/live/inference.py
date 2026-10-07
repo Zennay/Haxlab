@@ -267,11 +267,15 @@ def _extract_role_order(payload: Any) -> list[str] | None:
             if isinstance(value, dict) and len(value) == 4:
                 pairs: list[tuple[int, str]] = []
                 for k, v in value.items():
-                    if isinstance(v, int):
+                    if isinstance(v, int) and not isinstance(v, bool):
                         pairs.append((v, str(k).casefold()))
                     elif isinstance(k, str) and k.isdigit() and isinstance(v, str):
                         pairs.append((int(k), v.casefold()))
-                if len(pairs) == 4:
+                if (
+                    len(pairs) == len(DEFAULT_ROLE_ORDER)
+                    and sorted(index for index, _ in pairs)
+                    == list(range(len(DEFAULT_ROLE_ORDER)))
+                ):
                     return [name for _, name in sorted(pairs)]
         for value in payload.values():
             found = _extract_role_order(value)
