@@ -4,6 +4,7 @@ import pytest
 
 from haxlab.ingestion.match_id_contract import (
     DuplicateMatchIdError,
+    derive_canonical_match_id,
     validate_unique_match_ids,
 )
 
@@ -160,3 +161,43 @@ def test_duplicate_error_canonicalizes_machine_readable_conflicts() -> None:
         ("match-a", (("a" * 64, "100"), ("c" * 64, "300"))),
         ("match-z", (("b" * 64, "200"), ("d" * 64, "400"))),
     )
+
+
+def test_canonical_match_id_prefers_report_identity() -> None:
+    assert (
+        derive_canonical_match_id(
+            report_id="league-round-7",
+            replay_sha256="a" * 64,
+        )
+        == "league-round-7"
+    )
+
+
+def test_canonical_match_id_preserves_hbr2_sha_prefix_fallback() -> None:
+    assert (
+        derive_canonical_match_id(
+            report_id=None,
+            replay_sha256="0123456789abcdef" + "a" * 48,
+        )
+        == "hbr2:0123456789abcdef"
+    )
+
+
+@pytest.mark.parametrize("report_id", ["", " round-7", "round-7 ", True, 123])
+def test_canonical_match_id_rejects_malformed_report_identity(report_id: object) -> None:
+    with pytest.raises(ValueError):
+        derive_canonical_match_id(
+            report_id=report_id,
+            replay_sha256="a" * 64,
+        )
+
+
+@pytest.mark.parametrize("replay_sha256", ["", "A" * 64, "a" * 63, "g" * 64, None])
+def test_canonical_match_id_rejects_malformed_replay_sha(
+    replay_sha256: object,
+) -> None:
+    with pytest.raises(ValueError):
+        derive_canonical_match_id(
+            report_id=None,
+            replay_sha256=replay_sha256,
+        )
