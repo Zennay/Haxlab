@@ -52,6 +52,23 @@ def test_rejects_unknown_version(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("reader", [read_replay_header, decompress_replay_payload])
+def test_rejects_missing_nofollow_support(
+    tmp_path: Path,
+    monkeypatch,
+    reader,
+) -> None:
+    path = tmp_path / "sample.hbr2"
+    _write_replay(path)
+    monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+
+    with pytest.raises(
+        ReplayFormatError,
+        match="unsafe_replay_path:nofollow_unsupported",
+    ):
+        reader(path)
+
+
+@pytest.mark.parametrize("reader", [read_replay_header, decompress_replay_payload])
 def test_rejects_symlink_replay_paths(tmp_path: Path, reader) -> None:
     target = tmp_path / "target.hbr2"
     _write_replay(target)
