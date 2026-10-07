@@ -5,7 +5,7 @@ import json
 from haxlab.evaluation.calibration_run_outcome import (
     BATCH_STEP,
     EVIDENCE_STEPS,
-    MODEL_REJECTION_MARKER,
+    GATE_REJECTION_MARKER,
     POINTER_STEP,
     PREP_STEPS,
     SCHEMA,
@@ -114,7 +114,7 @@ def test_explicit_gate_marker_after_completed_batch_is_gate_rejection_only() -> 
             collect="skipped",
             upload="skipped",
         ),
-        job_log=f"prefix {MODEL_REJECTION_MARKER} candidate_d_failed suffix",
+        job_log=f"prefix {GATE_REJECTION_MARKER} candidate_d_failed suffix",
     )
 
     assert result["classification"] == "evaluation_gate_rejected"
@@ -154,7 +154,7 @@ def test_batch_execution_failure_is_not_promoted_to_model_rejection() -> None:
             collect="skipped",
             upload="skipped",
         ),
-        job_log=f"{MODEL_REJECTION_MARKER} must_be_ignored_before_summary",
+        job_log=f"{GATE_REJECTION_MARKER} must_be_ignored_before_summary",
     )
 
     assert result["classification"] == "execution_failed"
@@ -265,7 +265,7 @@ def test_cli_job_log_can_prove_explicit_gate_rejection(tmp_path, capsys) -> None
         encoding="utf-8",
     )
     log_path.write_text(
-        f"error: {MODEL_REJECTION_MARKER} candidate_d_failed\n",
+        f"error: {GATE_REJECTION_MARKER} candidate_d_failed\n",
         encoding="utf-8",
     )
 
