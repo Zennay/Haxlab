@@ -6,6 +6,14 @@ from dataclasses import dataclass, fields
 from types import MappingProxyType
 
 
+def _require_canonical_nonempty_string(
+    value: object,
+    error: str,
+) -> None:
+    if type(value) is not str or not value or value != value.strip():
+        raise ValueError(error)
+
+
 def _require_finite_number(
     value: object,
     field_name: str,
@@ -62,8 +70,10 @@ class SkillObservation:
     role: str | None = None
 
     def __post_init__(self) -> None:
-        if type(self.player_id) is not str or not self.player_id.strip():
-            raise ValueError("invalid_skill_observation:player_id")
+        _require_canonical_nonempty_string(
+            self.player_id,
+            "invalid_skill_observation:player_id",
+        )
         if type(self.performance) is not PerformanceVector:
             raise ValueError("invalid_skill_observation:performance")
 
@@ -91,10 +101,11 @@ class SkillObservation:
                     f"invalid_skill_observation:{field_name}",
                 )
 
-        if self.role is not None and (
-            type(self.role) is not str or not self.role.strip()
-        ):
-            raise ValueError("invalid_skill_observation:role")
+        if self.role is not None:
+            _require_canonical_nonempty_string(
+                self.role,
+                "invalid_skill_observation:role",
+            )
 
 
 @dataclass(frozen=True)
@@ -128,8 +139,10 @@ class PlayerSkillEstimate:
     effective_weight: float
 
     def __post_init__(self) -> None:
-        if type(self.player_id) is not str or not self.player_id:
-            raise ValueError("invalid_player_skill_estimate:player_id")
+        _require_canonical_nonempty_string(
+            self.player_id,
+            "invalid_player_skill_estimate:player_id",
+        )
         if type(self.dimensions) is not dict:
             raise ValueError("invalid_player_skill_estimate:dimensions")
 
