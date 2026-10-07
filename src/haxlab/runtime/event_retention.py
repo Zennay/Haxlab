@@ -134,7 +134,7 @@ def apply_event_retention(
     connection = sqlite3.connect(database, timeout=30.0)
     try:
         connection.execute("PRAGMA foreign_keys=ON")
-        connection.execute("BEGIN IMMEDIATE")
+        connection.execute("BEGIN" if dry_run else "BEGIN IMMEDIATE")
         _validate_schema(connection)
 
         rows_before = int(
