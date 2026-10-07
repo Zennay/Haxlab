@@ -124,6 +124,10 @@ class MemoizationStateVisitor(ast.NodeVisitor):
             return
         for item in node.names:
             if item.name == "*":
+                if node.module == "functools":
+                    self.violations.append(
+                        f"line {node.lineno}: wildcard functools import can expose stateful memoizers"
+                    )
                 continue
             self._bind(item.asname or item.name, f"{node.module}.{item.name}")
 
@@ -211,6 +215,7 @@ def test_data_pipeline_auditors_do_not_retain_memoized_state() -> None:
         "import functools\nmemo = functools.cache\nwrapped = memo(lambda value: value)\n",
         "import functools\nmemo = getattr(functools, 'lru_cache')\nwrapped = memo()(lambda value: value)\n",
         "import builtins, functools\nga = builtins.getattr\nmemo = ga(functools, 'cache')\nwrapped = memo(lambda value: value)\n",
+        "from functools import *\ndef audit(value):\n    return value\n",
         "import functools\na, memo = object(), functools.cache\nwrapped = memo(lambda value: value)\n",
     ],
 )
