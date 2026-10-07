@@ -6,6 +6,7 @@ import pytest
 
 from haxlab.evaluation.models import PromotionPolicy
 from haxlab.evaluation.policy_config import (
+    POLICY_CONFIG_SCHEMA,
     load_promotion_policy,
     load_promotion_policy_config,
     main,
@@ -35,6 +36,7 @@ def test_policy_config_provenance_binds_exact_source_bytes() -> None:
 
     loaded = load_promotion_policy_config(path)
 
+    assert loaded.schema == POLICY_CONFIG_SCHEMA
     assert loaded.policy == PromotionPolicy()
     assert loaded.source_sha256 == hashlib.sha256(raw).hexdigest()
     assert loaded.source_size_bytes == len(raw)
@@ -56,6 +58,7 @@ def test_semantically_equal_policy_records_byte_drift(tmp_path: Path) -> None:
     first_loaded = load_promotion_policy_config(first)
     second_loaded = load_promotion_policy_config(second)
 
+    assert first_loaded.schema == second_loaded.schema == POLICY_CONFIG_SCHEMA
     assert first_loaded.policy == second_loaded.policy == PromotionPolicy()
     assert first_loaded.source_sha256 != second_loaded.source_sha256
     assert first_loaded.source_size_bytes != second_loaded.source_size_bytes
@@ -77,7 +80,7 @@ def test_policy_config_maps_external_names_to_runtime_policy(tmp_path: Path) -> 
     )
 
 
-def test_policy_config_cli_emits_policy_and_source_provenance(
+def test_policy_config_cli_emits_versioned_policy_and_source_provenance(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     path = Path("configs/autonomy.toml")
@@ -85,8 +88,9 @@ def test_policy_config_cli_emits_policy_and_source_provenance(
 
     assert main([str(path)]) == 0
 
-    payload = json.loads(capsys.readouterr().out)
-    assert payload == {
+    output = capsys.readouterr().out
+    payload = {
+        "schema": POLICY_CONFIG_SCHEMA,
         "policy": {
             "allow_critical_regressions": False,
             "minimum_games": 500,
@@ -98,6 +102,8 @@ def test_policy_config_cli_emits_policy_and_source_provenance(
             "size_bytes": len(raw),
         },
     }
+    assert json.loads(output) == payload
+    assert output == json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
 
 
 def test_policy_config_cli_fails_closed_on_invalid_config(
