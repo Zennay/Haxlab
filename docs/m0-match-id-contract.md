@@ -54,3 +54,14 @@ tuples. The error boundary itself sorts match IDs and each provenance set, so ca
 receive deterministic structured evidence even if they construct or forward conflicts
 in a different source order. Human-readable exception text is derived from that same
 canonical structure; logs and tests therefore cannot disagree about ordering.
+
+
+## Canonical derivation helper
+
+`derive_canonical_match_id()` freezes the producer's existing identity rule without
+touching the active producer surface: a canonical non-empty `report_id` is used
+verbatim when present; otherwise the identity is exactly
+`hbr2:<first 16 lowercase hex characters of replay_sha256>`. The helper rejects
+malformed report IDs and replay hashes instead of coercing them. Producer integration
+can therefore reuse the same derivation and uniqueness boundary rather than
+re-implementing fallback semantics in two places.
