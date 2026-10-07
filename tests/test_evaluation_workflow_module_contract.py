@@ -18,8 +18,10 @@ def _module_path(module: str) -> Path:
     return Path("src").joinpath(*module.split(".")).with_suffix(".py")
 
 
-def _main_guard_calls_main(tree: ast.AST) -> bool:
-    for node in ast.walk(tree):
+def _main_guard_calls_main(tree: ast.Module) -> bool:
+    # The __main__ guard must itself be top-level. A nested guard can look
+    # structurally valid under ast.walk() but will not execute for python -m.
+    for node in tree.body:
         if not isinstance(node, ast.If):
             continue
         test = node.test
