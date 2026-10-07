@@ -26,6 +26,9 @@ def scan_once(
     minimum_file_age_seconds: float = 30.0,
     now: float | None = None,
 ) -> ScanSummary:
+    if incoming_root.is_symlink():
+        raise ValueError("incoming_root_must_not_be_symlink")
+
     now = time.time() if now is None else now
     discovered = unchanged = archived = duplicates = failed = disappeared = 0
 
