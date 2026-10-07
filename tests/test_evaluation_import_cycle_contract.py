@@ -37,14 +37,18 @@ class RuntimeImportVisitor(ast.NodeVisitor):
         self.type_checking_names: set[str] = {"TYPE_CHECKING", "typing.TYPE_CHECKING"}
 
     def _record_target(self, target: str, imported_names: list[str] | None = None) -> None:
+        child_modules = {
+            f"{target}.{name}"
+            for name in (imported_names or [])
+            if f"{target}.{name}" in self.known_modules
+            and f"{target}.{name}" != self.module_name
+        }
+        if child_modules:
+            self.dependencies.update(child_modules)
+            return
+
         if target in self.known_modules and target != self.module_name:
             self.dependencies.add(target)
-
-        if imported_names:
-            for name in imported_names:
-                child = f"{target}.{name}"
-                if child in self.known_modules and child != self.module_name:
-                    self.dependencies.add(child)
 
     def _resolve_from(self, node: ast.ImportFrom) -> str | None:
         if node.level == 0:
@@ -194,6 +198,7 @@ def test_cycle_detector_reports_direct_and_transitive_cycles() -> None:
 
 def test_runtime_import_extraction_handles_absolute_and_relative_modules() -> None:
     known = {
+        "haxlab.evaluation",
         "haxlab.evaluation.probe",
         "haxlab.evaluation.models",
         "haxlab.evaluation.duel_gate",
