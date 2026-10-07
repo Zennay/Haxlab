@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
+import shutil
 
 import pytest
 
@@ -70,6 +72,7 @@ def _install_dependencies(
     bundle_errors: list[str] | None = None,
     bundle_inventory_sha: str = "d" * 64,
     mutate_manifest_on_recheck: bool = False,
+    stub_roots: bool = True,
 ) -> None:
     manifest = manifest or _manifest()
     default_train, default_holdout = _indexes()
@@ -127,6 +130,26 @@ def _install_dependencies(
         return train_bytes if path.parent.name == "train" else holdout_bytes
 
     monkeypatch.setattr(shard_audit, "_read_regular_bytes", read_index)
+
+    if stub_roots:
+        def open_root(path: Path) -> tuple[int, tuple[int, int]]:
+            fd = os.open("/dev/null", os.O_RDONLY)
+            identity = (
+                1,
+                1 if path.name == "train" else 2,
+            )
+            return fd, identity
+
+        monkeypatch.setattr(
+            shard_audit,
+            "_open_shard_root",
+            open_root,
+        )
+        monkeypatch.setattr(
+            shard_audit,
+            "_reconfirm_shard_root",
+            lambda *args, **kwargs: None,
+        )
 
 
 def _audit() -> dict:
@@ -316,3 +339,92 @@ def test_chain_audit_detects_manifest_mutation_during_validation(
 
     assert receipt["clean"] is False
     assert "manifest_changed_during_chain_audit" in receipt["errors"]
+
+def test_chain_audit_rejects_physical_split_root_alias(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_dependencies(
+        monkeypatch,
+        stub_roots=False,
+    )
+    shared = tmp_path / "shared"
+    shared.mkdir()
+
+    receipt = audit_training_chain(
+        manifest_path=MANIFEST_PATH,
+        train_dir=shared,
+        holdout_dir=shared,
+    )
+
+    assert receipt["clean"] is False
+    assert (
+        "train_holdout_directory_alias"
+        in receipt["errors"]
+    )
+
+
+def test_chain_audit_rejects_byte_identical_root_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    train = tmp_path / "train"
+    holdout = tmp_path / "holdout"
+    replacement = tmp_path / "replacement-train"
+    original = tmp_path / "original-train"
+    train.mkdir()
+    holdout.mkdir()
+    replacement.mkdir()
+
+    train_index, _ = _indexes()
+    payload = _json_bytes(train_index)
+    (train / "_index.json").write_bytes(payload)
+    (replacement / "_index.json").write_bytes(payload)
+
+    _install_dependencies(
+        monkeypatch,
+        stub_roots=False,
+    )
+    clean_bundle = shard_bundle_audit.audit_shard_bundle
+
+    def replace_then_report(**kwargs) -> dict:
+        train.rename(original)
+        replacement.rename(train)
+        return {
+            "schema": shard_bundle_audit.AUDIT_SCHEMA,
+            "clean": True,
+            "inventory_sha256": "d" * 64,
+            "train": {
+                "index_sha256": hashlib.sha256(
+                    _json_bytes(_indexes()[0])
+                ).hexdigest()
+            },
+            "holdout": {
+                "index_sha256": hashlib.sha256(
+                    _json_bytes(_indexes()[1])
+                ).hexdigest()
+            },
+            "errors": [],
+        }
+
+    monkeypatch.setattr(
+        shard_bundle_audit,
+        "audit_shard_bundle",
+        replace_then_report,
+    )
+
+    receipt = audit_training_chain(
+        manifest_path=MANIFEST_PATH,
+        train_dir=train,
+        holdout_dir=holdout,
+    )
+
+    assert receipt["clean"] is False
+    assert any(
+        error.startswith(
+            "train:root:"
+            "shard_root_identity_changed_during_audit"
+        )
+        for error in receipt["errors"]
+    )
+
