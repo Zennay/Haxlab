@@ -259,6 +259,22 @@ def _scope_aliases(
                 )
                 if owner is not None:
                     bound_mutator = f"{owner}.{value.attr}"
+            elif (
+                isinstance(value, ast.Call)
+                and _canonical_name(value.func, imports)
+                in {"getattr", "builtins.getattr"}
+                and len(value.args) >= 2
+                and isinstance(value.args[1], ast.Constant)
+                and isinstance(value.args[1].value, str)
+                and value.args[1].value in MUTATING_METHODS
+            ):
+                owner = _state_root(
+                    value.args[0],
+                    imports=imports,
+                    state_aliases=state_aliases,
+                )
+                if owner is not None:
+                    bound_mutator = f"{owner}.{value.args[1].value}"
 
             for target in targets:
                 for local in _assignment_name_targets(target):
@@ -366,7 +382,10 @@ def _scan_scope(
                 continue
 
         target = _canonical_name(node.func, imports)
-        if target in UNBOUND_MUTATORS and node.args:
+        normalized_target = (
+            target.removeprefix("builtins.") if target is not None else None
+        )
+        if normalized_target in UNBOUND_MUTATORS and node.args:
             root = _state_root(
                 node.args[0],
                 imports=imports,
@@ -375,7 +394,7 @@ def _scan_scope(
             if root is not None:
                 findings.append(
                     f"line {node.lineno}: persistent module object mutation: "
-                    f"{target}({root}, ...)"
+                    f"{normalized_target}({root}, ...)"
                 )
 
     return findings
@@ -481,7 +500,15 @@ def test_evaluation_package_has_no_persistent_module_object_state() -> None:
             "operator.setitem(STATE.cache",
         ),
         (
+            "class Holder: pass\nSTATE = Holder()\ndef gate():\n    mutate = getattr(STATE.cache, 'update')\n    mutate({'x': 1})\n",
+            "STATE.cache.update",
+        ),
+        (
             "class Holder: pass\nSTATE = Holder()\ndef gate():\n    list.append(STATE.cache, 1)\n",
+            "list.append(STATE.cache",
+        ),
+        (
+            "from builtins import list as MutableList\nclass Holder: pass\nSTATE = Holder()\ndef gate():\n    MutableList.append(STATE.cache, 1)\n",
             "list.append(STATE.cache",
         ),
     ],
