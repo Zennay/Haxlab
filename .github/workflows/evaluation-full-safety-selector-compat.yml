@@ -1,0 +1,189 @@
+name: Hardened evaluation selector full safety compatibility
+
+on:
+  push:
+    branches:
+      - ops/evaluation-full-safety-selector-compat-20261007
+  pull_request:
+    branches:
+      - feature/arena-v2-current-main-20261004
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-evaluation-full-safety-selector-compat-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  prove:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 25
+    env:
+      CARRIER_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      CARRIER_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
+
+    steps:
+      - name: Checkout exact canonical Arena v2
+        uses: actions/checkout@v5
+        with:
+          ref: ee5ab508e9d8504de12b7cbb5fdeca43a58ae1a4
+          clean: true
+          fetch-depth: 0
+
+      - name: Verify canonical carrier and live owner heads
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "ee5ab508e9d8504de12b7cbb5fdeca43a58ae1a4"
+          test -z "$(git status --porcelain)"
+          carrier="$(git ls-remote --heads origin "refs/heads/$CARRIER_REF" | awk 'NR == 1 {print $1}')"
+          test -n "$carrier"
+          test "$carrier" = "$CARRIER_SHA"
+          while read -r expected owner_branch; do
+            actual="$(git ls-remote --heads origin "refs/heads/${owner_branch}" | awk 'NR == 1 {print $1}')"
+            test -n "$actual"
+            if [ "$actual" != "$expected" ]; then
+              echo "stale owner head: ${owner_branch} expected=${expected} actual=${actual}" >&2
+              exit 1
+            fi
+            echo "HAXLAB_SELECTOR_FULL_SAFETY_OWNER ${owner_branch}=${actual}"
+          done <<'EOF'
+          689e384540f5ac8f7cba6c84b3b55d75f3f66839 validation/multisource-strict-integer-config-20261007
+          9b6eb665693048348fc725a39dcde6ed7486840d validation/multisource-duel-policy-boundary-20261007
+          b628530178ff8b92dcde8905fd6cbe8848d318e8 validation/closed-loop-arena-policy-contract-20261007
+          108608984cf271e4054f9522fe10fcd41e52e93f validation/duel-gate-exact-type-boundary-20261007
+          95dcab1fe8f14f2cf75d95bb98acf742473b6d6d validation/scenario-source-strict-selector-config-20261007
+          df5184b54c40a0df4f73a2adb1923e8a85e3f87e validation/evaluation-no-assert-contract-20261007
+          69646fd0817b162be31add2bf8e87be3cb9b4fc7 validation/evaluation-determinism-contract-20261007
+          9e82831b22e000c773284223bfa53a02f116a87f validation/evaluation-hermeticity-contract-20261007
+          8d1a1039bd985b1d4860cc219d205e9d2e2fe9e6 validation/evaluation-safe-deserialization-contract-20261007
+          c738bad12c1092812ac1d1ad6b9f02d8b3df262c validation/evaluation-control-plane-import-contract-20261007
+          17d21965140f61736b16fa9dba23c823346b58d2 validation/evaluation-import-purity-contract-20261007
+          be70c0158b8c0aad90166997ef49e19b9bccf4d1 validation/evaluation-exception-boundary-contract-20261007
+          9f16cb83e1b3aad9242cf04ead6291b3f40bb982 validation/evaluation-global-state-contract-20261007
+          5ab757bd76e2594b82cc936782455be9844a4fba validation/evaluation-dynamic-loading-contract-20261007
+          523694b02be5262091ec2d61a8f6b06e4c6fe563 validation/evaluation-process-state-contract-20261007
+          87f2b01d6975f5ce90e6a602c2ac1eea77eec887 validation/evaluation-process-termination-contract-20261007
+          5445483fc0301d606b3dd831288ca11bd21578cc validation/evaluation-background-execution-contract-20261007
+          b9ae444bd437a07667ab80086cc0ff0d22bf4ace validation/evaluation-import-cycle-contract-20261007
+          0d75bda2a496a1d84ea9f2b01084fef56d374cff validation/evaluation-immutability-bypass-contract-20261007
+          8fa40c0748f6130d2ac3f51be4dda9b5bb0206e8 validation/evaluation-liveness-contract-20261007
+          33155e1c10bb578522b67418668c1ed19889402a validation/evaluation-filesystem-mutation-contract-20261007
+          58d54dbbfb1cf3db0d03f6f9c04f67a0140823b4 validation/evaluation-runtime-output-purity-20261007
+          17705f6d763b678409a49213e95ef8fc2668d8ac validation/evaluation-mutable-defaults-contract-20261007
+          19b4d05c4e47a2cff7ae83bbf156efa3731dc520 validation/evaluation-native-ffi-contract-20261007
+          EOF
+
+      - name: Materialize exact hardened product candidates
+        shell: bash
+        run: |
+          set -euo pipefail
+          while read -r sha path; do
+            if ! git cat-file -e "${sha}^{commit}" 2>/dev/null; then
+              git fetch --no-tags --depth=1 origin "${sha}"
+            fi
+            git show "${sha}:${path}" > "${path}"
+          done <<'EOF'
+          689e384540f5ac8f7cba6c84b3b55d75f3f66839 src/haxlab/evaluation/multisource_suite.py
+          689e384540f5ac8f7cba6c84b3b55d75f3f66839 tests/test_multisource_suite.py
+          9b6eb665693048348fc725a39dcde6ed7486840d src/haxlab/evaluation/multisource_duel.py
+          9b6eb665693048348fc725a39dcde6ed7486840d tests/test_multisource_duel.py
+          b628530178ff8b92dcde8905fd6cbe8848d318e8 src/haxlab/evaluation/closed_loop_arena.py
+          b628530178ff8b92dcde8905fd6cbe8848d318e8 tests/test_closed_loop_arena.py
+          108608984cf271e4054f9522fe10fcd41e52e93f src/haxlab/evaluation/duel_gate.py
+          108608984cf271e4054f9522fe10fcd41e52e93f tests/test_duel_gate.py
+          95dcab1fe8f14f2cf75d95bb98acf742473b6d6d src/haxlab/evaluation/scenario_source.py
+          95dcab1fe8f14f2cf75d95bb98acf742473b6d6d tests/test_scenario_source.py
+          EOF
+
+      - name: Materialize exact additive safety contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          while read -r sha path; do
+            if ! git cat-file -e "${sha}^{commit}" 2>/dev/null; then
+              git fetch --no-tags --depth=1 origin "${sha}"
+            fi
+            git show "${sha}:${path}" > "${path}"
+          done <<'EOF'
+          df5184b54c40a0df4f73a2adb1923e8a85e3f87e tests/test_evaluation_no_assert_contract.py
+          df5184b54c40a0df4f73a2adb1923e8a85e3f87e .github/workflows/evaluation-no-assert-contract-validation.yml
+          69646fd0817b162be31add2bf8e87be3cb9b4fc7 tests/test_evaluation_determinism_contract.py
+          69646fd0817b162be31add2bf8e87be3cb9b4fc7 .github/workflows/evaluation-determinism-contract-validation.yml
+          9e82831b22e000c773284223bfa53a02f116a87f tests/test_evaluation_hermeticity_contract.py
+          9e82831b22e000c773284223bfa53a02f116a87f .github/workflows/evaluation-hermeticity-contract-validation.yml
+          8d1a1039bd985b1d4860cc219d205e9d2e2fe9e6 tests/test_evaluation_safe_deserialization_contract.py
+          8d1a1039bd985b1d4860cc219d205e9d2e2fe9e6 .github/workflows/evaluation-safe-deserialization-validation.yml
+          c738bad12c1092812ac1d1ad6b9f02d8b3df262c tests/test_evaluation_control_plane_import_contract.py
+          c738bad12c1092812ac1d1ad6b9f02d8b3df262c .github/workflows/evaluation-control-plane-import-validation.yml
+          17d21965140f61736b16fa9dba23c823346b58d2 tests/test_evaluation_import_purity_contract.py
+          17d21965140f61736b16fa9dba23c823346b58d2 .github/workflows/evaluation-import-purity-contract-validation.yml
+          be70c0158b8c0aad90166997ef49e19b9bccf4d1 tests/test_evaluation_exception_boundary_contract.py
+          be70c0158b8c0aad90166997ef49e19b9bccf4d1 .github/workflows/evaluation-exception-boundary-validation.yml
+          9f16cb83e1b3aad9242cf04ead6291b3f40bb982 tests/test_evaluation_global_state_contract.py
+          9f16cb83e1b3aad9242cf04ead6291b3f40bb982 .github/workflows/evaluation-global-state-validation.yml
+          5ab757bd76e2594b82cc936782455be9844a4fba tests/test_evaluation_dynamic_loading_contract.py
+          5ab757bd76e2594b82cc936782455be9844a4fba .github/workflows/evaluation-dynamic-loading-validation.yml
+          523694b02be5262091ec2d61a8f6b06e4c6fe563 tests/test_evaluation_process_state_contract.py
+          523694b02be5262091ec2d61a8f6b06e4c6fe563 .github/workflows/evaluation-process-state-validation.yml
+          87f2b01d6975f5ce90e6a602c2ac1eea77eec887 tests/test_evaluation_process_termination_contract.py
+          87f2b01d6975f5ce90e6a602c2ac1eea77eec887 .github/workflows/evaluation-process-termination-validation.yml
+          5445483fc0301d606b3dd831288ca11bd21578cc tests/test_evaluation_background_execution_contract.py
+          5445483fc0301d606b3dd831288ca11bd21578cc .github/workflows/evaluation-background-execution-validation.yml
+          b9ae444bd437a07667ab80086cc0ff0d22bf4ace tests/test_evaluation_import_cycle_contract.py
+          b9ae444bd437a07667ab80086cc0ff0d22bf4ace .github/workflows/evaluation-import-cycle-validation.yml
+          0d75bda2a496a1d84ea9f2b01084fef56d374cff tests/test_evaluation_immutability_bypass_contract.py
+          0d75bda2a496a1d84ea9f2b01084fef56d374cff .github/workflows/evaluation-immutability-bypass-validation.yml
+          8fa40c0748f6130d2ac3f51be4dda9b5bb0206e8 tests/test_evaluation_liveness_contract.py
+          8fa40c0748f6130d2ac3f51be4dda9b5bb0206e8 .github/workflows/evaluation-liveness-validation.yml
+          33155e1c10bb578522b67418668c1ed19889402a tests/test_evaluation_filesystem_mutation_contract.py
+          33155e1c10bb578522b67418668c1ed19889402a .github/workflows/evaluation-filesystem-mutation-validation.yml
+          58d54dbbfb1cf3db0d03f6f9c04f67a0140823b4 tests/test_evaluation_runtime_output_purity_contract.py
+          58d54dbbfb1cf3db0d03f6f9c04f67a0140823b4 .github/workflows/evaluation-runtime-output-purity-validation.yml
+          17705f6d763b678409a49213e95ef8fc2668d8ac tests/test_evaluation_mutable_defaults_contract.py
+          17705f6d763b678409a49213e95ef8fc2668d8ac .github/workflows/evaluation-mutable-defaults-validation.yml
+          19b4d05c4e47a2cff7ae83bbf156efa3731dc520 tests/test_evaluation_native_ffi_contract.py
+          19b4d05c4e47a2cff7ae83bbf156efa3731dc520 .github/workflows/evaluation-native-ffi-validation.yml
+          EOF
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .evaluation-full-safety-selector-compat-venv
+          python3 -m venv .evaluation-full-safety-selector-compat-venv
+          .evaluation-full-safety-selector-compat-venv/bin/pip install --upgrade pip
+          .evaluation-full-safety-selector-compat-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile integrated evaluation surface and contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          .evaluation-full-safety-selector-compat-venv/bin/python -m compileall -q             src/haxlab/evaluation             tests/test_multisource_suite.py             tests/test_multisource_duel.py             tests/test_closed_loop_arena.py             tests/test_duel_gate.py             tests/test_scenario_source.py             tests/test_evaluation_no_assert_contract.py             tests/test_evaluation_determinism_contract.py             tests/test_evaluation_hermeticity_contract.py             tests/test_evaluation_safe_deserialization_contract.py             tests/test_evaluation_control_plane_import_contract.py             tests/test_evaluation_import_purity_contract.py             tests/test_evaluation_exception_boundary_contract.py             tests/test_evaluation_global_state_contract.py             tests/test_evaluation_dynamic_loading_contract.py             tests/test_evaluation_process_state_contract.py             tests/test_evaluation_process_termination_contract.py             tests/test_evaluation_background_execution_contract.py             tests/test_evaluation_import_cycle_contract.py             tests/test_evaluation_immutability_bypass_contract.py             tests/test_evaluation_liveness_contract.py             tests/test_evaluation_filesystem_mutation_contract.py             tests/test_evaluation_runtime_output_purity_contract.py             tests/test_evaluation_mutable_defaults_contract.py             tests/test_evaluation_native_ffi_contract.py
+
+      - name: Run full additive safety contract stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" .evaluation-full-safety-selector-compat-venv/bin/pytest -q             tests/test_evaluation_no_assert_contract.py             tests/test_evaluation_determinism_contract.py             tests/test_evaluation_hermeticity_contract.py             tests/test_evaluation_safe_deserialization_contract.py             tests/test_evaluation_control_plane_import_contract.py             tests/test_evaluation_import_purity_contract.py             tests/test_evaluation_exception_boundary_contract.py             tests/test_evaluation_global_state_contract.py             tests/test_evaluation_dynamic_loading_contract.py             tests/test_evaluation_process_state_contract.py             tests/test_evaluation_process_termination_contract.py             tests/test_evaluation_background_execution_contract.py             tests/test_evaluation_import_cycle_contract.py             tests/test_evaluation_immutability_bypass_contract.py             tests/test_evaluation_liveness_contract.py             tests/test_evaluation_filesystem_mutation_contract.py             tests/test_evaluation_runtime_output_purity_contract.py             tests/test_evaluation_mutable_defaults_contract.py             tests/test_evaluation_native_ffi_contract.py
+
+      - name: Run hardened product regression suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" .evaluation-full-safety-selector-compat-venv/bin/pytest -q             tests/test_multisource_suite.py             tests/test_multisource_duel.py             tests/test_closed_loop_arena.py             tests/test_duel_gate.py             tests/test_scenario_source.py
+
+      - name: Run adjacent canonical evaluation regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" .evaluation-full-safety-selector-compat-venv/bin/pytest -q             tests/test_calibration_gate.py             tests/test_calibration_resume.py             tests/test_elite_gate_preflight.py             tests/test_arena_v2_integration_workflow_contract.py             tests/test_calibration_cross_sha_resume_contract.py             tests/test_calibration_workflow_evidence_contract.py             tests/test_ci_workflow_exact_head_contract.py
+
+      - name: Record full-stack result
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HAXLAB_HARDENED_EVALUATION_SELECTOR_FULL_SAFETY_RESULT=green"
