@@ -4,7 +4,9 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import re
+import tempfile
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +15,28 @@ from typing import Any
 
 MANIFEST_SCHEMA = "haxlab-human-imitation-manifest-v3"
 _CANONICAL_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, path)
+    except Exception:
+        try:
+            os.unlink(temporary_name)
+        except OSError:
+            pass
+        raise
 
 
 def _name_key(name: str | None) -> str | None:
@@ -468,11 +492,7 @@ def main() -> int:
         )
     except ValueError as exc:
         parser.error(str(exc))
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    _atomic_json(args.output, manifest)
     print(json.dumps(manifest["stats"], indent=2, sort_keys=True))
     print(f"manifest: {args.output}")
     return 0
