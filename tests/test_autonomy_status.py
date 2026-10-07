@@ -233,6 +233,56 @@ def test_autonomy_tick_records_retryable_state_and_stops_on_invalid_snapshot(
 
 
 
+def test_autonomy_tick_stops_on_incoherent_status_counts(
+    tmp_path: Path,
+) -> None:
+    app_dir = tmp_path / "app"
+    bin_dir = app_dir / ".venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "python").symlink_to(sys.executable)
+
+    status_payload = _valid_payload()
+    status_payload["processing_ok"] = 13
+    status_cmd = bin_dir / "haxlab-status"
+    status_cmd.write_text(
+        "#!/usr/bin/env bash\n"
+        f"printf '%s\\n' {json.dumps(json.dumps(status_payload))}\n",
+        encoding="utf-8",
+    )
+    status_cmd.chmod(0o755)
+
+    state_dir = tmp_path / "state"
+    derived_dir = tmp_path / "derived"
+    models_dir = tmp_path / "models"
+    env = os.environ.copy()
+    env.update(
+        {
+            "HAXLAB_APP_DIR": str(app_dir),
+            "HAXLAB_STATE_DIR": str(state_dir),
+            "HAXLAB_DERIVED_DIR": str(derived_dir),
+            "HAXLAB_MODELS_DIR": str(models_dir),
+            "PYTHONPATH": str(Path.cwd() / "src"),
+        }
+    )
+
+    completed = subprocess.run(
+        ["bash", "deploy/haxlab-autonomy-tick.sh"],
+        cwd=Path.cwd(),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    status = json.loads((state_dir / "autonomy-status.json").read_text())
+    assert status["state"] == "FAILED_RETRYABLE"
+    assert status["action"] == "invalid_status_snapshot"
+    assert "analysis counters cannot exceed processing_ok" in status["detail"]
+    assert not derived_dir.exists()
+    assert not models_dir.exists()
+
+
 def test_autonomy_tick_records_retryable_state_on_status_command_failure(
     tmp_path: Path,
 ) -> None:
