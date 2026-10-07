@@ -376,10 +376,22 @@ def test_contract_rejects_dunder_dict_and_vars_mapping_mutation() -> None:
         "setdefault",
         "dict.__setitem__",
         "operator.delitem",
-        "via_getattr",
         "dict.__ior__",
     ):
         assert expected in findings
+
+
+def test_contract_rejects_getattr_dunder_dict_mapping() -> None:
+    source = textwrap.dedent(
+        """
+        def probe(policy):
+            getattr(policy, "__dict__")["threshold"] = 1.0
+        """
+    )
+
+    findings = scan_source(source)
+    assert len(findings) == 1
+    assert "policy.__dict__" in findings[0]
 
 
 def test_contract_rejects_stored_mapping_and_mutator_aliases() -> None:
