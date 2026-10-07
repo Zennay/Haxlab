@@ -1,0 +1,63 @@
+name: HaxLab shard bundle root-binding proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact branch SHA to prove
+        required: true
+        type: string
+  push:
+    branches:
+      - feature/data-pipeline-shard-bundle-root-binding-20261007
+    paths:
+      - "src/haxlab/learning/shard_bundle_audit.py"
+      - "tests/test_shard_bundle_audit.py"
+      - "docs/imitation-shard-bundle-audit.md"
+      - ".github/workflows/data-pipeline-shard-bundle-root-binding-proof.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-shard-bundle-root-binding-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate exact-head shard bundle root binding
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    env:
+      EXPECTED_HEAD: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_sha || github.sha }}
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+
+      - name: Assert exact head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Run focused integrity proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .shard-bundle-root-proof-venv
+          python3 -m venv .shard-bundle-root-proof-venv
+          .shard-bundle-root-proof-venv/bin/pip install -q --upgrade pip
+          .shard-bundle-root-proof-venv/bin/pip install -q -e '.[dev]'
+          .shard-bundle-root-proof-venv/bin/python -m compileall -q src tests
+          .shard-bundle-root-proof-venv/bin/pytest -q \
+            tests/test_shard_bundle_audit.py \
+            tests/test_shard_audit.py \
+            tests/test_data_pipeline_audit_readonly_contract.py \
+            tests/test_data_pipeline_audit_determinism_contract.py \
+            tests/test_data_pipeline_audit_exception_boundary.py \
+            tests/test_data_pipeline_audit_runtime_output_purity_contract.py
+          .shard-bundle-root-proof-venv/bin/pytest --collect-only -q >/dev/null
+          echo "HAXLAB_SHARD_BUNDLE_ROOT_BINDING_PROOF=success"
