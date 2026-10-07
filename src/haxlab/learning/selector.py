@@ -57,7 +57,12 @@ def _identity_key(player: dict[str, Any]) -> str | None:
 
 
 def _native_finite_number(value: Any) -> bool:
-    return type(value) in (int, float) and math.isfinite(float(value))
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except OverflowError:
+        return False
 
 
 def _valid_leaderboard_row(row: Any) -> bool:
