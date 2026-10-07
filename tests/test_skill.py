@@ -1,3 +1,7 @@
+import math
+
+import pytest
+
 from haxlab.skill.estimator import estimate_player_skill_v0
 from haxlab.skill.models import PerformanceVector, SkillObservation
 
@@ -36,3 +40,47 @@ def test_strong_teammates_do_not_get_credited_to_player() -> None:
     )
 
     assert stacked.dimensions["retention"].mean < neutral.dimensions["retention"].mean
+
+
+@pytest.mark.parametrize(
+    "prior_mean",
+    [math.nan, math.inf, -math.inf, True, "0.0"],
+)
+def test_estimator_rejects_invalid_prior_mean(prior_mean: object) -> None:
+    with pytest.raises(
+        ValueError,
+        match="invalid_skill_estimator:prior_mean",
+    ):
+        estimate_player_skill_v0(
+            "player-a",
+            [],
+            prior_mean=prior_mean,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize(
+    "prior_weight",
+    [0.0, -0.01, math.nan, math.inf, -math.inf, False, "5.0"],
+)
+def test_estimator_rejects_invalid_prior_weight(prior_weight: object) -> None:
+    with pytest.raises(
+        ValueError,
+        match="invalid_skill_estimator:prior_weight",
+    ):
+        estimate_player_skill_v0(
+            "player-a",
+            [],
+            prior_weight=prior_weight,  # type: ignore[arg-type]
+        )
+
+
+def test_estimator_accepts_current_leaderboard_prior() -> None:
+    estimate = estimate_player_skill_v0(
+        "player-a",
+        [_observation(opponent=0.0)],
+        prior_mean=0.0,
+        prior_weight=8.0,
+    )
+
+    assert estimate.player_id == "player-a"
+    assert estimate.dimensions["retention"].effective_weight > 0.0
