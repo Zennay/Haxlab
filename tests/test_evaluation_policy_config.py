@@ -1,9 +1,10 @@
+import json
 from pathlib import Path
 
 import pytest
 
 from haxlab.evaluation.models import PromotionPolicy
-from haxlab.evaluation.policy_config import load_promotion_policy
+from haxlab.evaluation.policy_config import load_promotion_policy, main
 
 
 def _write_policy(tmp_path: Path, evaluation_lines: str) -> Path:
@@ -32,6 +33,20 @@ def test_policy_config_maps_external_names_to_runtime_policy(tmp_path: Path) -> 
         minimum_scenario_pass_rate=0.99,
         allow_critical_regressions=False,
     )
+
+
+def test_policy_config_cli_emits_machine_readable_runtime_policy(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["configs/autonomy.toml"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "allow_critical_regressions": False,
+        "minimum_games": 500,
+        "minimum_scenario_pass_rate": 0.98,
+        "minimum_score_rate_lower_bound": 0.51,
+    }
 
 
 @pytest.mark.parametrize(
