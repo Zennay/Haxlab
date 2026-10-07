@@ -159,3 +159,32 @@ def test_player_skill_estimate_rejects_invalid_effective_weight(
             observation_count=0,
             effective_weight=effective_weight,  # type: ignore[arg-type]
         )
+
+
+def test_player_skill_estimate_dimensions_are_defensively_immutable() -> None:
+    source = _dimensions()
+    estimate = PlayerSkillEstimate(
+        player_id="player-a",
+        dimensions=source,
+        observation_count=0,
+        effective_weight=0.0,
+    )
+
+    source.pop("retention")
+    assert "retention" in estimate.dimensions
+
+    with pytest.raises(TypeError):
+        estimate.dimensions["retention"] = SkillDimensionEstimate(
+            mean=1.0,
+            uncertainty=0.0,
+            effective_weight=1.0,
+        )  # type: ignore[index]
+
+
+def test_estimator_dimensions_remain_mapping_compatible() -> None:
+    estimate = estimate_player_skill_v0("player-a", [])
+
+    assert list(estimate.dimensions) == [
+        field.name for field in fields(PerformanceVector)
+    ]
+    assert estimate.dimensions["retention"].mean == 0.0
