@@ -168,3 +168,34 @@ current, but cannot expose a mixed artifact set.
 
 The lock path itself is opened with `O_NOFOLLOW` and required to be a regular file,
 so a symlink cannot redirect the writer lock outside the store.
+
+
+## Generation-backed importer
+
+`haxlab.ingestion.generation_pipeline.run_generation_import()` integrates the
+existing importer without editing its active worker-owned module. It runs
+`run_import()` only against a private temporary dataset directory, then passes that
+complete five-file result to `publish_generation()`.
+
+The private build directory is explicitly created beside the **resolved store target**,
+not via the process-wide `TMPDIR`. The store target is first proven outside the
+immutable export root and a symlink store root is rejected. An environment that points
+`TMPDIR` into the raw export therefore cannot make the sequential legacy writes
+mutate or appear inside raw.
+
+Only after `run_import()` completes does the generation store validate, copy, fsync,
+commit and atomically select the complete dataset. Existing readers of the generation
+store never observe the importer's temporary per-file write sequence.
+
+The module is directly executable:
+
+```bash
+python -m haxlab.ingestion.generation_pipeline RAW_EXPORT GENERATION_STORE
+```
+
+Success emits the normal import manifest plus generation/receipt/commit identities.
+Failure exits non-zero and emits machine-readable JSON to stderr.
+
+This wrapper provides a migration path that leaves `pipeline.py` untouched: callers
+can adopt the generation-backed entry point first, while any later refactor of the
+legacy importer remains owned by its current producer lane.
