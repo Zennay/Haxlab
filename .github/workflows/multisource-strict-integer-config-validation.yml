@@ -1,0 +1,78 @@
+name: Multisource strict integer config validation
+
+on:
+  push:
+    branches:
+      - validation/multisource-strict-integer-config-20261007
+  pull_request:
+    branches:
+      - feature/arena-v2-current-main-20261004
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-multisource-strict-config-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  prove:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    env:
+      EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      EXPECTED_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          clean: true
+          fetch-depth: 0
+
+      - name: Verify exact live head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          live="$(git ls-remote --heads origin "refs/heads/$EXPECTED_REF" | awk 'NR == 1 {print $1}')"
+          test -n "$live"
+          test "$live" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain)"
+          echo "HAXLAB_MULTISOURCE_STRICT_CONFIG_HEAD=$live"
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .multisource-strict-config-venv
+          python3 -m venv .multisource-strict-config-venv
+          .multisource-strict-config-venv/bin/pip install --upgrade pip
+          .multisource-strict-config-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile changed evaluation surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          .multisource-strict-config-venv/bin/python -m compileall -q             src/haxlab/evaluation/multisource_suite.py             tests/test_multisource_suite.py
+
+      - name: Run focused multisource suite regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" .multisource-strict-config-venv/bin/pytest -q             tests/test_multisource_suite.py
+
+      - name: Run adjacent evaluation regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" .multisource-strict-config-venv/bin/pytest -q             tests/test_multisource_duel.py             tests/test_closed_loop_arena.py
+
+      - name: Record proof result
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HAXLAB_MULTISOURCE_STRICT_INTEGER_CONFIG_RESULT=green"
