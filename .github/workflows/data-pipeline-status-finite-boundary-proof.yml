@@ -1,0 +1,52 @@
+name: Data-pipeline runtime status finite boundary proof
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - src/haxlab/runtime/status.py
+      - tests/test_status_consumer_integrity.py
+      - docs/runtime-status-numeric-boundary.md
+      - .github/workflows/data-pipeline-status-finite-boundary-proof.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: data-pipeline-status-finite-boundary-exact-head
+  cancel-in-progress: true
+
+jobs:
+  proof:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout exact candidate head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+
+      - name: Verify immutable candidate checkout
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Run focused runtime-status proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv .venv-status-finite-proof
+          .venv-status-finite-proof/bin/python -m pip install -q -e ".[dev]"
+          .venv-status-finite-proof/bin/python -m py_compile src/haxlab/runtime/status.py
+          .venv-status-finite-proof/bin/python -m pytest -q tests/test_status_consumer_integrity.py
+          .venv-status-finite-proof/bin/python -m pytest --collect-only -q >"$RUNNER_TEMP/haxlab-status-finite-$GITHUB_RUN_ID.collect"
+          test -s "$RUNNER_TEMP/haxlab-status-finite-$GITHUB_RUN_ID.collect"
+          echo "HAXLAB_STATUS_FINITE_BOUNDARY_PROOF=success"
