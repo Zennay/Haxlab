@@ -341,6 +341,7 @@ def test_proof_workflow_is_manual_and_exact_live_head_bound() -> None:
         "uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
         in workflow
     )
+    assert "clean: true" in workflow
     assert 'test "$HEAD_SHA" = "${GITHUB_SHA}"' in workflow
     assert 'case "${GITHUB_REF}" in' in workflow
     assert "refs/heads/*)" in workflow
