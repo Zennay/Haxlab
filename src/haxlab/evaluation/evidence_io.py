@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -40,9 +42,73 @@ def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _read_stable_regular_text(path: Path) -> str:
+    """Read one stable regular file without following a replaced final symlink."""
+    before = os.lstat(path)
+    if not stat.S_ISREG(before.st_mode):
+        raise OSError("evidence_path_not_regular")
+
+    flags = os.O_RDONLY
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode):
+            raise OSError("evidence_opened_not_regular")
+        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+            raise OSError("evidence_path_identity_changed_before_open")
+
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(fd, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+
+        after_read = os.fstat(fd)
+    finally:
+        os.close(fd)
+
+    after_path = os.lstat(path)
+    if not stat.S_ISREG(after_path.st_mode):
+        raise OSError("evidence_path_not_regular_after_read")
+    if (after_path.st_dev, after_path.st_ino) != (
+        opened.st_dev,
+        opened.st_ino,
+    ):
+        raise OSError("evidence_path_identity_changed_after_read")
+
+    snapshot_before = (
+        opened.st_size,
+        opened.st_mtime_ns,
+        opened.st_ctime_ns,
+    )
+    snapshot_after_read = (
+        after_read.st_size,
+        after_read.st_mtime_ns,
+        after_read.st_ctime_ns,
+    )
+    snapshot_after_path = (
+        after_path.st_size,
+        after_path.st_mtime_ns,
+        after_path.st_ctime_ns,
+    )
+    if (
+        snapshot_before != snapshot_after_read
+        or snapshot_before != snapshot_after_path
+    ):
+        raise OSError("evidence_file_changed_during_read")
+
+    payload = b"".join(chunks)
+    if len(payload) != opened.st_size:
+        raise OSError("evidence_file_size_changed_during_read")
+    return payload.decode("utf-8")
+
+
 def _load_json(path: Path) -> Any:
     return json.loads(
-        path.read_text(encoding="utf-8"),
+        _read_stable_regular_text(path),
         object_pairs_hook=_unique_json_object,
     )
 
