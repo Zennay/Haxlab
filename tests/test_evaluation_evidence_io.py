@@ -436,3 +436,73 @@ def test_policy_loader_rejects_duplicate_json_key(tmp_path) -> None:
     assert result.reasons == (
         "invalid_policy:path:duplicate_json_key:minimum_games",
     )
+
+
+class _ExplodingString(str):
+    def strip(self, chars=None):
+        raise AssertionError("custom strip must not run at evidence IO boundary")
+
+
+class _ExplodingFloat(float):
+    def __float__(self) -> float:
+        raise AssertionError("custom __float__ must not run at evidence IO boundary")
+
+
+class _ExplodingInt(int):
+    def __int__(self) -> int:
+        raise AssertionError("custom __int__ must not run at evidence IO boundary")
+
+
+class _DictSubclass(dict):
+    pass
+
+
+class _ListSubclass(list):
+    pass
+
+
+def test_evidence_parser_rejects_scalar_subclasses_without_conversion_hooks() -> None:
+    payload = _valid_evidence_payload()
+    payload["challenger_id"] = _ExplodingString("challenger")
+    payload["score_rate_vs_champion"] = _ExplodingFloat(0.6)
+    payload["games_vs_champion"] = _ExplodingInt(500)
+
+    result = parse_evaluation_evidence(payload)
+
+    assert not result.valid
+    assert result.evidence is None
+    assert "invalid_evidence:challenger_id:not_string" in result.reasons
+    assert "invalid_evidence:score_rate_vs_champion:not_number" in result.reasons
+    assert "invalid_evidence:games_vs_champion:not_integer" in result.reasons
+
+
+def test_policy_parser_rejects_numeric_subclasses_without_conversion_hooks() -> None:
+    payload = _valid_policy_payload()
+    payload["minimum_games"] = _ExplodingInt(500)
+    payload["minimum_score_rate_lower_bound"] = _ExplodingFloat(0.51)
+
+    result = parse_promotion_policy(payload)
+
+    assert not result.valid
+    assert result.policy is None
+    assert "invalid_policy:minimum_games:not_integer" in result.reasons
+    assert "invalid_policy:minimum_score_rate_lower_bound:not_number" in result.reasons
+
+
+def test_evidence_parser_requires_exact_json_container_types() -> None:
+    payload = _DictSubclass(_valid_evidence_payload())
+
+    result = parse_evaluation_evidence(payload)
+
+    assert not result.valid
+    assert result.reasons == ("invalid_evidence:payload:not_object",)
+
+
+def test_regressions_require_exact_json_list_type() -> None:
+    payload = _valid_evidence_payload()
+    payload["regressions"] = _ListSubclass(payload["regressions"])
+
+    result = parse_evaluation_evidence(payload)
+
+    assert not result.valid
+    assert "invalid_evidence:regressions:not_list" in result.reasons
