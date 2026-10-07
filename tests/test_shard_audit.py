@@ -462,3 +462,77 @@ def test_audit_rejects_nonstandard_metadata_numeric_constant(
         f"{SHA}:meta:invalid_json_constant:Infinity" == error
         for error in receipt["errors"]
     )
+
+
+
+def test_audit_rejects_shard_root_replacement_during_audit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shard_dir = _fixture(tmp_path)
+    replacement_parent = tmp_path / "replacement-parent"
+    replacement_parent.mkdir()
+    replacement = _fixture(replacement_parent)
+    original = tmp_path / "train-original"
+
+    real_load = shard_audit._load_object_at
+    swapped = False
+
+    def racing_load(
+        root_fd: int,
+        name: str,
+    ) -> tuple[dict, bytes]:
+        nonlocal swapped
+        result = real_load(root_fd, name)
+        if name == "_index.json" and not swapped:
+            shard_dir.rename(original)
+            replacement.rename(shard_dir)
+            swapped = True
+        return result
+
+    monkeypatch.setattr(shard_audit, "_load_object_at", racing_load)
+
+    with pytest.raises(
+        shard_audit.AuditInputError,
+        match="shard_root_identity_changed_during_audit",
+    ):
+        shard_audit.audit_shard_directory(shard_dir)
+
+    assert swapped is True
+
+
+def test_audit_rejects_member_path_replacement_after_secure_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shard_dir = _fixture(tmp_path)
+    meta = shard_dir / f"{SHA}.meta.json"
+    replacement = tmp_path / "replacement-meta.json"
+    replacement.write_bytes(meta.read_bytes())
+    original = shard_dir / f"{SHA}.meta-original.json"
+
+    real_open = shard_audit._open_regular_at
+    swapped = False
+
+    def racing_open(
+        root_fd: int,
+        name: str,
+    ):
+        nonlocal swapped
+        opened = real_open(root_fd, name)
+        if name == meta.name and not swapped:
+            meta.rename(original)
+            replacement.rename(meta)
+            swapped = True
+        return opened
+
+    monkeypatch.setattr(shard_audit, "_open_regular_at", racing_open)
+
+    receipt = shard_audit.audit_shard_directory(shard_dir)
+
+    assert swapped is True
+    assert receipt["clean"] is False
+    assert any(
+        f"{SHA}:meta:logical_path_identity_changed:{meta.name}" in error
+        for error in receipt["errors"]
+    )
