@@ -1,0 +1,61 @@
+name: HaxLab worker bounded decompression proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact branch SHA to prove
+        required: true
+        type: string
+  push:
+    branches:
+      - feature/data-pipeline-worker-bounded-decompression-20261007
+    paths:
+      - "src/haxlab/runtime/worker.py"
+      - "tests/test_worker_bounded_decompression.py"
+      - "docs/worker-bounded-decompression.md"
+      - ".github/workflows/data-pipeline-worker-bounded-decompression-proof.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-worker-bounded-decompression-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate exact-head bounded replay decompression
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    env:
+      EXPECTED_HEAD: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_sha || github.sha }}
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+
+      - name: Assert exact head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Run focused proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .worker-bounded-decompression-venv
+          python3 -m venv .worker-bounded-decompression-venv
+          .worker-bounded-decompression-venv/bin/pip install -q --upgrade pip
+          .worker-bounded-decompression-venv/bin/pip install -q -e '.[dev]'
+          .worker-bounded-decompression-venv/bin/python -m compileall -q src tests
+          .worker-bounded-decompression-venv/bin/pytest -q \
+            tests/test_worker_bounded_decompression.py \
+            tests/test_worker.py \
+            tests/test_worker_archive_integrity.py \
+            tests/test_runtime_entrypoint_limits.py
+          .worker-bounded-decompression-venv/bin/pytest --collect-only -q >/dev/null
+          echo "HAXLAB_WORKER_BOUNDED_DECOMPRESSION_PROOF=success"

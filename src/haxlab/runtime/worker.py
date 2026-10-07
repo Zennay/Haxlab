@@ -21,6 +21,7 @@ from haxlab.runtime.state import RawReplayRecord, RuntimeState
 
 
 _READ_CHUNK_BYTES = 1024 * 1024
+_DECOMPRESS_CHUNK_BYTES = 1024 * 1024
 
 
 def _poll_interval_arg(value: str) -> float:
@@ -172,7 +173,34 @@ def _verified_archive_bytes(replay: RawReplayRecord) -> bytes:
         os.close(fd)
 
 
-def _probe_verified_replay(data: bytes) -> tuple[ReplayHeader, bytes]:
+def _decompressed_payload_size(compressed: bytes) -> int:
+    decompressor = zlib.decompressobj(-zlib.MAX_WBITS)
+    total = 0
+    remaining = compressed
+
+    try:
+        while True:
+            output = decompressor.decompress(
+                remaining,
+                _DECOMPRESS_CHUNK_BYTES,
+            )
+            total += len(output)
+
+            if decompressor.eof:
+                return total
+
+            remaining = decompressor.unconsumed_tail
+            if remaining:
+                continue
+
+            remaining = b""
+            if not output:
+                raise ReplayFormatError("deflate_error:incomplete_stream")
+    except zlib.error as exc:
+        raise ReplayFormatError(f"deflate_error:{exc}") from exc
+
+
+def _probe_verified_replay(data: bytes) -> tuple[ReplayHeader, int]:
     if len(data) < 12:
         raise ReplayFormatError("truncated_header")
 
@@ -182,12 +210,11 @@ def _probe_verified_replay(data: bytes) -> tuple[ReplayHeader, bytes]:
     if version != SUPPORTED_VERSION:
         raise ReplayFormatError(f"unsupported_version:{version}")
 
-    try:
-        payload = zlib.decompress(data[12:], -zlib.MAX_WBITS)
-    except zlib.error as exc:
-        raise ReplayFormatError(f"deflate_error:{exc}") from exc
-
-    return ReplayHeader(version=version, total_frames=total_frames), payload
+    decompressed_bytes = _decompressed_payload_size(data[12:])
+    return ReplayHeader(
+        version=version,
+        total_frames=total_frames,
+    ), decompressed_bytes
 
 
 def process_batch(state: RuntimeState, *, batch_size: int = 50) -> dict[str, int]:
@@ -197,7 +224,7 @@ def process_batch(state: RuntimeState, *, batch_size: int = 50) -> dict[str, int
     for replay in pending:
         try:
             archive_bytes = _verified_archive_bytes(replay)
-            header, payload = _probe_verified_replay(archive_bytes)
+            header, decompressed_bytes = _probe_verified_replay(archive_bytes)
 
             state.mark_replay_processing(
                 sha256=replay.sha256,
@@ -205,7 +232,7 @@ def process_batch(state: RuntimeState, *, batch_size: int = 50) -> dict[str, int
                 format_version=header.version,
                 total_frames=header.total_frames,
                 duration_seconds=header.duration_seconds,
-                decompressed_bytes=len(payload),
+                decompressed_bytes=decompressed_bytes,
                 parser_stage="probe",
             )
             state.event(
@@ -214,7 +241,7 @@ def process_batch(state: RuntimeState, *, batch_size: int = 50) -> dict[str, int
                 detail=(
                     f"frames={header.total_frames};"
                     f"duration={header.duration_seconds:.3f};"
-                    f"decompressed_bytes={len(payload)}"
+                    f"decompressed_bytes={decompressed_bytes}"
                 ),
             )
             ok += 1
