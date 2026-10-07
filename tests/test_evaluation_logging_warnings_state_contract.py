@@ -71,6 +71,8 @@ def _canonical_name(node: ast.AST | None, aliases: dict[str, str]) -> str | None
         return f"{parent}.{node.attr}" if parent else node.attr
     if isinstance(node, ast.Call):
         accessor = _canonical_name(node.func, aliases)
+        if accessor == "logging.getLogger":
+            return "logging.getLogger()"
         if (
             accessor in {"getattr", "builtins.getattr"}
             and len(node.args) >= 2
