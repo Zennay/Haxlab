@@ -232,14 +232,26 @@ def build_training_manifest(
     holdout_bucket: int = 0,
 ) -> dict[str, Any]:
     _validate_holdout_partition(holdout_modulus, holdout_bucket)
+    if leaderboard_path.is_symlink() or not leaderboard_path.is_file():
+        raise ValueError("leaderboard must be a regular non-symlink file")
     leaderboard_bytes = leaderboard_path.read_bytes()
     leaderboard_sha256 = hashlib.sha256(leaderboard_bytes).hexdigest()
     leaderboard = json.loads(leaderboard_bytes)
     if not isinstance(leaderboard, dict):
         raise ValueError("leaderboard must be a JSON object")
+    analysis_version = leaderboard.get("analysis_version")
+    if not isinstance(analysis_version, str) or not analysis_version.strip():
+        raise ValueError("leaderboard analysis_version must be a non-empty string")
     leaderboard_rows = leaderboard.get("rows")
     if not isinstance(leaderboard_rows, list):
         raise ValueError("leaderboard rows must be a JSON list")
+    valid_player_ids = [
+        row["player_id"]
+        for row in leaderboard_rows
+        if _valid_leaderboard_row(row)
+    ]
+    if len(valid_player_ids) != len(set(valid_player_ids)):
+        raise ValueError("leaderboard contains duplicate valid player_id rows")
     selected_players = select_players(
         leaderboard_rows,
         top_fraction_per_role=top_fraction_per_role,
@@ -366,7 +378,7 @@ def build_training_manifest(
     return {
         "schema": MANIFEST_SCHEMA,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "analysis_version": leaderboard.get("analysis_version"),
+        "analysis_version": analysis_version,
         "analysis_root": str(analysis_root),
         "leaderboard_path": str(leaderboard_path),
         "leaderboard_sha256": leaderboard_sha256,
