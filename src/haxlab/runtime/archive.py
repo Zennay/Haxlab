@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import stat
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,27 +24,63 @@ def archive_path_for(raw_root: Path, sha256: str) -> Path:
     return raw_root / sha256[:2] / sha256[2:4] / f"{sha256}.hbr2"
 
 
-def _source_signature(stat: os.stat_result) -> tuple[int, int, int, int, int]:
+def _source_signature(value: os.stat_result) -> tuple[int, int, int, int, int]:
     return (
-        stat.st_dev,
-        stat.st_ino,
-        stat.st_size,
-        stat.st_mtime_ns,
-        stat.st_ctime_ns,
+        value.st_dev,
+        value.st_ino,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
     )
+
+
+def _open_verified_source(source_path: Path) -> tuple[int, os.stat_result]:
+    try:
+        initial = source_path.lstat()
+    except OSError as exc:
+        raise RuntimeError("source_changed_during_archive") from exc
+    if stat.S_ISLNK(initial.st_mode) or not stat.S_ISREG(initial.st_mode):
+        raise RuntimeError("source_changed_during_archive")
+
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    nonblock = getattr(os, "O_NONBLOCK", None)
+    if nofollow is None or nonblock is None:
+        raise RuntimeError("source_changed_during_archive")
+    flags = os.O_RDONLY | nofollow | nonblock
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+
+    try:
+        fd = os.open(source_path, flags)
+    except OSError as exc:
+        raise RuntimeError("source_changed_during_archive") from exc
+
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode):
+            raise RuntimeError("source_changed_during_archive")
+        if (opened.st_dev, opened.st_ino) != (initial.st_dev, initial.st_ino):
+            raise RuntimeError("source_changed_during_archive")
+        return fd, opened
+    except Exception:
+        os.close(fd)
+        raise
 
 
 def _copy_to_staging_and_hash(
     source_path: Path,
     raw_root: Path,
 ) -> tuple[Path, str, int]:
-    """Copy one source snapshot to private staging while hashing those exact bytes."""
+    """Copy one verified source inode to private staging while hashing exact bytes."""
 
     staging_root = raw_root / ".staging"
     staging_root.mkdir(parents=True, exist_ok=True)
 
     staging_path: Path | None = None
+    source_fd: int | None = None
     try:
+        source_fd, source_before = _open_verified_source(source_path)
+
         with tempfile.NamedTemporaryFile(
             mode="wb",
             prefix="ingest-",
@@ -55,14 +92,29 @@ def _copy_to_staging_and_hash(
             digest = hashlib.sha256()
             copied_bytes = 0
 
-            with source_path.open("rb") as source:
-                while True:
-                    chunk = source.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    target.write(chunk)
-                    digest.update(chunk)
-                    copied_bytes += len(chunk)
+            while True:
+                chunk = os.read(source_fd, 1024 * 1024)
+                if not chunk:
+                    break
+                target.write(chunk)
+                digest.update(chunk)
+                copied_bytes += len(chunk)
+
+            source_after = os.fstat(source_fd)
+            if (
+                copied_bytes != source_after.st_size
+                or _source_signature(source_before) != _source_signature(source_after)
+            ):
+                raise RuntimeError("source_changed_during_archive")
+
+            try:
+                final = source_path.lstat()
+            except OSError as exc:
+                raise RuntimeError("source_changed_during_archive") from exc
+            if stat.S_ISLNK(final.st_mode) or not stat.S_ISREG(final.st_mode):
+                raise RuntimeError("source_changed_during_archive")
+            if _source_signature(final) != _source_signature(source_after):
+                raise RuntimeError("source_changed_during_archive")
 
             target.flush()
             os.fsync(target.fileno())
@@ -72,6 +124,9 @@ def _copy_to_staging_and_hash(
         if staging_path is not None:
             staging_path.unlink(missing_ok=True)
         raise
+    finally:
+        if source_fd is not None:
+            os.close(source_fd)
 
 
 def archive_replay(
