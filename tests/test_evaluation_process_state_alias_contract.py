@@ -202,6 +202,8 @@ class ProcessStateAliasVisitor(ast.NodeVisitor):
                     return f"{owner}.{attribute}"
         if isinstance(node, ast.Subscript):
             return self.canonical(node.value)
+        if isinstance(node, ast.NamedExpr):
+            return self.canonical(node.value)
         return None
 
     @staticmethod
@@ -398,6 +400,69 @@ class ProcessStateAliasVisitor(ast.NodeVisitor):
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         self._visit_function(node)
 
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        for default in list(node.args.defaults) + [
+            value for value in node.args.kw_defaults if value is not None
+        ]:
+            self.visit(default)
+
+        blocked = {
+            argument.arg
+            for argument in (
+                list(node.args.posonlyargs)
+                + list(node.args.args)
+                + list(node.args.kwonlyargs)
+            )
+        }
+        if node.args.vararg:
+            blocked.add(node.args.vararg.arg)
+        if node.args.kwarg:
+            blocked.add(node.args.kwarg.arg)
+
+        self.aliases.push(blocked)
+        self.visit(node.body)
+        self.aliases.pop()
+
+    def _visit_comprehension(
+        self,
+        generators: list[ast.comprehension],
+        values: list[ast.AST],
+    ) -> None:
+        if not generators:
+            for value in values:
+                self.visit(value)
+            return
+
+        # Python evaluates the first iterable in the enclosing scope. Generator
+        # targets themselves live in the comprehension scope.
+        self.visit(generators[0].iter)
+        blocked: set[str] = set()
+        for generator in generators:
+            blocked.update(self._simple_targets(generator.target))
+
+        self.aliases.push(blocked)
+        for condition in generators[0].ifs:
+            self.visit(condition)
+        for generator in generators[1:]:
+            self.visit(generator.iter)
+            for condition in generator.ifs:
+                self.visit(condition)
+        for value in values:
+            self.visit(value)
+        self.aliases.pop()
+
+    def visit_ListComp(self, node: ast.ListComp) -> None:
+        self._visit_comprehension(node.generators, [node.elt])
+
+    def visit_SetComp(self, node: ast.SetComp) -> None:
+        self._visit_comprehension(node.generators, [node.elt])
+
+    def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
+        self._visit_comprehension(node.generators, [node.elt])
+
+    def visit_DictComp(self, node: ast.DictComp) -> None:
+        self._visit_comprehension(node.generators, [node.key, node.value])
+
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         for decorator in node.decorator_list:
             self.visit(decorator)
@@ -474,6 +539,14 @@ def test_evaluation_package_has_no_process_state_alias_mutation() -> None:
             "os.environ",
         ),
         (
+            "import os\n(mut := os.chdir)('/tmp')\n",
+            "os.chdir",
+        ),
+        (
+            "import os\n(env := os.environ).update({'MODE': 'unsafe'})\n",
+            "os.environ.update",
+        ),
+        (
             "from sys import settrace as trace\nalias = trace\nalias(lambda *args: None)\n",
             "sys.settrace",
         ),
@@ -534,6 +607,16 @@ def test_contract_rejects_assignment_and_bound_alias_bypasses(
             "import os\n"
             "env = os.environ\n"
             "del env\n"
+        ),
+        (
+            "import os\n"
+            "env = os.environ\n"
+            "probe = lambda env: env.update({'local': True})\n"
+        ),
+        (
+            "import os\n"
+            "env = os.environ\n"
+            "values = [env.update({'local': True}) for env in ({},)]\n"
         ),
     ],
 )
