@@ -984,3 +984,33 @@ def test_training_manifest_rejects_duplicate_selected_replay_player_id(
             min_minutes=0.0,
             max_uncertainty=10.0,
         )
+
+
+
+def test_atomic_training_manifest_publication_preserves_previous_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from haxlab.learning import selector
+
+    output = tmp_path / "manifest.json"
+    previous = b'{"previous": true}\n'
+    output.write_bytes(previous)
+
+    original_dump = selector.json.dump
+
+    def failing_dump(payload: object, handle: object, **kwargs: object) -> None:
+        handle.write('{"partial":')
+        raise OSError("simulated serialization failure")
+
+    monkeypatch.setattr(selector.json, "dump", failing_dump)
+
+    with pytest.raises(OSError, match="simulated serialization failure"):
+        selector._atomic_json(output, {"next": True})
+
+    assert output.read_bytes() == previous
+    assert list(tmp_path.glob(".manifest.json.*.tmp")) == []
+
+    monkeypatch.setattr(selector.json, "dump", original_dump)
+    selector._atomic_json(output, {"next": True})
+    assert json.loads(output.read_text(encoding="utf-8")) == {"next": True}
