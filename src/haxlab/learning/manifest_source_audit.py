@@ -130,12 +130,43 @@ def _read_regular(path: Path, *, limit: int, label: str) -> bytes:
 
 def _regular_size(path: Path, *, label: str) -> int:
     try:
-        info = path.lstat()
+        initial = path.lstat()
     except OSError as exc:
         _fail(f"{label} is not readable: {exc}")
-    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+    if stat.S_ISLNK(initial.st_mode) or not stat.S_ISREG(initial.st_mode):
         _fail(f"{label} must be a regular non-symlink file")
-    return info.st_size
+
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    nonblock = getattr(os, "O_NONBLOCK", None)
+    if nofollow is None or nonblock is None:
+        _fail("platform lacks required no-follow/non-blocking file primitives")
+    try:
+        fd = os.open(path, os.O_RDONLY | nofollow | nonblock)
+    except OSError as exc:
+        _fail(f"{label} secure open failed: {exc}")
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode):
+            _fail(f"{label} descriptor must reference a regular file")
+        if (opened.st_dev, opened.st_ino) != (initial.st_dev, initial.st_ino):
+            _fail(f"{label} identity changed during secure open")
+        try:
+            final = path.lstat()
+        except OSError as exc:
+            _fail(f"{label} path changed during secure open: {exc}")
+        if stat.S_ISLNK(final.st_mode) or not stat.S_ISREG(final.st_mode):
+            _fail(f"{label} path changed to an unsafe file type")
+        if (final.st_dev, final.st_ino, final.st_size) != (
+            opened.st_dev,
+            opened.st_ino,
+            opened.st_size,
+        ):
+            _fail(f"{label} path identity changed during secure open")
+        return opened.st_size
+    except OSError as exc:
+        _fail(f"{label} inspection failed: {exc}")
+    finally:
+        os.close(fd)
 
 
 def _load_json(payload: bytes, *, label: str) -> dict[str, Any]:
