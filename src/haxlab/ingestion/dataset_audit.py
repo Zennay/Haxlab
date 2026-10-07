@@ -104,6 +104,17 @@ def _string_list(value: Any) -> bool:
     return type(value) is list and all(_non_empty_string(item) for item in value)
 
 
+def _safe_relative_path(value: Any) -> bool:
+    if not _non_empty_string(value):
+        return False
+    candidate = Path(value)
+    return (
+        not candidate.is_absolute()
+        and value != "."
+        and ".." not in candidate.parts
+    )
+
+
 def audit_dataset(root: Path) -> DatasetAudit:
     """Validate cross-artifact integrity for one M0 import dataset.
 
@@ -169,7 +180,7 @@ def audit_dataset(root: Path) -> DatasetAudit:
             else:
                 replay_by_sha[sha] = row
 
-            if not _non_empty_string(source_path):
+            if not _safe_relative_path(source_path):
                 issues.append(f"{prefix}:invalid_source_path")
             elif source_path in replay_by_source:
                 issues.append(f"{prefix}:duplicate_source_path")
@@ -178,6 +189,8 @@ def audit_dataset(root: Path) -> DatasetAudit:
 
             if not _non_empty_string(file_name):
                 issues.append(f"{prefix}:invalid_file_name")
+            elif _safe_relative_path(source_path) and file_name != Path(source_path).name:
+                issues.append(f"{prefix}:file_name_mismatch")
             if not _is_native_non_negative_int(size_bytes):
                 issues.append(f"{prefix}:invalid_size_bytes")
 
@@ -190,7 +203,7 @@ def audit_dataset(root: Path) -> DatasetAudit:
                 issues.append(f"{prefix}:invalid_validation_flag")
             if not _string_list(reasons):
                 issues.append(f"{prefix}:invalid_validation_reasons")
-            if valid is True and _non_empty_string(source_path):
+            if valid is True and _safe_relative_path(source_path):
                 valid_replay_sources.add(source_path)
 
     report_ids: set[str] = set()
@@ -220,14 +233,20 @@ def audit_dataset(root: Path) -> DatasetAudit:
             if not _string_list(paths):
                 issues.append(f"duplicates:{sha}:invalid_paths")
                 continue
+            if not paths:
+                issues.append(f"duplicates:{sha}:empty_group")
             duplicate_count += len(paths)
             for path in paths:
+                if not _safe_relative_path(path):
+                    issues.append(f"duplicates:{sha}:invalid_path")
                 if path in seen_duplicate_paths:
                     issues.append(f"duplicates:{sha}:duplicate_path")
                 seen_duplicate_paths.add(path)
                 canonical = replay_by_sha.get(sha, {}).get("source_path")
                 if canonical == path:
                     issues.append(f"duplicates:{sha}:canonical_path_reused")
+                elif path in replay_by_source:
+                    issues.append(f"duplicates:{sha}:canonical_source_collision")
 
     match_ids: set[str] = set()
     matched_replay_shas: set[str] = set()
@@ -310,6 +329,8 @@ def audit_dataset(root: Path) -> DatasetAudit:
         unmatched_replays = manifest.get("unmatched_replays")
         if not _string_list(unmatched_replays):
             issues.append("manifest:unmatched_replays:invalid")
+        elif any(not _safe_relative_path(path) for path in unmatched_replays):
+            issues.append("manifest:unmatched_replays:invalid_path")
         elif len(unmatched_replays) != len(set(unmatched_replays)):
             issues.append("manifest:unmatched_replays:duplicates")
         elif replays is not None and set(unmatched_replays) != (
