@@ -79,6 +79,24 @@ def test_receipt_ignores_unrelated_file_changes(tmp_path: Path) -> None:
     assert before == after
 
 
+@pytest.mark.parametrize("flag_name", ["O_NOFOLLOW", "O_DIRECTORY"])
+def test_receipt_fails_closed_without_directory_descriptor_support(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    flag_name: str,
+) -> None:
+    root = tmp_path / "export"
+    root.mkdir()
+    (root / "match.hbr2").write_bytes(b"replay")
+    monkeypatch.delattr(receipt.os, flag_name, raising=False)
+
+    with pytest.raises(
+        receipt.SourceBundleReceiptError,
+        match="source_directory_descriptors_unsupported",
+    ):
+        receipt.create_source_bundle_receipt(root)
+
+
 def test_receipt_rejects_symlinked_root(tmp_path: Path) -> None:
     target = tmp_path / "target"
     target.mkdir()
