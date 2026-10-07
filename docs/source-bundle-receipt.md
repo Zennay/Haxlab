@@ -33,15 +33,19 @@ If importer discovery semantics change, this contract must change in the same in
 
 Receipt creation fails when source identity cannot be proven safely:
 
+- a platform without directory + no-follow descriptor support;
 - missing, unreadable, symlinked, or non-directory export root;
+- a symlink or non-directory anywhere in the export root's parent-component chain;
 - any traversed symlink directory;
+- any traversed directory whose device/inode changes after inventory;
 - importer-relevant symlink or non-regular file;
 - a file whose device/inode changes between discovery and open;
 - a file whose size/mtime/ctime changes during the read;
 - a file replaced or mutated immediately after the read;
-- importer-relevant inventory changes between the pre-hash and post-hash scans.
+- importer-relevant inventory or directory identity changes between the pre-hash and post-hash scans;
+- the logical export-root path resolving to a different root inode before the receipt is returned.
 
-The module opens relevant files with `O_NOFOLLOW` where the platform provides it and hashes bytes from the opened descriptor. It never mutates the source tree.
+The module requires directory + no-follow descriptor support and fails closed when the platform cannot provide it. It opens the export root one path component at a time and keeps a bound directory descriptor for the complete operation. Nested traversal and relevant file opens are relative to already-bound directory descriptors with `O_NOFOLLOW` where the platform provides it. A final reopen of the configured logical root must resolve to the same device/inode before a receipt is emitted. The module never mutates the source tree.
 
 ## CLI
 
@@ -60,5 +64,7 @@ This lane is source-side provenance only. It does not modify:
 - runtime scanner/archive/state/analyzer paths;
 - learning selectors, manifests or shards;
 - evaluation, model, threshold or champion state.
+
+It is intentionally separate from raw-archive destination/root publication hardening: this contract protects immutable import-source provenance, not the runtime content-addressed archive destination.
 
 Integration requires exact-head repository CI and a fresh ownership/main-drift check.

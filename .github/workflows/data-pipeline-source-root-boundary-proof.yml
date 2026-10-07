@@ -1,0 +1,59 @@
+name: HaxLab source root boundary proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact branch SHA to prove
+        required: true
+        type: string
+  push:
+    branches:
+      - feature/data-pipeline-source-root-boundary-20261007
+    paths:
+      - "src/haxlab/ingestion/source_bundle_receipt.py"
+      - "tests/test_source_bundle_receipt.py"
+      - "tests/test_source_bundle_verify.py"
+      - "docs/source-bundle-receipt.md"
+      - ".github/workflows/data-pipeline-source-root-boundary-proof.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-source-root-boundary-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate exact-head source root boundary
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    env:
+      EXPECTED_HEAD: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_sha || github.sha }}
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+
+      - name: Assert exact head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Run focused source provenance proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .source-root-boundary-venv
+          python3 -m venv .source-root-boundary-venv
+          .source-root-boundary-venv/bin/pip install -q --upgrade pip
+          .source-root-boundary-venv/bin/pip install -q -e '.[dev]'
+          .source-root-boundary-venv/bin/python -m compileall -q src tests
+          .source-root-boundary-venv/bin/pytest -q \
+            tests/test_source_bundle_receipt.py \
+            tests/test_source_bundle_verify.py
+          echo "HAXLAB_SOURCE_ROOT_BOUNDARY_PROOF=success"
