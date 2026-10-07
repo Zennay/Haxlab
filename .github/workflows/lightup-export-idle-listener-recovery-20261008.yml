@@ -1,0 +1,76 @@
+name: Restore idle zCloud listener for LightUp export validation
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/lightup-export-idle-listener-recovery-20261008.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: lightup-export-idle-listener-recovery-20261008
+  cancel-in-progress: false
+jobs:
+  recover:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 3
+    steps:
+      - name: Recover idle permanent listener without interrupting workers
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          test "${RUNNER_NAME:-}" = "vps-bb300bba-haxlab"
+          python3 - <<'PY'
+          import json, pathlib, subprocess, time, urllib.request
+          ROOT = "/home/ubuntu/actions-runner-zcloud"
+          SERVICE = "actions.runner.Zennay-zCloud.zcloud-vps-1.service"
+          RUNS = [37704802064, 37704308669, 37704472650]
+          def command(args):
+              return subprocess.run(args, text=True, capture_output=True, check=True).stdout.strip()
+          def workers():
+              found = []
+              for proc in pathlib.Path("/proc").iterdir():
+                  if not proc.name.isdigit():
+                      continue
+                  try:
+                      args = (proc / "cmdline").read_bytes().split(b"\0")
+                  except FileNotFoundError:
+                      continue
+                  except PermissionError:
+                      raise SystemExit("Cannot inspect processes; recovery refused")
+                  if any(arg.decode(errors="replace") == ROOT + "/bin/Runner.Worker" for arg in args):
+                      found.append(int(proc.name))
+              return found
+          if not pathlib.Path(ROOT).is_dir():
+              raise SystemExit("Expected permanent runner root is absent")
+          queued = False
+          for run in RUNS:
+              request = urllib.request.Request(
+                  f"https://api.github.com/repos/Zennay/zCloud/actions/runs/{run}/jobs",
+                  headers={"Accept": "application/vnd.github+json", "User-Agent": "lightup-idle-listener-recovery"})
+              with urllib.request.urlopen(request, timeout=15) as response:
+                  jobs = json.load(response)["jobs"]
+              print("LIGHTUP_PROOF_QUEUE", run, [(j["id"], j["status"]) for j in jobs])
+              queued |= any(job["status"] == "queued" for job in jobs)
+          if not queued:
+              print("NO_QUEUED_EXPORT_PROOF_RECOVERY_SKIPPED")
+              raise SystemExit(0)
+          active = workers()
+          if active:
+              print("ACTIVE_ZCLOUD_WORKERS_PRESERVED", active)
+              raise SystemExit(0)
+          time.sleep(2)
+          active = workers()
+          if active:
+              print("ACTIVE_ZCLOUD_WORKERS_PRESERVED", active)
+              raise SystemExit(0)
+          command(["sudo", "-n", "systemctl", "restart", SERVICE])
+          for attempt in range(15):
+              state = subprocess.run(["systemctl", "is-active", SERVICE], text=True, capture_output=True).stdout.strip()
+              if state == "active":
+                  print("ZCLOUD_IDLE_LISTENER_RECOVERY_GREEN", SERVICE)
+                  break
+              time.sleep(1)
+          else:
+              raise SystemExit("Permanent runner service did not become active")
+          PY
