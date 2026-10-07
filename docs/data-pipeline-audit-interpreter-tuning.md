@@ -19,6 +19,9 @@ Audit modules must not invoke:
 - `sys.setrecursionlimit(...)`;
 - `sys.setswitchinterval(...)`;
 - `sys.set_int_max_str_digits(...)`;
+- `sys.setdlopenflags(...)`;
+- `sys.set_asyncgen_hooks(...)`;
+- `sys.set_coroutine_origin_tracking_depth(...)`;
 - `threading.stack_size(...)` when an argument is supplied.
 
 The scanner resolves normal imports, direct imports, aliases, chained/tuple assignment aliases and constant-string `getattr(...)`. Dynamic `getattr(sys/threading, name)` capability selection and wildcard imports from `sys` or `threading` are rejected because mutator provenance becomes statically ambiguous.
@@ -34,7 +37,7 @@ Read-only inspection remains valid, including:
 
 ## Why this matters
 
-These APIs change process-wide interpreter behavior. A verifier that changes recursion depth, scheduling cadence, integer-string conversion limits or the default stack size for later threads can make exact-head evidence depend on audit order instead of explicit repository and data inputs.
+These APIs change persistent interpreter behavior. A verifier that changes recursion depth, scheduling cadence, integer-string conversion limits, dynamic-loader flags, async-generator hooks, coroutine-origin tracking, or the default stack size for later threads can make exact-head evidence depend on audit order instead of explicit repository and data inputs.
 
 ## Proof
 
