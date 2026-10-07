@@ -1,0 +1,59 @@
+name: Duel evidence native-type validation
+
+on:
+  push:
+    branches:
+      - validation/duel-evidence-native-types-20261006
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-duel-evidence-native-types-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .duel-evidence-validation-venv
+          python3 -m venv .duel-evidence-validation-venv
+          .duel-evidence-validation-venv/bin/pip install --upgrade pip
+          .duel-evidence-validation-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile duel evidence gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          .duel-evidence-validation-venv/bin/python -m compileall -q             src/haxlab/evaluation/duel_gate.py             tests/test_duel_gate.py
+
+      - name: Run duel evidence regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src"             .duel-evidence-validation-venv/bin/pytest -q tests/test_duel_gate.py
+
+      - name: Run adjacent evaluation regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src"             .duel-evidence-validation-venv/bin/pytest -q               tests/test_multisource_duel.py               tests/test_closed_loop_arena.py
+
+      - name: Record exact-head validation evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "DUEL_EVIDENCE_VALIDATION_HEAD=$(git rev-parse HEAD)"
+          echo "DUEL_EVIDENCE_VALIDATION_RESULT=green"
