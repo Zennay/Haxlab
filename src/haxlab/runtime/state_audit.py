@@ -144,6 +144,24 @@ def _audit_source_files(
                     "failed source requires non-empty error evidence",
                 )
 
+    for row in connection.execute(
+        """
+        SELECT s.source_path, s.sha256
+        FROM source_files AS s
+        LEFT JOIN raw_replays AS r ON r.sha256 = s.sha256
+        WHERE s.status IN ('archived', 'duplicate')
+          AND s.sha256 IS NOT NULL
+          AND r.sha256 IS NULL
+        ORDER BY s.source_path
+        """
+    ):
+        _append_issue(
+            issues,
+            "source_without_raw_replay",
+            row["source_path"],
+            f"source references unknown raw replay sha256 {row['sha256']!r}",
+        )
+
 
 def _audit_raw_replays(
     connection: sqlite3.Connection,
@@ -346,6 +364,25 @@ def _audit_analysis(
             "analysis_without_successful_processing",
             subject,
             f"analysis status {row['status']!r} is bound to processing status {row['processing_status']!r}",
+        )
+
+    for row in connection.execute(
+        """
+        SELECT output_path, COUNT(*) AS row_count
+        FROM replay_analysis_versions
+        WHERE status = 'ok'
+          AND output_path IS NOT NULL
+          AND TRIM(output_path) != ''
+        GROUP BY output_path
+        HAVING COUNT(*) > 1
+        ORDER BY output_path
+        """
+    ):
+        _append_issue(
+            issues,
+            "analysis_output_path_reused",
+            row["output_path"],
+            f"successful analysis output is claimed by {int(row['row_count'])} ledger rows",
         )
 
 
