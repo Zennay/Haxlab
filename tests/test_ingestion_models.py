@@ -293,6 +293,27 @@ def test_import_manifest_binds_unmatched_evidence_to_counts() -> None:
         )
 
 
+def test_import_manifest_allows_invalid_replay_failure_outside_unmatched_valid_set() -> None:
+    manifest = ImportManifest(
+        replay_count=2,
+        unique_replay_count=2,
+        report_count=1,
+        match_count=1,
+        unmatched_replays=[],
+        unmatched_reports=[],
+        failures=[
+            ImportFailure(
+                source="invalid.hbr2",
+                stage="hbr2_validation",
+                error="too_small",
+            )
+        ],
+    )
+
+    assert manifest.as_dict()["unmatched_replays"] == []
+    assert manifest.as_dict()["failures"][0]["stage"] == "hbr2_validation"
+
+
 def test_import_manifest_as_dict_revalidates_unmatched_count_invariants() -> None:
     manifest = ImportManifest(
         replay_count=2,
