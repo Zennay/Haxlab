@@ -16,8 +16,10 @@ mapping containers.
 
 The detector resolves module/class imports, simple assignment aliases, constant
 `getattr(...)` constructor aliases (including default-value lookups), and
-`module.__dict__` / `vars(module)` mapping lookups. The standard-library
-constructor set is intentionally explicit so immutable wrappers such as `MappingProxyType`
+`module.__dict__` / `vars(module)` mapping lookups. Wildcard imports from modules
+that expose the banned mutable constructors are rejected because they erase the
+binding information required for deterministic static resolution. The
+standard-library constructor set is intentionally explicit so immutable wrappers such as `MappingProxyType`
 remain valid while common process-lifetime mutable containers fail closed.
 
 Per-instance state remains allowed. In particular, method-local containers and

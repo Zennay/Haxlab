@@ -10,6 +10,16 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EVALUATION_ROOT = REPO_ROOT / "src" / "haxlab" / "evaluation"
 
+MUTABLE_CONSTRUCTOR_MODULES = {
+    "array",
+    "builtins",
+    "collections",
+    "io",
+    "queue",
+    "types",
+    "weakref",
+}
+
 MUTABLE_CONSTRUCTORS = {
     "array.array",
     "bytearray",
@@ -161,6 +171,14 @@ class SharedClassStateScanner:
             if isinstance(statement, ast.Import):
                 _record_import(statement, aliases)
             elif isinstance(statement, ast.ImportFrom):
+                if (
+                    statement.module in MUTABLE_CONSTRUCTOR_MODULES
+                    and any(alias.name == "*" for alias in statement.names)
+                ):
+                    self.violations.append(
+                        f"line {statement.lineno}: wildcard import can hide "
+                        f"mutable class-state constructors: {statement.module}"
+                    )
                 _record_import_from(statement, aliases)
             elif isinstance(statement, ast.Assign):
                 _record_alias_targets(statement.targets, statement.value, aliases)
@@ -182,6 +200,14 @@ class SharedClassStateScanner:
                 _record_import(statement, aliases)
                 continue
             if isinstance(statement, ast.ImportFrom):
+                if (
+                    statement.module in MUTABLE_CONSTRUCTOR_MODULES
+                    and any(alias.name == "*" for alias in statement.names)
+                ):
+                    self.violations.append(
+                        f"line {statement.lineno}: wildcard import can hide "
+                        f"mutable class-state constructors: {statement.module}"
+                    )
                 _record_import_from(statement, aliases)
                 continue
             if isinstance(statement, ast.Assign):
@@ -255,6 +281,8 @@ def test_evaluation_package_has_no_shared_mutable_class_state() -> None:
         "import collections\nFactory = collections.__dict__['ChainMap']\nclass Gate:\n    state = Factory()\n",
         "import collections\nFactory = vars(collections).get('UserList')\nclass Gate:\n    state = Factory()\n",
         "import queue as q\nFactory = vars(q)['SimpleQueue']\nclass Gate:\n    pending = Factory()\n",
+        "from collections import *\nclass Gate:\n    counts = Counter()\n",
+        "from builtins import *\nclass Gate:\n    cache = list()\n",
     ],
 )
 def test_detector_rejects_shared_mutable_class_state(source: str) -> None:
