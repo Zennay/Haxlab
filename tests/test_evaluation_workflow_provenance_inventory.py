@@ -37,6 +37,7 @@ permissions:
 jobs:
   validate:
     runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
     steps:
       - name: Checkout exact source
         uses: {PINNED_CHECKOUT}
@@ -64,6 +65,11 @@ def test_clean_pinned_workflow_has_no_findings() -> None:
     assert report["checkout_refs_bound"] is True
     assert report["has_exact_head_guard"] is True
     assert report["top_level_contents_read_only"] is True
+    assert report["runner_specs"] == ["[self-hosted, haxlab]"]
+    assert report["self_hosted_haxlab_only"] is True
+    assert report["timeout_minutes"] == [20]
+    assert report["bounded_timeouts"] is True
+    assert report["continue_on_error_enabled"] is False
 
 
 
@@ -282,6 +288,39 @@ def test_write_permissions_are_visible_without_guessing_intent() -> None:
 
     assert report["write_permissions"] == ["issues: write"]
     assert report["findings"] == ["write_permissions_present"]
+
+
+def test_unexpected_runner_is_reported() -> None:
+    text = _clean_workflow().replace(
+        "runs-on: [self-hosted, haxlab]",
+        "runs-on: ubuntu-latest",
+    )
+    report = audit_workflow_text(".github/workflows/hosted.yml", text)
+
+    assert report["self_hosted_haxlab_only"] is False
+    assert "unexpected_runner" in report["findings"]
+
+
+def test_missing_timeout_is_reported() -> None:
+    text = _clean_workflow().replace("    timeout-minutes: 20\n", "")
+    report = audit_workflow_text(".github/workflows/unbounded.yml", text)
+
+    assert report["bounded_timeouts"] is False
+    assert "unbounded_or_invalid_timeout" in report["findings"]
+
+
+def test_continue_on_error_true_is_reported() -> None:
+    text = _clean_workflow().replace(
+        "      - name: Verify exact source",
+        "      - name: Optional failure\n"
+        "        continue-on-error: true\n"
+        "        run: false\n"
+        "      - name: Verify exact source",
+    )
+    report = audit_workflow_text(".github/workflows/masked.yml", text)
+
+    assert report["continue_on_error_enabled"] is True
+    assert "continue_on_error_enabled" in report["findings"]
 
 
 def test_inventory_is_sorted_deduplicated_and_deterministic(tmp_path: Path) -> None:
