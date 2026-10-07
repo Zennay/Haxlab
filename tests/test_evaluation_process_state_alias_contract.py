@@ -107,6 +107,76 @@ class AliasState:
         return name
 
 
+class _FunctionLocalCollector(ast.NodeVisitor):
+    """Collect bindings owned by one function scope without entering nested scopes."""
+
+    def __init__(self) -> None:
+        self.bound: set[str] = set()
+        self.global_names: set[str] = set()
+        self.nonlocal_names: set[str] = set()
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if isinstance(node.ctx, ast.Store):
+            self.bound.add(node.id)
+
+    def visit_Import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            self.bound.add(alias.asname or alias.name.split(".", 1)[0])
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        for alias in node.names:
+            if alias.name != "*":
+                self.bound.add(alias.asname or alias.name)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self.bound.add(node.name)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self.bound.add(node.name)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self.bound.add(node.name)
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        return
+
+    def visit_ListComp(self, node: ast.ListComp) -> None:
+        return
+
+    def visit_SetComp(self, node: ast.SetComp) -> None:
+        return
+
+    def visit_DictComp(self, node: ast.DictComp) -> None:
+        return
+
+    def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
+        return
+
+    def visit_Global(self, node: ast.Global) -> None:
+        self.global_names.update(node.names)
+
+    def visit_Nonlocal(self, node: ast.Nonlocal) -> None:
+        self.nonlocal_names.update(node.names)
+
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+        if node.name:
+            self.bound.add(node.name)
+        for statement in node.body:
+            self.visit(statement)
+
+    def local_names(self) -> set[str]:
+        return self.bound - self.global_names - self.nonlocal_names
+
+
+def _function_local_names(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> set[str]:
+    collector = _FunctionLocalCollector()
+    for statement in node.body:
+        collector.visit(statement)
+    return collector.local_names()
+
+
 class ProcessStateAliasVisitor(ast.NodeVisitor):
     def __init__(self) -> None:
         self.aliases = AliasState()
@@ -285,14 +355,15 @@ class ProcessStateAliasVisitor(ast.NodeVisitor):
         self,
         node: ast.FunctionDef | ast.AsyncFunctionDef,
     ) -> None:
-        blocked = {
+        blocked = _function_local_names(node)
+        blocked.update(
             argument.arg
             for argument in (
                 list(node.args.posonlyargs)
                 + list(node.args.args)
                 + list(node.args.kwonlyargs)
             )
-        }
+        )
         if node.args.vararg:
             blocked.add(node.args.vararg.arg)
         if node.args.kwarg:
@@ -428,6 +499,15 @@ def test_contract_rejects_assignment_and_bound_alias_bypasses(
             "    pass\n"
             "obj = Local()\n"
             "mutate(obj, 'value', 1)\n"
+        ),
+        (
+            "import os\n"
+            "env = os.environ\n"
+            "def probe():\n"
+            "    value = env.get('MODE')\n"
+            "    env = {}\n"
+            "    env.update({'local': True})\n"
+            "    return value\n"
         ),
     ],
 )
