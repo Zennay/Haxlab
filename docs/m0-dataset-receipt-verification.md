@@ -22,8 +22,10 @@ No other top-level fields are accepted. When `ok` is present it must be the
 native JSON boolean `true`.
 
 Receipt files are opened without following their final path component and must
-be regular files. Duplicate JSON object keys are rejected instead of relying
-on last-key-wins parsing.
+be regular files. Evidence is capped at 64 KiB and the verifier rejects a file
+whose size, mtime or ctime changes during the same open-descriptor read.
+Duplicate JSON object keys are rejected instead of relying on last-key-wins
+parsing.
 
 The payload must preserve:
 
