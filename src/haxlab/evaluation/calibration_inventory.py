@@ -51,14 +51,16 @@ def inventory_calibration_results(
     """
     result_root = Path(result_root)
     source_root = Path(source_root)
+    challenger_snapshot = dict(challengers)
+    partner_snapshot = tuple(partners)
 
     expected_labels = tuple(CALIBRATION_LABELS)
     missing_labels = [
-        label for label in expected_labels if label not in challengers
+        label for label in expected_labels if label not in challenger_snapshot
     ]
     unexpected_labels: list[str] = []
     invalid_challenger_key = False
-    for key in challengers:
+    for key in challenger_snapshot:
         if type(key) is not str:
             invalid_challenger_key = True
         elif key not in expected_labels:
@@ -86,7 +88,7 @@ def inventory_calibration_results(
 
     for label in expected_labels:
         label_rows: list[dict[str, Any]] = []
-        challenger = challengers.get(label)
+        challenger = challenger_snapshot.get(label)
         for source_id in SOURCE_IDS:
             result_path = result_root / f"{label}-source-{source_id}.json"
             blocked_reasons = list(global_request_errors)
@@ -109,7 +111,7 @@ def inventory_calibration_results(
                         result_path,
                         challenger=challenger,
                         champion=champion,
-                        partners=partners,
+                        partners=partner_snapshot,
                         stadium=source / "stadium.hbs",
                         scenarios=source / "scenarios.json",
                         seconds=seconds,
