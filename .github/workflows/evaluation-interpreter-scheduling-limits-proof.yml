@@ -56,7 +56,7 @@ jobs:
           set -euo pipefail
           rm -rf .proof-venv
           python3 -m venv .proof-venv
-          .proof-venv/bin/python -m pip install --disable-pip-version-check pytest
+          .proof-venv/bin/python -m pip install --disable-pip-version-check -e '.[dev]'
 
       - name: Run interpreter-limit contract and adjacent evaluation regressions
         shell: bash
