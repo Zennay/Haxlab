@@ -1,0 +1,60 @@
+name: Evaluation control plane import validation
+
+on:
+  push:
+    branches:
+      - validation/evaluation-control-plane-import-contract-20261007
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-evaluation-control-plane-import-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Verify exact checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          echo "HAXLAB_EVALUATION_CONTROL_PLANE_IMPORT_HEAD=$(git rev-parse HEAD)"
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .evaluation-control-plane-import-venv
+          python3 -m venv .evaluation-control-plane-import-venv
+          .evaluation-control-plane-import-venv/bin/pip install --upgrade pip
+          .evaluation-control-plane-import-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile evaluation package and contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          .evaluation-control-plane-import-venv/bin/python -m compileall -q             src/haxlab/evaluation             tests/test_evaluation_control_plane_import_contract.py
+
+      - name: Run control-plane import contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src"             .evaluation-control-plane-import-venv/bin/pytest -q               tests/test_evaluation_control_plane_import_contract.py
+
+      - name: Record green result
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HAXLAB_EVALUATION_CONTROL_PLANE_IMPORT_RESULT=green"
