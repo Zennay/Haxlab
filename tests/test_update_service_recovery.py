@@ -122,6 +122,26 @@ exit 17
     ]
 
 
+def test_failure_with_no_previously_active_services_starts_nothing(
+    tmp_path: Path,
+) -> None:
+    calls = tmp_path / "calls"
+    script = f"""
+set -euo pipefail
+source {shlex.quote(str(HELPER))}
+CALLS="$1"
+{_mock_systemctl(())}
+haxlab_capture_update_service_state
+haxlab_install_update_recovery_trap
+exit 9
+"""
+
+    result = _run_bash(script, str(calls))
+
+    assert result.returncode == 9
+    assert not calls.exists()
+
+
 def test_successful_exit_does_not_run_recovery(tmp_path: Path) -> None:
     calls = tmp_path / "calls"
     script = f"""
