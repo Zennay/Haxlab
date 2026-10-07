@@ -57,6 +57,18 @@ def _qualname(node: ast.AST, aliases: dict[str, str]) -> str | None:
         if parent is None:
             return None
         return f"{parent}.{node.attr}"
+    if isinstance(node, ast.Call):
+        callable_name = _qualname(node.func, aliases)
+        if (
+            callable_name in {"getattr", "builtins.getattr"}
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and isinstance(node.args[1].value, str)
+        ):
+            parent = _qualname(node.args[0], aliases)
+            if parent is None:
+                return None
+            return f"{parent}.{node.args[1].value}"
     return None
 
 
@@ -89,6 +101,33 @@ class _AmbientNondeterminismVisitor(ast.NodeVisitor):
         self.aliases: dict[str, str] = {}
         self.violations: list[str] = []
 
+    def _bind_name(self, target: ast.AST, source_name: str | None) -> None:
+        if isinstance(target, ast.Name):
+            if source_name is None:
+                self.aliases.pop(target.id, None)
+            else:
+                self.aliases[target.id] = source_name
+            return
+        if isinstance(target, (ast.Tuple, ast.List)):
+            for item in target.elts:
+                self._bind_name(item, None)
+
+    def _bind_assignment(self, target: ast.AST, value: ast.AST) -> None:
+        if (
+            isinstance(target, (ast.Tuple, ast.List))
+            and isinstance(value, (ast.Tuple, ast.List))
+            and len(target.elts) == len(value.elts)
+        ):
+            for target_item, value_item in zip(target.elts, value.elts, strict=True):
+                self._bind_assignment(target_item, value_item)
+            return
+        self._bind_name(target, _qualname(value, self.aliases))
+
+    def _record_ambient(self, node: ast.AST, name: str | None) -> None:
+        reason = _ambient_reason(name)
+        if reason is not None:
+            self.violations.append(f"{node.lineno}:{reason}")
+
     def visit_Import(self, node: ast.Import) -> None:
         for item in node.names:
             local = item.asname or item.name.split(".", 1)[0]
@@ -117,18 +156,35 @@ class _AmbientNondeterminismVisitor(ast.NodeVisitor):
                 )
         self.generic_visit(node)
 
+    def visit_Assign(self, node: ast.Assign) -> None:
+        for target in node.targets:
+            self._bind_assignment(target, node.value)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        if node.value is None:
+            self._bind_name(node.target, None)
+        else:
+            self._bind_assignment(node.target, node.value)
+        self.generic_visit(node)
+
+    def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+        self._bind_assignment(node.target, node.value)
+        self.generic_visit(node)
+
     def visit_Name(self, node: ast.Name) -> None:
         if isinstance(node.ctx, ast.Load):
-            reason = _ambient_reason(_qualname(node, self.aliases))
-            if reason is not None:
-                self.violations.append(f"{node.lineno}:{reason}")
+            self._record_ambient(node, _qualname(node, self.aliases))
         self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
         if isinstance(node.ctx, ast.Load):
-            reason = _ambient_reason(_qualname(node, self.aliases))
-            if reason is not None:
-                self.violations.append(f"{node.lineno}:{reason}")
+            self._record_ambient(node, _qualname(node, self.aliases))
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        self._record_ambient(node, _qualname(node, self.aliases))
+        self._record_ambient(node, _qualname(node.func, self.aliases))
         self.generic_visit(node)
 
 
@@ -185,6 +241,51 @@ def test_data_pipeline_auditors_have_no_ambient_nondeterminism() -> None:
     ],
 )
 def test_contract_rejects_representative_ambient_sources(
+    source: str,
+    reason: str,
+) -> None:
+    violations = _ambient_violations(source)
+    assert any(reason in violation for violation in violations), violations
+
+
+@pytest.mark.parametrize(
+    ("source", "reason"),
+    [
+        (
+            "import time\nclock_module = time\nclock = clock_module.time\nvalue = clock()",
+            "ambient_clock",
+        ),
+        (
+            "import os\nos_module = os\ngetenv = os_module.getenv\nvalue = getenv('HAXLAB_MODE')",
+            "environment",
+        ),
+        (
+            "import os\ngetenv = getattr(os, 'getenv')\nvalue = getenv('HAXLAB_MODE')",
+            "environment",
+        ),
+        (
+            "from builtins import getattr as ga\nimport time\nclock = ga(time, 'monotonic')\nvalue = clock()",
+            "ambient_clock",
+        ),
+        (
+            "import builtins, time\nbuiltins_module = builtins\nga = builtins_module.getattr\nclock = ga(time, 'perf_counter')\nvalue = clock()",
+            "ambient_clock",
+        ),
+        (
+            "import random\nentropy = getattr(random, 'random')\nvalue = entropy()",
+            "random_entropy",
+        ),
+        (
+            "import uuid\nuuid_module = uuid\nfactory = getattr(uuid_module, 'uuid4')\nvalue = factory()",
+            "uuid_entropy",
+        ),
+        (
+            "import time, os\nclock_module, os_module = time, os\nvalue = (clock_module.time(), os_module.getenv('X'))",
+            "ambient_clock",
+        ),
+    ],
+)
+def test_contract_rejects_assignment_and_getattr_alias_bypasses(
     source: str,
     reason: str,
 ) -> None:
