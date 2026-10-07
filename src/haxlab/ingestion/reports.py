@@ -22,26 +22,40 @@ _POSSESSION_RE = re.compile(
 )
 
 
+def _first_defined(value: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    for key in keys:
+        if key in value and value[key] is not None:
+            return value[key]
+    return None
+
+
 def _attachment_from_json(value: dict[str, Any]) -> AttachmentRef | None:
-    file_name = (
-        value.get("fileName")
-        or value.get("filename")
-        or value.get("name")
-        or value.get("file_name")
+    file_name = _first_defined(
+        value,
+        ("fileName", "filename", "name", "file_name"),
     )
-    if not file_name:
+    if type(file_name) is not str or not file_name.strip():
         return None
 
-    size = value.get("fileSizeBytes") or value.get("size") or value.get("size_bytes")
-    try:
-        size_bytes = int(size) if size is not None else None
-    except (TypeError, ValueError):
-        size_bytes = None
+    size = _first_defined(
+        value,
+        ("fileSizeBytes", "size", "size_bytes"),
+    )
+    if size is not None and (type(size) is not int or size < 0):
+        return None
+
+    raw_url = value.get("url")
+    if raw_url is None or raw_url == "":
+        url = None
+    elif type(raw_url) is str and raw_url.strip():
+        url = raw_url
+    else:
+        return None
 
     return AttachmentRef(
-        file_name=str(file_name),
-        url=str(value.get("url")) if value.get("url") else None,
-        size_bytes=size_bytes,
+        file_name=file_name,
+        url=url,
+        size_bytes=size,
     )
 
 
