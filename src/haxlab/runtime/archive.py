@@ -398,8 +398,13 @@ def archive_replay(
                 sha256,
                 missing_error=missing_error,
             )
+            _assert_archive_root_identity(raw_root, raw_root_fd)
         else:
             _publish_archive_no_clobber(staging_path, destination_io, sha256)
+            # Bind the logical ledger path to the same directory inode
+            # immediately before committing the raw row. As with any
+            # persistent pathname, later administrative replacement is
+            # detected by downstream archive/analysis integrity checks.
             _assert_archive_root_identity(raw_root, raw_root_fd)
             state.register_raw(
                 sha256=sha256,
@@ -407,7 +412,6 @@ def archive_replay(
                 size_bytes=copied_bytes,
             )
 
-        _assert_archive_root_identity(raw_root, raw_root_fd)
         return ArchiveResult(
             source_path=source_path,
             sha256=sha256,
