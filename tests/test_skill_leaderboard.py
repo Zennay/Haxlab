@@ -7,8 +7,10 @@ import sys
 from haxlab.skill.leaderboard import (
     _bounded_match_contexts,
     _normalizers,
+    _player_minutes,
     _raw_metrics,
     build_leaderboard,
+    load_match_evidence,
     main,
 )
 
@@ -348,3 +350,151 @@ def test_role_normalizer_is_robust_to_extreme_short_match_outlier() -> None:
 
     assert 0.45 <= center <= 0.55
     assert 0.0 < scale < 1.0
+
+
+
+def test_player_minutes_rejects_coerced_sampling_cadence() -> None:
+    player = {"samples": 600}
+
+    assert _player_minutes(
+        player,
+        {"simulation": {"sampleEveryTicks": 12}},
+    ) == 2.0
+    assert _player_minutes(player, {}) == 1.0
+    assert _player_minutes(
+        player,
+        {"simulation": {"sampleEveryTicks": "6"}},
+    ) is None
+    assert _player_minutes(
+        player,
+        {"simulation": {"sampleEveryTicks": 6.0}},
+    ) is None
+    assert _player_minutes(
+        player,
+        {"simulation": {"sampleEveryTicks": True}},
+    ) is None
+    assert _player_minutes(
+        player,
+        {"simulation": {"sampleEveryTicks": 0}},
+    ) is None
+
+
+def test_load_match_evidence_skips_player_from_malformed_cadence_artifact(
+    tmp_path: Path,
+) -> None:
+    _write_match(
+        tmp_path / "valid.json",
+        [
+            _player(
+                1,
+                "Valid",
+                1,
+                -40,
+                retained=8,
+                lost=2,
+                recoveries=2,
+                goals=1,
+                assists=0,
+                progression=40,
+            )
+        ],
+    )
+    (tmp_path / "malformed.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 4,
+                "totalFrames": 36000,
+                "simulation": {"sampleEveryTicks": "6"},
+                "players": [
+                    _player(
+                        2,
+                        "Malformed",
+                        1,
+                        -40,
+                        retained=80,
+                        lost=1,
+                        recoveries=20,
+                        goals=10,
+                        assists=10,
+                        progression=400,
+                    )
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    evidence = load_match_evidence(tmp_path)
+
+    assert {row["name"] for row in evidence} == {"Valid"}
+    assert evidence[0]["minutes"] == 10.0
+
+
+
+def test_load_match_evidence_skips_malformed_artifact_structure(
+    tmp_path: Path,
+) -> None:
+    _write_match(
+        tmp_path / "valid.json",
+        [
+            _player(
+                1,
+                "Valid",
+                1,
+                -40,
+                retained=8,
+                lost=2,
+                recoveries=2,
+                goals=1,
+                assists=0,
+                progression=40,
+            )
+        ],
+    )
+    (tmp_path / "string-schema.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": "4",
+                "simulation": {"sampleEveryTicks": 6},
+                "players": [
+                    _player(
+                        2,
+                        "Wrong schema",
+                        1,
+                        -40,
+                        retained=8,
+                        lost=2,
+                        recoveries=2,
+                        goals=1,
+                        assists=0,
+                        progression=40,
+                    )
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "bad-players.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 4,
+                "simulation": {"sampleEveryTicks": 6},
+                "players": {"not": "a-list"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "bad-player-row.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 4,
+                "simulation": {"sampleEveryTicks": 6},
+                "players": ["not-an-object"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    evidence = load_match_evidence(tmp_path)
+
+    assert {row["name"] for row in evidence} == {"Valid"}
