@@ -338,3 +338,127 @@ def test_training_manifest_provenance_tracks_exact_input_bytes(
     assert second["leaderboard_sha256"] == hashlib.sha256(
         leaderboard_path.read_bytes()
     ).hexdigest()
+
+
+
+def test_training_manifest_rejects_noncanonical_analysis_filename(
+    tmp_path: Path,
+) -> None:
+    analysis_root = tmp_path / "analysis"
+    analysis_root.mkdir()
+    leaderboard_path = tmp_path / "leaderboard.json"
+    leaderboard_path.write_text(
+        json.dumps(
+            {
+                "analysis_version": "state-pass-v4",
+                "rows": [
+                    {
+                        "player_id": "name:alpha",
+                        "name": "Alpha",
+                        "role": "forward",
+                        "rating": 56.0,
+                        "rating_uncertainty": 0.8,
+                        "matches": 80,
+                        "minutes": 500.0,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    payload = {
+        "schemaVersion": 4,
+        "totalFrames": 18000,
+        "simulation": {"sampledStateCount": 1200},
+        "featureSummary": {"touches": 100},
+        "players": [
+            {"id": 7, "name": "Alpha", "teamId": 1, "samples": 900},
+            {"id": 8, "name": "Mate", "teamId": 1, "samples": 900},
+            {"id": 9, "name": "Opp A", "teamId": 2, "samples": 900},
+            {"id": 10, "name": "Opp B", "teamId": 2, "samples": 900},
+        ],
+    }
+    (analysis_root / "not-a-replay-sha.json").write_text(
+        json.dumps(payload),
+        encoding="utf-8",
+    )
+
+    manifest = build_training_manifest(
+        analysis_root=analysis_root,
+        leaderboard_path=leaderboard_path,
+        raw_root=tmp_path / "raw",
+        top_fraction_per_role=1.0,
+        min_players_per_role=1,
+        min_matches=1,
+        min_minutes=0.0,
+        max_uncertainty=10.0,
+    )
+
+    assert manifest["train_replays"] == []
+    assert manifest["holdout_replays"] == []
+    assert manifest["stats"]["analysis_files_scanned"] == 1
+    assert manifest["stats"]["quality_rejected"] == 1
+    assert manifest["stats"]["quality_rejection_reasons"] == {
+        "invalid_analysis_provenance": 1
+    }
+
+
+def test_training_manifest_rejects_symlinked_analysis_artifact(
+    tmp_path: Path,
+) -> None:
+    analysis_root = tmp_path / "analysis"
+    analysis_root.mkdir()
+    leaderboard_path = tmp_path / "leaderboard.json"
+    leaderboard_path.write_text(
+        json.dumps(
+            {
+                "analysis_version": "state-pass-v4",
+                "rows": [
+                    {
+                        "player_id": "name:alpha",
+                        "name": "Alpha",
+                        "role": "forward",
+                        "rating": 56.0,
+                        "rating_uncertainty": 0.8,
+                        "matches": 80,
+                        "minutes": 500.0,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    payload = {
+        "schemaVersion": 4,
+        "totalFrames": 18000,
+        "simulation": {"sampledStateCount": 1200},
+        "featureSummary": {"touches": 100},
+        "players": [
+            {"id": 7, "name": "Alpha", "teamId": 1, "samples": 900},
+            {"id": 8, "name": "Mate", "teamId": 1, "samples": 900},
+            {"id": 9, "name": "Opp A", "teamId": 2, "samples": 900},
+            {"id": 10, "name": "Opp B", "teamId": 2, "samples": 900},
+        ],
+    }
+    target = tmp_path / "external.json"
+    target.write_text(json.dumps(payload), encoding="utf-8")
+    link = analysis_root / ("a" * 64 + ".json")
+    link.symlink_to(target)
+
+    manifest = build_training_manifest(
+        analysis_root=analysis_root,
+        leaderboard_path=leaderboard_path,
+        raw_root=tmp_path / "raw",
+        top_fraction_per_role=1.0,
+        min_players_per_role=1,
+        min_matches=1,
+        min_minutes=0.0,
+        max_uncertainty=10.0,
+    )
+
+    assert manifest["train_replays"] == []
+    assert manifest["holdout_replays"] == []
+    assert manifest["stats"]["quality_rejected"] == 1
+    assert manifest["stats"]["quality_rejection_reasons"] == {
+        "invalid_analysis_provenance": 1
+    }
