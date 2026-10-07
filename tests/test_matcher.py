@@ -1,4 +1,8 @@
-from haxlab.ingestion.matcher import score_pair
+import math
+
+import pytest
+
+from haxlab.ingestion.matcher import match_replays_to_reports, score_pair
 from haxlab.models import AttachmentRef, MatchReport, ReplayFile
 
 
@@ -27,3 +31,74 @@ def test_matches_dce_hashed_asset_name() -> None:
     assert score >= 0.9
     assert "dce_hashed_asset_filename" in reasons
     assert "attachment_size_matches" in reasons
+
+
+@pytest.mark.parametrize(
+    "minimum_confidence",
+    [-0.01, 1.01, math.nan, math.inf, -math.inf, True, "0.65"],
+)
+def test_matcher_rejects_invalid_minimum_confidence(
+    minimum_confidence: object,
+) -> None:
+    with pytest.raises(ValueError, match="invalid_minimum_confidence"):
+        match_replays_to_reports(
+            [],
+            [],
+            minimum_confidence=minimum_confidence,  # type: ignore[arg-type]
+        )
+
+
+def test_matcher_zero_threshold_keeps_literal_score_zero_semantics() -> None:
+    replay = ReplayFile(
+        path="/tmp/unrelated.hbr2",
+        file_name="unrelated.hbr2",
+        size_bytes=100,
+        sha256="b" * 64,
+    )
+    report = MatchReport(
+        message_id="report-zero",
+        timestamp=None,
+        channel_id="456",
+        content="MATCH REPORT",
+        attachments=(),
+    )
+
+    matches = match_replays_to_reports(
+        [replay],
+        [report],
+        minimum_confidence=0.0,
+    )
+
+    assert len(matches) == 1
+    assert matches[0].confidence == 0.0
+    assert matches[0].reasons == ()
+
+
+def test_matcher_one_threshold_accepts_only_full_confidence_candidate() -> None:
+    replay = ReplayFile(
+        path="/tmp/24-09-26-22h12-exact.hbr2",
+        file_name="24-09-26-22h12-exact.hbr2",
+        size_bytes=44237,
+        sha256="c" * 64,
+    )
+    report = MatchReport(
+        message_id="report-one",
+        timestamp="2026-09-24T22:12:27+02:00",
+        channel_id="456",
+        content="MATCH REPORT",
+        attachments=(
+            AttachmentRef(
+                file_name="24-09-26-22h12-exact.hbr2",
+                size_bytes=44237,
+            ),
+        ),
+    )
+
+    matches = match_replays_to_reports(
+        [replay],
+        [report],
+        minimum_confidence=1.0,
+    )
+
+    assert len(matches) == 1
+    assert matches[0].confidence == 1.0
