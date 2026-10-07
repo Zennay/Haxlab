@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import os
 import stat
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 
 from haxlab.models import ReplayFile
 
@@ -16,7 +18,14 @@ _READ_CHUNK_BYTES = 1024 * 1024
 class ReplayInventory:
     all_files: tuple[ReplayFile, ...]
     unique_files: tuple[ReplayFile, ...]
-    duplicate_paths_by_hash: dict[str, tuple[str, ...]]
+    duplicate_paths_by_hash: Mapping[str, tuple[str, ...]]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "duplicate_paths_by_hash",
+            MappingProxyType(dict(self.duplicate_paths_by_hash)),
+        )
 
 
 def _stat_signature(value: os.stat_result) -> tuple[int, int, int, int, int]:
