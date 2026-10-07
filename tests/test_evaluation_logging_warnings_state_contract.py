@@ -125,10 +125,33 @@ def _is_warnings_filters(node: ast.AST | None, aliases: dict[str, str], warnings
     return _canonical_name(node, aliases) == "warnings.filters"
 
 
-def _resolve_state_aliases(tree: ast.AST, aliases: dict[str, str]) -> tuple[set[str], set[str], dict[str, str]]:
+def _logger_collection_name(
+    node: ast.AST | None,
+    aliases: dict[str, str],
+    logger_aliases: set[str],
+    collection_aliases: dict[str, str],
+) -> str | None:
+    if node is None:
+        return None
+    if isinstance(node, ast.Name):
+        return collection_aliases.get(node.id)
+    if (
+        isinstance(node, ast.Attribute)
+        and node.attr in {"handlers", "filters"}
+        and _is_logger_expression(node.value, aliases, logger_aliases)
+    ):
+        return f"logger.{node.attr}"
+    return None
+
+
+def _resolve_state_aliases(
+    tree: ast.AST,
+    aliases: dict[str, str],
+) -> tuple[set[str], set[str], dict[str, str], dict[str, str]]:
     logger_aliases: set[str] = set()
     warnings_aliases: set[str] = set()
     callable_aliases: dict[str, str] = {}
+    collection_aliases: dict[str, str] = {}
 
     changed = True
     while changed:
@@ -149,6 +172,13 @@ def _resolve_state_aliases(tree: ast.AST, aliases: dict[str, str]) -> tuple[set[
             target_name = _canonical_name(value, aliases)
             is_logger = _is_logger_expression(value, aliases, logger_aliases)
             is_filters = _is_warnings_filters(value, aliases, warnings_aliases)
+
+            collection_target = _logger_collection_name(
+                value,
+                aliases,
+                logger_aliases,
+                collection_aliases,
+            )
 
             callable_target: str | None = None
             if target_name in FORBIDDEN_CALLS:
@@ -177,8 +207,11 @@ def _resolve_state_aliases(tree: ast.AST, aliases: dict[str, str]) -> tuple[set[
                 if callable_target and callable_aliases.get(name) != callable_target:
                     callable_aliases[name] = callable_target
                     changed = True
+                if collection_target and collection_aliases.get(name) != collection_target:
+                    collection_aliases[name] = collection_target
+                    changed = True
 
-    return logger_aliases, warnings_aliases, callable_aliases
+    return logger_aliases, warnings_aliases, callable_aliases, collection_aliases
 
 
 def _assignment_targets(node: ast.AST) -> list[ast.AST]:
@@ -192,12 +225,39 @@ def _assignment_targets(node: ast.AST) -> list[ast.AST]:
 def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
     tree = ast.parse(source, filename=filename)
     aliases = _import_aliases(tree)
-    logger_aliases, warnings_aliases, callable_aliases = _resolve_state_aliases(tree, aliases)
+    (
+        logger_aliases,
+        warnings_aliases,
+        callable_aliases,
+        collection_aliases,
+    ) = _resolve_state_aliases(tree, aliases)
     findings: list[str] = []
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             target = _canonical_name(node.func, aliases)
+
+            if target in {"setattr", "builtins.setattr", "delattr", "builtins.delattr"} and len(node.args) >= 2:
+                attribute = node.args[1]
+                if isinstance(attribute, ast.Constant) and isinstance(attribute.value, str):
+                    owner = node.args[0]
+                    if (
+                        attribute.value in LOGGER_MUTABLE_ATTRIBUTES
+                        and _is_logger_expression(owner, aliases, logger_aliases)
+                    ):
+                        findings.append(
+                            f"line {node.lineno}: logger registry reflective mutation: "
+                            f"{attribute.value}"
+                        )
+                        continue
+                    if (
+                        _canonical_name(owner, aliases) == "warnings"
+                        and attribute.value == "filters"
+                    ):
+                        findings.append(
+                            f"line {node.lineno}: warnings.filters reflective mutation"
+                        )
+                        continue
 
             if isinstance(node.func, ast.Name) and node.func.id in callable_aliases:
                 findings.append(
@@ -219,6 +279,18 @@ def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
                 ):
                     findings.append(
                         f"line {node.lineno}: logger registry mutation: {node.func.attr}"
+                    )
+                    continue
+                logger_collection = _logger_collection_name(
+                    node.func.value,
+                    aliases,
+                    logger_aliases,
+                    collection_aliases,
+                )
+                if node.func.attr in WARNINGS_MUTATORS and logger_collection:
+                    findings.append(
+                        f"line {node.lineno}: logger collection mutation: "
+                        f"{logger_collection}.{node.func.attr}"
                     )
                     continue
                 if (
@@ -250,6 +322,10 @@ def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
                     findings.append(
                         f"line {node.lineno}: logger registry assignment: {target.attr}"
                     )
+                elif _canonical_name(target, aliases) == "warnings.filters":
+                    findings.append(
+                        f"line {node.lineno}: warnings.filters assignment"
+                    )
             elif isinstance(target, ast.Subscript):
                 if _is_warnings_filters(target.value, aliases, warnings_aliases):
                     findings.append(
@@ -265,6 +341,10 @@ def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
                     ):
                         findings.append(
                             f"line {node.lineno}: logger registry deletion: {target.attr}"
+                        )
+                    elif _canonical_name(target, aliases) == "warnings.filters":
+                        findings.append(
+                            f"line {node.lineno}: warnings.filters deletion"
                         )
                 elif isinstance(target, ast.Subscript):
                     if _is_warnings_filters(target.value, aliases, warnings_aliases):
@@ -339,6 +419,10 @@ def test_contract_rejects_named_and_root_logger_mutation() -> None:
             logger.disabled = True
             logging.getLogger().setLevel(logging.ERROR)
             logging.root.handlers = []
+            logger.handlers.append(handler)
+            collections = logger.filters
+            collections.clear()
+            setattr(logger, "level", logging.WARNING)
         """
     )
 
@@ -352,6 +436,9 @@ def test_contract_rejects_named_and_root_logger_mutation() -> None:
         "propagate",
         "disabled",
         "handlers",
+        "logger.handlers.append",
+        "logger.filters.clear",
+        "level",
     ):
         assert expected in findings
 
@@ -371,6 +458,8 @@ def test_contract_rejects_warnings_registry_mutation() -> None:
             filters.clear()
             filters[:] = []
             del filters[:]
+            warnings.filters = []
+            setattr(warnings, "filters", [])
         """
     )
 
@@ -383,6 +472,7 @@ def test_contract_rejects_warnings_registry_mutation() -> None:
         "warnings.filters mutation: clear",
         "warnings.filters assignment",
         "warnings.filters deletion",
+        "warnings.filters reflective mutation",
     ):
         assert expected in findings
 
