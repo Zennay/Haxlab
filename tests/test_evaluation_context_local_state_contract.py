@@ -43,6 +43,12 @@ class ModuleScopeCollector(ast.NodeVisitor):
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self.nodes.append(node)
 
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        self.nodes.append(node)
+
+    def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
+        self.nodes.append(node)
+
 
 def _module_scope_nodes(tree: ast.Module) -> list[ast.AST]:
     collector = ModuleScopeCollector()
@@ -237,6 +243,14 @@ def test_evaluation_package_has_no_context_or_thread_local_persistent_state() ->
             "contextvars.ContextVar",
         ),
         (
+            "import builtins\nimport contextvars\nFactory = builtins.getattr(contextvars, 'ContextVar')\nCURRENT = Factory('current')\n",
+            "contextvars.ContextVar",
+        ),
+        (
+            "import contextvars\n(Factory := contextvars.ContextVar)\nCURRENT = Factory('current')\n",
+            "contextvars.ContextVar",
+        ),
+        (
             "import contextvars\nPAIR = ('stable', contextvars.ContextVar('current'))\n",
             "contextvars.ContextVar",
         ),
@@ -261,6 +275,7 @@ def test_detector_rejects_module_lifetime_context_local_state(
         "import threading\ndef probe():\n    local = threading.local()\n    local.value = 1\n    return local.value\n",
         "import contextvars\nFACTORY = lambda: contextvars.ContextVar('later')\n",
         "import contextvars\nFACTORIES = (contextvars.ContextVar for _ in range(1))\n",
+        "import contextvars\nFACTORIES = ((Factory := contextvars.ContextVar) for _ in range(1))\n",
         "import threading\nLOCK = threading.Lock()\n",
         "import contextvars\ndef probe():\n    return contextvars.copy_context()\n",
     ],
