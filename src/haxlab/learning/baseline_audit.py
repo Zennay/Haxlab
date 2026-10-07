@@ -94,21 +94,92 @@ def _invalid_constant(value: str) -> None:
     _fail(f"invalid JSON numeric constant: {value}")
 
 
-def _secure_bytes(
-    path: Path,
-    *,
-    max_bytes: int,
-) -> tuple[bytes, tuple[int, int]]:
+def _open_bundle_root(path: Path) -> tuple[int, tuple[int, int]]:
     if not isinstance(path, Path):
-        _fail("artifact path must be pathlib.Path")
+        _fail("bundle directory must be pathlib.Path")
     try:
         initial = path.lstat()
     except OSError as exc:
-        _fail(f"{path.name}: not readable: {exc}")
+        _fail(f"bundle directory is not readable: {exc}")
+    if stat.S_ISLNK(initial.st_mode) or not stat.S_ISDIR(initial.st_mode):
+        _fail("bundle directory must be a regular non-symlink directory")
+
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    directory = getattr(os, "O_DIRECTORY", None)
+    if nofollow is None or directory is None:
+        _fail("platform lacks required directory no-follow support")
+
+    flags = os.O_RDONLY | nofollow | directory
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        _fail(f"bundle directory secure open failed: {exc}")
+
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISDIR(opened.st_mode):
+            _fail("bundle directory descriptor is not a directory")
+        if (opened.st_dev, opened.st_ino) != (initial.st_dev, initial.st_ino):
+            _fail("bundle directory identity changed during secure open")
+        return fd, (opened.st_dev, opened.st_ino)
+    except Exception:
+        os.close(fd)
+        raise
+
+
+def _reconfirm_bundle_root(
+    path: Path,
+    *,
+    root_fd: int,
+    identity: tuple[int, int],
+) -> None:
+    try:
+        opened = os.fstat(root_fd)
+    except OSError as exc:
+        _fail(f"bundle directory descriptor became unreadable: {exc}")
+    if (
+        not stat.S_ISDIR(opened.st_mode)
+        or (opened.st_dev, opened.st_ino) != identity
+    ):
+        _fail("bundle directory descriptor identity changed during audit")
+
+    try:
+        current = path.lstat()
+    except OSError as exc:
+        _fail(f"bundle directory path changed during audit: {exc}")
+    if (
+        stat.S_ISLNK(current.st_mode)
+        or not stat.S_ISDIR(current.st_mode)
+        or (current.st_dev, current.st_ino) != identity
+    ):
+        _fail("bundle directory identity changed during audit")
+
+
+def _secure_bytes(
+    root_fd: int,
+    *,
+    name: str,
+    max_bytes: int,
+) -> tuple[bytes, tuple[int, int]]:
+    if (
+        type(name) is not str
+        or not name
+        or name in {".", ".."}
+        or "/" in name
+        or "\\" in name
+    ):
+        _fail("artifact name must be one canonical path component")
+
+    try:
+        initial = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+    except OSError as exc:
+        _fail(f"{name}: not readable: {exc}")
     if stat.S_ISLNK(initial.st_mode) or not stat.S_ISREG(initial.st_mode):
-        _fail(f"{path.name}: must be a regular non-symlink file")
+        _fail(f"{name}: must be a regular non-symlink file")
     if initial.st_size > max_bytes:
-        _fail(f"{path.name}: exceeds {max_bytes} byte limit")
+        _fail(f"{name}: exceeds {max_bytes} byte limit")
 
     nofollow = getattr(os, "O_NOFOLLOW", None)
     if nofollow is None:
@@ -117,18 +188,18 @@ def _secure_bytes(
     if hasattr(os, "O_CLOEXEC"):
         flags |= os.O_CLOEXEC
     try:
-        fd = os.open(path, flags)
+        fd = os.open(name, flags, dir_fd=root_fd)
     except OSError as exc:
-        _fail(f"{path.name}: secure open failed: {exc}")
+        _fail(f"{name}: secure open failed: {exc}")
 
     try:
         before = os.fstat(fd)
         if not stat.S_ISREG(before.st_mode):
-            _fail(f"{path.name}: descriptor is not a regular file")
+            _fail(f"{name}: descriptor is not a regular file")
         if (before.st_dev, before.st_ino) != (initial.st_dev, initial.st_ino):
-            _fail(f"{path.name}: identity changed during secure open")
+            _fail(f"{name}: identity changed during secure open")
         if before.st_size > max_bytes:
-            _fail(f"{path.name}: exceeds {max_bytes} byte limit")
+            _fail(f"{name}: exceeds {max_bytes} byte limit")
 
         def read_once() -> bytes:
             os.lseek(fd, 0, os.SEEK_SET)
@@ -141,27 +212,38 @@ def _secure_bytes(
                 chunks.append(chunk)
                 total += len(chunk)
                 if total > max_bytes:
-                    _fail(f"{path.name}: exceeds {max_bytes} byte limit")
+                    _fail(f"{name}: exceeds {max_bytes} byte limit")
             return b"".join(chunks)
 
         first = read_once()
         second = read_once()
         after = os.fstat(fd)
         if first != second:
-            _fail(f"{path.name}: bytes changed during audit")
+            _fail(f"{name}: bytes changed during audit")
         if (
             (before.st_dev, before.st_ino, before.st_size)
             != (after.st_dev, after.st_ino, after.st_size)
         ):
-            _fail(f"{path.name}: metadata changed during audit")
+            _fail(f"{name}: metadata changed during audit")
         if len(first) != after.st_size:
-            _fail(f"{path.name}: byte count does not match file size")
+            _fail(f"{name}: byte count does not match file size")
+
+        try:
+            current = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+        except OSError as exc:
+            _fail(f"{name}: path changed during audit: {exc}")
+        if (
+            stat.S_ISLNK(current.st_mode)
+            or not stat.S_ISREG(current.st_mode)
+            or (current.st_dev, current.st_ino, current.st_size)
+            != (after.st_dev, after.st_ino, after.st_size)
+        ):
+            _fail(f"{name}: logical path identity changed during audit")
         return first, (after.st_dev, after.st_ino)
     except OSError as exc:
-        _fail(f"{path.name}: read failed: {exc}")
+        _fail(f"{name}: read failed: {exc}")
     finally:
         os.close(fd)
-
 
 def _load_metrics(payload: bytes) -> dict[str, Any]:
     try:
@@ -614,39 +696,47 @@ def _validate_bundle(
 
 
 def audit_baseline_bundle(bundle_dir: Path) -> dict[str, Any]:
+    root_fd, root_identity = _open_bundle_root(bundle_dir)
     try:
-        root_stat = bundle_dir.lstat()
-    except OSError as exc:
-        _fail(f"bundle directory is not readable: {exc}")
-    if stat.S_ISLNK(root_stat.st_mode) or not stat.S_ISDIR(root_stat.st_mode):
-        _fail("bundle directory must be a regular non-symlink directory")
+        metrics_bytes, metrics_identity = _secure_bytes(
+            root_fd,
+            name="metrics.json",
+            max_bytes=MAX_METRICS_BYTES,
+        )
+        model_bytes, model_identity = _secure_bytes(
+            root_fd,
+            name="model.npz",
+            max_bytes=MAX_MODEL_BYTES,
+        )
+        if metrics_identity == model_identity:
+            _fail("metrics.json and model.npz must not alias the same file")
 
-    metrics_path = bundle_dir / "metrics.json"
-    model_path = bundle_dir / "model.npz"
-    metrics_bytes, metrics_identity = _secure_bytes(
-        metrics_path,
-        max_bytes=MAX_METRICS_BYTES,
-    )
-    model_bytes, model_identity = _secure_bytes(
-        model_path,
-        max_bytes=MAX_MODEL_BYTES,
-    )
-    if metrics_identity == model_identity:
-        _fail("metrics.json and model.npz must not alias the same file")
+        _reconfirm_bundle_root(
+            bundle_dir,
+            root_fd=root_fd,
+            identity=root_identity,
+        )
 
-    metrics = _load_metrics(metrics_bytes)
-    arrays = _load_model(model_bytes)
-    validated = _validate_bundle(metrics, arrays)
-    return {
-        "schema": AUDIT_SCHEMA,
-        "ok": True,
-        "metrics_size_bytes": len(metrics_bytes),
-        "metrics_sha256": hashlib.sha256(metrics_bytes).hexdigest(),
-        "model_size_bytes": len(model_bytes),
-        "model_sha256": hashlib.sha256(model_bytes).hexdigest(),
-        **validated,
-    }
+        metrics = _load_metrics(metrics_bytes)
+        arrays = _load_model(model_bytes)
+        validated = _validate_bundle(metrics, arrays)
 
+        _reconfirm_bundle_root(
+            bundle_dir,
+            root_fd=root_fd,
+            identity=root_identity,
+        )
+        return {
+            "schema": AUDIT_SCHEMA,
+            "ok": True,
+            "metrics_size_bytes": len(metrics_bytes),
+            "metrics_sha256": hashlib.sha256(metrics_bytes).hexdigest(),
+            "model_size_bytes": len(model_bytes),
+            "model_sha256": hashlib.sha256(model_bytes).hexdigest(),
+            **validated,
+        }
+    finally:
+        os.close(root_fd)
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="haxlab-baseline-audit")
