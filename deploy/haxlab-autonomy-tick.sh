@@ -34,7 +34,14 @@ tmp.replace(path)
 PY
 }
 
-STATUS_JSON="$("${APP_DIR}/.venv/bin/haxlab-status")"
+if ! STATUS_JSON="$("${APP_DIR}/.venv/bin/haxlab-status")"; then
+  write_status \
+    "FAILED_RETRYABLE" \
+    "status_command_failed" \
+    "haxlab-status exited non-zero; downstream autonomy work was not started."
+  exit 0
+fi
+
 if ! STATUS_FIELDS="$(
   printf '%s' "${STATUS_JSON}" |
     "${APP_DIR}/.venv/bin/python" -m haxlab.runtime.autonomy_status
