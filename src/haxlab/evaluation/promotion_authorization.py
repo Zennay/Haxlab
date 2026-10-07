@@ -36,6 +36,12 @@ _REQUEST_FIELDS = frozenset(
     }
 )
 _DECISION_FIELDS = frozenset({"promote", "reasons"})
+_PROMOTION_PASS_REASONS = (
+    "head_to_head_gate_passed",
+    "frozen_scenarios_passed",
+    "no_blocking_regressions",
+    "run_reproducible",
+)
 
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -49,6 +55,10 @@ def _native_nonempty_string(value: Any, field: str) -> str:
     if type(value) is not str or not value.strip():
         raise PromotionAuthorizationError(
             f"{field} must be a non-empty native string"
+        )
+    if value != value.strip():
+        raise PromotionAuthorizationError(
+            f"{field} must not contain leading or trailing whitespace"
         )
     return value
 
@@ -110,8 +120,10 @@ def _validate_gate_receipt(
     *,
     exact_head: str,
 ) -> list[dict[str, Any]]:
-    if not isinstance(receipt, Mapping):
-        raise PromotionAuthorizationError("gate_receipt must be an object")
+    if type(receipt) is not dict:
+        raise PromotionAuthorizationError(
+            "gate_receipt must be a native object"
+        )
 
     if receipt.get("schema") != GATE_RECEIPT_SCHEMA:
         raise PromotionAuthorizationError("gate_receipt.schema mismatch")
@@ -130,15 +142,17 @@ def _validate_gate_receipt(
         )
 
     gates = receipt.get("gates")
-    if isinstance(gates, (str, bytes)) or not isinstance(gates, Sequence):
-        raise PromotionAuthorizationError("gate_receipt.gates must be a sequence")
+    if type(gates) is not list:
+        raise PromotionAuthorizationError(
+            "gate_receipt.gates must be a native array"
+        )
 
     seen: dict[str, dict[str, Any]] = {}
     seen_run_ids: set[int] = set()
     for index, raw in enumerate(gates):
-        if not isinstance(raw, Mapping):
+        if type(raw) is not dict:
             raise PromotionAuthorizationError(
-                f"gate_receipt.gates[{index}] must be an object"
+                f"gate_receipt.gates[{index}] must be a native object"
             )
 
         gate = _native_nonempty_string(
@@ -284,6 +298,15 @@ def authorize_promotion(
             "promotion_decision.promote must be native boolean"
         )
     decision_reasons = _decision_reasons(promotion_decision)
+    if promotion_decision.promote is True:
+        if decision_reasons != _PROMOTION_PASS_REASONS:
+            raise PromotionAuthorizationError(
+                "promoting decision must use canonical pass reasons"
+            )
+    elif decision_reasons == _PROMOTION_PASS_REASONS:
+        raise PromotionAuthorizationError(
+            "rejected decision cannot carry canonical pass reasons"
+        )
 
     gates = _validate_gate_receipt(gate_receipt, exact_head=exact_head)
 
