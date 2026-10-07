@@ -34,7 +34,7 @@ MUTATING_METHODS = {
     "__setitem__",
 }
 
-FUNCTION_MUTATORS = {
+UNBOUND_MUTATORS = {
     "dict.__delitem__",
     "dict.__ior__",
     "dict.__setitem__",
@@ -70,34 +70,6 @@ FUNCTION_MUTATORS = {
 }
 
 
-def _import_aliases(tree: ast.AST) -> dict[str, str]:
-    aliases: dict[str, str] = {}
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                local = alias.asname or alias.name.split(".", 1)[0]
-                aliases[local] = alias.name
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            for alias in node.names:
-                if alias.name == "*":
-                    continue
-                aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}"
-
-    return aliases
-
-
-def _canonical_name(node: ast.AST | None, imports: dict[str, str]) -> str | None:
-    if node is None:
-        return None
-    if isinstance(node, ast.Name):
-        return imports.get(node.id, node.id)
-    if isinstance(node, ast.Attribute):
-        parent = _canonical_name(node.value, imports)
-        return f"{parent}.{node.attr}" if parent else node.attr
-    return None
-
-
 def _assignment_name_targets(node: ast.AST) -> list[str]:
     if isinstance(node, ast.Name):
         return [node.id]
@@ -109,20 +81,80 @@ def _assignment_name_targets(node: ast.AST) -> list[str]:
     return []
 
 
-def _module_function_aliases(tree: ast.Module) -> dict[str, str]:
-    aliases = {
+def _import_aliases(tree: ast.Module) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                local = alias.asname or alias.name.split(".", 1)[0]
+                aliases[local] = alias.name
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                aliases[alias.asname or alias.name] = (
+                    f"{node.module}.{alias.name}"
+                )
+    return aliases
+
+
+def _canonical_name(
+    node: ast.AST | None,
+    imports: dict[str, str],
+) -> str | None:
+    if node is None:
+        return None
+    if isinstance(node, ast.Name):
+        return imports.get(node.id, node.id)
+    if isinstance(node, ast.Attribute):
+        parent = _canonical_name(node.value, imports)
+        return f"{parent}.{node.attr}" if parent else node.attr
+    return None
+
+
+def _scope_nodes(root: ast.AST) -> list[ast.AST]:
+    nodes: list[ast.AST] = []
+
+    def visit(node: ast.AST, *, scope_root: bool = False) -> None:
+        nodes.append(node)
+        if not scope_root and isinstance(
+            node,
+            (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef),
+        ):
+            return
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    visit(root, scope_root=True)
+    return nodes
+
+
+def _module_function_bindings(tree: ast.Module) -> dict[str, str]:
+    bindings: dict[str, str] = {
         statement.name: statement.name
         for statement in tree.body
         if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
 
+    for statement in tree.body:
+        if isinstance(statement, ast.Assign) and isinstance(statement.value, ast.Lambda):
+            for target in statement.targets:
+                for local in _assignment_name_targets(target):
+                    bindings[local] = local
+        elif (
+            isinstance(statement, ast.AnnAssign)
+            and statement.value is not None
+            and isinstance(statement.value, ast.Lambda)
+        ):
+            for local in _assignment_name_targets(statement.target):
+                bindings[local] = local
+
     changed = True
     while changed:
         changed = False
-        for node in ast.walk(tree):
+        for node in _scope_nodes(tree):
             value: ast.AST | None = None
             targets: list[ast.AST] = []
-
             if isinstance(node, ast.Assign):
                 value = node.value
                 targets = list(node.targets)
@@ -135,34 +167,53 @@ def _module_function_aliases(tree: ast.Module) -> dict[str, str]:
 
             if not isinstance(value, ast.Name):
                 continue
-
-            resolved = aliases.get(value.id)
-            if resolved is None:
+            root = bindings.get(value.id)
+            if root is None:
                 continue
 
             for target in targets:
                 for local in _assignment_name_targets(target):
-                    if aliases.get(local) != resolved:
-                        aliases[local] = resolved
+                    if bindings.get(local) != root:
+                        bindings[local] = root
                         changed = True
 
-    return aliases
+    return bindings
 
 
-def _function_name(
-    node: ast.AST | None,
-    function_aliases: dict[str, str],
-) -> str | None:
-    if isinstance(node, ast.Name):
-        return function_aliases.get(node.id)
-    return None
+def _function_locals(
+    node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda,
+) -> tuple[set[str], set[str]]:
+    nodes = _scope_nodes(node)
+    globals_: set[str] = set()
+    for current in nodes:
+        if isinstance(current, ast.Global):
+            globals_.update(current.names)
+
+    locals_: set[str] = set()
+    arguments = node.args
+    for argument in (
+        list(arguments.posonlyargs)
+        + list(arguments.args)
+        + list(arguments.kwonlyargs)
+    ):
+        locals_.add(argument.arg)
+    if arguments.vararg:
+        locals_.add(arguments.vararg.arg)
+    if arguments.kwarg:
+        locals_.add(arguments.kwarg.arg)
+
+    for current in nodes:
+        if isinstance(current, ast.Name) and isinstance(current.ctx, ast.Store):
+            if current.id not in globals_:
+                locals_.add(current.id)
+
+    return locals_, globals_
 
 
-def _function_state_root(
+def _state_root(
     node: ast.AST | None,
     *,
     imports: dict[str, str],
-    function_aliases: dict[str, str],
     state_aliases: dict[str, str],
 ) -> str | None:
     if node is None:
@@ -172,24 +223,18 @@ def _function_state_root(
         return state_aliases.get(node.id)
 
     if isinstance(node, ast.Attribute):
-        owner_function = _function_name(node.value, function_aliases)
-        if owner_function is not None:
-            return f"{owner_function}.{node.attr}"
-
-        parent_state = _function_state_root(
+        parent = _state_root(
             node.value,
             imports=imports,
-            function_aliases=function_aliases,
             state_aliases=state_aliases,
         )
-        if parent_state is not None:
-            return f"{parent_state}.{node.attr}"
+        if parent is not None:
+            return f"{parent}.{node.attr}"
 
     if isinstance(node, ast.Subscript):
-        return _function_state_root(
+        return _state_root(
             node.value,
             imports=imports,
-            function_aliases=function_aliases,
             state_aliases=state_aliases,
         )
 
@@ -201,38 +246,32 @@ def _function_state_root(
             and isinstance(node.args[1], ast.Constant)
             and isinstance(node.args[1].value, str)
         ):
-            owner_function = _function_name(node.args[0], function_aliases)
-            if owner_function is not None:
-                return f"{owner_function}.{node.args[1].value}"
-
-            parent_state = _function_state_root(
+            parent = _state_root(
                 node.args[0],
                 imports=imports,
-                function_aliases=function_aliases,
                 state_aliases=state_aliases,
             )
-            if parent_state is not None:
-                return f"{parent_state}.{node.args[1].value}"
+            if parent is not None:
+                return f"{parent}.{node.args[1].value}"
 
     return None
 
 
-def _state_and_mutator_aliases(
-    tree: ast.Module,
+def _scope_aliases(
+    nodes: list[ast.AST],
     *,
     imports: dict[str, str],
-    function_aliases: dict[str, str],
+    visible_bindings: dict[str, str],
 ) -> tuple[dict[str, str], dict[str, str]]:
-    state_aliases: dict[str, str] = {}
+    state_aliases = dict(visible_bindings)
     mutator_aliases: dict[str, str] = {}
 
     changed = True
     while changed:
         changed = False
-        for node in ast.walk(tree):
+        for node in nodes:
             value: ast.AST | None = None
             targets: list[ast.AST] = []
-
             if isinstance(node, ast.Assign):
                 value = node.value
                 targets = list(node.targets)
@@ -246,28 +285,42 @@ def _state_and_mutator_aliases(
             if value is None:
                 continue
 
-            state_root = _function_state_root(
+            state = _state_root(
                 value,
                 imports=imports,
-                function_aliases=function_aliases,
                 state_aliases=state_aliases,
             )
 
             bound_mutator: str | None = None
             if isinstance(value, ast.Attribute) and value.attr in MUTATING_METHODS:
-                owner_root = _function_state_root(
+                owner = _state_root(
                     value.value,
                     imports=imports,
-                    function_aliases=function_aliases,
                     state_aliases=state_aliases,
                 )
-                if owner_root is not None:
-                    bound_mutator = f"{owner_root}.{value.attr}"
+                if owner is not None:
+                    bound_mutator = f"{owner}.{value.attr}"
+            elif (
+                isinstance(value, ast.Call)
+                and _canonical_name(value.func, imports)
+                in {"getattr", "builtins.getattr"}
+                and len(value.args) >= 2
+                and isinstance(value.args[1], ast.Constant)
+                and isinstance(value.args[1].value, str)
+                and value.args[1].value in MUTATING_METHODS
+            ):
+                owner = _state_root(
+                    value.args[0],
+                    imports=imports,
+                    state_aliases=state_aliases,
+                )
+                if owner is not None:
+                    bound_mutator = f"{owner}.{value.args[1].value}"
 
             for target in targets:
                 for local in _assignment_name_targets(target):
-                    if state_root is not None and state_aliases.get(local) != state_root:
-                        state_aliases[local] = state_root
+                    if state is not None and state_aliases.get(local) != state:
+                        state_aliases[local] = state
                         changed = True
                     if (
                         bound_mutator is not None
@@ -279,50 +332,43 @@ def _state_and_mutator_aliases(
     return state_aliases, mutator_aliases
 
 
-def _mutation_target_root(
-    node: ast.AST,
+def _mutation_root(
+    target: ast.AST,
     *,
     imports: dict[str, str],
-    function_aliases: dict[str, str],
     state_aliases: dict[str, str],
 ) -> str | None:
-    if isinstance(node, ast.Attribute):
-        owner_function = _function_name(node.value, function_aliases)
-        if owner_function is not None:
-            return f"{owner_function}.{node.attr}"
-
-        parent_state = _function_state_root(
-            node.value,
+    if isinstance(target, ast.Attribute):
+        parent = _state_root(
+            target.value,
             imports=imports,
-            function_aliases=function_aliases,
             state_aliases=state_aliases,
         )
-        if parent_state is not None:
-            return f"{parent_state}.{node.attr}"
-
-    if isinstance(node, ast.Subscript):
-        return _function_state_root(
-            node.value,
+        if parent is not None:
+            return f"{parent}.{target.attr}"
+    if isinstance(target, ast.Subscript):
+        return _state_root(
+            target.value,
             imports=imports,
-            function_aliases=function_aliases,
             state_aliases=state_aliases,
         )
-
     return None
 
 
-def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
-    tree = ast.parse(source, filename=filename)
-    imports = _import_aliases(tree)
-    function_aliases = _module_function_aliases(tree)
-    state_aliases, mutator_aliases = _state_and_mutator_aliases(
-        tree,
+def _scan_scope(
+    nodes: list[ast.AST],
+    *,
+    imports: dict[str, str],
+    visible_bindings: dict[str, str],
+) -> list[str]:
+    state_aliases, mutator_aliases = _scope_aliases(
+        nodes,
         imports=imports,
-        function_aliases=function_aliases,
+        visible_bindings=visible_bindings,
     )
     findings: list[str] = []
 
-    for node in ast.walk(tree):
+    for node in nodes:
         if isinstance(node, ast.Assign):
             targets = node.targets
         elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
@@ -331,10 +377,9 @@ def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
             targets = []
 
         for target in targets:
-            root = _mutation_target_root(
+            root = _mutation_root(
                 target,
                 imports=imports,
-                function_aliases=function_aliases,
                 state_aliases=state_aliases,
             )
             if root is not None:
@@ -344,10 +389,9 @@ def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
 
         if isinstance(node, ast.Delete):
             for target in node.targets:
-                root = _mutation_target_root(
+                root = _mutation_root(
                     target,
                     imports=imports,
-                    function_aliases=function_aliases,
                     state_aliases=state_aliases,
                 )
                 if root is not None:
@@ -355,41 +399,78 @@ def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
                         f"line {node.lineno}: persistent function attribute deletion: {root}"
                     )
 
-        if isinstance(node, ast.Call):
-            if isinstance(node.func, ast.Name) and node.func.id in mutator_aliases:
+        if not isinstance(node, ast.Call):
+            continue
+
+        if isinstance(node.func, ast.Name) and node.func.id in mutator_aliases:
+            findings.append(
+                f"line {node.lineno}: persistent function attribute mutation: "
+                f"{mutator_aliases[node.func.id]}"
+            )
+            continue
+
+        if isinstance(node.func, ast.Attribute) and node.func.attr in MUTATING_METHODS:
+            root = _state_root(
+                node.func.value,
+                imports=imports,
+                state_aliases=state_aliases,
+            )
+            if root is not None:
                 findings.append(
                     f"line {node.lineno}: persistent function attribute mutation: "
-                    f"{mutator_aliases[node.func.id]}"
+                    f"{root}.{node.func.attr}"
                 )
                 continue
 
-            if isinstance(node.func, ast.Attribute) and node.func.attr in MUTATING_METHODS:
-                root = _function_state_root(
-                    node.func.value,
-                    imports=imports,
-                    function_aliases=function_aliases,
-                    state_aliases=state_aliases,
+        target = _canonical_name(node.func, imports)
+        normalized_target = (
+            target.removeprefix("builtins.") if target is not None else None
+        )
+        if normalized_target in UNBOUND_MUTATORS and node.args:
+            root = _state_root(
+                node.args[0],
+                imports=imports,
+                state_aliases=state_aliases,
+            )
+            if root is not None:
+                findings.append(
+                    f"line {node.lineno}: persistent function attribute mutation: "
+                    f"{normalized_target}({root}, ...)"
                 )
-                if root is not None:
-                    findings.append(
-                        f"line {node.lineno}: persistent function attribute mutation: "
-                        f"{root}.{node.func.attr}"
-                    )
-                    continue
 
-            target = _canonical_name(node.func, imports)
-            if target in FUNCTION_MUTATORS and node.args:
-                root = _function_state_root(
-                    node.args[0],
-                    imports=imports,
-                    function_aliases=function_aliases,
-                    state_aliases=state_aliases,
-                )
-                if root is not None:
-                    findings.append(
-                        f"line {node.lineno}: persistent function attribute mutation: "
-                        f"{target}({root}, ...)"
-                    )
+    return findings
+
+
+def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
+    tree = ast.parse(source, filename=filename)
+    imports = _import_aliases(tree)
+    module_bindings = _module_function_bindings(tree)
+    findings: list[str] = []
+
+    findings.extend(
+        _scan_scope(
+            _scope_nodes(tree),
+            imports=imports,
+            visible_bindings=module_bindings,
+        )
+    )
+
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        locals_, globals_ = _function_locals(node)
+        visible_bindings = {
+            local: root
+            for local, root in module_bindings.items()
+            if local not in locals_ or local in globals_
+        }
+        findings.extend(
+            _scan_scope(
+                _scope_nodes(node),
+                imports=imports,
+                visible_bindings=visible_bindings,
+            )
+        )
 
     return sorted(set(findings))
 
@@ -419,11 +500,19 @@ def test_evaluation_package_has_no_persistent_function_attribute_state() -> None
         ("def gate():\n    return True\ngate.cache = {}\ngate.cache.update({'x': 1})\n", "gate.cache.update"),
         ("def gate():\n    return True\nalias = gate\nalias.cache = []\n", "gate.cache"),
         (
+            "def gate():\n    return True\nother = gate\ndef mutate():\n    other.cache = {}\n",
+            "gate.cache",
+        ),
+        (
             "def gate():\n    return True\ngate.cache = []\nstate = gate.cache\nstate.append(1)\n",
             "gate.cache.append",
         ),
         (
             "def gate():\n    return True\ngate.cache = {}\nmutate = gate.cache.update\nmutate({'x': 1})\n",
+            "gate.cache.update",
+        ),
+        (
+            "def gate():\n    return True\ngate.cache = {}\nmutate = getattr(gate.cache, 'update')\nmutate({'x': 1})\n",
             "gate.cache.update",
         ),
         (
@@ -442,6 +531,14 @@ def test_evaluation_package_has_no_persistent_function_attribute_state() -> None
             "def gate():\n    return True\nlist.append(gate.cache, 1)\n",
             "list.append(gate.cache",
         ),
+        (
+            "from builtins import list as MutableList\ndef gate():\n    return True\nMutableList.append(gate.cache, 1)\n",
+            "list.append(gate.cache",
+        ),
+        (
+            "def gate():\n    return True\ndef mutate():\n    global gate\n    gate.cache = {}\n",
+            "gate.cache",
+        ),
     ],
 )
 def test_detector_rejects_persistent_function_attribute_state(
@@ -458,9 +555,13 @@ def test_detector_rejects_persistent_function_attribute_state(
         "def gate():\n    local = {}\n    local['x'] = 1\n    return local\n",
         "def gate():\n    return True\nvalue = gate.__name__\n",
         "def gate():\n    return True\nvalue = getattr(gate, '__name__')\n",
+        "def gate():\n    return True\ndef helper(gate):\n    gate.cache = {}\n    return gate\n",
+        "def gate():\n    return True\ndef helper():\n    gate = object()\n    gate.cache = {}\n    return gate\n",
         "def outer():\n    def local_gate():\n        return True\n    local_gate.cache = {}\n    return local_gate\n",
         "class Evaluator:\n    def gate(self):\n        self.cache = {}\n        return True\n",
     ],
 )
-def test_detector_allows_ephemeral_or_read_only_function_usage(source: str) -> None:
+def test_detector_allows_shadowed_ephemeral_or_read_only_function_usage(
+    source: str,
+) -> None:
     assert scan_source(textwrap.dedent(source)) == []
