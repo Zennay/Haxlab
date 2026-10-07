@@ -11,13 +11,14 @@ This isolated lane stages a pure provenance helper without modifying the active
 ## Contract
 
 - a failure source is always relative to the supplied immutable export root;
+- lexical `.` / `..` aliases are normalized before containment is checked, so equivalent path spellings yield the same provenance while parent escapes fail closed;
 - path separators are rendered with POSIX `/` semantics so the derived evidence is
   stable across host mount locations;
 - a source outside the export root fails closed instead of leaking an absolute path;
 - the export root itself is not a valid file provenance;
 - optional per-message provenance uses the exact suffix `#message:<id>`;
 - message suffix tokens must be non-empty, already canonical strings and cannot
-  contain `#` or ASCII control characters;
+  contain `#` or ASCII control characters, including DEL (`0x7f`);
 - `unknown` remains valid so the current per-message isolation lane can preserve its
   fallback when a malformed message has no usable Discord message id.
 
