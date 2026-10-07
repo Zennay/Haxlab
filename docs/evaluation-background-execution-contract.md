@@ -54,5 +54,7 @@ evaluation package and contract, runs the focused contract, then runs the same
 12 adjacent canonical Arena-v2 evaluation regression files used by the existing
 validation bundle (excluding owner-reserved blocker #92).
 
+Only a proof whose checked-out `github.sha` equals the final branch head counts as acceptance evidence. Any later commit on the validation branch supersedes earlier green runs.
+
 A green result is narrow validation evidence only. It does not authorize PR #19
 merge or champion promotion.
