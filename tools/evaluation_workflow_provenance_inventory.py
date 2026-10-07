@@ -129,7 +129,40 @@ def _has_exact_head_guard(text: str) -> bool:
     actual_vars = {
         match.group(1)
         for match in re.finditer(
-            r'(?m)^\\s*([A-Z_][A-Z0-9_]*)=["\\\']?\\$\\(git rev-parse HEAD\\)["\\\']?\\s*    lines = text.splitlines()
+            r'(?m)^\s*([A-Z_][A-Z0-9_]*)="\$\(git rev-parse HEAD\)"\s*$',
+            text,
+        )
+    }
+    expected_vars: set[str] = set()
+    for line in lines:
+        if not any(marker in line for marker in SOURCE_SHA_MARKERS):
+            continue
+        match = re.match(
+            r'^\s*(?:export\s+)?([A-Z_][A-Z0-9_]*)\s*(?::|=)',
+            line,
+        )
+        if match:
+            expected_vars.add(match.group(1))
+
+    for line in lines:
+        if not ("[" in line or "test " in line):
+            continue
+        actual_present = any(
+            f"${name}" in line or f"${{{name}}}" in line
+            for name in actual_vars
+        )
+        expected_present = any(
+            f"${name}" in line or f"${{{name}}}" in line
+            for name in expected_vars
+        )
+        if actual_present and expected_present:
+            return True
+
+    return False
+
+
+def _top_level_contents_read_only(text: str) -> bool:
+    lines = text.splitlines()
     try:
         start = lines.index("permissions:")
     except ValueError:
