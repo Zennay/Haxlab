@@ -25,6 +25,28 @@ _ALLOWED_KEYS = {
 _REQUIRED_KEYS = _ALLOWED_KEYS - {"goal_difference_per_game"}
 
 
+class _DuplicateJsonKeyError(ValueError):
+    def __init__(self, key: str) -> None:
+        super().__init__(key)
+        self.key = key
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _DuplicateJsonKeyError(key)
+        result[key] = value
+    return result
+
+
+def _load_json(path: Path) -> Any:
+    return json.loads(
+        path.read_text(encoding="utf-8"),
+        object_pairs_hook=_unique_json_object,
+    )
+
+
 @dataclass(frozen=True)
 class EvidenceParseResult:
     evidence: EvaluationEvidence | None
@@ -271,7 +293,12 @@ def load_evaluation_evidence(path: Path) -> EvidenceParseResult:
         )
 
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = _load_json(path)
+    except _DuplicateJsonKeyError as exc:
+        return EvidenceParseResult(
+            evidence=None,
+            reasons=(f"invalid_evidence:path:duplicate_json_key:{exc.key}",),
+        )
     except (OSError, UnicodeError, json.JSONDecodeError):
         return EvidenceParseResult(
             evidence=None,
@@ -418,7 +445,12 @@ def load_promotion_policy(path: Path) -> PolicyParseResult:
         )
 
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = _load_json(path)
+    except _DuplicateJsonKeyError as exc:
+        return PolicyParseResult(
+            policy=None,
+            reasons=(f"invalid_policy:path:duplicate_json_key:{exc.key}",),
+        )
     except (OSError, UnicodeError, json.JSONDecodeError):
         return PolicyParseResult(
             policy=None,
