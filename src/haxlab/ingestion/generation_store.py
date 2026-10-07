@@ -495,10 +495,7 @@ def publish_generation(
         if generations_fd >= 0:
             os.close(generations_fd)
         if lock_fd >= 0:
-            try:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
-            finally:
-                os.close(lock_fd)
+            os.close(lock_fd)
         if store_fd >= 0:
             os.close(store_fd)
         if source_fd >= 0:
