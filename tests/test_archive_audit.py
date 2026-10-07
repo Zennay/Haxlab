@@ -332,3 +332,83 @@ def test_archive_audit_cli_fails_closed_and_can_truncate_details(
     assert report["objects_with_issues"] == 1
     assert report["issues"] == []
     assert report["issues_truncated"] is True
+
+
+def test_archive_audit_rejects_malformed_ledger_evidence_before_file_reads(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db = tmp_path / "state.sqlite3"
+    raw = tmp_path / "raw"
+    good_sha_one = "1" * 64
+    good_sha_two = "2" * 64
+
+    with RuntimeState(db) as state:
+        state.connection.executemany(
+            """
+            INSERT INTO raw_replays (sha256, archive_path, size_bytes)
+            VALUES (?, ?, ?)
+            """,
+            [
+                ("A" * 64, str(raw / "upper.hbr2"), 1),
+                (good_sha_one, "", 1),
+                (good_sha_two, str(raw / "bad-size.hbr2"), "not-an-integer"),
+            ],
+        )
+        state.connection.commit()
+
+        def unexpected_read(path: Path) -> tuple[int, str]:
+            raise AssertionError(f"malformed ledger row reached filesystem: {path}")
+
+        monkeypatch.setattr(
+            archive_audit,
+            "_secure_archive_snapshot",
+            unexpected_read,
+        )
+        report = audit_raw_archive(state)
+
+    assert report["ok"] is False
+    assert report["checked_records"] == 3
+    assert report["existing_files"] == 0
+    assert report["read_failures"] == 3
+    assert report["objects_with_issues"] == 3
+    assert report["issues_truncated"] is False
+    assert [item["reasons"] for item in report["issues"]] == [
+        ["invalid_ledger_evidence:size_bytes"],
+        ["invalid_ledger_evidence:archive_path"],
+        ["invalid_ledger_evidence:sha256"],
+    ]
+
+
+def test_archive_audit_cli_reports_malformed_size_without_crashing(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    db = tmp_path / "state.sqlite3"
+    digest = "3" * 64
+    archive_path = tmp_path / "raw" / "invalid-size.hbr2"
+
+    with RuntimeState(db) as state:
+        state.connection.execute(
+            """
+            INSERT INTO raw_replays (sha256, archive_path, size_bytes)
+            VALUES (?, ?, ?)
+            """,
+            (digest, str(archive_path), "broken"),
+        )
+        state.connection.commit()
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["haxlab-audit-archive", "--state-db", str(db)],
+    )
+    assert main() == 2
+    report = json.loads(capsys.readouterr().out)
+
+    assert report["ok"] is False
+    assert report["read_failures"] == 1
+    assert report["issues"][0]["reasons"] == [
+        "invalid_ledger_evidence:size_bytes"
+    ]
