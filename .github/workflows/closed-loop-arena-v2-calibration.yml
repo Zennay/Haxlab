@@ -565,17 +565,17 @@ jobs:
                   None if decision.passed else list(decision.reasons)
               ),
           }
-          if not decision.passed:
-              raise SystemExit(
-                  "frozen policy validation failed: "
-                  + ", ".join(decision.reasons)
-              )
-
           (root / "calibration-summary.json").write_text(
               json.dumps(summary, indent=2) + "\n",
               encoding="utf-8",
           )
           print(json.dumps(summary, indent=2))
+
+          if not decision.passed:
+              raise SystemExit(
+                  "frozen policy validation failed: "
+                  + ", ".join(decision.reasons)
+              )
           PY
 
           sudo -u haxlab cat "$ARENA_OUT/calibration-summary.json"             > /tmp/haxlab-arena-v2-calibration-latest-summary.json
