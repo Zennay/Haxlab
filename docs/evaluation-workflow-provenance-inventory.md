@@ -23,7 +23,7 @@ For every explicitly listed workflow the report includes:
   40-character commit pins;
 - whether checkout disables persisted credentials;
 - whether checkout requests a clean working tree;
-- whether checkout is bound to an exact source expression;
+- whether every checkout ref is provenance-bound, either to the exact event/source expression or to a literal 40-character immutable commit (for frozen secondary sources);
 - whether the workflow merely records HEAD and whether it contains a real source-bound exact-HEAD comparison guard;
 - whether top-level `contents: read` is present;
 - any explicit `*: write` permission lines;
