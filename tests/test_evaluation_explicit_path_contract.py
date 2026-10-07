@@ -268,3 +268,20 @@ def test_evaluation_package_uses_only_explicit_evidence_paths() -> None:
         )
 
     assert violations == [], "\n".join(violations)
+
+
+def test_proof_workflow_is_manual_and_exact_live_head_bound() -> None:
+    workflow = PROOF_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "workflow_dispatch:" in workflow
+    assert "pull_request:" not in workflow
+    assert "push:" not in workflow
+    assert (
+        "uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
+        in workflow
+    )
+    assert 'test "$HEAD_SHA" = "${GITHUB_SHA}"' in workflow
+    assert 'case "${GITHUB_REF}" in' in workflow
+    assert "refs/heads/*)" in workflow
+    assert 'git ls-remote --exit-code origin "${GITHUB_REF}"' in workflow
+    assert 'if [ "$LIVE_SHA" != "${GITHUB_SHA}" ]; then' in workflow
