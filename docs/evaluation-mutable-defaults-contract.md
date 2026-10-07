@@ -39,7 +39,7 @@ mutation (#248), and runtime output purity (#252).
 `tests/test_evaluation_mutable_defaults_contract.py` recursively parses every
 evaluation module and checks function, async-function, method, and lambda
 defaults. Focused regressions cover positional defaults, keyword-only defaults,
-import aliases, assignment aliases, nested containers, async functions, and lambdas.
+import aliases, assignment aliases, constant `getattr(...)` reflection, nested containers, async functions, and lambdas.
 
 The branch-scoped self-hosted proof additionally compiles the evaluation tree,
 runs the focused contract, and executes the adjacent canonical Arena-v2
