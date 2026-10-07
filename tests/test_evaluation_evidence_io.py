@@ -355,3 +355,52 @@ def test_strict_serialized_inputs_feed_existing_promotion_gate() -> None:
         "no_blocking_regressions",
         "run_reproducible",
     )
+
+
+def test_strict_parser_preserves_blocking_critical_regression() -> None:
+    evidence_result = parse_evaluation_evidence(
+        _payload(
+            regressions=[
+                {
+                    "scenario": "last_man_defence",
+                    "severity": "critical",
+                    "details": "large regression",
+                }
+            ]
+        )
+    )
+    policy_result = parse_promotion_policy(_policy())
+
+    assert evidence_result.valid
+    assert policy_result.valid
+    assert evidence_result.evidence is not None
+    assert policy_result.policy is not None
+
+    decision = decide_promotion(
+        evidence_result.evidence,
+        policy_result.policy,
+    )
+
+    assert not decision.promote
+    assert any(
+        reason.startswith("critical_regressions:last_man_defence")
+        for reason in decision.reasons
+    )
+
+
+def test_non_reproducible_evidence_parses_but_cannot_promote() -> None:
+    evidence_result = parse_evaluation_evidence(_payload(reproducible=False))
+    policy_result = parse_promotion_policy(_policy())
+
+    assert evidence_result.valid
+    assert policy_result.valid
+    assert evidence_result.evidence is not None
+    assert policy_result.policy is not None
+
+    decision = decide_promotion(
+        evidence_result.evidence,
+        policy_result.policy,
+    )
+
+    assert not decision.promote
+    assert "run_not_reproducible" in decision.reasons
