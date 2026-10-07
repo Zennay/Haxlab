@@ -355,6 +355,31 @@ def test_concurrent_valid_winner_is_verified_and_recovered(
     assert row["size_bytes"] == len(payload)
 
 
+def test_archive_replay_rejects_regular_file_raw_root(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "incoming" / "source.hbr2"
+    raw = tmp_path / "raw"
+    db = tmp_path / "state.sqlite3"
+    source.parent.mkdir()
+    source.write_bytes(_valid_hbr2(payload=b"root-regular-file"))
+    raw.write_bytes(b"not-a-directory")
+
+    with RuntimeState(db) as state:
+        try:
+            archive_replay(source, raw, state)
+        except RuntimeError as exc:
+            assert str(exc) == "raw_archive_root_unsafe"
+        else:
+            raise AssertionError("regular-file raw root must fail closed")
+        count = state.connection.execute(
+            "SELECT COUNT(*) AS count FROM raw_replays"
+        ).fetchone()["count"]
+
+    assert count == 0
+    assert raw.read_bytes() == b"not-a-directory"
+
+
 def test_archive_replay_rejects_symlinked_raw_root(
     tmp_path: Path,
 ) -> None:
