@@ -135,6 +135,21 @@ def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
                     f"line {node.lineno}: wildcard interpreter-state import: {module}"
                 )
         elif isinstance(node, ast.Call):
+            accessor = _canonical_name(node.func, aliases)
+            if (
+                accessor in {"getattr", "builtins.getattr"}
+                and len(node.args) >= 2
+            ):
+                owner = _canonical_name(node.args[0], aliases)
+                selector = node.args[1]
+                if owner in TRACKED_NAMESPACES and not (
+                    isinstance(selector, ast.Constant)
+                    and isinstance(selector.value, str)
+                ):
+                    findings.append(
+                        f"line {node.lineno}: dynamic interpreter-state capability: {owner}"
+                    )
+
             target = _canonical_name(node.func, aliases)
             if target in FORBIDDEN_CALLS:
                 findings.append(
