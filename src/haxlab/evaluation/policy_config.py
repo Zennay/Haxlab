@@ -4,6 +4,8 @@ import argparse
 import hashlib
 import json
 import math
+import os
+import stat
 import tomllib
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
@@ -68,18 +70,46 @@ def _require_runtime_policy_schema() -> None:
         )
 
 
+
+def _read_regular_file_nofollow(path: Path) -> bytes:
+    """Read one regular file without a symlink check/read race."""
+
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    if nofollow is None:
+        raise ValueError("secure no-follow promotion policy reads are unsupported")
+
+    try:
+        fd = os.open(path, os.O_RDONLY | nofollow)
+    except OSError as exc:
+        raise ValueError(
+            "promotion policy path must be a readable regular non-symlink file"
+        ) from exc
+
+    try:
+        try:
+            metadata = os.fstat(fd)
+        except OSError as exc:
+            raise ValueError("promotion policy config metadata is unreadable") from exc
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError(
+                "promotion policy path must be a readable regular non-symlink file"
+            )
+        try:
+            with os.fdopen(fd, "rb", closefd=False) as handle:
+                return handle.read()
+        except OSError as exc:
+            raise ValueError("promotion policy config is unreadable") from exc
+    finally:
+        os.close(fd)
+
+
 def load_promotion_policy_config(path: Path) -> LoadedPromotionPolicy:
     """Load a strict promotion policy plus immutable source provenance."""
 
     if not isinstance(path, Path):
         raise ValueError("promotion policy path must be pathlib.Path")
-    if path.is_symlink() or not path.is_file():
-        raise ValueError("promotion policy path must be a regular non-symlink file")
 
-    try:
-        raw = path.read_bytes()
-    except OSError as exc:
-        raise ValueError("promotion policy config is unreadable") from exc
+    raw = _read_regular_file_nofollow(path)
 
     try:
         document = tomllib.loads(raw.decode("utf-8"))
