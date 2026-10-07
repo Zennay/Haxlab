@@ -336,3 +336,39 @@ def test_reader_ignores_unreferenced_staging_directory(tmp_path: Path) -> None:
     (stale / "junk").write_text("partial", encoding="utf-8")
 
     assert resolve_current_generation(store) == current
+
+
+def test_publish_rejects_fifo_artifact_without_blocking(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    store = tmp_path / "store"
+    _write_dataset(source, match_id="m-1")
+    fifo = source / "reports.json"
+    fifo.unlink()
+    fifo.parent.mkdir(parents=True, exist_ok=True)
+    import os
+
+    os.mkfifo(fifo)
+
+    with pytest.raises(
+        GenerationStoreError,
+        match="dataset artifact is not a regular file: reports.json",
+    ):
+        publish_generation(source, store)
+
+
+def test_reader_rejects_fifo_artifact_without_blocking(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    store = tmp_path / "store"
+    _write_dataset(source, match_id="m-1")
+    current = publish_generation(source, store)
+    fifo = current.root / "reports.json"
+    fifo.unlink()
+    import os
+
+    os.mkfifo(fifo)
+
+    with pytest.raises(
+        GenerationStoreError,
+        match="dataset artifact is not a regular file: reports.json",
+    ):
+        resolve_current_generation(store)
