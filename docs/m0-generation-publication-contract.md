@@ -99,3 +99,51 @@ crash-safety acceptance criteria are complete. The producer owner still needs to
 
 Those producer/consumer filesystem changes remain separate from this pure contract
 lane so the existing `pipeline.py` / atomic-publication owners are not duplicated.
+
+
+## Standalone generation store
+
+`haxlab.ingestion.generation_store` implements the contract without modifying the
+active `pipeline.py` producer:
+
+1. validate and bind the source five-file dataset to its exact receipt;
+2. create a private staging directory below `generations/`;
+3. copy every canonical artifact through no-follow regular-file descriptors, require
+   stable source metadata across the copy and fsync every destination file;
+4. rebuild the staged receipt and require exact equality with the source receipt;
+5. write/fsync `generation-commit.json` and fsync the staging directory;
+6. atomically rename the complete staging directory to its content-addressed
+   `generation_id`, then fsync the `generations/` directory;
+7. validate the published immutable generation again;
+8. write/fsync a private current-pointer temp file;
+9. atomically replace `current-generation.json` and fsync the store root.
+
+The publisher refuses a store root equal to or below the source dataset before it
+creates directories, so publication cannot mutate the input dataset by configuration
+mistake. Store roots, generation directories, source artifacts, commit evidence and
+the current pointer are opened with no-follow semantics; evidence reads are bounded
+and metadata-stable.
+
+Republishing an already committed content ID is idempotent: its existing commit and
+artifact receipt must validate exactly before the current pointer can be refreshed.
+An existing corrupted generation is never overwritten.
+
+## Crash-boundary contract
+
+The implementation exposes an internal fault hook used only by regressions at these
+durable boundaries:
+
+- `after_stage_artifacts`;
+- `after_stage_commit`;
+- `after_generation_publish`;
+- `after_pointer_temp`;
+- `after_pointer_swap`.
+
+For every injected failure before the pointer swap, the reader must still resolve the
+previous complete generation. A failure after generation publication may leave an
+orphan **complete** content-addressed generation, but it is invisible because the
+current pointer still names the previous generation. A failure after the durable
+pointer swap resolves the new complete generation.
+
+Staging failures are cleaned best-effort; stale/unreferenced staging directories are
+never reader-visible. Pointer temp files are removed when the swap is not reached.
