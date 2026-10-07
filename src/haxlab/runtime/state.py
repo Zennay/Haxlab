@@ -7,6 +7,7 @@ from pathlib import Path
 
 CURRENT_ANALYZER_VERSION = "state-pass-v4"
 ANALYSIS_WRITE_STATUSES = frozenset({"ok", "failed", "retry"})
+PROCESSING_WRITE_STATUSES = frozenset({"ok", "failed"})
 
 
 SCHEMA = """
@@ -275,6 +276,9 @@ class RuntimeState:
         parser_stage: str = "probe",
         error: str | None = None,
     ) -> None:
+        if type(status) is not str or status not in PROCESSING_WRITE_STATUSES:
+            raise ValueError("processing status must be one of: failed, ok")
+
         self.connection.execute(
             """
             INSERT INTO replay_processing (
