@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 import tempfile
+import sys
 
 from haxlab.ingestion.generation_store import (
     ResolvedGeneration,
@@ -31,13 +32,16 @@ def _resolved(path: Path, *, strict: bool) -> Path:
         raise GenerationImportError(f"cannot resolve path safely: {path}") from exc
 
 
-def _validate_roots(export_root: Path, store_root: Path) -> None:
+def _validate_roots(export_root: Path, store_root: Path) -> tuple[Path, Path]:
     export = _resolved(export_root, strict=True)
     store = _resolved(store_root, strict=False)
     if store == export or store.is_relative_to(export):
         raise GenerationImportError(
             "store_root must be outside the immutable export_root"
         )
+    if store_root.is_symlink():
+        raise GenerationImportError("store_root must not be a symlink")
+    return export, store
 
 
 def run_generation_import(
@@ -50,9 +54,19 @@ def run_generation_import(
 
     export_root = Path(export_root)
     store_root = Path(store_root)
-    _validate_roots(export_root, store_root)
+    _, resolved_store = _validate_roots(export_root, store_root)
+    build_parent = resolved_store.parent
+    try:
+        build_parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise GenerationImportError(
+            f"cannot create private build parent: {build_parent}"
+        ) from exc
 
-    with tempfile.TemporaryDirectory(prefix="haxlab-m0-build-") as temporary:
+    with tempfile.TemporaryDirectory(
+        prefix=".haxlab-m0-build-",
+        dir=build_parent,
+    ) as temporary:
         build_root = Path(temporary) / "dataset"
         manifest = run_import(
             export_root,
@@ -91,7 +105,8 @@ def main() -> int:
             json.dumps(
                 {"ok": False, "error": str(exc)},
                 sort_keys=True,
-            )
+            ),
+            file=sys.stderr,
         )
         return 2
 
