@@ -13,8 +13,9 @@ maintenance boundary for that table.
 - Symlink database paths and paths traversing a symlink fail closed before SQLite opens.
 - The exact five-column `runtime_events` schema is verified inside the same write
   transaction before any deletion.
-- Retention uses one `BEGIN IMMEDIATE` transaction, so eligibility and deletion are
-  evaluated against one SQLite snapshot.
+- Live retention uses one `BEGIN IMMEDIATE` transaction, so eligibility and deletion are
+  evaluated against one SQLite snapshot. Dry-run uses a read transaction and does not
+  reserve the writer slot.
 - Rows newer than the age horizon are always retained.
 - Independently, the newest `--keep-latest N` rows are retained even when older than
   the horizon. Ordering is `created_at DESC, id DESC`.
