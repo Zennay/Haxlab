@@ -8,6 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+
+_NATIVE_PATH_TYPE = type(Path("."))
+
 from haxlab.evaluation.models import EvaluationEvidence, PromotionPolicy, Regression
 
 
@@ -202,8 +205,11 @@ def _parse_regressions(
             continue
 
         expected = {"scenario", "severity", "details"}
-        missing = sorted(expected - set(raw))
-        unexpected = sorted(set(raw) - expected)
+        raw_keys = {key for key in raw if type(key) is str}
+        if len(raw_keys) != len(raw):
+            failures.append(f"invalid_evidence:{label}:non_string_key")
+        missing = sorted(expected - raw_keys)
+        unexpected = sorted(raw_keys - expected)
         for key in missing:
             failures.append(f"invalid_evidence:{label}:missing:{key}")
         for key in unexpected:
@@ -244,7 +250,9 @@ def parse_evaluation_evidence(payload: Any) -> EvidenceParseResult:
         )
 
     failures: list[str] = []
-    keys = set(payload)
+    keys = {key for key in payload if type(key) is str}
+    if len(keys) != len(payload):
+        failures.append("invalid_evidence:payload:non_string_key")
     for key in sorted(_REQUIRED_KEYS - keys):
         failures.append(f"invalid_evidence:missing:{key}")
     for key in sorted(keys - _ALLOWED_KEYS):
@@ -342,7 +350,7 @@ def parse_evaluation_evidence(payload: Any) -> EvidenceParseResult:
 
 def load_evaluation_evidence(path: Path) -> EvidenceParseResult:
     """Load one regular JSON file and parse it with the strict contract."""
-    if not isinstance(path, Path):
+    if type(path) is not _NATIVE_PATH_TYPE:
         return EvidenceParseResult(
             evidence=None,
             reasons=("invalid_evidence:path:not_path",),
@@ -444,7 +452,9 @@ def parse_promotion_policy(payload: Any) -> PolicyParseResult:
         "allow_critical_regressions",
     }
     failures: list[str] = []
-    keys = set(payload)
+    keys = {key for key in payload if type(key) is str}
+    if len(keys) != len(payload):
+        failures.append("invalid_policy:payload:non_string_key")
     for key in sorted(required - keys):
         failures.append(f"invalid_policy:missing:{key}")
     for key in sorted(keys - required):
@@ -494,7 +504,7 @@ def parse_promotion_policy(payload: Any) -> PolicyParseResult:
 
 def load_promotion_policy(path: Path) -> PolicyParseResult:
     """Load one regular JSON policy file and parse it fail-closed."""
-    if not isinstance(path, Path):
+    if type(path) is not _NATIVE_PATH_TYPE:
         return PolicyParseResult(
             policy=None,
             reasons=("invalid_policy:path:not_path",),
