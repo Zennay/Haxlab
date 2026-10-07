@@ -23,7 +23,7 @@ Audit decision code may not depend on:
 - the `numpy.random` namespace, including generator factories and distribution calls;
 - generated UUID APIs such as `uuid1`, `uuid4`, `uuid6`, `uuid7` or `uuid8`.
 
-Import aliases, chained assignment aliases and loaded callable/module references are resolved by the contract. Constant `getattr(...)` indirection is resolved as well, including an aliased `builtins.getattr`, so an ambient source cannot be hidden behind another local name before use. Direct tuple/list unpacking of aliasable references is covered. Wildcard imports from sensitive modules are rejected. NumPy itself remains allowed; only references/imports under `numpy.random` are treated as ambient entropy.
+Import aliases, chained assignment aliases and loaded callable/module references are resolved by the contract. Constant `getattr(...)` indirection is resolved as well, including an aliased `builtins.getattr`, so an ambient source cannot be hidden behind another local name before use. Direct tuple/list unpacking of aliasable references is covered. Wildcard imports from sensitive modules are rejected, including `from numpy import *` because it can expose the RNG namespace. Normal NumPy imports remain allowed; only `numpy.random` references/imports are treated as ambient entropy.
 
 ## Allowed deterministic operations
 
