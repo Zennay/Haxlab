@@ -11,7 +11,7 @@ def test_evaluation_product_code_is_python_optimization_safe() -> None:
     """Safety gates must not disappear or branch differently under Python -O."""
 
     violations: list[str] = []
-    for path in sorted(EVALUATION_ROOT.glob("*.py")):
+    for path in sorted(EVALUATION_ROOT.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if isinstance(node, ast.Assert):
