@@ -7,6 +7,7 @@ from typing import Any, Sequence
 
 
 SCHEMA = "haxlab-calibration-run-outcome-v1"
+MODEL_REJECTION_MARKER = "frozen policy validation failed:"
 
 PREP_STEPS = (
     "Checkout exact event SHA",
@@ -41,11 +42,16 @@ def _reason(code: str, detail: str | None = None) -> str:
     return code if detail is None else f"{code}:{detail}"
 
 
-def classify_calibration_job(payload: Any) -> dict[str, Any]:
+def classify_calibration_job(
+    payload: Any,
+    *,
+    job_log: str | None = None,
+) -> dict[str, Any]:
     """Classify GitHub job semantics without treating interruption as model rejection.
 
-    This contract is diagnostic only. promotion_evidence_valid is true only for a
-    fully successful calibration job. Every malformed or incomplete shape fails closed.
+    The contract is diagnostic only. promotion_evidence_valid is true only for a
+    fully successful calibration job. Model rejection additionally requires the
+    explicit deterministic calibration-gate marker from the job log.
     """
 
     reasons: list[str] = []
@@ -58,6 +64,9 @@ def classify_calibration_job(payload: Any) -> dict[str, Any]:
             model_rejection=False,
             reasons=("job:not_object",),
         )
+
+    if job_log is not None and not isinstance(job_log, str):
+        reasons.append("job_log:not_string")
 
     run_id = payload.get("run_id")
     job_id = payload.get("id")
@@ -176,13 +185,22 @@ def classify_calibration_job(payload: Any) -> dict[str, Any]:
 
     summary_conclusion = step_conclusion(SUMMARY_STEP)
     if summary_conclusion in FAILURE_CONCLUSIONS:
+        if isinstance(job_log, str) and MODEL_REJECTION_MARKER in job_log:
+            return _result(
+                run_id=run_id,
+                job_id=job_id,
+                classification="evaluation_rejected",
+                promotion_evidence_valid=False,
+                model_rejection=True,
+                reasons=("summary:gate_rejected",),
+            )
         return _result(
             run_id=run_id,
             job_id=job_id,
-            classification="evaluation_rejected",
+            classification="summary_failed",
             promotion_evidence_valid=False,
-            model_rejection=True,
-            reasons=(f"summary:{summary_conclusion}",),
+            model_rejection=False,
+            reasons=(f"summary:{summary_conclusion}:no_gate_marker",),
         )
     if summary_conclusion in INTERRUPTION_CONCLUSIONS:
         return _result(
@@ -272,6 +290,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("job_json", type=Path)
     parser.add_argument(
+        "--job-log",
+        type=Path,
+        help="optional decoded GitHub job log used only for explicit gate-rejection proof",
+    )
+    parser.add_argument(
         "--require-green",
         action="store_true",
         help="exit non-zero unless the complete calibration job is green",
@@ -293,7 +316,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             reasons=(f"job_json:unreadable:{type(exc).__name__}",),
         )
     else:
-        result = classify_calibration_job(payload)
+        job_log: str | None = None
+        if args.job_log is not None:
+            try:
+                job_log = args.job_log.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as exc:
+                result = _result(
+                    run_id=None,
+                    job_id=None,
+                    classification="invalid",
+                    promotion_evidence_valid=False,
+                    model_rejection=False,
+                    reasons=(f"job_log:unreadable:{type(exc).__name__}",),
+                )
+            else:
+                result = classify_calibration_job(payload, job_log=job_log)
+        else:
+            result = classify_calibration_job(payload)
 
     print(json.dumps(result, sort_keys=True))
     if result["classification"] == "invalid":
