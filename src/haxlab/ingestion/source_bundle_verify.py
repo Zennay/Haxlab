@@ -36,7 +36,7 @@ class SourceBundleVerifyError(ValueError):
     """Raised when expected source-receipt evidence cannot be trusted."""
 
 
-ReceiptBinding = tuple[tuple[int, int], ...]
+ReceiptBinding = tuple[tuple[int, ...], ...]
 
 
 def _directory_open_flags() -> int:
@@ -135,11 +135,25 @@ def _open_receipt_parent(path: Path) -> tuple[int, str, ReceiptBinding]:
         raise
 
 
-def _read_receipt_bytes(
-    path: Path,
-    *,
-    expected_binding: ReceiptBinding | None = None,
-) -> tuple[bytes, ReceiptBinding]:
+def _receipt_path_binding(path: Path) -> ReceiptBinding:
+    parent_fd, name, parent_binding = _open_receipt_parent(path)
+    try:
+        try:
+            current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        except OSError as exc:
+            raise SourceBundleVerifyError(
+                f"receipt_path_unreadable:{exc}"
+            ) from exc
+        if stat.S_ISLNK(current.st_mode):
+            raise SourceBundleVerifyError("receipt_path_symlink")
+        if not stat.S_ISREG(current.st_mode):
+            raise SourceBundleVerifyError("receipt_path_not_regular")
+        return parent_binding + (_stat_identity(current),)
+    finally:
+        os.close(parent_fd)
+
+
+def _read_receipt_bytes(path: Path) -> tuple[bytes, ReceiptBinding]:
     parent_fd, name, parent_binding = _open_receipt_parent(path)
     try:
         try:
@@ -194,10 +208,16 @@ def _read_receipt_bytes(
         if stat.S_ISLNK(final.st_mode) or _stat_identity(final) != _stat_identity(after):
             raise SourceBundleVerifyError("receipt_changed_after_read")
 
-        binding = parent_binding + ((after.st_dev, after.st_ino),)
-        if expected_binding is not None and binding != expected_binding:
+        binding = parent_binding + (_stat_identity(after),)
+        try:
+            logical_binding = _receipt_path_binding(path)
+        except SourceBundleVerifyError as exc:
             raise SourceBundleVerifyError(
-                "receipt_path_identity_changed_during_verification"
+                "receipt_logical_path_changed_during_read"
+            ) from exc
+        if logical_binding != binding:
+            raise SourceBundleVerifyError(
+                "receipt_logical_path_changed_during_read"
             )
         return b"".join(chunks), binding
     finally:
@@ -322,12 +342,13 @@ def verify_source_bundle(export_root: Path, receipt_path: Path) -> dict[str, Any
 
     current = create_source_bundle_receipt(Path(export_root))
 
-    second_raw, _ = _read_receipt_bytes(
-        Path(receipt_path),
-        expected_binding=receipt_binding,
-    )
+    second_raw, second_binding = _read_receipt_bytes(Path(receipt_path))
     if second_raw != first_raw:
         raise SourceBundleVerifyError("receipt_changed_during_verification")
+    if second_binding != receipt_binding:
+        raise SourceBundleVerifyError(
+            "receipt_path_identity_changed_during_verification"
+        )
 
     expected_by_path = {item["path"]: item for item in expected["files"]}
     current_by_path = {item["path"]: item for item in current["files"]}

@@ -342,6 +342,79 @@ def test_verify_rejects_identical_receipt_inode_swap_during_verification(
         verify.verify_source_bundle(export_root, receipt_path)
 
 
+def test_verify_rejects_logical_parent_swap_after_second_descriptor_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    export_root = tmp_path / "export"
+    export_root.mkdir()
+    _source_tree(export_root)
+    receipt_parent = tmp_path / "receipts"
+    receipt_parent.mkdir()
+    receipt_path = receipt_parent / "receipt.json"
+    _write_receipt(export_root, receipt_path)
+    stable_bytes = receipt_path.read_bytes()
+    old_parent = tmp_path / "receipts-old"
+
+    original_binding = verify._receipt_path_binding
+    calls = 0
+
+    def swap_before_final_rebind(path: Path):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            receipt_parent.rename(old_parent)
+            receipt_parent.mkdir()
+            (receipt_parent / "receipt.json").write_bytes(stable_bytes)
+        return original_binding(path)
+
+    monkeypatch.setattr(
+        verify,
+        "_receipt_path_binding",
+        swap_before_final_rebind,
+    )
+
+    with pytest.raises(
+        verify.SourceBundleVerifyError,
+        match="receipt_logical_path_changed_during_read",
+    ):
+        verify.verify_source_bundle(export_root, receipt_path)
+
+
+def test_verify_rejects_in_place_mutation_after_second_descriptor_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    export_root = tmp_path / "export"
+    export_root.mkdir()
+    _source_tree(export_root)
+    receipt_path = tmp_path / "receipt.json"
+    _write_receipt(export_root, receipt_path)
+
+    original_binding = verify._receipt_path_binding
+    calls = 0
+
+    def mutate_before_final_rebind(path: Path):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            with receipt_path.open("ab") as handle:
+                handle.write(b" ")
+        return original_binding(path)
+
+    monkeypatch.setattr(
+        verify,
+        "_receipt_path_binding",
+        mutate_before_final_rebind,
+    )
+
+    with pytest.raises(
+        verify.SourceBundleVerifyError,
+        match="receipt_logical_path_changed_during_read",
+    ):
+        verify.verify_source_bundle(export_root, receipt_path)
+
+
 def test_verify_rejects_receipt_mutation_during_verification(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -32,7 +32,7 @@ The expected receipt file must be a stable regular file reached through one immu
 - size/mtime/ctime changes during or immediately after reading;
 - receipts larger than the bounded parser limit.
 
-The verifier opens the absolute receipt parent one component at a time relative to already-bound directory descriptors, then opens the final receipt through that bound parent with no-follow semantics. After validating the expected receipt, it recomputes current source identity through `create_source_bundle_receipt()`. It then reopens the configured receipt path, requires the entire parent/file device+inode binding to match the first read, and finally requires the receipt bytes to be unchanged. Replacing the path with an identical-byte copy therefore still fails closed.
+The verifier opens the absolute receipt parent one component at a time relative to already-bound directory descriptors, then opens the final receipt through that bound parent with no-follow semantics. After every descriptor-backed receipt read it immediately reopens the configured logical path and requires that path to resolve back to the same parent-directory identities and the same receipt device/inode/size/mtime/ctime signature. After validating the expected receipt, it recomputes current source identity through `create_source_bundle_receipt()`, repeats the bound read, requires the complete binding to match the first read, and finally requires the receipt bytes to be unchanged. Replacing the path with an identical-byte copy or mutating the same inode after the second descriptor read therefore still fails closed.
 
 The source tree itself inherits all fail-closed source receipt protections, including relevant-file hashing, symlink rejection and inventory-drift detection.
 
