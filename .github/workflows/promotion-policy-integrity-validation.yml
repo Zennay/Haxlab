@@ -23,6 +23,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           clean: true
+          persist-credentials: false
 
       - name: Verify exact validation head
         shell: bash
