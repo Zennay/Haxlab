@@ -36,22 +36,22 @@ def _ingestion_paths() -> list[Path]:
     return sorted(path for path in INGESTION_ROOT.rglob("*.py") if path.is_file())
 
 
-def _simple_assignment(node: ast.AST) -> tuple[str, ast.AST] | None:
-    if (
-        isinstance(node, ast.Assign)
-        and len(node.targets) == 1
-        and isinstance(node.targets[0], ast.Name)
-    ):
-        return node.targets[0].id, node.value
+def _simple_assignments(node: ast.AST) -> list[tuple[str, ast.AST]]:
+    if isinstance(node, ast.Assign):
+        return [
+            (target.id, node.value)
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        ]
     if (
         isinstance(node, ast.AnnAssign)
         and isinstance(node.target, ast.Name)
         and node.value is not None
     ):
-        return node.target.id, node.value
+        return [(node.target.id, node.value)]
     if isinstance(node, ast.NamedExpr) and isinstance(node.target, ast.Name):
-        return node.target.id, node.value
-    return None
+        return [(node.target.id, node.value)]
+    return []
 
 
 def _canonical_name(node: ast.AST | None, aliases: dict[str, str]) -> str | None:
@@ -103,19 +103,16 @@ def _aliases(tree: ast.AST) -> dict[str, str]:
     while changed:
         changed = False
         for node in ast.walk(tree):
-            assignment = _simple_assignment(node)
-            if assignment is None:
-                continue
-            local, expression = assignment
-            value = _canonical_name(expression, aliases)
-            if value and (
-                value in DIRECT_OUTPUT_CALLS
-                or value in STDIO_STREAMS
-                or value in STDIO_FD_STREAMS
-            ):
-                if aliases.get(local) != value:
-                    aliases[local] = value
-                    changed = True
+            for local, expression in _simple_assignments(node):
+                value = _canonical_name(expression, aliases)
+                if value and (
+                    value in DIRECT_OUTPUT_CALLS
+                    or value in STDIO_STREAMS
+                    or value in STDIO_FD_STREAMS
+                ):
+                    if aliases.get(local) != value:
+                        aliases[local] = value
+                        changed = True
 
     return aliases
 
@@ -179,6 +176,11 @@ class OutputVisitor(ast.NodeVisitor):
                 self.visit(default)
         self.function_stack.append("<lambda>")
         self.visit(node.body)
+        self.function_stack.pop()
+
+    def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
+        self.function_stack.append("<generator>")
+        self.generic_visit(node)
         self.function_stack.pop()
 
     def _inside_top_level_cli_main(self) -> bool:
@@ -270,6 +272,10 @@ def test_ingestion_libraries_are_silent_outside_cli_main() -> None:
             "sys.stdout.write",
         ),
         (
+            "import sys\nout = mirror = sys.stdout\ndef ingest():\n    mirror.write('noise')\n",
+            "sys.stdout.write",
+        ),
+        (
             "import sys\ndef ingest():\n    getattr(sys.stderr, 'write')('noise')\n",
             "sys.stderr.write",
         ),
@@ -340,6 +346,10 @@ def emit(fn):
 def main() -> int:
     return 0
 """
+    lazy_generator = """
+def main():
+    return (print(value) for value in range(1))
+"""
 
     for source in (
         class_method,
@@ -347,6 +357,7 @@ def main() -> int:
         nested_lambda,
         default_side_effect,
         decorator_side_effect,
+        lazy_generator,
     ):
         assert any("builtins.print" in finding for finding in scan_source(source))
 
