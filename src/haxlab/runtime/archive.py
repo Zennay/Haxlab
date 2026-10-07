@@ -7,7 +7,6 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from haxlab.hashing import sha256_file
 from haxlab.replay.validation import validate_replay_basic
 from haxlab.runtime.state import RuntimeState
 
@@ -129,12 +128,107 @@ def _copy_to_staging_and_hash(
             os.close(source_fd)
 
 
+def _verify_existing_archive(
+    destination: Path,
+    sha256: str,
+    *,
+    missing_error: str,
+) -> None:
+    mismatch_error = f"raw_archive_hash_mismatch:{sha256}"
+    try:
+        initial = destination.lstat()
+    except FileNotFoundError as exc:
+        raise RuntimeError(missing_error) from exc
+    except OSError as exc:
+        raise RuntimeError(mismatch_error) from exc
+    if stat.S_ISLNK(initial.st_mode) or not stat.S_ISREG(initial.st_mode):
+        raise RuntimeError(mismatch_error)
+
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    nonblock = getattr(os, "O_NONBLOCK", None)
+    if nofollow is None or nonblock is None:
+        raise RuntimeError(mismatch_error)
+    flags = os.O_RDONLY | nofollow | nonblock
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+
+    try:
+        fd = os.open(destination, flags)
+    except FileNotFoundError as exc:
+        raise RuntimeError(missing_error) from exc
+    except OSError as exc:
+        raise RuntimeError(mismatch_error) from exc
+
+    try:
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise RuntimeError(mismatch_error)
+        if (before.st_dev, before.st_ino) != (initial.st_dev, initial.st_ino):
+            raise RuntimeError(mismatch_error)
+
+        digest = hashlib.sha256()
+        total = 0
+        while True:
+            chunk = os.read(fd, 1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            digest.update(chunk)
+
+        after = os.fstat(fd)
+        if (
+            total != after.st_size
+            or _source_signature(before) != _source_signature(after)
+        ):
+            raise RuntimeError(mismatch_error)
+
+        try:
+            final = destination.lstat()
+        except FileNotFoundError as exc:
+            raise RuntimeError(missing_error) from exc
+        except OSError as exc:
+            raise RuntimeError(mismatch_error) from exc
+        if stat.S_ISLNK(final.st_mode) or not stat.S_ISREG(final.st_mode):
+            raise RuntimeError(mismatch_error)
+        if _source_signature(final) != _source_signature(after):
+            raise RuntimeError(mismatch_error)
+        if digest.hexdigest() != sha256:
+            raise RuntimeError(mismatch_error)
+    finally:
+        os.close(fd)
+
+
+def _publish_archive_no_clobber(
+    staging_path: Path,
+    destination: Path,
+    sha256: str,
+) -> None:
+    mismatch_error = f"raw_archive_hash_mismatch:{sha256}"
+    try:
+        os.link(staging_path, destination, follow_symlinks=False)
+    except FileExistsError:
+        _verify_existing_archive(
+            destination,
+            sha256,
+            missing_error=mismatch_error,
+        )
+        return
+    except OSError as exc:
+        raise RuntimeError(f"raw_archive_publish_failed:{sha256}") from exc
+
+    _verify_existing_archive(
+        destination,
+        sha256,
+        missing_error=mismatch_error,
+    )
+
+
 def archive_replay(
     source_path: Path,
     raw_root: Path,
     state: RuntimeState,
 ) -> ArchiveResult:
-    """Archive a settled replay without trusting a source that changes mid-copy."""
+    """Archive a settled replay without trusting mutable source/destination paths."""
 
     source_before = source_path.stat()
     staging_path, sha256, copied_bytes = _copy_to_staging_and_hash(
@@ -158,22 +252,14 @@ def archive_replay(
         duplicate = state.raw_exists(sha256)
 
         if duplicate:
-            if not destination.is_file():
-                raise RuntimeError(f"raw_archive_missing:{sha256}")
-            if sha256_file(destination) != sha256:
-                raise RuntimeError(f"raw_archive_hash_mismatch:{sha256}")
+            _verify_existing_archive(
+                destination,
+                sha256,
+                missing_error=f"raw_archive_missing:{sha256}",
+            )
         else:
             destination.parent.mkdir(parents=True, exist_ok=True)
-
-            if destination.exists():
-                # A previous process may have atomically finalized the object and
-                # crashed before registering it in SQLite. Recover only when the
-                # on-disk object proves it matches its content-addressed path.
-                if not destination.is_file() or sha256_file(destination) != sha256:
-                    raise RuntimeError(f"raw_archive_hash_mismatch:{sha256}")
-            else:
-                staging_path.replace(destination)
-
+            _publish_archive_no_clobber(staging_path, destination, sha256)
             state.register_raw(
                 sha256=sha256,
                 archive_path=str(destination),
