@@ -257,6 +257,69 @@ def _reconfirm_identity_anchor(
         _fail(f"{label} path identity changed during source audit")
 
 
+def _read_identity_anchor(
+    path: Path,
+    *,
+    fd: int,
+    identity: tuple[int, int],
+    limit: int,
+    label: str,
+) -> bytes:
+    _reconfirm_identity_anchor(
+        path,
+        fd=fd,
+        identity=identity,
+        label=label,
+    )
+    try:
+        before = os.fstat(fd)
+        if before.st_size > limit:
+            _fail(f"{label} exceeds {limit} byte limit")
+        os.lseek(fd, 0, os.SEEK_SET)
+        first = _read_fd_bounded(
+            fd,
+            limit=limit,
+            label=label,
+        )
+        os.lseek(fd, 0, os.SEEK_SET)
+        second = _read_fd_bounded(
+            fd,
+            limit=limit,
+            label=label,
+        )
+        after = os.fstat(fd)
+    except OSError as exc:
+        _fail(f"{label} anchored read failed: {exc}")
+
+    if first != second:
+        _fail(f"{label} bytes changed during anchored source read")
+    if (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    ) != (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    ):
+        _fail(f"{label} metadata changed during anchored source read")
+    if (after.st_dev, after.st_ino) != identity:
+        _fail(f"{label} descriptor identity changed during source audit")
+    if len(first) != after.st_size:
+        _fail(f"{label} byte count does not match file size")
+    _reconfirm_identity_anchor(
+        path,
+        fd=fd,
+        identity=identity,
+        label=label,
+    )
+    return first
+
+
 def _load_json(payload: bytes, *, label: str) -> dict[str, Any]:
     try:
         text = payload.decode("utf-8")
@@ -436,21 +499,11 @@ def audit_manifest_sources(manifest_path: Path) -> dict[str, Any]:
         except ManifestAuditError as exc:
             _fail(f"structural manifest audit failed: {exc}")
 
-        _reconfirm_identity_anchor(
+        manifest_bytes = _read_identity_anchor(
             manifest_path,
             fd=manifest_fd,
             identity=manifest_identity,
-            label="manifest",
-        )
-        manifest_bytes = _read_regular(
-            manifest_path,
             limit=MAX_LINKED_JSON_BYTES,
-            label="manifest",
-        )
-        _reconfirm_identity_anchor(
-            manifest_path,
-            fd=manifest_fd,
-            identity=manifest_identity,
             label="manifest",
         )
 
@@ -489,21 +542,11 @@ def audit_manifest_sources(manifest_path: Path) -> dict[str, Any]:
                 f"linked leaderboard audit failed: {exc}"
             )
 
-        _reconfirm_identity_anchor(
+        leaderboard_bytes = _read_identity_anchor(
             leaderboard_path,
             fd=leaderboard_fd,
             identity=leaderboard_identity,
-            label="linked leaderboard",
-        )
-        leaderboard_bytes = _read_regular(
-            leaderboard_path,
             limit=MAX_LINKED_JSON_BYTES,
-            label="linked leaderboard",
-        )
-        _reconfirm_identity_anchor(
-            leaderboard_path,
-            fd=leaderboard_fd,
-            identity=leaderboard_identity,
             label="linked leaderboard",
         )
 
