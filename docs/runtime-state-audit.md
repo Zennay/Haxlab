@@ -26,7 +26,10 @@ The v1 audit checks:
 - statuses use the runtime's declared state vocabulary;
 - archived/duplicate source records resolve to a raw replay with the same byte size;
 - every versioned analysis row is backed by a successfully processed replay;
-- successful analysis rows cannot reuse the same output path.
+- successful analysis rows cannot reuse the same output path;
+- known runtime provenance events retain the expected subject identity and
+  non-empty detail evidence, while unknown future event types remain extensible;
+- replay-identity events must reference an existing raw replay.
 
 Run it directly without adding a console-script dependency:
 
