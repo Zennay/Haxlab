@@ -7,6 +7,12 @@ on:
     paths:
       - .github/workflows/evaluation-contracts-compat-proof-v2.yml
       - ops/evaluation-contracts-compat-proof-v2.md
+  pull_request:
+    branches:
+      - feature/arena-v2-current-main-20261004
+    paths:
+      - .github/workflows/evaluation-contracts-compat-proof-v2.yml
+      - ops/evaluation-contracts-compat-proof-v2.md
   workflow_dispatch:
 
 permissions:
