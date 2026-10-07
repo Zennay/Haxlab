@@ -7,17 +7,20 @@ that can make later gate decisions depend on call order or host process history.
 
 Production modules recursively below `src/haxlab/evaluation/` must not mutate:
 
-- the active `decimal` context through `setcontext()`, active-context
-  attribute assignment, trap/flag mutation, or context-clearing mutators;
+- active and template `decimal` contexts through `setcontext()`, `getcontext()`,
+  `DefaultContext`/`BasicContext`/`ExtendedContext` attribute assignment,
+  trap/flag mutation, or context-clearing mutators;
 - NumPy process/thread numeric configuration through `seterr`,
   `seterrcall`, `set_printoptions`, or `setbufsize`;
-- Torch default numeric/runtime configuration through default dtype/device,
-  grad-mode, thread-count, deterministic-algorithm, or deterministic-debug setters;
+- Torch default numeric/runtime configuration through default dtype/device/tensor
+  type, float32 matmul precision, denormal handling, grad-mode, thread-count,
+  deterministic-algorithm, or deterministic-debug setters;
 - known Torch backend numeric flags such as cuDNN determinism/benchmark and
   CUDA matmul TF32/reduced-precision controls.
 
 The contract resolves normal import aliases, direct-import aliases, simple
-assignment aliases, and constant-`getattr(...)` spellings. Read-only inspection,
+assignment aliases, bound context-mutator aliases, unbound `dict`/`operator`
+mutators, builtins aliases, and constant-`getattr(...)` spellings. Read-only inspection,
 ordinary tensor/array creation, explicit local `decimal.Context` objects, and
 scoped `decimal.localcontext()` mutation remain allowed.
 
