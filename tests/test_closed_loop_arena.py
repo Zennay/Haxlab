@@ -743,3 +743,17 @@ def test_closed_loop_arena_preserves_valid_custom_policy() -> None:
     assert decision.behavior_gate_passed
     assert decision.eligible_for_live_promotion
     assert decision.checks["policy_calibrated"] is True
+
+
+def test_closed_loop_arena_rejects_policy_subclass_before_attribute_access() -> None:
+    class HostilePolicy(ClosedLoopArenaPolicy):
+        def __getattribute__(self, name: str):
+            if name == "calibrated":
+                raise AssertionError("policy attributes must not be read")
+            return super().__getattribute__(name)
+
+    policy = HostilePolicy()
+    decision = decide_closed_loop_arena(_payload(), policy=policy)
+
+    assert not decision.eligible_for_live_promotion
+    assert decision.reasons == ("invalid_policy:object_type",)
