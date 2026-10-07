@@ -11,9 +11,9 @@ on:
       - "src/haxlab/evaluation/closed_loop_arena.py"
       - "tests/test_evaluation_model_schema_contract.py"
       - "tests/test_evaluation_workflow_module_contract.py"
+      - "tests/test_evaluation_cross_workflow_contract.py"
       - "tests/test_promotion.py"
-      - ".github/workflows/closed-loop-arena-v2-calibration.yml"
-      - ".github/workflows/evaluation-contract-current-head-validation.yml"
+      - ".github/workflows/*.yml"
   workflow_dispatch:
 
 permissions:
@@ -68,6 +68,7 @@ jobs:
           .evaluation-contract-venv/bin/pytest -q \
             tests/test_evaluation_model_schema_contract.py \
             tests/test_evaluation_workflow_module_contract.py \
+            tests/test_evaluation_cross_workflow_contract.py \
             tests/test_promotion.py
 
       - name: Record focused proof
