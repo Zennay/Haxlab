@@ -616,11 +616,22 @@ def test_hashed_metrics_role_ids_define_live_role_order() -> None:
     [
         {"gk": 0, "dm": 1, "am": 2, "xx": 3},
         {"gk": 0, "dm": 1, "am": 2, "st": 2},
+        {"gk": 0, "dm": 1, "am": 2, "st": True},
     ],
 )
 def test_hashed_metrics_role_ids_require_exact_canonical_role_set(
     role_ids: dict[str, int],
 ) -> None:
-    with pytest.raises(ValueError, match="invalid role order"):
+    with pytest.raises(ValueError, match="invalid role"):
         _resolve_role_order({"role_ids": role_ids})
+
+
+def test_hashed_metrics_reject_conflicting_role_metadata() -> None:
+    with pytest.raises(ValueError, match="conflicting role metadata"):
+        _resolve_role_order(
+            {
+                "role_ids": {"gk": 0, "dm": 1, "am": 2, "st": 3},
+                "role_order": ["st", "am", "dm", "gk"],
+            }
+        )
 
