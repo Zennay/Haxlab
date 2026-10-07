@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import tomllib
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,13 @@ _EVALUATION_KEYS = {
     "minimum_score_rate_lower_bound",
     "minimum_frozen_scenario_pass_rate",
 }
+
+
+@dataclass(frozen=True)
+class LoadedPromotionPolicy:
+    policy: PromotionPolicy
+    source_sha256: str
+    source_size_bytes: int
 
 
 def _require_native_int(value: Any, label: str, *, minimum: int) -> int:
@@ -37,13 +45,8 @@ def _require_probability(value: Any, label: str) -> float:
     return number
 
 
-def load_promotion_policy(path: Path) -> PromotionPolicy:
-    """Load the promotion gate from the canonical autonomy TOML contract.
-
-    The loader is deliberately strict and fail-closed. It accepts only a regular,
-    non-symlink file, requires the exact evaluation keyset, and rejects coercible
-    booleans/strings/non-finite thresholds before constructing PromotionPolicy.
-    """
+def load_promotion_policy_config(path: Path) -> LoadedPromotionPolicy:
+    """Load a strict promotion policy plus immutable source provenance."""
 
     if not isinstance(path, Path):
         raise ValueError("promotion policy path must be pathlib.Path")
@@ -51,9 +54,13 @@ def load_promotion_policy(path: Path) -> PromotionPolicy:
         raise ValueError("promotion policy path must be a regular non-symlink file")
 
     try:
-        with path.open("rb") as handle:
-            document = tomllib.load(handle)
-    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise ValueError("promotion policy config is unreadable") from exc
+
+    try:
+        document = tomllib.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         raise ValueError("promotion policy config is unreadable or invalid TOML") from exc
 
     if not isinstance(document, dict):
@@ -72,7 +79,7 @@ def load_promotion_policy(path: Path) -> PromotionPolicy:
             f"missing={missing}, extra={extra}"
         )
 
-    return PromotionPolicy(
+    policy = PromotionPolicy(
         minimum_games=_require_native_int(
             evaluation["minimum_games_vs_champion"],
             "evaluation.minimum_games_vs_champion",
@@ -88,6 +95,17 @@ def load_promotion_policy(path: Path) -> PromotionPolicy:
         ),
         allow_critical_regressions=False,
     )
+    return LoadedPromotionPolicy(
+        policy=policy,
+        source_sha256=hashlib.sha256(raw).hexdigest(),
+        source_size_bytes=len(raw),
+    )
+
+
+def load_promotion_policy(path: Path) -> PromotionPolicy:
+    """Load only the validated runtime policy from the strict config boundary."""
+
+    return load_promotion_policy_config(path).policy
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -99,11 +117,23 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        policy = load_promotion_policy(args.config)
+        loaded = load_promotion_policy_config(args.config)
     except ValueError as exc:
         parser.error(str(exc))
 
-    print(json.dumps(asdict(policy), sort_keys=True, separators=(",", ":")))
+    print(
+        json.dumps(
+            {
+                "policy": asdict(loaded.policy),
+                "source": {
+                    "sha256": loaded.source_sha256,
+                    "size_bytes": loaded.source_size_bytes,
+                },
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
     return 0
 
 
