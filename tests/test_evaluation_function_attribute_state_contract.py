@@ -213,6 +213,24 @@ def _function_locals(
         if isinstance(current, ast.Name) and isinstance(current.ctx, ast.Store):
             if current.id not in globals_:
                 locals_.add(current.id)
+        elif (
+            current is not node
+            and isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and current.name not in globals_
+        ):
+            locals_.add(current.name)
+        elif isinstance(current, ast.Import):
+            for alias in current.names:
+                local = alias.asname or alias.name.split(".", 1)[0]
+                if local not in globals_:
+                    locals_.add(local)
+        elif isinstance(current, ast.ImportFrom):
+            for alias in current.names:
+                if alias.name == "*":
+                    continue
+                local = alias.asname or alias.name
+                if local not in globals_:
+                    locals_.add(local)
 
     return locals_, globals_
 
@@ -573,6 +591,7 @@ def test_detector_rejects_persistent_function_attribute_state(
         "def gate():\n    return True\ndef helper(gate):\n    gate.cache = {}\n    return gate\n",
         "def gate():\n    return True\ndef helper():\n    gate = object()\n    gate.cache = {}\n    return gate\n",
         "def outer():\n    def local_gate():\n        return True\n    local_gate.cache = {}\n    return local_gate\n",
+        "def gate():\n    return True\ndef outer():\n    def gate():\n        return False\n    gate.cache = {}\n    return gate\n",
         "class Evaluator:\n    def gate(self):\n        self.cache = {}\n        return True\n",
     ],
 )
