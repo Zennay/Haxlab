@@ -11,7 +11,8 @@ Before a shard is used by normalization, evaluation, or training:
 3. `rowWidth` exactly equals the number of declared columns.
 4. The decompressed payload contains a whole number of rows for that width.
 5. Every float32 value is finite; NaN and positive/negative Infinity fail closed.
-6. Failure happens before `model.npz` or `metrics.json` publication.
+6. `dir_x` and `dir_y` labels are exactly one of `-1`, `0`, or `1`; `kick` is exactly `0` or `1`. Corrupt labels are rejected instead of rounded, clipped, or thresholded into plausible targets.
+7. Failure happens before `model.npz` or `metrics.json` publication.
 
 Valid current shard layouts and baseline training behavior are unchanged.
 
