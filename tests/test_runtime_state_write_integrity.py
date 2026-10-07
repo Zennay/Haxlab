@@ -48,7 +48,7 @@ def test_register_raw_rejects_noncanonical_sha_without_writing(
         assert _count(state, "raw_replays") == 0
 
 
-@pytest.mark.parametrize("bad_size", [True, -1, 1.0, "1"])
+@pytest.mark.parametrize("bad_size", [True, -1, 1.0, "1", 1 << 63])
 def test_register_raw_rejects_non_native_nonnegative_size(
     tmp_path: Path,
     bad_size: object,
@@ -87,6 +87,7 @@ def test_register_raw_rejects_malformed_archive_path(
         ("mtime_ns", True),
         ("mtime_ns", -1),
         ("mtime_ns", "1"),
+        ("mtime_ns", 1 << 63),
     ],
 )
 def test_mark_seen_rejects_invalid_native_integer_evidence_before_write(
@@ -121,6 +122,8 @@ def test_mark_seen_rejects_invalid_native_integer_evidence_before_write(
         ("decompressed_bytes", True),
         ("decompressed_bytes", -1),
         ("decompressed_bytes", 4.0),
+        ("total_frames", 1 << 63),
+        ("decompressed_bytes", 1 << 63),
     ],
 )
 def test_processing_write_rejects_invalid_integer_metrics_without_row(
@@ -210,6 +213,8 @@ def test_processing_write_rejects_malformed_parser_stage_without_row(
         ("tick_count", True),
         ("tick_count", -1),
         ("tick_count", "4"),
+        ("sampled_state_count", 1 << 63),
+        ("tick_count", 1 << 63),
     ],
 )
 def test_analysis_write_rejects_invalid_count_evidence_without_row(
@@ -590,3 +595,25 @@ def test_invalid_duplicate_raw_registration_does_not_mutate_existing_row(
         "archive_path": original_path,
         "size_bytes": 123,
     }
+
+
+def test_large_float_representable_duration_is_normalized_before_sqlite_write(
+    tmp_path: Path,
+) -> None:
+    sha = "9" * 64
+    large_duration = 10**100
+
+    with RuntimeState(tmp_path / "state.sqlite3") as state:
+        _register_raw(state, tmp_path, sha)
+        state.mark_replay_processing(
+            sha256=sha,
+            status="ok",
+            duration_seconds=large_duration,
+        )
+        stored = state.connection.execute(
+            "SELECT duration_seconds FROM replay_processing WHERE sha256 = ?",
+            (sha,),
+        ).fetchone()["duration_seconds"]
+
+    assert stored == float(large_duration)
+    assert type(stored) is float
