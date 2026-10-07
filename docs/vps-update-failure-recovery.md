@@ -25,6 +25,16 @@ ingest is restored before worker and analyzer and the live bot is restored
 last. This also covers late failures after the normal update path has already
 started services that were inactive before the update.
 
+## Stable updater execution
+
+The updater resets `APP_DIR` to `origin/main`, which replaces the checked-out
+`deploy/update-vps.sh` file itself. The destructive/update command sequence is
+therefore defined as `haxlab_apply_verified_main_update` before the first
+service stop. Bash parses the complete function body before invocation, so the
+running update sequence is already fixed in the shell before `git reset --hard`
+can replace the checkout. The function call is the final top-level updater
+command; no deployment logic is read from the replaced script afterward.
+
 ## Exit semantics
 
 An EXIT trap is installed after the active-state snapshot and before the first
