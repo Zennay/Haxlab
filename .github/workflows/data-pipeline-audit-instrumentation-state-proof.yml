@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - validation/data-pipeline-audit-instrumentation-state-20261007
+      - validation/data-pipeline-audit-sys-trace-profile-20261007
   pull_request:
     branches:
       - main

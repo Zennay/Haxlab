@@ -21,6 +21,8 @@ TRACKED_NAMESPACES = {
 }
 FORBIDDEN_CALLS = {
     "sys.addaudithook",
+    "sys.settrace",
+    "sys.setprofile",
     "faulthandler.enable",
     "faulthandler.disable",
     "faulthandler.register",
@@ -195,6 +197,16 @@ def test_data_pipeline_auditors_do_not_mutate_process_instrumentation() -> None:
     ("source", "expected"),
     [
         ("import sys\nsys.addaudithook(lambda *args: None)\n", "sys.addaudithook"),
+        ("import sys\nsys.settrace(lambda *args: None)\n", "sys.settrace"),
+        (
+            "from sys import setprofile as install_profile\n"
+            "install_profile(lambda *args: None)\n",
+            "sys.setprofile",
+        ),
+        (
+            "import sys\ntrace = getattr(sys, 'settrace')\ntrace(None)\n",
+            "sys.settrace",
+        ),
         (
             "from faulthandler import enable as turn_on\nturn_on()\n",
             "faulthandler.enable",
@@ -270,12 +282,14 @@ import sys
 import threading
 import tracemalloc
 
-def audit() -> tuple[bool, tuple[int, int], object, object, int]:
+def audit() -> tuple[bool, tuple[int, int], object, object, object, object, int]:
     enabled = faulthandler.is_enabled()
     traced = tracemalloc.get_traced_memory()
+    sys_trace_hook = sys.gettrace()
+    sys_profile_hook = sys.getprofile()
     trace_hook = threading.gettrace()
     profile_hook = threading.getprofile()
     events = sys.monitoring.get_events(1)
-    return enabled, traced, trace_hook, profile_hook, events
+    return enabled, traced, sys_trace_hook, sys_profile_hook, trace_hook, profile_hook, events
 """
     assert scan_source(source) == []
