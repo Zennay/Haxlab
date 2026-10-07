@@ -13,7 +13,7 @@ This generation carries the repaired v7 set of 21 current pinned owner heads and
 - #357 process registry mutation: `ad19f1c36ada3e42d4eba5458cb2b9aa668ce2d6`
 - #359 atexit registry state: `cfb6cc827b078fff08e7999b9f311fe76acd48e8`
 
-The workflow is intentionally `workflow_dispatch`-only while canonical calibration attempt 2 is running. It does not consume the self-hosted runner until explicitly dispatched after the serialized gate frees up.
+The workflow is staged with a safe branch-push trigger plus `workflow_dispatch`. The self-hosted `prove` job runs only for a manual dispatch or when the triggering commit message contains `[run-v8]`; ordinary preparation pushes are skipped before runner allocation while canonical calibration attempt 2 is active.
 
 At execution it:
 1. checks out untouched canonical Arena-v2;
