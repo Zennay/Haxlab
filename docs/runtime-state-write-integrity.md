@@ -7,9 +7,11 @@ range that downstream audits and status consumers assume.
 ## Canonical identities and text
 
 Persisted replay SHA-256 values are canonical lowercase 64-character hex
-digests. Required path/version/stage strings are native non-empty strings with
-no leading or trailing whitespace. Optional error text remains free-form text,
-including an empty string, but it may not be a non-string scalar.
+digests. Required path/version/stage strings are native strings containing at
+least one non-whitespace character. Their bytes are preserved verbatim; the
+write boundary does not trim or otherwise normalize valid text. Optional error
+text remains free-form text, including an empty string, but it may not be a
+non-string scalar.
 
 This contract validates evidence; it does not normalize it.
 
