@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import argparse
 import json
 import re
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 from haxlab.evaluation.models import PromotionDecision
@@ -22,6 +24,18 @@ REQUIRED_GATES: dict[str, tuple[str, str]] = {
     ),
 }
 _ALLOWED_EVENTS = frozenset({"push", "pull_request", "workflow_dispatch"})
+_REQUEST_FIELDS = frozenset(
+    {
+        "exact_head",
+        "candidate_id",
+        "champion_id",
+        "promotion_decision",
+        "gate_receipt",
+        "evidence_sha256",
+        "policy_sha256",
+    }
+)
+_DECISION_FIELDS = frozenset({"promote", "reasons"})
 
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -304,3 +318,97 @@ def render_authorization(payload: Mapping[str, Any]) -> str:
         )
         + "\n"
     )
+
+
+def load_authorization_request(path: Path) -> dict[str, Any]:
+    """Load and validate one strict JSON authorization request."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise PromotionAuthorizationError(
+            f"unable to read authorization request: {exc}"
+        ) from exc
+
+    if type(payload) is not dict:
+        raise PromotionAuthorizationError(
+            "authorization request must be a JSON object"
+        )
+    fields = set(payload)
+    missing = sorted(_REQUEST_FIELDS - fields)
+    unexpected = sorted(fields - _REQUEST_FIELDS)
+    if missing:
+        raise PromotionAuthorizationError(
+            "authorization request missing fields: " + ", ".join(missing)
+        )
+    if unexpected:
+        raise PromotionAuthorizationError(
+            "authorization request has unexpected fields: "
+            + ", ".join(unexpected)
+        )
+
+    raw_decision = payload["promotion_decision"]
+    if type(raw_decision) is not dict:
+        raise PromotionAuthorizationError(
+            "promotion_decision must be a JSON object"
+        )
+    decision_fields = set(raw_decision)
+    missing_decision = sorted(_DECISION_FIELDS - decision_fields)
+    unexpected_decision = sorted(decision_fields - _DECISION_FIELDS)
+    if missing_decision:
+        raise PromotionAuthorizationError(
+            "promotion_decision missing fields: "
+            + ", ".join(missing_decision)
+        )
+    if unexpected_decision:
+        raise PromotionAuthorizationError(
+            "promotion_decision has unexpected fields: "
+            + ", ".join(unexpected_decision)
+        )
+
+    promote = raw_decision["promote"]
+    if type(promote) is not bool:
+        raise PromotionAuthorizationError(
+            "promotion_decision.promote must be native boolean"
+        )
+    raw_reasons = raw_decision["reasons"]
+    if type(raw_reasons) is not list:
+        raise PromotionAuthorizationError(
+            "promotion_decision.reasons must be a JSON array"
+        )
+
+    decision = PromotionDecision(
+        promote=promote,
+        reasons=tuple(raw_reasons),
+    )
+    return authorize_promotion(
+        exact_head=payload["exact_head"],
+        candidate_id=payload["candidate_id"],
+        champion_id=payload["champion_id"],
+        promotion_decision=decision,
+        gate_receipt=payload["gate_receipt"],
+        evidence_sha256=payload["evidence_sha256"],
+        policy_sha256=payload["policy_sha256"],
+    )
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Bind a HaxLab promotion decision to exact-head mandatory "
+            "evaluation gate evidence"
+        )
+    )
+    parser.add_argument("request", type=Path)
+    args = parser.parse_args(argv)
+
+    try:
+        authorization = load_authorization_request(args.request)
+    except PromotionAuthorizationError as exc:
+        parser.exit(2, f"promotion authorization rejected: {exc}\n")
+
+    print(render_authorization(authorization), end="")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
