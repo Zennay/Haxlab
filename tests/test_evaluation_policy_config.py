@@ -72,6 +72,36 @@ def test_policy_config_uses_atomic_nofollow_file_open(
     assert all(flags & os.O_NONBLOCK for flags in seen_flags)
 
 
+def test_policy_config_fails_closed_on_read_time_metadata_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _write_policy(
+        tmp_path,
+        "minimum_games_vs_champion = 500\n"
+        "minimum_score_rate_lower_bound = 0.51\n"
+        "minimum_frozen_scenario_pass_rate = 0.98\n",
+    )
+    real_fstat = os.fstat
+    calls = 0
+
+    def drifting_fstat(fd: int) -> os.stat_result:
+        nonlocal calls
+        result = real_fstat(fd)
+        calls += 1
+        if calls == 1:
+            return result
+        values = list(result)
+        values[6] = result.st_size + 1
+        return os.stat_result(values)
+
+    monkeypatch.setattr(policy_config_module.os, "fstat", drifting_fstat)
+
+    with pytest.raises(ValueError, match="changed while being read"):
+        load_promotion_policy(path)
+
+
+
 def test_policy_config_fails_closed_without_nofollow_support(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
