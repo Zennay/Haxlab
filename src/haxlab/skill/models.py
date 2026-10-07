@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass, fields
+from types import MappingProxyType
 
 
 @dataclass(frozen=True)
@@ -72,7 +74,7 @@ class SkillDimensionEstimate:
 @dataclass(frozen=True)
 class PlayerSkillEstimate:
     player_id: str
-    dimensions: dict[str, SkillDimensionEstimate]
+    dimensions: Mapping[str, SkillDimensionEstimate]
     observation_count: int
     effective_weight: float
 
@@ -91,6 +93,12 @@ class PlayerSkillEstimate:
             for name, estimate in self.dimensions.items()
         ):
             raise ValueError("invalid_player_skill_estimate:dimension_value")
+
+        object.__setattr__(
+            self,
+            "dimensions",
+            MappingProxyType(dict(self.dimensions)),
+        )
 
         if type(self.observation_count) is not int or self.observation_count < 0:
             raise ValueError("invalid_player_skill_estimate:observation_count")
