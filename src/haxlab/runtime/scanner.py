@@ -43,11 +43,6 @@ def scan_once(
         raise ValueError("now_must_be_finite")
 
     if incoming_root.is_symlink():
-        state.event(
-            "ingest_root_rejected",
-            subject=str(incoming_root),
-            detail="symlink_root",
-        )
         raise ValueError("incoming_root_must_not_be_symlink")
     discovered = unchanged = archived = duplicates = failed = disappeared = 0
 
@@ -63,11 +58,6 @@ def scan_once(
         for name in dir_names:
             directory = root_path / name
             if directory.is_symlink():
-                state.event(
-                    "ingest_directory_rejected",
-                    subject=str(directory),
-                    detail="symlink_directory",
-                )
                 continue
             retained_dirs.append(name)
         dir_names[:] = retained_dirs
@@ -83,11 +73,6 @@ def scan_once(
         # is_file() follows symlinks, so retain the discovery-time observation
         # and re-check after sorting before any file metadata/content is trusted.
         if was_symlink or path.is_symlink():
-            state.event(
-                "replay_rejected",
-                subject=str(path),
-                detail="symlink_source",
-            )
             continue
         if not path.is_file():
             continue
