@@ -215,6 +215,9 @@ def audit_dataset(root: Path) -> DatasetAudit:
                 issues.append(f"{prefix}:wrong_type")
                 continue
             message_id = row.get("message_id")
+            report_id = row.get("report_id")
+            if report_id is not None and not _non_empty_string(report_id):
+                issues.append(f"{prefix}:invalid_report_id")
             if not _non_empty_string(message_id):
                 issues.append(f"{prefix}:invalid_message_id")
             elif message_id in report_ids:
@@ -302,6 +305,20 @@ def audit_dataset(root: Path) -> DatasetAudit:
                     issues.append(f"{prefix}:missing_report")
                 elif report != report_by_id[source_message_id]:
                     issues.append(f"{prefix}:report_payload_mismatch")
+
+            expected_match_id: str | None = None
+            if isinstance(sha, str) and sha in replay_by_sha:
+                if source_message_id is None:
+                    expected_match_id = f"hbr2:{sha[:16]}"
+                elif source_message_id in report_by_id:
+                    report_id = report_by_id[source_message_id].get("report_id")
+                    expected_match_id = (
+                        report_id
+                        if _non_empty_string(report_id)
+                        else f"hbr2:{sha[:16]}"
+                    )
+            if expected_match_id is not None and match_id != expected_match_id:
+                issues.append(f"{prefix}:match_id_mismatch")
 
             if not _is_finite_probability(row.get("match_confidence")):
                 issues.append(f"{prefix}:invalid_match_confidence")
