@@ -7,6 +7,7 @@ from haxlab.evaluation.models import (
     EvaluationEvidence,
     PromotionDecision,
     PromotionPolicy,
+    Regression,
 )
 
 
@@ -161,12 +162,18 @@ def decide_promotion(
         "allow_critical_regressions",
     )
 
-    challenger_id = str(evidence.challenger_id or "").strip()
-    champion_id = str(evidence.champion_id or "").strip()
-    if not challenger_id:
-        failures.append("missing_challenger_id")
-    if not champion_id:
-        failures.append("missing_champion_id")
+    challenger_id = evidence.challenger_id
+    champion_id = evidence.champion_id
+    if type(challenger_id) is not str or not challenger_id.strip():
+        failures.append("invalid_evidence:challenger_id")
+        challenger_id = ""
+    else:
+        challenger_id = challenger_id.strip()
+    if type(champion_id) is not str or not champion_id.strip():
+        failures.append("invalid_evidence:champion_id")
+        champion_id = ""
+    else:
+        champion_id = champion_id.strip()
     if challenger_id and challenger_id == champion_id:
         failures.append("challenger_matches_champion")
 
@@ -240,10 +247,32 @@ def decide_promotion(
                 f"<{minimum_scenario_pass_rate:.4f}"
             )
 
+    regressions_value = evidence.regressions
+    valid_regressions: list[Regression] = []
+    if not isinstance(regressions_value, tuple):
+        failures.append("invalid_evidence:regressions:not_tuple")
+    else:
+        for index, regression in enumerate(regressions_value):
+            prefix = f"invalid_evidence:regressions:{index}"
+            if not isinstance(regression, Regression):
+                failures.append(f"{prefix}:object_type")
+                continue
+
+            if type(regression.scenario) is not str or not regression.scenario.strip():
+                failures.append(f"{prefix}:scenario:invalid")
+                continue
+            if type(regression.severity) is not str or not regression.severity.strip():
+                failures.append(f"{prefix}:severity:invalid")
+                continue
+            if type(regression.details) is not str:
+                failures.append(f"{prefix}:details:not_string")
+                continue
+            valid_regressions.append(regression)
+
     critical = [
         regression
-        for regression in evidence.regressions
-        if str(regression.severity).casefold() == "critical"
+        for regression in valid_regressions
+        if regression.severity.strip().casefold() == "critical"
     ]
     if critical and not allow_critical_regressions:
         failures.append(
