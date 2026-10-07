@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 from haxlab.evaluation.calibration_resume import reusable_result_or_reasons
 
@@ -304,6 +305,7 @@ def test_rejects_duplicate_match_grid_even_when_count_matches(tmp_path: Path) ->
     assert reusable is False
     assert "match_results:plug_and_play:grid_mismatch" in reasons
 
+
 def test_rejects_corrupt_or_partial_result(tmp_path: Path) -> None:
     inputs = _inputs(tmp_path)
     result = tmp_path / "result.json"
@@ -314,3 +316,93 @@ def test_rejects_corrupt_or_partial_result(tmp_path: Path) -> None:
     assert reusable is False
     assert len(reasons) == 1
     assert reasons[0].startswith("result:unreadable:")
+
+
+def test_rejects_missing_or_non_file_bound_inputs_without_raising(
+    tmp_path: Path,
+) -> None:
+    for key, as_directory in (("challenger", False), ("scenarios", True)):
+        case_dir = tmp_path / key
+        case_dir.mkdir()
+        inputs = _inputs(case_dir)
+        result = _write_result(case_dir, _payload(inputs))
+        bound_path = inputs[key]
+        assert isinstance(bound_path, Path)
+        bound_path.unlink()
+        if as_directory:
+            bound_path.mkdir()
+
+        reusable, reasons = reusable_result_or_reasons(result, **inputs)
+
+        assert reusable is False
+        assert f"provenance:{key}:path:not_regular_file" in reasons
+
+
+def test_rejects_non_path_bound_input_without_raising(tmp_path: Path) -> None:
+    inputs = _inputs(tmp_path)
+    result = _write_result(tmp_path, _payload(inputs))
+    inputs["stadium"] = "stadium.hbs"
+
+    reusable, reasons = reusable_result_or_reasons(result, **inputs)
+
+    assert reusable is False
+    assert "provenance:stadium:path:not_path" in reasons
+
+
+def test_rejects_hash_read_failure_without_raising(tmp_path: Path) -> None:
+    inputs = _inputs(tmp_path)
+    result = _write_result(tmp_path, _payload(inputs))
+
+    with patch(
+        "haxlab.evaluation.calibration_resume._sha256",
+        side_effect=PermissionError("denied"),
+    ):
+        reusable, reasons = reusable_result_or_reasons(result, **inputs)
+
+    assert reusable is False
+    assert "provenance:challenger:sha256:unreadable:PermissionError" in reasons
+
+
+def test_rejects_non_path_result_locator_without_raising(tmp_path: Path) -> None:
+    inputs = _inputs(tmp_path)
+
+    reusable, reasons = reusable_result_or_reasons("result.json", **inputs)
+
+    assert reusable is False
+    assert reasons == ("result:path:not_path",)
+
+
+def test_rejects_malformed_partner_container_without_raising(tmp_path: Path) -> None:
+    inputs = _inputs(tmp_path)
+    result = _write_result(tmp_path, _payload(inputs))
+
+    for malformed, expected in (
+        (None, "request:partners:not_sequence"),
+        ("partner.json", "request:partners:not_sequence"),
+        ((), "request:partners:empty"),
+    ):
+        mutated = dict(inputs)
+        mutated["partners"] = malformed
+
+        reusable, reasons = reusable_result_or_reasons(result, **mutated)
+
+        assert reusable is False
+        assert expected in reasons
+
+
+def test_invalid_bound_input_never_stringifies_untrusted_object(
+    tmp_path: Path,
+) -> None:
+    class BrokenString:
+        def __str__(self) -> str:
+            raise RuntimeError("must not stringify invalid bound input")
+
+    inputs = _inputs(tmp_path)
+    result = _write_result(tmp_path, _payload(inputs))
+    inputs["stadium"] = BrokenString()
+
+    reusable, reasons = reusable_result_or_reasons(result, **inputs)
+
+    assert reusable is False
+    assert "provenance:stadium:path:not_path" in reasons
+

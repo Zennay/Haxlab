@@ -4,8 +4,9 @@ import argparse
 import hashlib
 import json
 import math
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 
 ARENA_SCHEMA = "haxlab-closed-loop-arena-v2"
@@ -20,6 +21,27 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _validated_sha256(
+    failures: list[str],
+    *,
+    path: Any,
+    label: str,
+) -> str | None:
+    if not isinstance(path, Path):
+        failures.append(f"provenance:{label}:path:not_path")
+        return None
+    try:
+        if not path.is_file():
+            failures.append(f"provenance:{label}:path:not_regular_file")
+            return None
+        return _sha256(path)
+    except (OSError, ValueError) as exc:
+        failures.append(
+            f"provenance:{label}:sha256:unreadable:{type(exc).__name__}"
+        )
+        return None
 
 
 def _expect_exact(
@@ -198,6 +220,10 @@ def validate_reusable_result(
         plug_repeats=plug_repeats,
         seed=seed,
     )
+    if isinstance(partners, (str, bytes)) or not isinstance(partners, Sequence):
+        failures.append("request:partners:not_sequence")
+    elif not partners:
+        failures.append("request:partners:empty")
     if failures:
         return tuple(failures)
 
@@ -230,18 +256,42 @@ def validate_reusable_result(
         failures.append("provenance:not_object")
         provenance = {}
 
+    bound_input_failures_before = len(failures)
+    challenger_sha256 = _validated_sha256(
+        failures, path=challenger, label="challenger"
+    )
+    champion_sha256 = _validated_sha256(
+        failures, path=champion, label="champion"
+    )
+    partner_sha256s = [
+        _validated_sha256(failures, path=path, label=f"partner:{index}")
+        for index, path in enumerate(partners)
+    ]
+    stadium_sha256 = _validated_sha256(failures, path=stadium, label="stadium")
+    scenarios_sha256 = _validated_sha256(
+        failures, path=scenarios, label="scenarios"
+    )
+    if len(failures) > bound_input_failures_before:
+        return tuple(failures)
+
     expected_provenance = {
         "challenger_model": str(challenger),
-        "challenger_sha256": _sha256(challenger),
         "champion_model": str(champion),
-        "champion_sha256": _sha256(champion),
         "partner_models": [str(path) for path in partners],
-        "partner_sha256s": [_sha256(path) for path in partners],
         "stadium": str(stadium),
-        "stadium_sha256": _sha256(stadium),
         "scenarios": str(scenarios),
-        "scenarios_sha256": _sha256(scenarios),
     }
+    if challenger_sha256 is not None:
+        expected_provenance["challenger_sha256"] = challenger_sha256
+    if champion_sha256 is not None:
+        expected_provenance["champion_sha256"] = champion_sha256
+    if all(value is not None for value in partner_sha256s):
+        expected_provenance["partner_sha256s"] = partner_sha256s
+    if stadium_sha256 is not None:
+        expected_provenance["stadium_sha256"] = stadium_sha256
+    if scenarios_sha256 is not None:
+        expected_provenance["scenarios_sha256"] = scenarios_sha256
+
     for key, expected in expected_provenance.items():
         _expect_exact(failures, provenance, key, expected, f"provenance:{key}")
 
@@ -343,6 +393,8 @@ def reusable_result_or_reasons(
     result_path: Path,
     **kwargs: Any,
 ) -> tuple[bool, tuple[str, ...]]:
+    if not isinstance(result_path, Path):
+        return False, ("result:path:not_path",)
     try:
         payload = json.loads(result_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
