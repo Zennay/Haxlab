@@ -13,6 +13,7 @@ from typing import Any
 from haxlab.ingestion.dataset_receipt import (
     M0_ARTIFACTS,
     RECEIPT_SCHEMA,
+    DatasetReceiptError,
     build_dataset_receipt,
 )
 
@@ -177,7 +178,12 @@ def verify_dataset_receipt(
     receipt_payload: dict[str, object],
 ) -> dict[str, object]:
     expected = validate_receipt_payload(receipt_payload)
-    current = build_dataset_receipt(dataset_root)
+    try:
+        current = build_dataset_receipt(dataset_root)
+    except DatasetReceiptError as exc:
+        raise DatasetReceiptVerificationError(
+            f"dataset is unsafe or incomplete: {exc}"
+        ) from exc
 
     if current != expected:
         expected_rows = {
@@ -217,7 +223,7 @@ def main() -> int:
             args.dataset_root,
             load_receipt(args.receipt),
         )
-    except (DatasetReceiptVerificationError, ValueError) as exc:
+    except DatasetReceiptVerificationError as exc:
         print(
             json.dumps(
                 {
