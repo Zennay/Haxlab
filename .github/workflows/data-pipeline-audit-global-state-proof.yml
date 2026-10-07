@@ -1,0 +1,89 @@
+name: Data-pipeline audit global-state mutation proof
+
+on:
+  push:
+    branches:
+      - validation/data-pipeline-audit-global-state-20261007
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-data-pipeline-audit-global-state-${{ github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Verify exact checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          echo "HAXLAB_DATA_PIPELINE_AUDIT_GLOBAL_STATE_HEAD=$(git rev-parse HEAD)"
+
+      - name: Verify candidate is still the live branch head
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk 'NR == 1 {print $1}')"
+          test -n "$remote_head"
+          test "$remote_head" = "${{ github.sha }}"
+          echo "HAXLAB_DATA_PIPELINE_AUDIT_GLOBAL_STATE_LIVE_HEAD=$remote_head"
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .data-pipeline-audit-global-state-venv
+          python3 -m venv .data-pipeline-audit-global-state-venv
+          .data-pipeline-audit-global-state-venv/bin/pip install --upgrade pip
+          .data-pipeline-audit-global-state-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile repository Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          .data-pipeline-audit-global-state-venv/bin/python -m compileall -q \
+            src \
+            tests
+
+      - name: Run focused global-state mutation contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .data-pipeline-audit-global-state-venv/bin/pytest -q \
+              tests/test_data_pipeline_audit_global_state_contract.py
+
+      - name: Run adjacent integrated data-pipeline audit contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .data-pipeline-audit-global-state-venv/bin/pytest -q \
+              tests/test_data_pipeline_audit_layer_boundary.py \
+              tests/test_data_pipeline_audit_process_termination_contract.py \
+              tests/test_data_pipeline_audit_background_execution_contract.py \
+              tests/test_data_pipeline_audit_liveness_contract.py \
+              tests/test_data_pipeline_audit_readonly_contract.py \
+              tests/test_data_pipeline_audit_hermeticity.py \
+              tests/test_data_pipeline_audit_determinism_contract.py \
+              tests/test_data_pipeline_audit_exception_boundary.py \
+              tests/test_data_pipeline_audit_safe_deserialization.py
+
+      - name: Record green result
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HAXLAB_DATA_PIPELINE_AUDIT_GLOBAL_STATE_RESULT=green"
