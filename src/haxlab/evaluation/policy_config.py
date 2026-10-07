@@ -9,7 +9,7 @@ import stat
 import tomllib
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
-from typing import Any
+from typing import Any, get_type_hints
 
 from haxlab.evaluation.models import PromotionPolicy
 
@@ -26,6 +26,12 @@ _POLICY_FIELDS = {
     "minimum_score_rate_lower_bound",
     "minimum_scenario_pass_rate",
     "allow_critical_regressions",
+}
+_POLICY_FIELD_TYPES = {
+    "minimum_games": int,
+    "minimum_score_rate_lower_bound": float,
+    "minimum_scenario_pass_rate": float,
+    "allow_critical_regressions": bool,
 }
 
 
@@ -67,6 +73,22 @@ def _require_runtime_policy_schema() -> None:
         raise ValueError(
             "promotion policy runtime schema mismatch: "
             f"missing={missing}, extra={extra}"
+        )
+
+    try:
+        type_hints = get_type_hints(PromotionPolicy)
+    except (NameError, TypeError) as exc:
+        raise ValueError("promotion policy runtime annotations are unreadable") from exc
+    actual_types = {name: type_hints.get(name) for name in actual_fields}
+    if actual_types != _POLICY_FIELD_TYPES:
+        drifted = sorted(
+            name
+            for name in _POLICY_FIELDS
+            if actual_types.get(name) != _POLICY_FIELD_TYPES[name]
+        )
+        raise ValueError(
+            "promotion policy runtime type schema mismatch: "
+            f"drifted={drifted}"
         )
 
 
