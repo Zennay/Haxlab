@@ -45,3 +45,12 @@ invalid. The pre-publication validator enforces the same boundary before identit
 uniqueness is evaluated. This guarantees that duplicate diagnostics always identify
 the complete replay provenance, including the rare fallback-ID collision case where
 two full hashes share the same `hbr2:<16-char-prefix>`.
+
+
+## Machine-readable conflict evidence
+
+`DuplicateMatchIdError.conflicts` exposes the exact canonical conflict set as immutable
+tuples. The error boundary itself sorts match IDs and each provenance set, so callers
+receive deterministic structured evidence even if they construct or forward conflicts
+in a different source order. Human-readable exception text is derived from that same
+canonical structure; logs and tests therefore cannot disagree about ordering.
