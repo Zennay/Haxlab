@@ -16,16 +16,18 @@ _CANONICAL_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _name_key(name: str | None) -> str | None:
-    if not name:
+    if not isinstance(name, str):
         return None
-    cleaned = " ".join(str(name).strip().split())
+    cleaned = " ".join(name.strip().split())
     return cleaned.casefold() or None
 
 
 def _identity_key(player: dict[str, Any]) -> str | None:
     auth_hash = player.get("authHash")
-    if auth_hash:
-        return f"auth:{auth_hash}"
+    if auth_hash is not None:
+        if not isinstance(auth_hash, str) or not auth_hash.strip():
+            return None
+        return f"auth:{auth_hash.strip()}"
     name = _name_key(player.get("name"))
     return f"name:{name}" if name else None
 
@@ -38,10 +40,13 @@ def _valid_leaderboard_row(row: Any) -> bool:
     if not isinstance(row, dict):
         return False
     player_id = row.get("player_id")
+    role = row.get("role")
     matches = row.get("matches")
     return (
         isinstance(player_id, str)
         and bool(player_id.strip())
+        and isinstance(role, str)
+        and bool(role.strip())
         and type(matches) is int
         and matches >= 0
         and _native_finite_number(row.get("minutes"))
@@ -58,6 +63,28 @@ def _conservative_score(row: dict[str, Any]) -> float:
     )
 
 
+def _validate_selection_config(
+    *,
+    top_fraction_per_role: float,
+    min_players_per_role: int,
+    min_matches: int,
+    min_minutes: float,
+    max_uncertainty: float,
+) -> None:
+    if not _native_finite_number(top_fraction_per_role) or not (
+        0.0 <= float(top_fraction_per_role) <= 1.0
+    ):
+        raise ValueError("top_fraction_per_role must be finite and in [0, 1]")
+    if type(min_players_per_role) is not int or min_players_per_role < 1:
+        raise ValueError("min_players_per_role must be a native integer >= 1")
+    if type(min_matches) is not int or min_matches < 1:
+        raise ValueError("min_matches must be a native integer >= 1")
+    if not _native_finite_number(min_minutes) or float(min_minutes) < 0.0:
+        raise ValueError("min_minutes must be finite and >= 0")
+    if not _native_finite_number(max_uncertainty) or float(max_uncertainty) < 0.0:
+        raise ValueError("max_uncertainty must be finite and >= 0")
+
+
 def select_players(
     leaderboard_rows: list[dict[str, Any]],
     *,
@@ -67,6 +94,13 @@ def select_players(
     min_minutes: float = 120.0,
     max_uncertainty: float = 1.5,
 ) -> list[dict[str, Any]]:
+    _validate_selection_config(
+        top_fraction_per_role=top_fraction_per_role,
+        min_players_per_role=min_players_per_role,
+        min_matches=min_matches,
+        min_minutes=min_minutes,
+        max_uncertainty=max_uncertainty,
+    )
     eligible = [
         row
         for row in leaderboard_rows
@@ -78,7 +112,7 @@ def select_players(
 
     by_role: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in eligible:
-        by_role[str(row.get("role") or "unknown")].append(row)
+        by_role[row["role"].strip()].append(row)
 
     selected: list[dict[str, Any]] = []
     for role, rows in sorted(by_role.items()):
