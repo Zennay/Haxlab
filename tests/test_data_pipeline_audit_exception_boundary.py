@@ -34,12 +34,39 @@ def _name(node: ast.AST | None) -> str | None:
     return None
 
 
-def _is_broad_exception(node: ast.AST | None) -> bool:
+def _import_aliases(tree: ast.AST) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "builtins":
+                    aliases[alias.asname or "builtins"] = "builtins"
+        elif isinstance(node, ast.ImportFrom) and node.module == "builtins":
+            for alias in node.names:
+                if alias.name in BROAD_EXCEPTION_NAMES:
+                    aliases[alias.asname or alias.name] = alias.name
+    return aliases
+
+
+def _canonical_name(node: ast.AST | None, aliases: dict[str, str]) -> str | None:
+    name = _name(node)
+    if name is None:
+        return None
+    head, dot, tail = name.partition(".")
+    if head in aliases:
+        return aliases[head] + (dot + tail if dot else "")
+    return name
+
+
+def _is_broad_exception(
+    node: ast.AST | None,
+    aliases: dict[str, str],
+) -> bool:
     if node is None:
         return True
     if isinstance(node, ast.Tuple):
-        return any(_is_broad_exception(item) for item in node.elts)
-    name = _name(node)
+        return any(_is_broad_exception(item, aliases) for item in node.elts)
+    name = _canonical_name(node, aliases)
     if name is None:
         return False
     return name.rsplit(".", 1)[-1] in BROAD_EXCEPTION_NAMES
@@ -70,8 +97,11 @@ def _suite_terminates(statements: list[ast.stmt]) -> bool:
     return False
 
 
-def _handler_violations(handler: ast.ExceptHandler) -> list[str]:
-    if not _is_broad_exception(handler.type):
+def _handler_violations(
+    handler: ast.ExceptHandler,
+    aliases: dict[str, str],
+) -> list[str]:
+    if not _is_broad_exception(handler.type, aliases):
         return []
 
     violations: list[str] = []
@@ -93,11 +123,12 @@ def _handler_violations(handler: ast.ExceptHandler) -> list[str]:
 
 def _violations(source: str) -> list[str]:
     tree = ast.parse(source)
+    aliases = _import_aliases(tree)
     findings: list[str] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.ExceptHandler):
             continue
-        for violation in _handler_violations(node):
+        for violation in _handler_violations(node, aliases):
             findings.append(f"line:{node.lineno}:{violation}")
     return sorted(findings)
 
@@ -177,6 +208,13 @@ def test_contract_rejects_broad_exception_swallowing() -> None:
                     pass
                 raise
         """,
+        "aliased_exception": """
+            from builtins import Exception as Broad
+            try:
+                work()
+            except Broad:
+                pass
+        """,
     }
 
     findings = {
@@ -193,3 +231,4 @@ def test_contract_rejects_broad_exception_swallowing() -> None:
     assert kinds["base_return"] == ["fallthrough", "return"]
     assert kinds["tuple_fallthrough"] == ["fallthrough"]
     assert kinds["nested_swallow_before_raise"] == ["pass"]
+    assert kinds["aliased_exception"] == ["fallthrough", "pass"]
