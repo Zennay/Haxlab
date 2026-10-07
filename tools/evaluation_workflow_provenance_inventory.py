@@ -242,6 +242,24 @@ def _validates_exact_sha_input(text: str) -> bool:
     return False
 
 
+def _has_errexit_before(lines: Sequence[str], index: int) -> bool:
+    for line in reversed(lines[:index]):
+        stripped = line.strip()
+        if stripped.startswith("- name:"):
+            return False
+        if re.match(r"^set\s+-[A-Za-z]*e[A-Za-z]*", stripped):
+            return True
+    return False
+
+
+def _line_exits_on_failure(line: str) -> bool:
+    if "||" not in line:
+        return False
+    suffix = line.split("||", 1)[1].strip()
+    match = re.match(r"exit\s+([0-9]+)", suffix)
+    return bool(match and int(match.group(1)) != 0)
+
+
 def _has_exact_head_guard(text: str) -> bool:
     lines = text.splitlines()
     exact_input_validated = _validates_exact_sha_input(text)
@@ -251,8 +269,10 @@ def _has_exact_head_guard(text: str) -> bool:
     )
 
     # Direct source-bound equality assertion.
-    for line in lines:
+    for index, line in enumerate(lines):
         if "git rev-parse HEAD" not in line or not _is_equality_assertion(line):
+            continue
+        if not (_has_errexit_before(lines, index) or _line_exits_on_failure(line)):
             continue
         has_event_sha = any(marker in line for marker in EVENT_SHA_MARKERS)
         has_validated_input = exact_input_validated and INPUT_REF_MARKER in line
@@ -279,7 +299,9 @@ def _has_exact_head_guard(text: str) -> bool:
         if not (actual_present and expected_present):
             continue
 
-        if _is_equality_assertion(line):
+        if _is_equality_assertion(line) and (
+            _has_errexit_before(lines, index) or _line_exits_on_failure(line)
+        ):
             return True
 
         # Canonical CI-style guard: mismatch enters a branch that exits nonzero.
