@@ -38,3 +38,7 @@ The contract deliberately permits deterministic transformations of explicit evid
 Issue #180 owns import-time side effects, filesystem mutation, network and subprocess hermeticity. This contract does not duplicate that surface. It only prevents audit results from changing because the same evidence was checked in a different process environment or at a different time.
 
 Issue #378 hardens the already-integrated determinism boundary against assignment and constant-`getattr` alias indirection. No producer, auditor, runtime state, ingestion, learning, evaluation, model or champion implementation is modified by this lane.
+
+## Exact-head proof policy
+
+Merging newer `main` into a validation branch changes the candidate SHA even when main-side drift is file-disjoint from this three-file contract. The specialized determinism proof and normal HaxLab CI must therefore both rerun on that exact post-merge head before integration; green evidence from a pre-merge head remains historical only.
