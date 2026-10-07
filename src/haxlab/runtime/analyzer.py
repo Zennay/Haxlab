@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import stat
 import subprocess
 import tempfile
 import time
@@ -15,6 +17,158 @@ from haxlab.runtime.state import CURRENT_ANALYZER_VERSION, RawReplayRecord, Runt
 
 
 ANALYZER_VERSION = CURRENT_ANALYZER_VERSION
+_READ_CHUNK_BYTES = 1024 * 1024
+
+
+class AnalyzerArchiveError(ValueError):
+    pass
+
+
+def _archive_open_failure(path: Path) -> AnalyzerArchiveError:
+    try:
+        current = path.lstat()
+    except FileNotFoundError:
+        return AnalyzerArchiveError("archive_missing")
+    except OSError:
+        return AnalyzerArchiveError("archive_secure_open_failed")
+    if stat.S_ISLNK(current.st_mode):
+        return AnalyzerArchiveError("archive_symlink_not_allowed")
+    return AnalyzerArchiveError("archive_secure_open_failed")
+
+
+def _prepare_verified_decode_input(
+    replay: RawReplayRecord,
+    *,
+    output_dir: Path,
+) -> tuple[int, str]:
+    source = Path(replay.archive_path)
+    try:
+        initial = source.lstat()
+    except FileNotFoundError as exc:
+        raise AnalyzerArchiveError("archive_missing") from exc
+    except OSError as exc:
+        raise AnalyzerArchiveError("archive_read_failed") from exc
+
+    if stat.S_ISLNK(initial.st_mode):
+        raise AnalyzerArchiveError("archive_symlink_not_allowed")
+    if not stat.S_ISREG(initial.st_mode):
+        raise AnalyzerArchiveError("archive_not_regular")
+    if initial.st_size != replay.size_bytes:
+        raise AnalyzerArchiveError(
+            f"archive_size_mismatch:expected={replay.size_bytes}:actual={initial.st_size}"
+        )
+
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    nonblock = getattr(os, "O_NONBLOCK", None)
+    if nofollow is None or nonblock is None:
+        raise AnalyzerArchiveError("archive_secure_open_unsupported")
+    proc_fd_root = Path("/proc/self/fd")
+    if os.name != "posix" or not proc_fd_root.is_dir():
+        raise AnalyzerArchiveError("decode_fd_transport_unsupported")
+
+    flags = os.O_RDONLY | nofollow | nonblock
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+
+    try:
+        source_fd = os.open(source, flags)
+    except OSError as exc:
+        raise _archive_open_failure(source) from exc
+
+    temporary_name: str | None = None
+    temporary_fd = -1
+    keep_snapshot = False
+    try:
+        before = os.fstat(source_fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise AnalyzerArchiveError("archive_not_regular")
+        if (before.st_dev, before.st_ino) != (initial.st_dev, initial.st_ino):
+            raise AnalyzerArchiveError("archive_identity_changed")
+
+        try:
+            temporary_fd, temporary_name = tempfile.mkstemp(
+                prefix=f".{replay.sha256}.decode.",
+                suffix=".hbr2",
+                dir=output_dir,
+            )
+        except OSError as exc:
+            raise AnalyzerArchiveError("decode_snapshot_create_failed") from exc
+
+        digest = hashlib.sha256()
+        total = 0
+        with os.fdopen(os.dup(temporary_fd), "wb") as handle:
+            while True:
+                chunk = os.read(source_fd, _READ_CHUNK_BYTES)
+                if not chunk:
+                    break
+                handle.write(chunk)
+                digest.update(chunk)
+                total += len(chunk)
+            handle.flush()
+            os.fsync(handle.fileno())
+
+        after = os.fstat(source_fd)
+        before_identity = (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        )
+        after_identity = (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        )
+        if after_identity != before_identity or total != after.st_size:
+            raise AnalyzerArchiveError("archive_changed_during_read")
+
+        try:
+            final = source.lstat()
+        except OSError as exc:
+            raise AnalyzerArchiveError("archive_path_changed_during_read") from exc
+        if stat.S_ISLNK(final.st_mode) or not stat.S_ISREG(final.st_mode):
+            raise AnalyzerArchiveError("archive_path_changed_during_read")
+        final_identity = (
+            final.st_dev,
+            final.st_ino,
+            final.st_size,
+            final.st_mtime_ns,
+            final.st_ctime_ns,
+        )
+        if final_identity != after_identity:
+            raise AnalyzerArchiveError("archive_path_changed_during_read")
+
+        if total != replay.size_bytes:
+            raise AnalyzerArchiveError(
+                f"archive_size_mismatch:expected={replay.size_bytes}:actual={total}"
+            )
+        actual_sha256 = digest.hexdigest()
+        if actual_sha256 != replay.sha256:
+            raise AnalyzerArchiveError(
+                f"archive_sha256_mismatch:expected={replay.sha256}:actual={actual_sha256}"
+            )
+
+        os.lseek(temporary_fd, 0, os.SEEK_SET)
+        os.unlink(temporary_name)
+        temporary_name = None
+        keep_snapshot = True
+        return temporary_fd, f"/proc/self/fd/{temporary_fd}"
+    except OSError as exc:
+        raise AnalyzerArchiveError("archive_read_failed") from exc
+    finally:
+        os.close(source_fd)
+        if temporary_fd >= 0 and not keep_snapshot:
+            os.close(temporary_fd)
+        if temporary_name is not None and not keep_snapshot:
+            try:
+                os.unlink(temporary_name)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
 
 
 def _positive_native_int(value: object, *, name: str) -> int:
@@ -39,26 +193,48 @@ def _analyze_one(
     # analyzer version. A pre-existing derived file can only be orphan/stale
     # evidence from an interrupted or tampered run, so never promote it by
     # reuse. Re-run the decoder and replace it atomically below.
+    #
+    # The probe-worker's earlier archive check is not sufficient here: the raw
+    # object can change between probe and analysis. Snapshot the exact verified
+    # ledger bytes immediately before decode and give Node only that snapshot.
+    try:
+        decode_fd, decode_input = _prepare_verified_decode_input(
+            replay,
+            output_dir=output_dir,
+        )
+    except AnalyzerArchiveError as exc:
+        return replay, None, f"archive_integrity_error:{exc}", None
+
     command = [
         "node",
         str(decoder_script),
-        replay.archive_path,
+        decode_input,
         str(max(1, sample_every_ticks)),
     ]
 
+    completed: subprocess.CompletedProcess[str] | None = None
+    run_error: str | None = None
     try:
-        completed = subprocess.run(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=timeout_seconds,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return replay, None, f"decoder_timeout:{timeout_seconds}s", None
-    except OSError as exc:
-        return replay, None, f"decoder_exec_error:{exc}", None
+        try:
+            completed = subprocess.run(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout_seconds,
+                check=False,
+                pass_fds=(decode_fd,),
+            )
+        except subprocess.TimeoutExpired:
+            run_error = f"decoder_timeout:{timeout_seconds}s"
+        except OSError as exc:
+            run_error = f"decoder_exec_error:{exc}"
+    finally:
+        os.close(decode_fd)
+
+    if run_error is not None:
+        return replay, None, run_error, None
+    assert completed is not None
 
     if completed.returncode != 0:
         stderr = completed.stderr.strip()[-4000:]
