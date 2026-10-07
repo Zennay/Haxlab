@@ -475,6 +475,16 @@ def _audit_runtime_events(
                 "analysis_finalized requires non-empty analyzer-version subject",
             )
 
+        if event_type in (
+            _REPLAY_SHA_EVENT_TYPES | _PATH_EVENT_TYPES | {"analysis_finalized"}
+        ) and not _nonempty_text(row["detail"]):
+            _append_issue(
+                issues,
+                "event_detail_invalid",
+                event_id,
+                f"{event_type} requires non-empty detail evidence",
+            )
+
         if not _nonempty_text(row["created_at"]):
             _append_issue(
                 issues,
