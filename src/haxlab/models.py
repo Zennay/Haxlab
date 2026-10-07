@@ -338,6 +338,20 @@ class ImportManifest:
             "ImportManifest.unmatched_reports",
         )
 
+        expected_unmatched_reports = report_count - match_count
+        if len(self.unmatched_reports) != expected_unmatched_reports:
+            raise ValueError(
+                "ImportManifest.unmatched_reports length must equal "
+                "report_count - match_count"
+            )
+
+        maximum_unmatched_replays = unique_replay_count - match_count
+        if len(self.unmatched_replays) > maximum_unmatched_replays:
+            raise ValueError(
+                "ImportManifest.unmatched_replays length must not exceed "
+                "unique_replay_count - match_count"
+            )
+
         if type(self.failures) is not list:
             raise TypeError("ImportManifest.failures must be a list")
         for index, failure in enumerate(self.failures):
