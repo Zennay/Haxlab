@@ -40,6 +40,19 @@ class _InterpreterLimitScanner(ast.NodeVisitor):
         ):
             base = self._resolve(node.args[0])
             return f"{base}.{node.args[1].value}" if base else None
+        if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant):
+            key = node.slice.value
+            if isinstance(key, str):
+                base = self._resolve(node.value)
+                if base and base.endswith(".__dict__"):
+                    return f"{base[:-9]}.{key}"
+                if (
+                    isinstance(node.value, ast.Call)
+                    and self._resolve(node.value.func) in {"vars", "builtins.vars"}
+                    and len(node.value.args) == 1
+                ):
+                    owner = self._resolve(node.value.args[0])
+                    return f"{owner}.{key}" if owner else None
         return None
 
     def _bind_target(self, target: ast.AST, value: ast.AST | None) -> None:
@@ -47,8 +60,15 @@ class _InterpreterLimitScanner(ast.NodeVisitor):
             self.aliases[target.id] = self._resolve(value) if value is not None else None
             return
         if isinstance(target, (ast.Tuple, ast.List)):
-            for element in target.elts:
-                self._bind_target(element, None)
+            if (
+                isinstance(value, (ast.Tuple, ast.List))
+                and len(target.elts) == len(value.elts)
+            ):
+                for element, item in zip(target.elts, value.elts, strict=True):
+                    self._bind_target(element, item)
+            else:
+                for element in target.elts:
+                    self._bind_target(element, None)
 
     def visit_Import(self, node: ast.Import) -> None:
         for item in node.names:
@@ -60,6 +80,11 @@ class _InterpreterLimitScanner(ast.NodeVisitor):
             return
         for item in node.names:
             if item.name == "*":
+                if node.module == "sys":
+                    for name in ("setrecursionlimit", "setswitchinterval", "set_int_max_str_digits"):
+                        self.aliases[name] = f"sys.{name}"
+                elif node.module == "threading":
+                    self.aliases["stack_size"] = "threading.stack_size"
                 continue
             self.aliases[item.asname or item.name] = f"{node.module}.{item.name}"
 
@@ -196,6 +221,29 @@ digits(10000)
         "sys.setswitchinterval",
         "sys.set_int_max_str_digits",
     }
+
+
+def test_wildcard_mapping_and_unpacking_aliases_are_rejected() -> None:
+    source = """
+from sys import *
+import sys
+from threading import *
+recursion, interval = sys.setrecursionlimit, sys.setswitchinterval
+mapped = vars(sys)["set_int_max_str_digits"]
+reflected = sys.__dict__["setrecursionlimit"]
+recursion(4096)
+interval(0.01)
+mapped(10000)
+reflected(2048)
+stack_size(262144)
+"""
+    assert [name for _, name in _scan(source)] == [
+        "sys.setrecursionlimit",
+        "sys.setswitchinterval",
+        "sys.set_int_max_str_digits",
+        "sys.setrecursionlimit",
+        "threading.stack_size",
+    ]
 
 
 def test_thread_stack_size_setter_is_rejected_but_getter_is_allowed() -> None:
