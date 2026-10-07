@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import fcntl
 import os
 from pathlib import Path
 import secrets
@@ -27,6 +28,8 @@ from haxlab.ingestion.generation_commit import (
     validate_generation_pointer,
 )
 
+
+PUBLISH_LOCK_FILE = ".generation-publish.lock"
 
 PUBLICATION_STAGES = (
     "after_stage_artifacts",
@@ -213,6 +216,30 @@ def _copy_regular_at(source_fd: int, destination_fd: int, name: str) -> None:
             os.close(source)
 
 
+def _acquire_publish_lock(store_fd: int) -> int:
+    fd = -1
+    try:
+        fd = os.open(
+            PUBLISH_LOCK_FILE,
+            os.O_RDWR | os.O_CREAT | _required_flag("O_NOFOLLOW"),
+            0o600,
+            dir_fd=store_fd,
+        )
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise GenerationStoreError("generation publish lock is not a regular file")
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return fd
+    except GenerationStoreError:
+        if fd >= 0:
+            os.close(fd)
+        raise
+    except OSError as exc:
+        if fd >= 0:
+            os.close(fd)
+        raise GenerationStoreError("failed to acquire generation publish lock") from exc
+
+
 def _ensure_generations_directory(store_fd: int) -> int:
     try:
         os.mkdir(GENERATIONS_DIRECTORY, 0o755, dir_fd=store_fd)
@@ -361,12 +388,15 @@ def publish_generation(
 
     source_fd = -1
     store_fd = -1
+    lock_fd = -1
     generations_fd = -1
     stage_name: str | None = None
     pointer_temp_name: str | None = None
+    resolved: ResolvedGeneration | None = None
     try:
         source_fd = _open_directory(source_root)
         store_fd = _open_directory(store_root)
+        lock_fd = _acquire_publish_lock(store_fd)
         generations_fd = _ensure_generations_directory(store_fd)
         generation_root = store_root / GENERATIONS_DIRECTORY / generation_id
 
@@ -453,6 +483,7 @@ def publish_generation(
         pointer_temp_name = None
         os.fsync(store_fd)
         _emit_fault(_fault, "after_pointer_swap")
+        resolved = resolve_current_generation(store_root)
     finally:
         if pointer_temp_name is not None and store_fd >= 0:
             try:
@@ -463,12 +494,19 @@ def publish_generation(
             _cleanup_stage(generations_fd, stage_name)
         if generations_fd >= 0:
             os.close(generations_fd)
+        if lock_fd >= 0:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            finally:
+                os.close(lock_fd)
         if store_fd >= 0:
             os.close(store_fd)
         if source_fd >= 0:
             os.close(source_fd)
 
-    return resolve_current_generation(store_root)
+    if resolved is None:
+        raise GenerationStoreError("generation publication completed without resolution")
+    return resolved
 
 
 def resolve_current_generation(store_root: Path) -> ResolvedGeneration:
