@@ -1,0 +1,59 @@
+name: Evaluation hermeticity contract validation
+
+on:
+  push:
+    branches:
+      - validation/evaluation-hermeticity-contract-20261007
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-evaluation-hermeticity-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Verify immutable checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          echo "HAXLAB_EVALUATION_HERMETICITY_HEAD=$(git rev-parse HEAD)"
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .evaluation-hermeticity-venv
+          python3 -m venv .evaluation-hermeticity-venv
+          .evaluation-hermeticity-venv/bin/pip install --upgrade pip
+          .evaluation-hermeticity-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile evaluation package and contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          .evaluation-hermeticity-venv/bin/python -m compileall -q src/haxlab/evaluation tests/test_evaluation_hermeticity_contract.py
+
+      - name: Run hermeticity contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" .evaluation-hermeticity-venv/bin/pytest -q tests/test_evaluation_hermeticity_contract.py
+
+      - name: Record green marker
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HAXLAB_EVALUATION_HERMETICITY_RESULT=green"
