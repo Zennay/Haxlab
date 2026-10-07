@@ -118,6 +118,9 @@ def assess_match_quality(evidence: MatchQualityEvidence) -> MatchQualityAssessme
         if evidence.observed_player_count < evidence.expected_player_count:
             reasons.append("incomplete_player_count")
             score -= 0.20
+        elif evidence.observed_player_count > evidence.expected_player_count:
+            reasons.append("excess_player_count")
+            score -= 0.20
         else:
             reasons.append("expected_player_count_present")
             score += 0.05

@@ -26,6 +26,36 @@ def test_missing_evidence_cannot_accidentally_be_elite() -> None:
     assert assessment.missing_evidence
 
 
+
+
+def test_exact_player_count_is_rewarded_as_expected_format() -> None:
+    assessment = assess_match_quality(
+        MatchQualityEvidence(
+            replay_valid=True,
+            expected_player_count=8,
+            observed_player_count=8,
+        )
+    )
+
+    assert "expected_player_count_present" in assessment.reasons
+    assert "excess_player_count" not in assessment.reasons
+    assert assessment.weight == 0.55
+
+
+def test_excess_player_count_is_degraded_not_rewarded() -> None:
+    assessment = assess_match_quality(
+        MatchQualityEvidence(
+            replay_valid=True,
+            expected_player_count=8,
+            observed_player_count=9,
+        )
+    )
+
+    assert "excess_player_count" in assessment.reasons
+    assert "expected_player_count_present" not in assessment.reasons
+    assert assessment.weight == 0.3
+
+
 def test_invalid_replay_is_rejected() -> None:
     assessment = assess_match_quality(MatchQualityEvidence(replay_valid=False))
 
