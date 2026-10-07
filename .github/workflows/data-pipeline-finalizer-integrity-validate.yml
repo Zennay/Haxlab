@@ -1,0 +1,50 @@
+name: HaxLab analysis finalizer integrity
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/haxlab/runtime/finalize.py"
+      - "tests/test_analysis_finalize.py"
+      - "docs/runtime-finalize-input-contract.md"
+      - ".github/workflows/data-pipeline-finalizer-integrity-validate.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-finalizer-integrity-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate exact-head finalizer contract
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Assert exact head
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          echo "HAXLAB_FINALIZER_EXACT_HEAD=$EXPECTED_HEAD"
+
+      - name: Run focused finalizer regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .finalizer-integrity-venv
+          python3 -m venv .finalizer-integrity-venv
+          .finalizer-integrity-venv/bin/pip install -q --upgrade pip
+          .finalizer-integrity-venv/bin/pip install -q -e '.[dev]'
+          .finalizer-integrity-venv/bin/python -m compileall -q src/haxlab
+          .finalizer-integrity-venv/bin/pytest -q tests/test_analysis_finalize.py
+          echo "HAXLAB_FINALIZER_INTEGRITY_RESULT=green"
