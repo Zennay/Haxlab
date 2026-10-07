@@ -166,6 +166,19 @@ class MemoizationStateVisitor(ast.NodeVisitor):
         self.scopes.pop()
 
     def visit_Call(self, node: ast.Call) -> None:
+        accessor = self._qualified_name(node.func)
+        if (
+            accessor in {"getattr", "builtins.getattr"}
+            and len(node.args) >= 2
+            and self._qualified_name(node.args[0]) == "functools"
+            and not (
+                isinstance(node.args[1], ast.Constant)
+                and isinstance(node.args[1].value, str)
+            )
+        ):
+            self.violations.append(
+                f"line {node.lineno}: dynamic functools getattr can expose stateful memoizers"
+            )
         self._check_memoizer(node, node.func)
         self.generic_visit(node)
 
@@ -215,6 +228,8 @@ def test_data_pipeline_auditors_do_not_retain_memoized_state() -> None:
         "import functools\nmemo = functools.cache\nwrapped = memo(lambda value: value)\n",
         "import functools\nmemo = getattr(functools, 'lru_cache')\nwrapped = memo()(lambda value: value)\n",
         "import builtins, functools\nga = builtins.getattr\nmemo = ga(functools, 'cache')\nwrapped = memo(lambda value: value)\n",
+        "import functools\nname = 'cache'\nmemo = getattr(functools, name)\nwrapped = memo(lambda value: value)\n",
+        "import builtins, functools\nga = builtins.getattr\nname = 'lru_cache'\nmemo = ga(functools, name)\n",
         "from functools import *\ndef audit(value):\n    return value\n",
         "import functools\na, memo = object(), functools.cache\nwrapped = memo(lambda value: value)\n",
     ],
