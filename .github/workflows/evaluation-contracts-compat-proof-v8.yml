@@ -1,6 +1,9 @@
 name: Evaluation additive contract compatibility v8
 
 on:
+  push:
+    branches:
+      - ops/evaluation-contracts-compat-v8-current-state-20261007
   workflow_dispatch:
 
 permissions:
@@ -12,6 +15,7 @@ concurrency:
 
 jobs:
   prove:
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[run-v8]') }}
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 20
     env:
