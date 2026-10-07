@@ -2,6 +2,6 @@
 
 Temporary execution-only carrier.
 
-- target: `f61e20d66d3b7bec1de30f3229c74707019e99c7`
+- target: `df5184b54c40a0df4f73a2adb1923e8a85e3f87e`
 - purpose: exact-head self-hosted validation of HaxLab evaluation optimization safety
 - do not merge into `main`
