@@ -147,7 +147,7 @@ def test_verify_rejects_nonstandard_numeric_constants(
     receipt_path = tmp_path / "receipt.json"
     payload = create_source_bundle_receipt(export_root)
     text = json.dumps(payload, separators=(",", ":")).replace(
-        '"total_size_bytes":29',
+        f'"total_size_bytes":{payload["total_size_bytes"]}',
         f'"total_size_bytes":{constant}',
         1,
     )
