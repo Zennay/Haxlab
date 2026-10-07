@@ -2,17 +2,23 @@
 set -euo pipefail
 
 APP_DIR="${HAXLAB_APP_DIR:-/opt/haxlab}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run with sudo: sudo bash deploy/update-vps.sh"
   exit 1
 fi
 
+source "${SCRIPT_DIR}/update-service-recovery.sh"
+haxlab_capture_update_service_state
+
 LIVE_WAS_ACTIVE=0
-if systemctl is-active --quiet haxlab-live-bot.service 2>/dev/null; then
+if haxlab_update_service_was_active haxlab-live-bot.service; then
   LIVE_WAS_ACTIVE=1
 fi
-systemctl stop haxlab-live-bot.service haxlab-autonomy.timer haxlab-autonomy.service haxlab-analyzer.service haxlab-worker.service haxlab-ingest.service 2>/dev/null || true
+
+haxlab_install_update_recovery_trap
+systemctl stop "${HAXLAB_UPDATE_MANAGED_SERVICES[@]}" 2>/dev/null || true
 
 apt-get install -y nodejs npm
 
@@ -36,6 +42,7 @@ chmod 0755 "${APP_DIR}/deploy/haxlab-autonomy-tick.sh"
 
 ln -sf "${APP_DIR}/.venv/bin/haxlab" /usr/local/bin/haxlab
 ln -sf "${APP_DIR}/.venv/bin/haxlab-status" /usr/local/bin/haxlab-status
+haxlab_disable_update_recovery_trap
 ln -sf "${APP_DIR}/.venv/bin/haxlab-worker" /usr/local/bin/haxlab-worker
 ln -sf "${APP_DIR}/.venv/bin/haxlab-daemon" /usr/local/bin/haxlab-daemon
 ln -sf "${APP_DIR}/.venv/bin/haxlab-analyzer" /usr/local/bin/haxlab-analyzer
