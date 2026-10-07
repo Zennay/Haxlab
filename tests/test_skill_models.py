@@ -65,7 +65,7 @@ def test_skill_dimension_estimate_rejects_malformed_values(
         SkillDimensionEstimate(**kwargs)  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize("player_id", ["", None, 123])
+@pytest.mark.parametrize("player_id", ["", "   ", " player-a", "player-a ", None, 123])
 def test_player_skill_estimate_requires_native_nonempty_player_id(
     player_id: object,
 ) -> None:
@@ -219,6 +219,8 @@ def test_performance_vector_rejects_non_finite_or_non_native_values(
     [
         ({"player_id": ""}, "player_id"),
         ({"player_id": "   "}, "player_id"),
+        ({"player_id": " player-a"}, "player_id"),
+        ({"player_id": "player-a "}, "player_id"),
         ({"player_id": 123}, "player_id"),
         ({"performance": object()}, "performance"),
         ({"match_quality_weight": -0.01}, "match_quality_weight"),
@@ -242,6 +244,8 @@ def test_performance_vector_rejects_non_finite_or_non_native_values(
         ({"state_difficulty": True}, "state_difficulty"),
         ({"role": ""}, "role"),
         ({"role": "   "}, "role"),
+        ({"role": " midfield"}, "role"),
+        ({"role": "midfield "}, "role"),
         ({"role": 1}, "role"),
     ],
 )
@@ -292,3 +296,23 @@ def test_skill_observation_accepts_current_leaderboard_boundary_values() -> None
     assert observation.performance.creation == 3.0
     assert observation.match_quality_weight == 0.15
     assert observation.minutes_or_possessions_weight == 2.0
+
+
+def test_skill_identity_strings_preserve_current_canonical_values() -> None:
+    observation = SkillObservation(
+        player_id="auth:abc123",
+        performance=PerformanceVector(retention=0.25),
+        match_quality_weight=1.0,
+        minutes_or_possessions_weight=1.0,
+        role="midfield",
+    )
+    estimate = PlayerSkillEstimate(
+        player_id="auth:abc123",
+        dimensions=_dimensions(),
+        observation_count=1,
+        effective_weight=1.0,
+    )
+
+    assert observation.player_id == "auth:abc123"
+    assert observation.role == "midfield"
+    assert estimate.player_id == "auth:abc123"
