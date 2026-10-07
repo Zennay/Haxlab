@@ -40,11 +40,13 @@ def _open_regular_replay(path: Path) -> Iterator[BinaryIO]:
     if not stat.S_ISREG(before.st_mode):
         raise ReplayFormatError("unsafe_replay_path:not_regular")
 
-    flags = os.O_RDONLY
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    if nofollow is None:
+        raise ReplayFormatError("unsafe_replay_path:nofollow_unsupported")
+
+    flags = os.O_RDONLY | nofollow
     if hasattr(os, "O_CLOEXEC"):
         flags |= os.O_CLOEXEC
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
 
     try:
         fd = os.open(path, flags)
