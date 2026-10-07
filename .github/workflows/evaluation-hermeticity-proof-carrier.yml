@@ -25,6 +25,7 @@ jobs:
         with:
           ref: 9e82831b22e000c773284223bfa53a02f116a87f
           clean: true
+          fetch-depth: 0
 
       - name: Verify exact candidate SHA
         shell: bash
@@ -53,6 +54,15 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONPATH="$GITHUB_WORKSPACE/src" .evaluation-hermeticity-proof-venv/bin/pytest -q tests/test_evaluation_hermeticity_contract.py
+
+      - name: Verify active resync-guard compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show b9b12c5611872cd85c00ab0850f117c198d0a586:src/haxlab/evaluation/resync_guard.py > src/haxlab/evaluation/resync_guard.py
+          PYTHONPATH="$GITHUB_WORKSPACE/src" .evaluation-hermeticity-proof-venv/bin/pytest -q tests/test_evaluation_hermeticity_contract.py
+          rm -f src/haxlab/evaluation/resync_guard.py
+          echo "HAXLAB_EVALUATION_HERMETICITY_RESYNC84_COMPAT=green"
 
       - name: Record proof result
         shell: bash
