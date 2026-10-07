@@ -40,29 +40,41 @@ def _raise_open_failure(path: Path) -> None:
     raise _ArchiveReadError("archive_secure_open_failed")
 
 
-def _secure_archive_snapshot(path: Path) -> tuple[int, str]:
-    """Read one stable regular-file inode and hash exactly those descriptor bytes."""
+def _raise_member_open_failure(parent_fd: int, name: str) -> None:
+    """Classify one descriptor-relative member after a failed no-follow open."""
+
+    try:
+        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        raise _ArchiveReadError("archive_missing")
+    except OSError:
+        raise _ArchiveReadError("archive_secure_open_failed")
+    if stat.S_ISLNK(current.st_mode):
+        raise _ArchiveReadError("symlink_not_allowed")
+    raise _ArchiveReadError("archive_secure_open_failed")
+
+
+def _open_bound_parent(path: Path) -> tuple[int, os.stat_result]:
+    """Bind the logical archive parent to one no-follow directory inode."""
 
     try:
         initial = path.lstat()
     except FileNotFoundError:
         raise _ArchiveReadError("archive_missing")
     except OSError:
-        raise _ArchiveReadError("archive_read_failed")
+        raise _ArchiveReadError("archive_secure_open_failed")
 
     if stat.S_ISLNK(initial.st_mode):
         raise _ArchiveReadError("symlink_not_allowed")
-    if not stat.S_ISREG(initial.st_mode):
-        # Preserve the previous audit semantics: non-files count as missing archive
-        # evidence rather than as successfully opened objects.
+    if not stat.S_ISDIR(initial.st_mode):
         raise _ArchiveReadError("archive_missing")
 
     nofollow = getattr(os, "O_NOFOLLOW", None)
-    nonblock = getattr(os, "O_NONBLOCK", None)
-    if nofollow is None or nonblock is None:
+    directory = getattr(os, "O_DIRECTORY", None)
+    if nofollow is None or directory is None:
         raise _ArchiveReadError("archive_secure_open_unsupported")
 
-    flags = os.O_RDONLY | nofollow | nonblock
+    flags = os.O_RDONLY | nofollow | directory
     if hasattr(os, "O_CLOEXEC"):
         flags |= os.O_CLOEXEC
 
@@ -74,60 +86,130 @@ def _secure_archive_snapshot(path: Path) -> tuple[int, str]:
         _raise_open_failure(path)
 
     try:
-        before = os.fstat(fd)
-        if not stat.S_ISREG(before.st_mode):
-            raise _ArchiveReadError("archive_not_regular")
-        if (before.st_dev, before.st_ino) != (initial.st_dev, initial.st_ino):
-            raise _ArchiveReadError("archive_identity_changed")
+        opened = os.fstat(fd)
+        if not stat.S_ISDIR(opened.st_mode):
+            raise _ArchiveReadError("archive_missing")
+        if (opened.st_dev, opened.st_ino) != (initial.st_dev, initial.st_ino):
+            raise _ArchiveReadError("archive_parent_identity_changed")
+        return fd, opened
+    except Exception:
+        os.close(fd)
+        raise
 
-        digest = hashlib.sha256()
-        total = 0
-        while True:
-            chunk = os.read(fd, _READ_CHUNK_BYTES)
-            if not chunk:
-                break
-            total += len(chunk)
-            digest.update(chunk)
 
-        after = os.fstat(fd)
-        before_identity = (
-            before.st_dev,
-            before.st_ino,
-            before.st_size,
-            before.st_mtime_ns,
-            before.st_ctime_ns,
-        )
-        after_identity = (
-            after.st_dev,
-            after.st_ino,
-            after.st_size,
-            after.st_mtime_ns,
-            after.st_ctime_ns,
-        )
-        if after_identity != before_identity or total != after.st_size:
-            raise _ArchiveReadError("archive_changed_during_read")
+def _assert_logical_parent_identity(path: Path, expected: os.stat_result) -> None:
+    """Prove the logical parent still resolves to the descriptor-bound directory."""
+
+    try:
+        current = path.lstat()
+    except OSError:
+        raise _ArchiveReadError("archive_parent_changed_during_read")
+    if stat.S_ISLNK(current.st_mode) or not stat.S_ISDIR(current.st_mode):
+        raise _ArchiveReadError("archive_parent_changed_during_read")
+    if (current.st_dev, current.st_ino) != (expected.st_dev, expected.st_ino):
+        raise _ArchiveReadError("archive_parent_changed_during_read")
+
+
+def _secure_archive_snapshot(path: Path) -> tuple[int, str]:
+    """Read one stable member from one stable content-address directory inode."""
+
+    parent_fd: int | None = None
+    try:
+        parent_fd, parent_identity = _open_bound_parent(path.parent)
 
         try:
-            final = path.lstat()
+            initial = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            raise _ArchiveReadError("archive_missing")
         except OSError:
-            raise _ArchiveReadError("archive_path_changed_during_read")
-        if stat.S_ISLNK(final.st_mode) or not stat.S_ISREG(final.st_mode):
-            raise _ArchiveReadError("archive_path_changed_during_read")
-        final_identity = (
-            final.st_dev,
-            final.st_ino,
-            final.st_size,
-            final.st_mtime_ns,
-            final.st_ctime_ns,
-        )
-        if final_identity != after_identity:
-            raise _ArchiveReadError("archive_path_changed_during_read")
+            raise _ArchiveReadError("archive_read_failed")
 
-        return total, digest.hexdigest()
-    except OSError:
-        raise _ArchiveReadError("archive_read_failed")
+        if stat.S_ISLNK(initial.st_mode):
+            raise _ArchiveReadError("symlink_not_allowed")
+        if not stat.S_ISREG(initial.st_mode):
+            # Preserve the previous audit semantics: non-files count as missing archive
+            # evidence rather than as successfully opened objects.
+            raise _ArchiveReadError("archive_missing")
+
+        nofollow = getattr(os, "O_NOFOLLOW", None)
+        nonblock = getattr(os, "O_NONBLOCK", None)
+        if nofollow is None or nonblock is None:
+            raise _ArchiveReadError("archive_secure_open_unsupported")
+
+        flags = os.O_RDONLY | nofollow | nonblock
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
+
+        try:
+            fd = os.open(path.name, flags, dir_fd=parent_fd)
+        except FileNotFoundError:
+            raise _ArchiveReadError("archive_missing")
+        except OSError:
+            _raise_member_open_failure(parent_fd, path.name)
+
+        try:
+            before = os.fstat(fd)
+            if not stat.S_ISREG(before.st_mode):
+                raise _ArchiveReadError("archive_not_regular")
+            if (before.st_dev, before.st_ino) != (initial.st_dev, initial.st_ino):
+                raise _ArchiveReadError("archive_identity_changed")
+
+            digest = hashlib.sha256()
+            total = 0
+            while True:
+                chunk = os.read(fd, _READ_CHUNK_BYTES)
+                if not chunk:
+                    break
+                total += len(chunk)
+                digest.update(chunk)
+
+            after = os.fstat(fd)
+            before_identity = (
+                before.st_dev,
+                before.st_ino,
+                before.st_size,
+                before.st_mtime_ns,
+                before.st_ctime_ns,
+            )
+            after_identity = (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+                after.st_ctime_ns,
+            )
+            if after_identity != before_identity or total != after.st_size:
+                raise _ArchiveReadError("archive_changed_during_read")
+
+            try:
+                final = os.stat(
+                    path.name,
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+            except OSError:
+                raise _ArchiveReadError("archive_path_changed_during_read")
+            if stat.S_ISLNK(final.st_mode) or not stat.S_ISREG(final.st_mode):
+                raise _ArchiveReadError("archive_path_changed_during_read")
+            final_identity = (
+                final.st_dev,
+                final.st_ino,
+                final.st_size,
+                final.st_mtime_ns,
+                final.st_ctime_ns,
+            )
+            if final_identity != after_identity:
+                raise _ArchiveReadError("archive_path_changed_during_read")
+
+            _assert_logical_parent_identity(path.parent, parent_identity)
+            return total, digest.hexdigest()
+        except OSError:
+            raise _ArchiveReadError("archive_read_failed")
+        finally:
+            os.close(fd)
     finally:
-        os.close(fd)
+        if parent_fd is not None:
+            os.close(parent_fd)
 
 
 def audit_raw_archive(
