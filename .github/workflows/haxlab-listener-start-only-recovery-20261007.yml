@@ -1,4 +1,4 @@
-name: HaxLab listener start-only incident recovery
+# Recovery trigger 2026-10-07: calibration terminal; 8 repository runs queued, 0 in progress.\nname: HaxLab listener start-only incident recovery
 
 on:
   push:
