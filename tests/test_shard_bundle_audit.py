@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import shutil
 import struct
 from pathlib import Path
 
@@ -401,3 +402,61 @@ def test_bundle_audit_rejects_duplicate_json_keys(
     assert receipt["errors"] == [
         "duplicate_json_key:split"
     ]
+
+def test_bundle_audit_rejects_nonlexical_same_root_alias(
+    tmp_path: Path,
+) -> None:
+    train, _ = _pair(tmp_path)
+    train_alias = train / ".." / "train"
+
+    receipt = shard_bundle_audit.audit_shard_bundle(
+        train_dir=train,
+        holdout_dir=train_alias,
+    )
+
+    assert receipt["clean"] is False
+    assert (
+        "train_holdout_directory_alias"
+        in receipt["errors"]
+    )
+
+
+def test_bundle_audit_rejects_byte_identical_root_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    train, holdout = _pair(tmp_path)
+    replacement = tmp_path / "replacement-train"
+    original_root = tmp_path / "original-train"
+    shutil.copytree(train, replacement)
+
+    original = shard_audit.audit_shard_directory
+    replaced = False
+
+    def replacing_audit(path: Path) -> dict:
+        nonlocal replaced
+        if path == train and not replaced:
+            train.rename(original_root)
+            replacement.rename(train)
+            replaced = True
+        return original(path)
+
+    monkeypatch.setattr(
+        shard_audit,
+        "audit_shard_directory",
+        replacing_audit,
+    )
+
+    receipt = shard_bundle_audit.audit_shard_bundle(
+        train_dir=train,
+        holdout_dir=holdout,
+    )
+
+    assert receipt["clean"] is False
+    assert any(
+        error.startswith(
+            "train:root:shard_root_identity_changed_during_audit"
+        )
+        for error in receipt["errors"]
+    )
+
