@@ -25,6 +25,15 @@ class _InterpreterLimitScanner(ast.NodeVisitor):
     def _lookup(self, name: str) -> str | None:
         return self.aliases.get(name, name)
 
+    def _const_str(self, node: ast.AST) -> str | None:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            left = self._const_str(node.left)
+            right = self._const_str(node.right)
+            return left + right if left is not None and right is not None else None
+        return None
+
     def _resolve(self, node: ast.AST) -> str | None:
         if isinstance(node, ast.Name):
             return self._lookup(node.id)
@@ -35,11 +44,29 @@ class _InterpreterLimitScanner(ast.NodeVisitor):
             isinstance(node, ast.Call)
             and self._resolve(node.func) in {"getattr", "builtins.getattr"}
             and len(node.args) >= 2
-            and isinstance(node.args[1], ast.Constant)
-            and isinstance(node.args[1].value, str)
         ):
+            key = self._const_str(node.args[1])
             base = self._resolve(node.args[0])
-            return f"{base}.{node.args[1].value}" if base else None
+            return f"{base}.{key}" if base and key is not None else None
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get"
+            and node.args
+        ):
+            key = self._const_str(node.args[0])
+            mapping = node.func.value
+            if key is not None:
+                if (
+                    isinstance(mapping, ast.Call)
+                    and self._resolve(mapping.func) in {"vars", "builtins.vars"}
+                    and len(mapping.args) == 1
+                ):
+                    owner = self._resolve(mapping.args[0])
+                    return f"{owner}.{key}" if owner else None
+                base = self._resolve(mapping)
+                if base and base.endswith(".__dict__"):
+                    return f"{base[:-9]}.{key}"
         if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant):
             key = node.slice.value
             if isinstance(key, str):
@@ -243,6 +270,23 @@ stack_size(262144)
         "sys.set_int_max_str_digits",
         "sys.setrecursionlimit",
         "threading.stack_size",
+    ]
+
+
+def test_computed_getattr_and_mapping_get_aliases_are_rejected() -> None:
+    source = """
+import sys
+computed = getattr(sys, "set" + "recursionlimit")
+mapped = vars(sys).get("setswitch" + "interval")
+reflected = sys.__dict__.get("set_int_max_str_digits")
+computed(4096)
+mapped(0.01)
+reflected(10000)
+"""
+    assert [name for _, name in _scan(source)] == [
+        "sys.setrecursionlimit",
+        "sys.setswitchinterval",
+        "sys.set_int_max_str_digits",
     ]
 
 
