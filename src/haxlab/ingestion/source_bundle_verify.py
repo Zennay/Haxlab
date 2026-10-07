@@ -341,11 +341,28 @@ def validate_source_receipt(payload: dict[str, Any]) -> None:
         raise SourceBundleVerifyError("receipt_self_digest_mismatch")
 
 
+def _reject_receipt_inside_export_root(
+    export_root: Path,
+    receipt_path: Path,
+) -> None:
+    lexical_export_root = Path(os.path.abspath(os.fspath(export_root)))
+    lexical_receipt_path = Path(os.path.abspath(os.fspath(receipt_path)))
+    if (
+        lexical_receipt_path == lexical_export_root
+        or lexical_export_root in lexical_receipt_path.parents
+    ):
+        raise SourceBundleVerifyError("receipt_inside_export_root")
+
+
 def verify_source_bundle(export_root: Path, receipt_path: Path) -> dict[str, Any]:
-    expected, first_raw, receipt_binding = _load_receipt(Path(receipt_path))
+    export_root = Path(export_root)
+    receipt_path = Path(receipt_path)
+    _reject_receipt_inside_export_root(export_root, receipt_path)
+
+    expected, first_raw, receipt_binding = _load_receipt(receipt_path)
     validate_source_receipt(expected)
 
-    current = create_source_bundle_receipt(Path(export_root))
+    current = create_source_bundle_receipt(export_root)
 
     second_raw, second_binding = _read_receipt_bytes(Path(receipt_path))
     if second_raw != first_raw:

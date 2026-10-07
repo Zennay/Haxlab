@@ -22,7 +22,9 @@ JSON parsing is strict:
 
 ## Filesystem safety
 
-The expected receipt file must be a stable regular file reached through one immutable path. The verifier rejects:
+The expected receipt file must be a stable regular file reached through one immutable path. The receipt must also be lexically outside the immutable export root: the verifier compares absolute lexical paths without resolving symlinks and rejects both the export root itself and every descendant before source re-inventory begins. This keeps persisted evidence outside the importer-visible source tree and avoids a self-referential source/evidence boundary.
+
+The verifier rejects:
 
 - platforms without directory + no-follow descriptor support;
 - missing/unreadable receipt files;

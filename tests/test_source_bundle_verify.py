@@ -44,6 +44,80 @@ def _write_receipt(export_root: Path, receipt_path: Path) -> dict:
     return payload
 
 
+def test_verify_rejects_receipt_inside_export_root_before_inventory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    export_root = tmp_path / "export"
+    export_root.mkdir()
+    _source_tree(export_root)
+    receipt_path = export_root / "receipt.json"
+    receipt_path.write_text("{}", encoding="utf-8")
+
+    def unexpected_inventory(root: Path) -> dict:
+        raise AssertionError("source inventory must not run for an overlapping receipt")
+
+    monkeypatch.setattr(verify, "create_source_bundle_receipt", unexpected_inventory)
+
+    with pytest.raises(
+        verify.SourceBundleVerifyError,
+        match="receipt_inside_export_root",
+    ):
+        verify.verify_source_bundle(export_root, receipt_path)
+
+
+def test_verify_rejects_export_root_as_receipt_path_before_inventory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    export_root = tmp_path / "export"
+    export_root.mkdir()
+    _source_tree(export_root)
+
+    def unexpected_inventory(root: Path) -> dict:
+        raise AssertionError("source inventory must not run for an overlapping receipt")
+
+    monkeypatch.setattr(verify, "create_source_bundle_receipt", unexpected_inventory)
+
+    with pytest.raises(
+        verify.SourceBundleVerifyError,
+        match="receipt_inside_export_root",
+    ):
+        verify.verify_source_bundle(export_root, export_root)
+
+
+def test_verify_accepts_lexical_sibling_receipt_path(tmp_path: Path) -> None:
+    export_root = tmp_path / "export"
+    export_root.mkdir()
+    _source_tree(export_root)
+    receipt_path = tmp_path / "export-receipt.json"
+    expected = _write_receipt(export_root, receipt_path)
+
+    result = verify.verify_source_bundle(export_root, receipt_path)
+
+    assert result["clean"] is True
+    assert result["expected_receipt_sha256"] == expected["receipt_sha256"]
+
+
+def test_verify_cli_reports_overlapping_receipt_as_machine_readable_error(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    export_root = tmp_path / "export"
+    export_root.mkdir()
+    _source_tree(export_root)
+    receipt_path = export_root / "receipt.json"
+    receipt_path.write_text("{}", encoding="utf-8")
+
+    assert verify.main([str(export_root), str(receipt_path)]) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "schema": verify.VERIFY_SCHEMA,
+        "clean": False,
+        "error": "receipt_inside_export_root",
+    }
+
+
 def test_verify_accepts_exact_persisted_receipt(tmp_path: Path) -> None:
     export_root = tmp_path / "export"
     export_root.mkdir()
