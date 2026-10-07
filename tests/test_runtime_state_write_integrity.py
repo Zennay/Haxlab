@@ -159,7 +159,7 @@ def test_processing_write_rejects_invalid_integer_metrics_without_row(
         float("nan"),
         float("inf"),
         float("-inf"),
-        10**10000,
+        pytest.param(10**10000, id="float-unrepresentable-int"),
     ],
 )
 def test_processing_write_rejects_invalid_duration_without_row(
