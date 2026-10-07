@@ -1,0 +1,63 @@
+name: Arena runner config integrity validation
+
+on:
+  push:
+    branches:
+      - validation/arena-runner-config-integrity-20261006
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-arena-runner-config-integrity-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Validate Arena runner syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check tools/elite_closed_loop_arena_v2.js
+          node --check tests/test_closed_loop_arena_v2.js
+
+      - name: Run Arena runner regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          NODE_PATH=/opt/haxlab/node_modules node tests/test_closed_loop_arena_v2.js
+
+      - name: Create adjacent Python test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .arena-runner-config-validation-venv
+          python3 -m venv .arena-runner-config-validation-venv
+          .arena-runner-config-validation-venv/bin/pip install --upgrade pip
+          .arena-runner-config-validation-venv/bin/pip install -e '.[dev]'
+
+      - name: Run Arena consumer regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .arena-runner-config-validation-venv/bin/pytest -q \
+              tests/test_closed_loop_arena.py \
+              tests/test_multisource_duel.py
+
+      - name: Record exact-head validation evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "ARENA_RUNNER_CONFIG_VALIDATION_HEAD=$(git rev-parse HEAD)"
+          echo "ARENA_RUNNER_CONFIG_VALIDATION_RESULT=green"

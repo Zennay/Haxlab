@@ -1,0 +1,59 @@
+name: Elite gate preflight integrity validation
+
+on:
+  push:
+    branches:
+      - validation/elite-gate-preflight-numeric-integrity-20261006
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-elite-gate-preflight-integrity
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .elite-preflight-venv
+          python3 -m venv .elite-preflight-venv
+          .elite-preflight-venv/bin/pip install --upgrade pip
+          .elite-preflight-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile preflight gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          .elite-preflight-venv/bin/python -m compileall -q \
+            src/haxlab/evaluation/elite_gate_preflight.py \
+            tests/test_elite_gate_preflight.py
+
+      - name: Run preflight and adjacent evaluation regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .elite-preflight-venv/bin/pytest -q \
+              tests/test_elite_gate_preflight.py \
+              tests/test_promotion.py \
+              tests/test_closed_loop_arena.py
+
+      - name: Record exact-head evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "ELITE_PREFLIGHT_VALIDATION_HEAD=$(git rev-parse HEAD)"
+          echo "ELITE_PREFLIGHT_VALIDATION_RESULT=green"
