@@ -11,6 +11,8 @@ from haxlab.ingestion.dataset_receipt import M0_ARTIFACTS, RECEIPT_SCHEMA
 
 GENERATION_COMMIT_SCHEMA = "haxlab-m0-generation-commit-v1"
 GENERATION_POINTER_SCHEMA = "haxlab-m0-generation-pointer-v1"
+MAX_GENERATION_COMMIT_BYTES = 16 * 1024
+MAX_GENERATION_POINTER_BYTES = 1024
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -25,6 +27,34 @@ def _canonical_bytes(payload: Mapping[str, object]) -> bytes:
         separators=(",", ":"),
         ensure_ascii=False,
     ).encode("utf-8")
+
+
+def _parse_json_object(payload: bytes, *, label: str, max_bytes: int) -> dict[str, Any]:
+    if type(payload) is not bytes:
+        raise GenerationCommitError(f"{label} bytes must be native bytes")
+    if not payload or len(payload) > max_bytes:
+        raise GenerationCommitError(f"{label} byte size is invalid")
+
+    def _object_from_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise GenerationCommitError(f"{label} has duplicate JSON key: {key}")
+            result[key] = value
+        return result
+
+    try:
+        value = json.loads(
+            payload.decode("utf-8"),
+            object_pairs_hook=_object_from_pairs,
+        )
+    except GenerationCommitError:
+        raise
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise GenerationCommitError(f"{label} is not valid UTF-8 JSON") from exc
+    if type(value) is not dict:
+        raise GenerationCommitError(f"{label} must be a JSON object")
+    return value
 
 
 def _require_sha256(value: Any, *, field: str) -> str:
@@ -157,6 +187,33 @@ def _validated_commit(commit: Mapping[str, Any]) -> dict[str, object]:
     return {key: commit[key] for key in required}
 
 
+def _validated_pointer(pointer: Mapping[str, Any]) -> dict[str, object]:
+    if not isinstance(pointer, Mapping):
+        raise GenerationCommitError("generation pointer must be an object")
+    required = {"schema", "generation_id", "receipt_sha256", "commit_sha256"}
+    if set(pointer) != required:
+        raise GenerationCommitError("generation pointer has unexpected fields")
+    if pointer.get("schema") != GENERATION_POINTER_SCHEMA:
+        raise GenerationCommitError("generation pointer schema mismatch")
+
+    receipt_sha256 = _require_sha256(
+        pointer.get("receipt_sha256"), field="receipt_sha256"
+    )
+    commit_sha256 = _require_sha256(
+        pointer.get("commit_sha256"), field="commit_sha256"
+    )
+    generation_id = pointer.get("generation_id")
+    if generation_id != f"m0-{receipt_sha256}":
+        raise GenerationCommitError("generation pointer id does not match receipt")
+
+    return {
+        "schema": GENERATION_POINTER_SCHEMA,
+        "generation_id": generation_id,
+        "receipt_sha256": receipt_sha256,
+        "commit_sha256": commit_sha256,
+    }
+
+
 def build_generation_pointer(commit: Mapping[str, Any]) -> dict[str, object]:
     """Build the small pointer payload intended for one final atomic swap."""
 
@@ -173,3 +230,44 @@ def generation_pointer_bytes(commit: Mapping[str, Any]) -> bytes:
     """Return canonical bytes for the atomically replaceable generation pointer."""
 
     return _canonical_bytes(build_generation_pointer(commit)) + b"\n"
+
+
+def parse_generation_commit_bytes(payload: bytes) -> dict[str, object]:
+    """Parse and validate canonical persisted generation-commit bytes."""
+
+    raw = _parse_json_object(
+        payload,
+        label="generation commit",
+        max_bytes=MAX_GENERATION_COMMIT_BYTES,
+    )
+    valid = _validated_commit(raw)
+    if payload != _canonical_bytes(valid) + b"\n":
+        raise GenerationCommitError("generation commit bytes are not canonical")
+    return valid
+
+
+def parse_generation_pointer_bytes(payload: bytes) -> dict[str, object]:
+    """Parse and validate canonical persisted generation-pointer bytes."""
+
+    raw = _parse_json_object(
+        payload,
+        label="generation pointer",
+        max_bytes=MAX_GENERATION_POINTER_BYTES,
+    )
+    valid = _validated_pointer(raw)
+    if payload != _canonical_bytes(valid) + b"\n":
+        raise GenerationCommitError("generation pointer bytes are not canonical")
+    return valid
+
+
+def validate_generation_pointer(
+    pointer: Mapping[str, Any],
+    commit: Mapping[str, Any],
+) -> dict[str, object]:
+    """Bind a reader-visible pointer to the exact validated generation commit."""
+
+    valid_pointer = _validated_pointer(pointer)
+    expected = build_generation_pointer(commit)
+    if valid_pointer != expected:
+        raise GenerationCommitError("generation pointer does not match commit")
+    return valid_pointer
