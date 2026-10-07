@@ -33,6 +33,19 @@ FORBIDDEN_PREFIXES = (
     "secrets.",
 )
 
+FORBIDDEN_IMPORT_ROOTS = {
+    "random",
+    "secrets",
+}
+
+GUARDED_WILDCARD_ROOTS = {
+    "datetime",
+    "random",
+    "secrets",
+    "time",
+    "uuid",
+}
+
 
 def _name(expr: ast.expr, aliases: dict[str, str]) -> str | None:
     if isinstance(expr, ast.Name):
@@ -89,6 +102,23 @@ def _violations(source: str) -> list[str]:
     violations: list[str] = []
 
     for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for item in node.names:
+                root = item.name.split(".", 1)[0]
+                if root in FORBIDDEN_IMPORT_ROOTS:
+                    violations.append(f"{node.lineno}:import:{item.name}")
+            continue
+
+        if isinstance(node, ast.ImportFrom) and node.module:
+            root = node.module.split(".", 1)[0]
+            if root in FORBIDDEN_IMPORT_ROOTS:
+                violations.append(f"{node.lineno}:import:{node.module}")
+            if root in GUARDED_WILDCARD_ROOTS and any(
+                item.name == "*" for item in node.names
+            ):
+                violations.append(f"{node.lineno}:wildcard-import:{node.module}")
+            continue
+
         if not isinstance(node, ast.Call):
             continue
         resolved = _name(node.func, aliases)
@@ -114,9 +144,10 @@ def test_ingestion_package_has_no_ambient_nondeterminism() -> None:
 @pytest.mark.parametrize(
     ("source", "expected"),
     [
-        ("import random\nrandom.random()\n", "random.random"),
+        ("import random\n", "import:random"),
         ("import random as r\nr.choice([1, 2])\n", "random.choice"),
         ("from secrets import token_hex as token\ntoken(8)\n", "secrets.token_hex"),
+        ("from datetime import *\ndatetime.now()\n", "wildcard-import:datetime"),
         ("import uuid\nf = uuid.uuid4\nf()\n", "uuid.uuid4"),
         ("import time as t\ngetattr(t, 'time')()\n", "time.time"),
         (
