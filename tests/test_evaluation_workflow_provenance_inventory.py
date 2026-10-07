@@ -67,6 +67,35 @@ def test_clean_pinned_workflow_has_no_findings() -> None:
 
 
 
+def test_dispatch_input_ref_requires_exact_sha_validation() -> None:
+    text = _clean_workflow().replace("ref: github.sha", "ref: inputs.ref")
+    report = audit_workflow_text(".github/workflows/input-ref.yml", text)
+
+    assert report["checkout_ref_kinds"] == ["mutable_input"]
+    assert report["checkout_refs_bound"] is False
+    assert "checkout_ref_unbound" in report["findings"]
+
+
+def test_exact_sha_validated_dispatch_input_is_bound() -> None:
+    text = _clean_workflow().replace(
+        "      - name: Checkout exact source",
+        """      - name: Validate requested ref
+        env:
+          TARGET_SHA: inputs.ref
+        run: |
+          set -euo pipefail
+          if ! [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            exit 1
+          fi
+      - name: Checkout exact source""",
+    ).replace("ref: github.sha", "ref: inputs.ref")
+    report = audit_workflow_text(".github/workflows/validated-input-ref.yml", text)
+
+    assert report["checkout_ref_kinds"] == ["validated_input"]
+    assert report["checkout_refs_bound"] is True
+    assert "checkout_ref_unbound" not in report["findings"]
+
+
 def test_immutable_secondary_checkout_is_provenance_bound() -> None:
     text = _clean_workflow().replace(
         "      - name: Verify exact source",
