@@ -182,10 +182,15 @@ def _read_receipt_bytes(path: Path) -> tuple[bytes, ReceiptBinding]:
                 raise SourceBundleVerifyError("receipt_identity_changed")
 
             while True:
-                chunk = os.read(
-                    fd,
-                    min(1024 * 1024, _MAX_RECEIPT_BYTES + 1 - total),
-                )
+                try:
+                    chunk = os.read(
+                        fd,
+                        min(1024 * 1024, _MAX_RECEIPT_BYTES + 1 - total),
+                    )
+                except OSError as exc:
+                    raise SourceBundleVerifyError(
+                        f"receipt_read_failed:{exc}"
+                    ) from exc
                 if not chunk:
                     break
                 chunks.append(chunk)
