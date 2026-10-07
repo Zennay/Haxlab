@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 import haxlab.evaluation.calibration_inventory as inventory_module
 from haxlab.evaluation.calibration_inventory import (
     INVENTORY_SCHEMA,
@@ -173,6 +175,75 @@ def test_non_string_challenger_key_fails_closed_without_coercion(
     assert report["blocked_results"] == 9
     assert all(
         row["reasons"] == ["challengers:key_type"]
+        for row in report["results"]
+    )
+
+
+def test_invalid_bound_input_types_block_before_delegation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    request = _request(tmp_path)
+    request["champion"] = "not-a-path"
+    partners = list(request["partners"])
+    partners[1] = object()
+    request["partners"] = partners
+
+    def unexpected_validator(*args, **kwargs):
+        raise AssertionError("invalid bound inputs must not reach validator")
+
+    monkeypatch.setattr(
+        inventory_module,
+        "reusable_result_or_reasons",
+        unexpected_validator,
+    )
+
+    report = inventory_calibration_results(**request)
+
+    assert report["request_errors"] == [
+        "champion:not_path",
+        "partners:1:not_path",
+    ]
+    assert report["reusable_results"] == 0
+    assert report["blocked_results"] == 9
+    assert all(
+        row["reasons"]
+        == ["champion:not_path", "partners:1:not_path"]
+        for row in report["results"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("validator_result", "expected_reason"),
+    [
+        (("yes", ()), "validator_error:reusable_not_boolean"),
+        ((True, ["reason"]), "validator_error:reasons_shape"),
+        ((False, ()), "validator_error:blocked_without_reasons"),
+    ],
+)
+def test_inconsistent_validator_result_contract_fails_closed(
+    tmp_path: Path,
+    monkeypatch,
+    validator_result,
+    expected_reason: str,
+) -> None:
+    request = _request(tmp_path)
+
+    def inconsistent_validator(result_path: Path, **kwargs):
+        return validator_result
+
+    monkeypatch.setattr(
+        inventory_module,
+        "reusable_result_or_reasons",
+        inconsistent_validator,
+    )
+
+    report = inventory_calibration_results(**request)
+
+    assert report["reusable_results"] == 0
+    assert report["blocked_results"] == 9
+    assert all(
+        row["reasons"][0] == expected_reason
         for row in report["results"]
     )
 
