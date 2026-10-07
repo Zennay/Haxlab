@@ -2,14 +2,24 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 import re
-from typing import Any
+from typing import Any, TypeAlias
 
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+MatchProvenance: TypeAlias = tuple[str, str | None]
+MatchIdConflict: TypeAlias = tuple[str, tuple[MatchProvenance, ...]]
 
 
 class DuplicateMatchIdError(ValueError):
     """Raised when canonical M0 match records contain duplicate identities."""
+
+    def __init__(self, conflicts: tuple[MatchIdConflict, ...]) -> None:
+        self.conflicts = conflicts
+        rendered = "; ".join(
+            f"{match_id!r} provenances={provenances!r}"
+            for match_id, provenances in conflicts
+        )
+        super().__init__(f"duplicate canonical match_id values: {rendered}")
 
 
 def _require_non_empty_string(value: Any, *, field: str) -> str:
@@ -25,7 +35,7 @@ def _require_replay_sha256(value: Any, *, field: str) -> str:
 
 
 def _provenance_sort_key(
-    provenance: tuple[str, str | None],
+    provenance: MatchProvenance,
 ) -> tuple[str, str]:
     replay_sha256, source_message_id = provenance
     return replay_sha256, source_message_id or ""
@@ -42,7 +52,7 @@ def validate_unique_match_ids(
     reported with its complete, sorted provenance set.
     """
 
-    provenance_by_match_id: dict[str, list[tuple[str, str | None]]] = {}
+    provenance_by_match_id: dict[str, list[MatchProvenance]] = {}
 
     for index, record in enumerate(records):
         if not isinstance(record, Mapping):
@@ -74,10 +84,6 @@ def validate_unique_match_ids(
     ]
     if duplicates:
         duplicates.sort(key=lambda item: item[0])
-        rendered = "; ".join(
-            f"{match_id!r} provenances={provenances!r}"
-            for match_id, provenances in duplicates
-        )
-        raise DuplicateMatchIdError(f"duplicate canonical match_id values: {rendered}")
+        raise DuplicateMatchIdError(tuple(duplicates))
 
     return tuple(sorted(provenance_by_match_id))
