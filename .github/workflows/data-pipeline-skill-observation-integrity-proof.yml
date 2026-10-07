@@ -7,6 +7,14 @@ on:
         description: Exact branch SHA to prove
         required: true
         type: string
+  push:
+    branches:
+      - feature/data-pipeline-skill-observation-integrity-r1-20261007
+    paths:
+      - "src/haxlab/skill/models.py"
+      - "tests/test_skill_models.py"
+      - "docs/skill-observation-integrity.md"
+      - ".github/workflows/data-pipeline-skill-observation-integrity-proof.yml"
 
 permissions:
   contents: read
@@ -21,7 +29,7 @@ jobs:
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 20
     env:
-      EXPECTED_HEAD: ${{ inputs.expected_sha }}
+      EXPECTED_HEAD: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_sha || github.sha }}
 
     steps:
       - name: Checkout exact candidate
