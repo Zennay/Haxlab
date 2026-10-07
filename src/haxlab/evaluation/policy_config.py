@@ -15,6 +15,7 @@ from haxlab.evaluation.models import PromotionPolicy
 
 
 POLICY_CONFIG_SCHEMA = "haxlab-promotion-policy-config-v1"
+MAX_POLICY_CONFIG_BYTES = 64 * 1024
 
 _EVALUATION_KEYS = {
     "minimum_games_vs_champion",
@@ -120,9 +121,20 @@ def _read_regular_file_nofollow(path: Path) -> bytes:
             raise ValueError(
                 "promotion policy path must be a readable regular non-symlink file"
             )
+        if metadata.st_size > MAX_POLICY_CONFIG_BYTES:
+            raise ValueError(
+                f"promotion policy config exceeds {MAX_POLICY_CONFIG_BYTES} bytes"
+            )
         try:
             with os.fdopen(fd, "rb", closefd=False) as handle:
-                return handle.read()
+                raw = handle.read(MAX_POLICY_CONFIG_BYTES + 1)
+        except OSError as exc:
+            raise ValueError("promotion policy config is unreadable") from exc
+        if len(raw) > MAX_POLICY_CONFIG_BYTES:
+            raise ValueError(
+                f"promotion policy config exceeds {MAX_POLICY_CONFIG_BYTES} bytes"
+            )
+        return raw
         except OSError as exc:
             raise ValueError("promotion policy config is unreadable") from exc
     finally:
