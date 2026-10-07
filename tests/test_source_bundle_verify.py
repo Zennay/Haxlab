@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -232,6 +233,113 @@ def test_verify_rejects_symlinked_receipt(tmp_path: Path) -> None:
 
     with pytest.raises(verify.SourceBundleVerifyError, match="receipt_symlink"):
         verify.verify_source_bundle(export_root, link)
+
+
+@pytest.mark.parametrize("flag_name", ["O_NOFOLLOW", "O_DIRECTORY"])
+def test_verify_fails_closed_without_directory_descriptor_support(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    flag_name: str,
+) -> None:
+    export_root = tmp_path / "export"
+    export_root.mkdir()
+    _source_tree(export_root)
+    receipt_path = tmp_path / "receipt.json"
+    _write_receipt(export_root, receipt_path)
+    monkeypatch.delattr(verify.os, flag_name, raising=False)
+
+    with pytest.raises(
+        verify.SourceBundleVerifyError,
+        match="receipt_directory_descriptors_unsupported",
+    ):
+        verify.verify_source_bundle(export_root, receipt_path)
+
+
+def test_verify_rejects_symlinked_receipt_parent(tmp_path: Path) -> None:
+    export_root = tmp_path / "export"
+    export_root.mkdir()
+    _source_tree(export_root)
+    actual_parent = tmp_path / "actual-receipts"
+    actual_parent.mkdir()
+    target = actual_parent / "receipt.json"
+    _write_receipt(export_root, target)
+    linked_parent = tmp_path / "linked-receipts"
+    linked_parent.symlink_to(actual_parent, target_is_directory=True)
+
+    with pytest.raises(
+        verify.SourceBundleVerifyError,
+        match="receipt_parent_symlink:",
+    ):
+        verify.verify_source_bundle(export_root, linked_parent / "receipt.json")
+
+
+def test_verify_rejects_identical_receipt_parent_swap_during_verification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    export_root = tmp_path / "export"
+    export_root.mkdir()
+    _source_tree(export_root)
+    receipt_parent = tmp_path / "receipts"
+    receipt_parent.mkdir()
+    receipt_path = receipt_parent / "receipt.json"
+    _write_receipt(export_root, receipt_path)
+    stable_bytes = receipt_path.read_bytes()
+    old_parent = tmp_path / "receipts-old"
+
+    original = verify.create_source_bundle_receipt
+
+    def swap_parent_after_hash(root: Path) -> dict:
+        current = original(root)
+        receipt_parent.rename(old_parent)
+        receipt_parent.mkdir()
+        (receipt_parent / "receipt.json").write_bytes(stable_bytes)
+        return current
+
+    monkeypatch.setattr(
+        verify,
+        "create_source_bundle_receipt",
+        swap_parent_after_hash,
+    )
+
+    with pytest.raises(
+        verify.SourceBundleVerifyError,
+        match="receipt_path_identity_changed_during_verification",
+    ):
+        verify.verify_source_bundle(export_root, receipt_path)
+
+
+def test_verify_rejects_identical_receipt_inode_swap_during_verification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    export_root = tmp_path / "export"
+    export_root.mkdir()
+    _source_tree(export_root)
+    receipt_path = tmp_path / "receipt.json"
+    _write_receipt(export_root, receipt_path)
+    stable_bytes = receipt_path.read_bytes()
+
+    original = verify.create_source_bundle_receipt
+
+    def swap_receipt_after_hash(root: Path) -> dict:
+        current = original(root)
+        replacement = tmp_path / "replacement.json"
+        replacement.write_bytes(stable_bytes)
+        replacement.replace(receipt_path)
+        return current
+
+    monkeypatch.setattr(
+        verify,
+        "create_source_bundle_receipt",
+        swap_receipt_after_hash,
+    )
+
+    with pytest.raises(
+        verify.SourceBundleVerifyError,
+        match="receipt_path_identity_changed_during_verification",
+    ):
+        verify.verify_source_bundle(export_root, receipt_path)
 
 
 def test_verify_rejects_receipt_mutation_during_verification(
