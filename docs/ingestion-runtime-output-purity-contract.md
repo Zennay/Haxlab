@@ -11,7 +11,7 @@ Only the direct runtime body of that top-level function is exempt.
 
 The exemption does not extend to:
 - class methods named `main`;
-- nested helpers or lambdas called by `main`;
+- nested helpers, lambdas or lazy generator expressions created by `main`;
 - decorators, defaults, annotations or other function-signature expressions;
 - library helpers called independently by another Python caller.
 
@@ -20,7 +20,7 @@ The exemption does not extend to:
 `tests/test_ingestion_runtime_output_purity_contract.py` recursively scans
 every Python module below `src/haxlab/ingestion/` and rejects output outside
 that CLI boundary through:
-- builtin `print`, including imported/assigned aliases;
+- builtin `print`, including imported, assigned and chained-assignment aliases;
 - stdout/stderr and original-stream `write` / `writelines`, including buffers;
 - constant `getattr(...)` aliases;
 - `os.write(1|2, ...)`;
