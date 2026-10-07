@@ -353,6 +353,7 @@ def test_archive_audit_rejects_malformed_ledger_evidence_before_file_reads(
                 ("A" * 64, str(raw / "upper.hbr2"), 1),
                 (good_sha_one, "", 1),
                 (good_sha_two, str(raw / "bad-size.hbr2"), "not-an-integer"),
+                (b"\x00\xff", str(raw / "blob-sha.hbr2"), 1),
             ],
         )
         state.connection.commit()
@@ -368,16 +369,18 @@ def test_archive_audit_rejects_malformed_ledger_evidence_before_file_reads(
         report = audit_raw_archive(state)
 
     assert report["ok"] is False
-    assert report["checked_records"] == 3
+    assert report["checked_records"] == 4
     assert report["existing_files"] == 0
-    assert report["read_failures"] == 3
-    assert report["objects_with_issues"] == 3
+    assert report["read_failures"] == 4
+    assert report["objects_with_issues"] == 4
     assert report["issues_truncated"] is False
-    assert [item["reasons"] for item in report["issues"]] == [
-        ["invalid_ledger_evidence:size_bytes"],
-        ["invalid_ledger_evidence:archive_path"],
-        ["invalid_ledger_evidence:sha256"],
-    ]
+    assert {tuple(item["reasons"]) for item in report["issues"]} == {
+        ("invalid_ledger_evidence:sha256",),
+        ("invalid_ledger_evidence:archive_path",),
+        ("invalid_ledger_evidence:size_bytes",),
+    }
+    assert any(item["sha256"] == "<blob:00ff>" for item in report["issues"])
+    json.dumps(report)
 
 
 def test_archive_audit_cli_reports_malformed_size_without_crashing(
