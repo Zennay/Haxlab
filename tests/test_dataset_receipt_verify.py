@@ -228,3 +228,15 @@ def test_load_receipt_rejects_evidence_changed_while_reading(
         match="receipt evidence changed while reading",
     ):
         load_receipt(receipt_path)
+
+
+
+def test_load_receipt_rejects_fifo_without_blocking(tmp_path: Path) -> None:
+    receipt_path = tmp_path / "receipt.json"
+    receipt_verify.os.mkfifo(receipt_path)
+
+    with pytest.raises(
+        DatasetReceiptVerificationError,
+        match="receipt evidence is not a regular file",
+    ):
+        load_receipt(receipt_path)
