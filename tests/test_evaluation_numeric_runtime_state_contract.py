@@ -235,6 +235,24 @@ def _context_root(
     return _decimal_context_root(node, aliases, value_aliases)
 
 
+def _mutation_context_target(
+    node: ast.AST,
+    aliases: dict[str, str],
+    value_aliases: dict[str, str],
+    decimal_aliases: dict[str, str],
+) -> str | None:
+    if isinstance(node, ast.Attribute):
+        parent = _context_root(
+            node.value, aliases, value_aliases, decimal_aliases
+        )
+        return f"{parent}.{node.attr}" if parent else None
+    if isinstance(node, ast.Subscript):
+        return _context_root(
+            node.value, aliases, value_aliases, decimal_aliases
+        )
+    return None
+
+
 def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
     tree = ast.parse(source, filename=filename)
     aliases = _imports(tree)
@@ -279,18 +297,27 @@ def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
                 target in {"builtins.setattr", "builtins.delattr"}
                 and len(node.args) >= 2
             ):
-                guarded = _canonical(node.args[0], aliases, value_aliases)
                 attr = node.args[1]
-                if (
-                    guarded
-                    and isinstance(attr, ast.Constant)
-                    and isinstance(attr.value, str)
-                    and f"{guarded}.{attr.value}" in TORCH_BACKEND_MUTABLE_ATTRIBUTES
-                ):
-                    findings.append(
-                        f"line {node.lineno}: torch backend state mutation: "
-                        f"{guarded}.{attr.value}"
+                if isinstance(attr, ast.Constant) and isinstance(attr.value, str):
+                    guarded = _canonical(node.args[0], aliases, value_aliases)
+                    if (
+                        guarded
+                        and f"{guarded}.{attr.value}"
+                        in TORCH_BACKEND_MUTABLE_ATTRIBUTES
+                    ):
+                        findings.append(
+                            f"line {node.lineno}: torch backend state mutation: "
+                            f"{guarded}.{attr.value}"
+                        )
+
+                    context = _context_root(
+                        node.args[0], aliases, value_aliases, context_aliases
                     )
+                    if context:
+                        findings.append(
+                            f"line {node.lineno}: decimal context reflective mutation: "
+                            f"{context}.{attr.value}"
+                        )
 
         if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
@@ -301,7 +328,7 @@ def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
                         f"line {node.lineno}: torch backend state assignment: {canonical}"
                     )
 
-                context = _context_root(
+                context = _mutation_context_target(
                     target_node, aliases, value_aliases, context_aliases
                 )
                 if context:
@@ -317,7 +344,7 @@ def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
                         f"line {node.lineno}: torch backend state deletion: {canonical}"
                     )
 
-                context = _context_root(
+                context = _mutation_context_target(
                     target_node, aliases, value_aliases, context_aliases
                 )
                 if context:
@@ -356,6 +383,7 @@ def test_evaluation_package_has_no_numeric_runtime_state_mutation() -> None:
         ("import decimal\nctx = decimal.getcontext()\nctx.prec = 50\n", "decimal.getcontext().prec"),
         ("from decimal import getcontext as gc\nctx = gc()\nctx.traps[ValueError] = True\n", "decimal.getcontext().traps"),
         ("import decimal\nctx = decimal.getcontext()\nctx.flags.clear()\n", "decimal.getcontext().flags.clear"),
+        ("import decimal\nctx = decimal.getcontext()\nsetattr(ctx, 'prec', 64)\n", "decimal.getcontext().prec"),
         ("import decimal\ngetattr(decimal, 'setcontext')(decimal.Context())\n", "decimal.setcontext"),
         ("import numpy as np\nmutate = np.seterr\nmutate(over='raise')\n", "numpy.seterr"),
     ],
