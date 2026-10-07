@@ -187,3 +187,27 @@ def test_non_object_duel_fails_closed() -> None:
 
     assert not decision.eligible_to_replace_champion
     assert decision.reasons == ("invalid_duel:object_type",)
+
+
+def test_duel_gate_rejects_dict_subclass_before_get_access() -> None:
+    class HostileDuel(dict):
+        def get(self, key, default=None):
+            raise AssertionError("duel.get must not execute")
+
+    decision = decide_duel_gate(HostileDuel())
+
+    assert not decision.eligible_to_replace_champion
+    assert decision.reasons == ("invalid_duel:object_type",)
+
+
+def test_duel_gate_rejects_policy_subclass_before_attribute_access() -> None:
+    class HostilePolicy(DuelGatePolicy):
+        def __getattribute__(self, name: str):
+            if name == "minimum_matches":
+                raise AssertionError("policy attributes must not execute")
+            return super().__getattribute__(name)
+
+    decision = decide_duel_gate(_duel(), HostilePolicy())
+
+    assert not decision.eligible_to_replace_champion
+    assert decision.reasons == ("invalid_policy:object_type",)
