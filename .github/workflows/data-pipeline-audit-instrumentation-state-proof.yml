@@ -1,0 +1,94 @@
+name: Data-pipeline audit instrumentation-state proof
+
+on:
+  push:
+    branches:
+      - validation/data-pipeline-audit-instrumentation-state-20261007
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/data-pipeline-audit-instrumentation-state-proof.yml"
+      - "docs/data-pipeline-audit-instrumentation-state.md"
+      - "tests/test_data_pipeline_audit_instrumentation_state_contract.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-data-pipeline-audit-instrumentation-state-${{ github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    env:
+      SOURCE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          clean: true
+          persist-credentials: false
+
+      - name: Verify exact checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          echo "HAXLAB_DATA_PIPELINE_AUDIT_INSTRUMENTATION_STATE_HEAD=$(git rev-parse HEAD)"
+
+      - name: Verify candidate is still the live branch head
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            branch="${{ github.head_ref }}"
+          else
+            branch="$GITHUB_REF_NAME"
+          fi
+          test -n "$branch"
+          remote_head="$(git ls-remote origin "refs/heads/$branch" | awk 'NR == 1 {print $1}')"
+          test -n "$remote_head"
+          test "$remote_head" = "$SOURCE_SHA"
+          echo "HAXLAB_DATA_PIPELINE_AUDIT_INSTRUMENTATION_STATE_LIVE_HEAD=$remote_head"
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .data-pipeline-audit-instrumentation-state-venv
+          python3 -m venv .data-pipeline-audit-instrumentation-state-venv
+          .data-pipeline-audit-instrumentation-state-venv/bin/pip install --upgrade pip
+          .data-pipeline-audit-instrumentation-state-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile repository Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          .data-pipeline-audit-instrumentation-state-venv/bin/python -m compileall -q src tests
+
+      - name: Run instrumentation-state contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .data-pipeline-audit-instrumentation-state-venv/bin/pytest -q \
+              tests/test_data_pipeline_audit_instrumentation_state_contract.py
+
+      - name: Verify full test collection
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .data-pipeline-audit-instrumentation-state-venv/bin/pytest --collect-only -q >/dev/null
+
+      - name: Record green result
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HAXLAB_DATA_PIPELINE_AUDIT_INSTRUMENTATION_STATE_RESULT=green"
