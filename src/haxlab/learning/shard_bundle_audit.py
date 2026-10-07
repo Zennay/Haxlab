@@ -60,6 +60,36 @@ def _load_index_snapshot_at(
     return value, payload
 
 
+def _load_index_snapshot(
+    shard_dir: Path,
+) -> tuple[dict[str, Any], bytes]:
+    """Read one index snapshot for cross-auditor compatibility."""
+    path = shard_dir / "_index.json"
+    try:
+        payload = shard_audit._read_regular_bytes(path)
+    except shard_audit.AuditInputError as exc:
+        raise ShardBundleAuditError(
+            f"{shard_dir.name}:index:{exc}"
+        ) from exc
+    try:
+        value = json.loads(
+            payload,
+            object_pairs_hook=_unique_object,
+        )
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ) as exc:
+        raise ShardBundleAuditError(
+            f"{shard_dir.name}:invalid_index_json:{exc}"
+        ) from exc
+    if type(value) is not dict:
+        raise ShardBundleAuditError(
+            f"{shard_dir.name}:index_not_object"
+        )
+    return value, payload
+
+
 def _inventory(
     index: dict[str, Any],
     *,
