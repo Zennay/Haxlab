@@ -6,13 +6,14 @@ from pathlib import Path
 import pytest
 
 from haxlab.evaluation import policy_config as policy_config_module
-from haxlab.evaluation.models import PromotionPolicy
+from haxlab.evaluation.models import EvaluationEvidence, PromotionPolicy
 from haxlab.evaluation.policy_config import (
     POLICY_CONFIG_SCHEMA,
     load_promotion_policy,
     load_promotion_policy_config,
     main,
 )
+from haxlab.evaluation.promotion import decide_promotion
 
 
 def _write_policy(
@@ -79,6 +80,46 @@ def test_policy_config_maps_external_names_to_runtime_policy(tmp_path: Path) -> 
         minimum_score_rate_lower_bound=0.53,
         minimum_scenario_pass_rate=0.99,
         allow_critical_regressions=False,
+    )
+
+
+def test_loaded_policy_controls_existing_promotion_gate_when_passed_explicitly(
+    tmp_path: Path,
+) -> None:
+    evidence = EvaluationEvidence(
+        challenger_id="candidate",
+        champion_id="champion",
+        games_vs_champion=600,
+        score_rate_vs_champion=0.55,
+        score_rate_lower_bound=0.52,
+        frozen_scenarios_total=100,
+        frozen_scenarios_passed=100,
+        regressions=(),
+        reproducible=True,
+    )
+    permissive = _write_policy(
+        tmp_path,
+        "minimum_games_vs_champion = 500\n"
+        "minimum_score_rate_lower_bound = 0.51\n"
+        "minimum_frozen_scenario_pass_rate = 0.98\n",
+        filename="permissive.toml",
+    )
+    strict = _write_policy(
+        tmp_path,
+        "minimum_games_vs_champion = 500\n"
+        "minimum_score_rate_lower_bound = 0.53\n"
+        "minimum_frozen_scenario_pass_rate = 0.98\n",
+        filename="strict.toml",
+    )
+
+    accepted = decide_promotion(evidence, load_promotion_policy(permissive))
+    rejected = decide_promotion(evidence, load_promotion_policy(strict))
+
+    assert accepted.promote
+    assert not rejected.promote
+    assert any(
+        reason.startswith("head_to_head_confidence_gate_failed")
+        for reason in rejected.reasons
     )
 
 
