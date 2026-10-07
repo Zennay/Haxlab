@@ -1,9 +1,12 @@
 import hashlib
+import math
 import os
 import struct
 import time
 import zlib
 from pathlib import Path
+
+import pytest
 
 import haxlab.runtime.archive as archive_module
 from haxlab.runtime.archive import archive_path_for
@@ -250,3 +253,230 @@ def test_disappearing_candidate_does_not_crash_ingest(
     assert event is not None
     assert event["event_type"] == "replay_disappeared"
     assert event["detail"] == "disappeared_before_stat"
+
+
+def test_scanner_ignores_symlinked_replay_source(tmp_path: Path) -> None:
+    incoming = tmp_path / "incoming"
+    raw = tmp_path / "raw"
+    db = tmp_path / "state.sqlite3"
+    incoming.mkdir()
+
+    outside = tmp_path / "outside.hbr2"
+    payload = _valid_hbr2(total_frames=900, payload=b"outside-source")
+    outside.write_bytes(payload)
+    link = incoming / "linked.hbr2"
+    link.symlink_to(outside)
+
+    with RuntimeState(db) as state:
+        summary = scan_once(
+            incoming,
+            raw,
+            state,
+            minimum_file_age_seconds=0,
+            now=time.time() + 10,
+        )
+        snapshot = state.status_snapshot()
+        source_count = state.connection.execute(
+            "SELECT COUNT(*) FROM source_files"
+        ).fetchone()[0]
+
+    assert summary.discovered == 0
+    assert summary.archived == 0
+    assert summary.duplicates == 0
+    assert summary.failed == 0
+    assert snapshot["raw_unique_replays"] == 0
+    assert source_count == 0
+    assert not list(raw.rglob("*.hbr2"))
+
+
+def test_scanner_rechecks_symlink_status_before_processing(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    incoming = tmp_path / "incoming"
+    raw = tmp_path / "raw"
+    db = tmp_path / "state.sqlite3"
+    incoming.mkdir()
+
+    outside = tmp_path / "outside.hbr2"
+    outside.write_bytes(_valid_hbr2(total_frames=901, payload=b"outside-race"))
+    replay = incoming / "queued.hbr2"
+    replay.write_bytes(_valid_hbr2(total_frames=600, payload=b"initial"))
+
+    original_is_symlink = Path.is_symlink
+    checks = 0
+
+    def becomes_symlink_after_discovery(self: Path) -> bool:
+        nonlocal checks
+        if self == replay:
+            checks += 1
+            if checks == 1:
+                return False
+            if checks == 2:
+                replay.unlink()
+                replay.symlink_to(outside)
+                return True
+        return original_is_symlink(self)
+
+    monkeypatch.setattr(Path, "is_symlink", becomes_symlink_after_discovery)
+
+    with RuntimeState(db) as state:
+        summary = scan_once(
+            incoming,
+            raw,
+            state,
+            minimum_file_age_seconds=0,
+            now=time.time() + 10,
+        )
+        snapshot = state.status_snapshot()
+
+    assert checks >= 2
+    assert summary.discovered == 0
+    assert summary.archived == 0
+    assert summary.failed == 0
+    assert snapshot["raw_unique_replays"] == 0
+    assert not list(raw.rglob("*.hbr2"))
+
+
+def test_scanner_rejects_symlinked_incoming_root(tmp_path: Path) -> None:
+    real_incoming = tmp_path / "real-incoming"
+    real_incoming.mkdir()
+    (real_incoming / "outside.hbr2").write_bytes(
+        _valid_hbr2(total_frames=902, payload=b"root-symlink")
+    )
+    incoming = tmp_path / "incoming"
+    incoming.symlink_to(real_incoming, target_is_directory=True)
+
+    raw = tmp_path / "raw"
+    db = tmp_path / "state.sqlite3"
+
+    with RuntimeState(db) as state:
+        with pytest.raises(
+            ValueError,
+            match="incoming_root_must_not_be_symlink",
+        ):
+            scan_once(
+                incoming,
+                raw,
+                state,
+                minimum_file_age_seconds=0,
+                now=time.time() + 10,
+            )
+        snapshot = state.status_snapshot()
+
+    assert snapshot["raw_unique_replays"] == 0
+    assert not list(raw.rglob("*.hbr2"))
+
+
+@pytest.mark.parametrize(
+    "minimum_file_age_seconds",
+    [math.nan, math.inf, -math.inf, -1.0, True, "30"],
+)
+def test_scanner_rejects_invalid_minimum_file_age(
+    tmp_path: Path,
+    minimum_file_age_seconds: object,
+) -> None:
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    raw = tmp_path / "raw"
+    db = tmp_path / "state.sqlite3"
+
+    with RuntimeState(db) as state:
+        with pytest.raises(
+            ValueError,
+            match="minimum_file_age_seconds_must_be_finite_and_nonnegative",
+        ):
+            scan_once(
+                incoming,
+                raw,
+                state,
+                minimum_file_age_seconds=minimum_file_age_seconds,  # type: ignore[arg-type]
+                now=time.time(),
+            )
+
+    assert not list(raw.rglob("*.hbr2"))
+
+
+@pytest.mark.parametrize("now", [math.nan, math.inf, -math.inf, True, "0"])
+def test_scanner_rejects_invalid_now(
+    tmp_path: Path,
+    now: object,
+) -> None:
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    raw = tmp_path / "raw"
+    db = tmp_path / "state.sqlite3"
+
+    with RuntimeState(db) as state:
+        with pytest.raises(ValueError, match="now_must_be_finite"):
+            scan_once(
+                incoming,
+                raw,
+                state,
+                minimum_file_age_seconds=0,
+                now=now,  # type: ignore[arg-type]
+            )
+
+    assert not list(raw.rglob("*.hbr2"))
+
+
+def test_scanner_rejects_symlinked_nested_directory(tmp_path: Path) -> None:
+    incoming = tmp_path / "incoming"
+    incoming.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "external.hbr2").write_bytes(
+        _valid_hbr2(total_frames=903, payload=b"nested-directory-link")
+    )
+    linked_directory = incoming / "linked-dir"
+    linked_directory.symlink_to(outside, target_is_directory=True)
+
+    raw = tmp_path / "raw"
+    db = tmp_path / "state.sqlite3"
+
+    with RuntimeState(db) as state:
+        summary = scan_once(
+            incoming,
+            raw,
+            state,
+            minimum_file_age_seconds=0,
+            now=time.time() + 10,
+        )
+        snapshot = state.status_snapshot()
+        source_count = state.connection.execute(
+            "SELECT COUNT(*) FROM source_files"
+        ).fetchone()[0]
+
+    assert summary.discovered == 0
+    assert summary.archived == 0
+    assert summary.failed == 0
+    assert snapshot["raw_unique_replays"] == 0
+    assert source_count == 0
+    assert not list(raw.rglob("*.hbr2"))
+
+
+def test_scanner_keeps_regular_nested_directories(tmp_path: Path) -> None:
+    incoming = tmp_path / "incoming"
+    nested = incoming / "nested" / "deep"
+    nested.mkdir(parents=True)
+    replay = nested / "regular.hbr2"
+    replay.write_bytes(_valid_hbr2(total_frames=904, payload=b"nested-regular"))
+
+    raw = tmp_path / "raw"
+    db = tmp_path / "state.sqlite3"
+
+    with RuntimeState(db) as state:
+        summary = scan_once(
+            incoming,
+            raw,
+            state,
+            minimum_file_age_seconds=0,
+            now=time.time() + 10,
+        )
+        snapshot = state.status_snapshot()
+
+    assert summary.discovered == 1
+    assert summary.archived == 1
+    assert summary.failed == 0
+    assert snapshot["raw_unique_replays"] == 1
+    assert len(list(raw.rglob("*.hbr2"))) == 1
