@@ -12,6 +12,13 @@ on:
       - validation/data-pipeline-audit-determinism-contract-20261007
       - validation/data-pipeline-audit-determinism-aliases-20261007
       - validation/data-pipeline-audit-numpy-entropy-20261007
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/data-pipeline-audit-determinism-proof.yml"
+      - "docs/data-pipeline-audit-determinism.md"
+      - "tests/test_data_pipeline_audit-determinism_contract.py"
 
 permissions:
   contents: read
@@ -26,7 +33,7 @@ jobs:
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 20
     env:
-      EXPECTED_HEAD: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_sha || github.sha }}
+      EXPECTED_HEAD: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_sha || github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
     steps:
       - name: Checkout exact candidate
@@ -41,6 +48,21 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Verify candidate is still the live branch head
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            branch="${{ github.head_ref }}"
+          else
+            branch="$GITHUB_REF_NAME"
+          fi
+          test -n "$branch"
+          remote_head="$(git ls-remote origin "refs/heads/$branch" | awk 'NR == 1 {print $1}')"
+          test -n "$remote_head"
+          test "$remote_head" = "$EXPECTED_HEAD"
+          echo "HAXLAB_AUDIT_DETERMINISM_LIVE_HEAD=$remote_head"
 
       - name: Run focused proof
         shell: bash
