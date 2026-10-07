@@ -22,7 +22,7 @@ Audit decision code may not depend on:
 - `random` or `secrets` entropy;
 - generated UUID APIs such as `uuid1`, `uuid4`, `uuid6`, `uuid7` or `uuid8`.
 
-Aliased imports and loaded callable references are resolved by the contract so assigning an ambient source to another local name does not bypass the check. Wildcard imports from sensitive modules are rejected.
+Import aliases, chained assignment aliases and loaded callable/module references are resolved by the contract. Constant `getattr(...)` indirection is resolved as well, including an aliased `builtins.getattr`, so an ambient source cannot be hidden behind another local name before use. Direct tuple/list unpacking of aliasable references is covered. Wildcard imports from sensitive modules are rejected.
 
 ## Allowed deterministic operations
 
@@ -37,4 +37,8 @@ The contract deliberately permits deterministic transformations of explicit evid
 
 Issue #180 owns import-time side effects, filesystem mutation, network and subprocess hermeticity. This contract does not duplicate that surface. It only prevents audit results from changing because the same evidence was checked in a different process environment or at a different time.
 
-No producer, auditor, runtime state, ingestion, learning, evaluation, model or champion implementation is modified by this lane.
+Issue #378 hardens the already-integrated determinism boundary against assignment and constant-`getattr` alias indirection. No producer, auditor, runtime state, ingestion, learning, evaluation, model or champion implementation is modified by this lane.
+
+## Exact-head proof policy
+
+Merging newer `main` into a validation branch changes the candidate SHA even when main-side drift is file-disjoint from this three-file contract. The specialized determinism proof and normal HaxLab CI must therefore both rerun on that exact post-merge head before integration; green evidence from a pre-merge head remains historical only.
