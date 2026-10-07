@@ -130,10 +130,20 @@ def _extract_xy(
     input_columns = [columns[i] for i in input_indices]
     x = rows[:, input_indices].astype(np.float32, copy=False)
 
-    dx = np.clip(np.rint(rows[:, dx_i]), -1, 1).astype(np.int8)
-    dy = np.clip(np.rint(rows[:, dy_i]), -1, 1).astype(np.int8)
+    dx_raw = rows[:, dx_i]
+    dy_raw = rows[:, dy_i]
+    kick_raw = rows[:, kick_i]
+    if not np.isin(dx_raw, (-1.0, 0.0, 1.0)).all():
+        raise ValueError("invalid dir_x action label; expected -1, 0, or 1")
+    if not np.isin(dy_raw, (-1.0, 0.0, 1.0)).all():
+        raise ValueError("invalid dir_y action label; expected -1, 0, or 1")
+    if not np.isin(kick_raw, (0.0, 1.0)).all():
+        raise ValueError("invalid kick action label; expected 0 or 1")
+
+    dx = dx_raw.astype(np.int8)
+    dy = dy_raw.astype(np.int8)
     direction = ((dy + 1) * 3 + (dx + 1)).astype(np.int64)
-    kick = (rows[:, kick_i] > 0.5).astype(np.float32)
+    kick = kick_raw.astype(np.float32)
     return x, direction, kick, input_columns
 
 
