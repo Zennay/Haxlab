@@ -23,6 +23,11 @@ The preflight is structural only. It does not weaken or duplicate the performanc
 thresholds in elite_gate. The unchanged frozen gate still makes the final holdout
 decision.
 
+Evidence metadata is fail-closed at the type boundary: rate fields must be native
+finite numeric values, sample counts must be native integers, and provenance
+markers such as `kick_threshold_source` must be native strings. Numeric strings,
+booleans, and integer-valued floats are not canonical evidence.
+
 Candidate H remains rejected and must not be retried. Promotion-v5 remains
 pristine until a future preregistered challenger reaches it through all earlier
 gates.

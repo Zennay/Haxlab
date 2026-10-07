@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - validation/elite-gate-preflight-numeric-integrity-20261006
+      - validation/elite-preflight-native-count-integrity-20261006
   workflow_dispatch:
 
 permissions:
