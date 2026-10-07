@@ -10,6 +10,7 @@ CURRENT_ANALYZER_VERSION = "state-pass-v4"
 ANALYSIS_WRITE_STATUSES = frozenset({"ok", "failed", "retry"})
 PROCESSING_WRITE_STATUSES = frozenset({"ok", "failed"})
 SOURCE_WRITE_STATUSES = frozenset({"archived", "duplicate", "failed"})
+SQLITE_INTEGER_MAX = (1 << 63) - 1
 
 
 SCHEMA = """
@@ -119,8 +120,15 @@ def _positive_queue_limit(limit: int) -> int:
 
 
 def _require_non_negative_int(value: object, field: str) -> int:
-    if type(value) is not int or value < 0:
-        raise ValueError(f"{field} must be a native non-negative integer")
+    if (
+        type(value) is not int
+        or value < 0
+        or value > SQLITE_INTEGER_MAX
+    ):
+        raise ValueError(
+            f"{field} must be a native non-negative integer within "
+            "SQLite INTEGER range"
+        )
     return value
 
 
@@ -353,7 +361,7 @@ class RuntimeState:
         _require_sha256(sha256)
         _require_optional_non_negative_int(format_version, "format_version")
         _require_optional_non_negative_int(total_frames, "total_frames")
-        _require_optional_non_negative_finite_number(
+        validated_duration_seconds = _require_optional_non_negative_finite_number(
             duration_seconds,
             "duration_seconds",
         )
@@ -388,7 +396,7 @@ class RuntimeState:
                 status,
                 format_version,
                 total_frames,
-                duration_seconds,
+                validated_duration_seconds,
                 decompressed_bytes,
                 parser_stage,
                 error,
