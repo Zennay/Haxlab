@@ -42,6 +42,13 @@ class _InterpreterLimitScanner(ast.NodeVisitor):
             return f"{base}.{node.attr}" if base else None
         if (
             isinstance(node, ast.Call)
+            and self._resolve(node.func) in {"vars", "builtins.vars"}
+            and len(node.args) == 1
+        ):
+            owner = self._resolve(node.args[0])
+            return f"{owner}.__dict__" if owner else None
+        if (
+            isinstance(node, ast.Call)
             and self._resolve(node.func) in {"getattr", "builtins.getattr"}
             and len(node.args) >= 2
         ):
@@ -132,25 +139,35 @@ class _InterpreterLimitScanner(ast.NodeVisitor):
     def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         for decorator in node.decorator_list:
             self.visit(decorator)
-        for default in [*node.args.defaults, *node.args.kw_defaults]:
+
+        positional = [*node.args.posonlyargs, *node.args.args]
+        positional_defaults: dict[str, str | None] = {}
+        if node.args.defaults:
+            defaulted_args = positional[-len(node.args.defaults):]
+            for argument, default in zip(defaulted_args, node.args.defaults, strict=True):
+                self.visit(default)
+                positional_defaults[argument.arg] = self._resolve(default)
+
+        keyword_defaults: dict[str, str | None] = {}
+        for argument, default in zip(
+            node.args.kwonlyargs, node.args.kw_defaults, strict=True
+        ):
             if default is not None:
                 self.visit(default)
+                keyword_defaults[argument.arg] = self._resolve(default)
 
         inherited = dict(self.aliases)
         self.aliases[node.name] = None
         inherited[node.name] = None
         self.scopes.append(inherited)
-        arguments = [
-            *node.args.posonlyargs,
-            *node.args.args,
-            *node.args.kwonlyargs,
-        ]
+        for argument in positional:
+            self.aliases[argument.arg] = positional_defaults.get(argument.arg)
+        for argument in node.args.kwonlyargs:
+            self.aliases[argument.arg] = keyword_defaults.get(argument.arg)
         if node.args.vararg is not None:
-            arguments.append(node.args.vararg)
+            self.aliases[node.args.vararg.arg] = None
         if node.args.kwarg is not None:
-            arguments.append(node.args.kwarg)
-        for argument in arguments:
-            self.aliases[argument.arg] = None
+            self.aliases[node.args.kwarg.arg] = None
         for statement in node.body:
             self.visit(statement)
         self.scopes.pop()
@@ -177,15 +194,32 @@ class _InterpreterLimitScanner(ast.NodeVisitor):
         self.scopes.pop()
 
     def visit_Lambda(self, node: ast.Lambda) -> None:
+        positional = [*node.args.posonlyargs, *node.args.args]
+        positional_defaults: dict[str, str | None] = {}
+        if node.args.defaults:
+            defaulted_args = positional[-len(node.args.defaults):]
+            for argument, default in zip(defaulted_args, node.args.defaults, strict=True):
+                self.visit(default)
+                positional_defaults[argument.arg] = self._resolve(default)
+
+        keyword_defaults: dict[str, str | None] = {}
+        for argument, default in zip(
+            node.args.kwonlyargs, node.args.kw_defaults, strict=True
+        ):
+            if default is not None:
+                self.visit(default)
+                keyword_defaults[argument.arg] = self._resolve(default)
+
         inherited = dict(self.aliases)
         self.scopes.append(inherited)
-        arguments = [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
+        for argument in positional:
+            self.aliases[argument.arg] = positional_defaults.get(argument.arg)
+        for argument in node.args.kwonlyargs:
+            self.aliases[argument.arg] = keyword_defaults.get(argument.arg)
         if node.args.vararg is not None:
-            arguments.append(node.args.vararg)
+            self.aliases[node.args.vararg.arg] = None
         if node.args.kwarg is not None:
-            arguments.append(node.args.kwarg)
-        for argument in arguments:
-            self.aliases[argument.arg] = None
+            self.aliases[node.args.kwarg.arg] = None
         self.visit(node.body)
         self.scopes.pop()
 
@@ -328,3 +362,43 @@ def inspect(sys):
     sys.setrecursionlimit(1)
 """
     assert _scan(source) == []
+
+
+def test_stored_module_mappings_cannot_hide_setter_aliases() -> None:
+    source = """
+import sys
+mapping = vars(sys)
+namespace = sys.__dict__
+recursion = mapping["setrecursionlimit"]
+interval = namespace.get("setswitchinterval")
+recursion(4096)
+interval(0.01)
+"""
+    assert [name for _, name in _scan(source)] == [
+        "sys.setrecursionlimit",
+        "sys.setswitchinterval",
+    ]
+
+
+def test_function_and_lambda_defaults_preserve_captured_setter_provenance() -> None:
+    source = """
+import sys
+import threading
+
+def mutate(
+    recursion=sys.setrecursionlimit,
+    *,
+    interval=sys.setswitchinterval,
+):
+    recursion(4096)
+    interval(0.01)
+
+digits = lambda setter=sys.set_int_max_str_digits: setter(10000)
+stack = lambda setter=threading.stack_size: setter(262144)
+"""
+    assert [name for _, name in _scan(source)] == [
+        "sys.setrecursionlimit",
+        "sys.setswitchinterval",
+        "sys.set_int_max_str_digits",
+        "threading.stack_size",
+    ]
