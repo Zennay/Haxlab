@@ -10,6 +10,7 @@ on:
   push:
     branches:
       - validation/data-pipeline-audit-determinism-contract-20261007
+      - validation/data-pipeline-audit-determinism-aliases-20261007
     paths:
       - "tests/test_data_pipeline_audit_determinism_contract.py"
       - "docs/data-pipeline-audit-determinism.md"
