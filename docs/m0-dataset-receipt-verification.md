@@ -64,3 +64,26 @@ Do not use receipt verification as a substitute for semantic validation.
 A downstream publication gate should require both when it needs to prove that
 an M0 dataset is internally coherent and still byte-identical to the recorded
 evidence.
+
+
+## Receipt-to-receipt drift analysis
+
+For deterministic reruns or publication lineage, two stored receipts can be
+compared without reading the underlying datasets again:
+
+```bash
+python -m haxlab.ingestion.dataset_receipt_diff \
+  before-receipt.json \
+  after-receipt.json
+```
+
+The diff validates both inputs with the same strict receipt contract before
+comparing them. Output preserves canonical M0 artifact order and reports each
+changed artifact with its before/after byte size and SHA-256, plus explicit
+`size_changed` and `sha256_changed` flags. This catches byte drift even when
+the file size remains unchanged.
+
+Schema: `haxlab-m0-dataset-receipt-diff-v1`.
+
+Malformed, ambiguous or internally inconsistent receipt evidence fails closed
+instead of producing a best-effort comparison.
