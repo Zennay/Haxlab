@@ -30,6 +30,28 @@ def _identity_key(player: dict[str, Any]) -> str | None:
     return f"name:{name}" if name else None
 
 
+def _native_finite_number(value: Any) -> bool:
+    return type(value) in (int, float) and math.isfinite(float(value))
+
+
+def _valid_leaderboard_row(row: Any) -> bool:
+    if not isinstance(row, dict):
+        return False
+    player_id = row.get("player_id")
+    matches = row.get("matches")
+    return (
+        isinstance(player_id, str)
+        and bool(player_id.strip())
+        and type(matches) is int
+        and matches >= 0
+        and _native_finite_number(row.get("minutes"))
+        and float(row["minutes"]) >= 0.0
+        and _native_finite_number(row.get("rating"))
+        and _native_finite_number(row.get("rating_uncertainty"))
+        and float(row["rating_uncertainty"]) >= 0.0
+    )
+
+
 def _conservative_score(row: dict[str, Any]) -> float:
     return float(row.get("rating", 0.0)) - float(
         row.get("rating_uncertainty", 0.0)
@@ -48,9 +70,10 @@ def select_players(
     eligible = [
         row
         for row in leaderboard_rows
-        if int(row.get("matches", 0)) >= min_matches
-        and float(row.get("minutes", 0.0)) >= min_minutes
-        and float(row.get("rating_uncertainty", math.inf)) <= max_uncertainty
+        if _valid_leaderboard_row(row)
+        and row["matches"] >= min_matches
+        and float(row["minutes"]) >= min_minutes
+        and float(row["rating_uncertainty"]) <= max_uncertainty
     ]
 
     by_role: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -158,8 +181,13 @@ def build_training_manifest(
     leaderboard_bytes = leaderboard_path.read_bytes()
     leaderboard_sha256 = hashlib.sha256(leaderboard_bytes).hexdigest()
     leaderboard = json.loads(leaderboard_bytes)
+    if not isinstance(leaderboard, dict):
+        raise ValueError("leaderboard must be a JSON object")
+    leaderboard_rows = leaderboard.get("rows")
+    if not isinstance(leaderboard_rows, list):
+        raise ValueError("leaderboard rows must be a JSON list")
     selected_players = select_players(
-        list(leaderboard.get("rows") or []),
+        leaderboard_rows,
         top_fraction_per_role=top_fraction_per_role,
         min_players_per_role=min_players_per_role,
         min_matches=min_matches,
