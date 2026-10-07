@@ -17,6 +17,7 @@ import numpy as np
 
 DEFAULT_CHAMPION_ROOT = Path("/var/lib/haxlab/derived/champions/elite-player")
 ROLE_KEYS = ("role_order", "role_names", "role_labels", "roles")
+DEFAULT_ROLE_ORDER = ("gk", "dm", "am", "st")
 
 
 def _reject_json_constant(value: str) -> None:
@@ -284,6 +285,19 @@ def _extract_role_order(payload: Any) -> list[str] | None:
     return None
 
 
+def _resolve_role_order(runtime_payload: Any) -> list[str]:
+    role_order = _extract_role_order(runtime_payload)
+    if not role_order:
+        role_order = list(DEFAULT_ROLE_ORDER)
+    if (
+        len(role_order) != len(DEFAULT_ROLE_ORDER)
+        or len(set(role_order)) != len(DEFAULT_ROLE_ORDER)
+        or set(role_order) != set(DEFAULT_ROLE_ORDER)
+    ):
+        raise ValueError(f"invalid role order: {role_order}")
+    return role_order
+
+
 def _softmax(logits: np.ndarray) -> np.ndarray:
     shifted = logits - np.max(logits)
     exp = np.exp(shifted)
@@ -346,13 +360,7 @@ class LiveChampion:
                 except Exception:
                     runtime_payload = {}
 
-        role_order = _extract_role_order(runtime_payload)
-        if not role_order:
-            configured = os.environ.get("HAXLAB_ROLE_ORDER", "gk,dm,am,st")
-            role_order = [item.strip().casefold() for item in configured.split(",") if item.strip()]
-        if len(role_order) != 4 or len(set(role_order)) != 4:
-            raise ValueError(f"invalid role order: {role_order}")
-        self.role_order = role_order
+        self.role_order = _resolve_role_order(runtime_payload)
         self.role = (role or os.environ.get("HAXLAB_LIVE_ROLE", "st")).casefold()
         if self.role not in self.role_order:
             raise ValueError(f"unknown role {self.role!r}; expected one of {self.role_order}")
