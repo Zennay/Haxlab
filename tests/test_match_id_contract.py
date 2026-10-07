@@ -47,6 +47,39 @@ def test_duplicate_report_identity_fails_closed_with_both_provenances() -> None:
     assert "b" * 64 in message
 
 
+def test_duplicate_diagnostics_are_identical_across_source_ordering() -> None:
+    rows = [
+        _row("league-round-7", "b" * 64, "222"),
+        _row("league-round-7", "a" * 64, "111"),
+    ]
+
+    messages: list[str] = []
+    for candidate in (rows, list(reversed(rows))):
+        with pytest.raises(DuplicateMatchIdError) as exc:
+            validate_unique_match_ids(candidate)
+        messages.append(str(exc.value))
+
+    assert messages[0] == messages[1]
+    assert messages[0].index("a" * 64) < messages[0].index("b" * 64)
+
+
+def test_all_duplicate_identity_groups_are_reported_in_canonical_order() -> None:
+    rows = [
+        _row("match-z", "d" * 64, "400"),
+        _row("match-a", "c" * 64, "300"),
+        _row("match-z", "b" * 64, "200"),
+        _row("match-a", "a" * 64, "100"),
+    ]
+
+    with pytest.raises(DuplicateMatchIdError) as exc:
+        validate_unique_match_ids(rows)
+
+    message = str(exc.value)
+    assert message.index("'match-a'") < message.index("'match-z'")
+    assert message.index("a" * 64) < message.index("c" * 64)
+    assert message.index("b" * 64) < message.index("d" * 64)
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
