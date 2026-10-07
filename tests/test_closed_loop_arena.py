@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from haxlab.evaluation.closed_loop_arena import (
     ClosedLoopArenaPolicy,
     decide_closed_loop_arena,
@@ -567,3 +569,177 @@ def test_stringified_role_metric_fails_closed() -> None:
         "invalid_metric:st:candidate:far_stall_rate:non_numeric"
         in decision.reasons
     )
+
+
+def test_closed_loop_arena_rejects_wrong_policy_object_before_payload_access() -> None:
+    decision = decide_closed_loop_arena(
+        [],
+        policy=object(),  # type: ignore[arg-type]
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.behavior_gate_passed
+    assert not decision.eligible_for_live_promotion
+    assert decision.reasons == ("invalid_policy:object_type",)
+
+
+def test_closed_loop_arena_requires_boolean_calibration_flag() -> None:
+    for value in (0, 1, "false", None):
+        decision = decide_closed_loop_arena(
+            _payload(),
+            policy=replace(
+                ClosedLoopArenaPolicy(),
+                calibrated=value,  # type: ignore[arg-type]
+            ),
+        )
+
+        assert not decision.eligible_for_live_promotion
+        assert decision.reasons == ("invalid_policy:calibrated:not_boolean",)
+
+
+def test_closed_loop_arena_requires_nonempty_policy_version() -> None:
+    for value in ("", "   ", None):
+        decision = decide_closed_loop_arena(
+            _payload(),
+            policy=replace(
+                ClosedLoopArenaPolicy(),
+                policy_version=value,  # type: ignore[arg-type]
+            ),
+        )
+
+        assert not decision.eligible_for_live_promotion
+        assert (
+            "invalid_policy:policy_version:not_nonempty_string"
+            in decision.reasons
+        )
+
+
+def test_closed_loop_arena_rejects_invalid_integer_policy_controls() -> None:
+    cases = (
+        ("minimum_team_matches", False),
+        ("minimum_team_matches", 0),
+        ("minimum_team_matches", 4.0),
+        ("minimum_plug_matches_per_role", True),
+        ("minimum_plug_matches_per_role", 0),
+        ("minimum_partner_models", "1"),
+        ("minimum_partner_models", -1),
+        ("max_runtime_errors", False),
+        ("max_runtime_errors", -1),
+        ("max_runtime_errors", 0.0),
+    )
+    for field, value in cases:
+        decision = decide_closed_loop_arena(
+            _payload(),
+            policy=replace(
+                ClosedLoopArenaPolicy(),
+                **{field: value},
+            ),
+        )
+
+        assert not decision.eligible_for_live_promotion
+        assert any(
+            reason.startswith(f"invalid_policy:{field}:")
+            for reason in decision.reasons
+        )
+
+
+def test_closed_loop_arena_rejects_nonfinite_numeric_policy_controls() -> None:
+    fields = (
+        "max_boundary_regression",
+        "max_ood_regression",
+        "max_far_stall_regression",
+        "max_role_deviation_regression",
+        "max_held_action_regression_seconds",
+        "max_context_adaptation_regression",
+        "max_formation_order_regression",
+        "max_shape_collapse_regression",
+        "minimum_team_proxy_match_score",
+        "minimum_plug_proxy_match_score",
+        "max_absolute_far_stall_rate",
+        "max_absolute_held_action_seconds",
+        "minimum_absolute_context_adaptation_rate",
+    )
+    for field in fields:
+        for value in (float("nan"), float("inf"), float("-inf")):
+            decision = decide_closed_loop_arena(
+                _payload(),
+                policy=replace(
+                    ClosedLoopArenaPolicy(),
+                    **{field: value},
+                ),
+            )
+
+            assert not decision.eligible_for_live_promotion
+            assert f"invalid_policy:{field}:non_finite" in decision.reasons
+
+
+def test_closed_loop_arena_rejects_rate_policy_values_outside_unit_interval() -> None:
+    fields = (
+        "max_boundary_regression",
+        "max_ood_regression",
+        "max_far_stall_regression",
+        "max_context_adaptation_regression",
+        "max_formation_order_regression",
+        "max_shape_collapse_regression",
+        "minimum_team_proxy_match_score",
+        "minimum_plug_proxy_match_score",
+        "max_absolute_far_stall_rate",
+        "minimum_absolute_context_adaptation_rate",
+    )
+    for field in fields:
+        for value in (-0.01, 1.01):
+            decision = decide_closed_loop_arena(
+                _payload(),
+                policy=replace(
+                    ClosedLoopArenaPolicy(),
+                    **{field: value},
+                ),
+            )
+
+            assert not decision.eligible_for_live_promotion
+            assert any(
+                reason.startswith(f"invalid_policy:{field}:")
+                for reason in decision.reasons
+            )
+
+
+def test_closed_loop_arena_rejects_negative_unbounded_policy_tolerances() -> None:
+    for field in (
+        "max_role_deviation_regression",
+        "max_held_action_regression_seconds",
+        "max_absolute_held_action_seconds",
+    ):
+        decision = decide_closed_loop_arena(
+            _payload(),
+            policy=replace(
+                ClosedLoopArenaPolicy(),
+                **{field: -0.01},
+            ),
+        )
+
+        assert not decision.eligible_for_live_promotion
+        assert any(
+            reason.startswith(f"invalid_policy:{field}:below_minimum:")
+            for reason in decision.reasons
+        )
+
+
+def test_closed_loop_arena_preserves_valid_custom_policy() -> None:
+    policy = replace(
+        ClosedLoopArenaPolicy(),
+        calibrated=True,
+        minimum_team_matches=2,
+        minimum_plug_matches_per_role=1,
+        minimum_partner_models=1,
+        max_runtime_errors=1,
+        max_boundary_regression=0.02,
+        max_role_deviation_regression=75.0,
+        max_absolute_held_action_seconds=35.0,
+    )
+
+    decision = decide_closed_loop_arena(_payload(), policy=policy)
+
+    assert decision.structurally_valid
+    assert decision.behavior_gate_passed
+    assert decision.eligible_for_live_promotion
+    assert decision.checks["policy_calibrated"] is True
