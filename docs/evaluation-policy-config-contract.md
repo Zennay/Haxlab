@@ -86,3 +86,8 @@ The secure open uses both no-follow and non-blocking flags before inspecting the
 ## Read-time mutation
 
 The opened descriptor is fingerprinted with device, inode, byte size, modification time and change time before the bounded read, then checked again afterwards. The byte count must also equal the final descriptor size. Any drift fails closed instead of parsing a potentially torn policy snapshot. This complements no-follow path safety: path replacement and in-place mutation are separate hazards.
+
+
+## Stable byte snapshot
+
+Metadata stability alone is not sufficient for a same-size in-place rewrite. The loader therefore performs two bounded reads from the same already-validated descriptor, rewinding between them, and requires byte-for-byte equality before parsing. The post-read descriptor metadata check remains in place as an independent guard. Any disagreement is treated as read-time policy mutation.
