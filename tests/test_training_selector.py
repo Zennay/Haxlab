@@ -534,6 +534,85 @@ def test_training_manifest_rejects_invalid_holdout_partition_before_scan(
 
 
 
+def test_select_players_rejects_unrepresentable_native_integer_evidence() -> None:
+    huge = 10**10000
+    base = {
+        "player_id": "name:alpha",
+        "name": "Alpha",
+        "role": "forward",
+        "rating": 56.0,
+        "rating_uncertainty": 0.8,
+        "matches": 80,
+        "minutes": 500.0,
+    }
+
+    for field in ("minutes", "rating", "rating_uncertainty"):
+        row = {**base, field: huge}
+        assert select_players(
+            [row],
+            top_fraction_per_role=1.0,
+            min_players_per_role=1,
+            min_matches=1,
+            min_minutes=0.0,
+            max_uncertainty=10.0,
+        ) == []
+
+
+def test_select_players_rejects_unrepresentable_selection_config() -> None:
+    huge = 10**10000
+
+    with pytest.raises(
+        ValueError,
+        match="min_minutes must be finite and >= 0",
+    ):
+        select_players(
+            [],
+            top_fraction_per_role=1.0,
+            min_players_per_role=1,
+            min_matches=1,
+            min_minutes=huge,
+            max_uncertainty=10.0,
+        )
+
+    with pytest.raises(
+        ValueError,
+        match="max_uncertainty must be finite and >= 0",
+    ):
+        select_players(
+            [],
+            top_fraction_per_role=1.0,
+            min_players_per_role=1,
+            min_matches=1,
+            min_minutes=0.0,
+            max_uncertainty=huge,
+        )
+
+
+def test_select_players_preserves_large_but_representable_native_integer() -> None:
+    large = 10**300
+    row = {
+        "player_id": "name:alpha",
+        "name": "Alpha",
+        "role": "forward",
+        "rating": large,
+        "rating_uncertainty": 0,
+        "matches": 80,
+        "minutes": 500,
+    }
+
+    selected = select_players(
+        [row],
+        top_fraction_per_role=1.0,
+        min_players_per_role=1,
+        min_matches=1,
+        min_minutes=0,
+        max_uncertainty=10,
+    )
+
+    assert len(selected) == 1
+    assert selected[0]["rating"] == float(large)
+
+
 @pytest.mark.parametrize(
     "mutated",
     [
