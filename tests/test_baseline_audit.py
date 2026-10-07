@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import haxlab.learning.baseline_audit as baseline_audit_module
 from haxlab.learning.baseline_audit import (
     AUDIT_SCHEMA,
     BaselineAuditError,
@@ -422,3 +423,82 @@ def test_audit_normalizes_corrupt_npz_member_failure(
         match="model.npz: cannot load arrays",
     ):
         audit_baseline_bundle(bundle)
+
+
+
+def test_audit_rejects_bundle_directory_replacement_during_audit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = _write_bundle(tmp_path)
+    replacement_parent = tmp_path / "replacement-parent"
+    replacement_parent.mkdir()
+    replacement = _write_bundle(replacement_parent)
+    original = tmp_path / "bundle-original"
+
+    real_open = baseline_audit_module.os.open
+    swapped = False
+
+    def racing_open(path, flags, *args, **kwargs):
+        nonlocal swapped
+        if (
+            path == "model.npz"
+            and kwargs.get("dir_fd") is not None
+            and not swapped
+        ):
+            bundle.rename(original)
+            replacement.rename(bundle)
+            swapped = True
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(baseline_audit_module.os, "open", racing_open)
+
+    with pytest.raises(
+        BaselineAuditError,
+        match="bundle directory identity changed during audit",
+    ):
+        audit_baseline_bundle(bundle)
+
+    assert swapped is True
+
+
+def test_audit_rejects_member_path_replacement_after_secure_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = _write_bundle(tmp_path)
+    model = bundle / "model.npz"
+    replacement = tmp_path / "replacement-model.npz"
+    replacement.write_bytes(model.read_bytes())
+    original = bundle / "model-original.npz"
+
+    real_open = baseline_audit_module.os.open
+    real_read = baseline_audit_module.os.read
+    model_fd: int | None = None
+    swapped = False
+
+    def tracking_open(path, flags, *args, **kwargs):
+        nonlocal model_fd
+        fd = real_open(path, flags, *args, **kwargs)
+        if path == "model.npz" and kwargs.get("dir_fd") is not None:
+            model_fd = fd
+        return fd
+
+    def racing_read(fd: int, size: int) -> bytes:
+        nonlocal swapped
+        if fd == model_fd and not swapped:
+            model.rename(original)
+            replacement.rename(model)
+            swapped = True
+        return real_read(fd, size)
+
+    monkeypatch.setattr(baseline_audit_module.os, "open", tracking_open)
+    monkeypatch.setattr(baseline_audit_module.os, "read", racing_read)
+
+    with pytest.raises(
+        BaselineAuditError,
+        match="model.npz: logical path identity changed during audit",
+    ):
+        audit_baseline_bundle(bundle)
+
+    assert swapped is True
