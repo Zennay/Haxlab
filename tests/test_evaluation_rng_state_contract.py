@@ -68,10 +68,10 @@ class AliasState:
     def bind(self, name: str, target: str | None) -> None:
         self.scopes[-1][name] = target
 
-    def resolve(self, name: str) -> str:
+    def resolve(self, name: str) -> str | None:
         for scope in reversed(self.scopes):
             if name in scope:
-                return scope[name] or name
+                return scope[name]
         return name
 
 
@@ -101,6 +101,48 @@ class _FunctionLocalCollector(ast.NodeVisitor):
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         self.bound.add(node.name)
+
+    def _visit_comprehension(
+        self,
+        generators: list[ast.comprehension],
+        values: list[ast.AST],
+    ) -> None:
+        if not generators:
+            for value in values:
+                self.visit(value)
+            return
+
+        # The first iterable is evaluated in the enclosing scope. Each target
+        # shadows outer names only after its own iterable has been evaluated.
+        self.visit(generators[0].iter)
+        self.aliases.push()
+        for name in self._simple_targets(generators[0].target):
+            self.aliases.bind(name, None)
+        for condition in generators[0].ifs:
+            self.visit(condition)
+
+        for generator in generators[1:]:
+            self.visit(generator.iter)
+            for name in self._simple_targets(generator.target):
+                self.aliases.bind(name, None)
+            for condition in generator.ifs:
+                self.visit(condition)
+
+        for value in values:
+            self.visit(value)
+        self.aliases.pop()
+
+    def visit_ListComp(self, node: ast.ListComp) -> None:
+        self._visit_comprehension(node.generators, [node.elt])
+
+    def visit_SetComp(self, node: ast.SetComp) -> None:
+        self._visit_comprehension(node.generators, [node.elt])
+
+    def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
+        self._visit_comprehension(node.generators, [node.elt])
+
+    def visit_DictComp(self, node: ast.DictComp) -> None:
+        self._visit_comprehension(node.generators, [node.key, node.value])
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self.bound.add(node.name)
@@ -157,7 +199,7 @@ class RngStateVisitor(ast.NodeVisitor):
             return self.aliases.resolve(node.id)
         if isinstance(node, ast.Attribute):
             parent = self.canonical(node.value)
-            return f"{parent}.{node.attr}" if parent else node.attr
+            return f"{parent}.{node.attr}" if parent else None
         if isinstance(node, ast.Call):
             accessor = self.canonical(node.func)
             if accessor in {"getattr", "builtins.getattr"} and len(node.args) >= 2:
@@ -168,6 +210,17 @@ class RngStateVisitor(ast.NodeVisitor):
         if isinstance(node, ast.NamedExpr):
             return self.canonical(node.value)
         return None
+
+    @staticmethod
+    def _simple_targets(node: ast.AST) -> list[str]:
+        if isinstance(node, ast.Name):
+            return [node.id]
+        if isinstance(node, (ast.Tuple, ast.List)):
+            result: list[str] = []
+            for element in node.elts:
+                result.extend(RngStateVisitor._simple_targets(element))
+            return result
+        return []
 
     @staticmethod
     def _is_trackable(target: str | None) -> bool:
@@ -207,13 +260,25 @@ class RngStateVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def _bind_assignment(self, target: ast.AST, value: ast.AST) -> None:
-        if not isinstance(target, ast.Name):
+        if isinstance(target, ast.Name):
+            resolved = self.canonical(value)
+            self.aliases.bind(
+                target.id,
+                resolved if self._is_trackable(resolved) else None,
+            )
             return
-        resolved = self.canonical(value)
-        self.aliases.bind(
-            target.id,
-            resolved if self._is_trackable(resolved) else None,
-        )
+
+        if (
+            isinstance(target, (ast.Tuple, ast.List))
+            and isinstance(value, (ast.Tuple, ast.List))
+            and len(target.elts) == len(value.elts)
+        ):
+            for child_target, child_value in zip(target.elts, value.elts):
+                self._bind_assignment(child_target, child_value)
+            return
+
+        for name in self._simple_targets(target):
+            self.aliases.bind(name, None)
 
     def visit_Assign(self, node: ast.Assign) -> None:
         self.visit(node.value)
@@ -345,6 +410,18 @@ def test_evaluation_package_has_no_process_global_rng_state_mutation() -> None:
         ("from torch.cuda import set_rng_state as restore\nrestore(state)\n", "torch.cuda.set_rng_state"),
         ("import torch\n(getattr(torch.cuda, 'set_rng_state_all'))(states)\n", "torch.cuda.set_rng_state_all"),
         ("import torch\n(mut := torch.manual_seed)(7)\n", "torch.manual_seed"),
+        (
+            "import random\n"
+            "(seed, restore) = (random.seed, random.setstate)\n"
+            "seed(7)\n",
+            "random.seed",
+        ),
+        (
+            "import numpy as np\n"
+            "[reseed, restore] = [np.random.seed, np.random.set_state]\n"
+            "restore(state)\n",
+            "numpy.random.set_state",
+        ),
     ],
 )
 def test_contract_rejects_global_rng_state_mutation(
@@ -376,6 +453,14 @@ def test_contract_rejects_global_rng_state_mutation(
             "def probe():\n"
             "    random = LocalRng()\n"
             "    random.seed(7)\n"
+        ),
+        (
+            "import random\n"
+            "values = [random.seed(7) for random in (LocalRng(),)]\n"
+        ),
+        (
+            "import torch\n"
+            "values = {torch.manual_seed(7) for torch in (LocalGenerator(),)}\n"
         ),
     ],
 )
