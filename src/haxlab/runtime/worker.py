@@ -187,6 +187,8 @@ def _decompressed_payload_size(compressed: bytes) -> int:
             total += len(output)
 
             if decompressor.eof:
+                if decompressor.unused_data:
+                    raise ReplayFormatError("deflate_trailing_data")
                 return total
 
             remaining = decompressor.unconsumed_tail
