@@ -55,6 +55,7 @@ jobs:
           .shard-bundle-root-proof-venv/bin/pytest -q \
             tests/test_shard_bundle_audit.py \
             tests/test_shard_audit.py \
+            tests/test_training_chain_audit.py \
             tests/test_data_pipeline_audit_readonly_contract.py \
             tests/test_data_pipeline_audit_determinism_contract.py \
             tests/test_data_pipeline_audit_exception_boundary.py \
