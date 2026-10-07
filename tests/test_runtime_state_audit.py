@@ -163,6 +163,73 @@ def test_runtime_state_audit_reports_missing_schema_without_crashing(
     assert codes.count("required_table_missing") == 6
 
 
+def test_runtime_state_audit_requires_successful_source_to_resolve_raw_replay(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "state.sqlite3"
+    with RuntimeState(db) as state:
+        state.mark_seen(
+            source_path=str(tmp_path / "orphan-source.hbr2"),
+            size_bytes=123,
+            mtime_ns=456,
+            sha256="d" * 64,
+            status="archived",
+        )
+
+    result = audit_runtime_state(db)
+    codes = {issue.code for issue in result.issues}
+
+    assert result.ok is False
+    assert "source_without_raw_replay" in codes
+
+
+def test_runtime_state_audit_rejects_reused_success_output_path(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "state.sqlite3"
+    shared_output = tmp_path / "derived" / "shared.json"
+    shared_output.parent.mkdir(parents=True)
+    shared_output.write_text("{}", encoding="utf-8")
+
+    with RuntimeState(db) as state:
+        for sha in ("e" * 64, "f" * 64):
+            replay = tmp_path / f"{sha[:8]}.hbr2"
+            replay.write_bytes(b"x")
+            state.register_raw(
+                sha256=sha,
+                archive_path=str(replay),
+                size_bytes=1,
+            )
+            state.mark_replay_processing(
+                sha256=sha,
+                status="ok",
+                format_version=3,
+                total_frames=600,
+                duration_seconds=10.0,
+                decompressed_bytes=1024,
+            )
+            state.mark_replay_analysis(
+                sha256=sha,
+                analyzer_version=CURRENT_ANALYZER_VERSION,
+                status="ok",
+                output_path=str(shared_output),
+                sampled_state_count=100,
+                player_count=8,
+                raw_event_count=40,
+                tick_count=600,
+            )
+
+    result = audit_runtime_state(db)
+    reused = [
+        issue for issue in result.issues
+        if issue.code == "analysis_output_path_reused"
+    ]
+
+    assert result.ok is False
+    assert len(reused) == 1
+    assert reused[0].subject == str(shared_output)
+
+
 def test_runtime_state_audit_cli_is_machine_readable(
     tmp_path: Path,
     capsys,
