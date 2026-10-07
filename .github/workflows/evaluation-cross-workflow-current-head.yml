@@ -43,11 +43,20 @@ jobs:
           fi
           echo "HAXLAB_EVALUATION_CROSS_WORKFLOW_HEAD=$ACTUAL_SHA"
 
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .evaluation-cross-workflow-venv
+          python3 -m venv .evaluation-cross-workflow-venv
+          .evaluation-cross-workflow-venv/bin/pip install --upgrade pip
+          .evaluation-cross-workflow-venv/bin/pip install -e '.[dev]'
+
       - name: Run cross-workflow contract regressions
         shell: bash
         run: |
           set -euo pipefail
-          /opt/haxlab/.venv/bin/python -m pytest -q tests/test_evaluation_cross_workflow_contract.py
+          .evaluation-cross-workflow-venv/bin/python -m pytest -q tests/test_evaluation_cross_workflow_contract.py
 
       - name: Record focused proof
         shell: bash
