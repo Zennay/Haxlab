@@ -219,7 +219,7 @@ def _load_model(payload: bytes) -> dict[str, np.ndarray]:
                 name: np.array(archive[name], copy=True)
                 for name in MODEL_ARRAYS
             }
-    except (OSError, ValueError, KeyError) as exc:
+    except Exception as exc:
         _fail(f"model.npz: cannot load arrays: {exc}")
     return arrays
 
