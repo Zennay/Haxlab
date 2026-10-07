@@ -51,6 +51,32 @@ def test_receipt_is_relocation_stable_and_tracks_importer_inputs(tmp_path: Path)
     assert len(first_receipt["receipt_sha256"]) == 64
 
 
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        r"match\\one.hbr2",
+        r"group\\one/match.hbr2",
+    ],
+)
+def test_receipt_rejects_paths_outside_verifier_canonical_contract(
+    tmp_path: Path,
+    relative: str,
+) -> None:
+    root = tmp_path / "export"
+    root.mkdir()
+    source = root / relative
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(b"replay")
+
+    with pytest.raises(
+        receipt.SourceBundleReceiptError,
+        match="source_file_path_not_canonical:",
+    ):
+        receipt.create_source_bundle_receipt(root)
+
+
 def test_receipt_changes_when_relevant_bytes_change(tmp_path: Path) -> None:
     root = tmp_path / "export"
     root.mkdir()
