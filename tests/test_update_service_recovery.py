@@ -173,22 +173,39 @@ exit 0
     assert not calls.exists()
 
 
-def test_update_wires_recovery_before_stop_and_disables_after_health_checks() -> None:
+def test_update_preparses_destructive_phase_before_checkout_reset() -> None:
     text = UPDATE.read_text(encoding="utf-8")
 
     source_index = text.index('source "${SCRIPT_DIR}/update-service-recovery.sh"')
     capture_index = text.index("haxlab_capture_update_service_state")
-    trap_index = text.index("haxlab_install_update_recovery_trap")
+    function_index = text.index("haxlab_apply_verified_main_update() {")
     stop_index = text.index('systemctl stop "${HAXLAB_UPDATE_MANAGED_SERVICES[@]}"')
-    status_index = text.index("\nhaxlab-status\n")
-    disable_index = text.index("\nhaxlab_disable_update_recovery_trap\n")
+    reset_index = text.index('git -C "${APP_DIR}" reset --hard origin/main')
     restart_index = text.index(
         "systemctl start haxlab-ingest.service haxlab-worker.service "
         "haxlab-analyzer.service haxlab-autonomy.timer"
     )
+    status_index = text.index("\n  haxlab-status\n", function_index)
+    disable_index = text.index(
+        "\n  haxlab_disable_update_recovery_trap\n",
+        function_index,
+    )
+    function_end_index = text.index(
+        "\n}\nhaxlab_install_update_recovery_trap\n",
+        disable_index,
+    )
+    trap_index = text.index(
+        "haxlab_install_update_recovery_trap",
+        function_end_index,
+    )
+    call = "\nhaxlab_apply_verified_main_update\n"
+    call_index = text.index(call, trap_index)
 
-    assert source_index < capture_index < trap_index < stop_index
-    assert stop_index < restart_index < status_index < disable_index
+    assert source_index < capture_index < function_index
+    assert function_index < stop_index < reset_index < restart_index
+    assert restart_index < status_index < disable_index < function_end_index
+    assert function_end_index < trap_index < call_index
+    assert text[call_index + len(call) :].strip() == ""
 
 
 def test_all_managed_services_restore_in_exact_reverse_stop_order(
