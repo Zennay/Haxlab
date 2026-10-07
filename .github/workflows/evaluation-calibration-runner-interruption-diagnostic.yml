@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   diagnose:
-    runs-on: [self-hosted, haxlab]
+    runs-on: [self-hosted, zcloud, vps]
     timeout-minutes: 8
 
     steps:
@@ -26,7 +26,7 @@ jobs:
           ref: ${{ github.sha }}
           clean: true
 
-      - name: Verify exact live head
+      - name: Verify exact live head and host
         shell: bash
         run: |
           set -euo pipefail
@@ -34,7 +34,12 @@ jobs:
           remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk 'NR == 1 {print $1}')"
           test -n "$remote_head"
           test "$remote_head" = "${{ github.sha }}"
+
+          host="$(hostname -s)"
+          test "$host" = "vps-bb300bba"
+
           echo "HAXLAB_INTERRUPTION_DIAGNOSTIC_HEAD=$remote_head"
+          echo "HAXLAB_INTERRUPTION_DIAGNOSTIC_HOST=$host"
 
       - name: Capture bounded host evidence
         shell: bash
@@ -44,12 +49,11 @@ jobs:
           mkdir -p "$out"
 
           service="actions.runner.Zennay-Haxlab.vps-bb300bba-haxlab.service"
-          since="2026-10-07 14:24:00 UTC"
-          until="2026-10-07 14:29:30 UTC"
 
           {
             echo "service=$service"
             echo "captured_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "capture_host=$(hostname -s)"
             echo "active_state=$(systemctl is-active "$service" 2>/dev/null || true)"
             echo "main_pid=$(systemctl show "$service" -p MainPID --value 2>/dev/null || true)"
             echo "n_restarts=$(systemctl show "$service" -p NRestarts --value 2>/dev/null || true)"
@@ -57,30 +61,69 @@ jobs:
             echo "exec_main_status=$(systemctl show "$service" -p ExecMainStatus --value 2>/dev/null || true)"
           } > "$out/current-service-state.txt"
 
-          sudo -n journalctl -u "$service"             --since "$since" --until "$until"             --no-pager -o short-iso > "$out/runner-service.log" || true
+          capture_window() {
+            local tag="$1"
+            local since="$2"
+            local until="$3"
 
-          sudo -n journalctl -k             --since "$since" --until "$until"             --no-pager -o short-iso 2>/dev/null             | grep -Ei 'out of memory|oom|killed process|memory cgroup|memory pressure'             > "$out/kernel-memory.log" || true
+            sudo -n journalctl -u "$service" \
+              --since "$since" --until "$until" \
+              --no-pager -o short-iso > "$out/runner-service-$tag.log" || true
 
-          sudo -n journalctl -u systemd-oomd             --since "$since" --until "$until"             --no-pager -o short-iso 2>/dev/null             | grep -Ei 'kill|memory|pressure|haxlab|runner|node'             > "$out/systemd-oomd.log" || true
+            sudo -n journalctl -k \
+              --since "$since" --until "$until" \
+              --no-pager -o short-iso 2>/dev/null \
+              | grep -Ei 'out of memory|oom|killed process|memory cgroup|memory pressure' \
+              > "$out/kernel-memory-$tag.log" || true
 
-          sudo -n journalctl             --since "$since" --until "$until"             --no-pager -o short-iso 2>/dev/null             | grep -Ei 'COMMAND=.*systemctl (restart|stop|start) actions\.runner\.Zennay-Haxlab\.vps-bb300bba-haxlab\.service|systemctl (restart|stop|start) actions\.runner\.Zennay-Haxlab\.vps-bb300bba-haxlab\.service|Stopping.*GitHub Actions Runner.*HaxLab|Stopped.*GitHub Actions Runner.*HaxLab|Starting.*GitHub Actions Runner.*HaxLab|Started.*GitHub Actions Runner.*HaxLab'             > "$out/runner-control.log" || true
+            sudo -n journalctl -u systemd-oomd \
+              --since "$since" --until "$until" \
+              --no-pager -o short-iso 2>/dev/null \
+              | grep -Ei 'kill|memory|pressure|haxlab|runner|node' \
+              > "$out/systemd-oomd-$tag.log" || true
+
+            sudo -n journalctl \
+              --since "$since" --until "$until" \
+              --no-pager -o short-iso 2>/dev/null \
+              | grep -Ei 'COMMAND=.*systemctl (restart|stop|start) actions\.runner\.Zennay-Haxlab\.vps-bb300bba-haxlab\.service|systemctl (restart|stop|start) actions\.runner\.Zennay-Haxlab\.vps-bb300bba-haxlab\.service|Stopping.*GitHub Actions Runner.*HaxLab|Stopped.*GitHub Actions Runner.*HaxLab|Starting.*GitHub Actions Runner.*HaxLab|Started.*GitHub Actions Runner.*HaxLab' \
+              > "$out/runner-control-$tag.log" || true
+          }
+
+          capture_window first "2026-10-07 14:24:00 UTC" "2026-10-07 14:29:30 UTC"
+          capture_window second "2026-10-07 15:06:00 UTC" "2026-10-07 15:08:30 UTC"
 
           # Extra authentication-log evidence is restricted to the exact runner
           # service control command; no unrelated sudo/auth lines are retained.
           if sudo -n test -r /var/log/auth.log; then
-            sudo -n grep -E 'Oct[[:space:]]+7 14:2[4-9].*COMMAND=.*systemctl (restart|stop|start) actions\.runner\.Zennay-Haxlab\.vps-bb300bba-haxlab\.service'               /var/log/auth.log >> "$out/runner-control.log" || true
+            sudo -n grep -E 'Oct[[:space:]]+7 (14:2[4-9]|15:0[6-8]).*COMMAND=.*systemctl (restart|stop|start) actions\.runner\.Zennay-Haxlab\.vps-bb300bba-haxlab\.service' \
+              /var/log/auth.log > "$out/runner-control-auth.log" || true
+          else
+            : > "$out/runner-control-auth.log"
           fi
+
+          cat "$out/runner-control-first.log" "$out/runner-control-second.log" "$out/runner-control-auth.log" \
+            > "$out/runner-control.log"
+          cat "$out/kernel-memory-first.log" "$out/kernel-memory-second.log" \
+            > "$out/kernel-memory.log"
+          cat "$out/systemd-oomd-first.log" "$out/systemd-oomd-second.log" \
+            > "$out/systemd-oomd.log"
+          cat "$out/runner-service-first.log" "$out/runner-service-second.log" \
+            > "$out/runner-service.log"
 
           echo "=== current service state ==="
           cat "$out/current-service-state.txt"
-          echo "=== runner service incident lines ==="
-          tail -n 120 "$out/runner-service.log" || true
-          echo "=== kernel memory incident lines ==="
-          cat "$out/kernel-memory.log" || true
-          echo "=== systemd-oomd incident lines ==="
-          cat "$out/systemd-oomd.log" || true
-          echo "=== explicit runner control lines ==="
-          cat "$out/runner-control.log" || true
+          for tag in first second; do
+            echo "=== $tag window runner service lines ==="
+            tail -n 120 "$out/runner-service-$tag.log" || true
+            echo "=== $tag window kernel memory lines ==="
+            cat "$out/kernel-memory-$tag.log" || true
+            echo "=== $tag window systemd-oomd lines ==="
+            cat "$out/systemd-oomd-$tag.log" || true
+            echo "=== $tag window explicit runner control lines ==="
+            cat "$out/runner-control-$tag.log" || true
+          done
+          echo "=== bounded auth-log runner control lines ==="
+          cat "$out/runner-control-auth.log" || true
 
       - name: Classify interruption evidence
         shell: bash
@@ -98,71 +141,102 @@ jobs:
               path = root / name
               return path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
 
-          service = read("runner-service.log")
-          kernel = read("kernel-memory.log")
-          oomd = read("systemd-oomd.log")
-          control = read("runner-control.log")
+          def classify(tag: str) -> dict:
+              service = read(f"runner-service-{tag}.log")
+              kernel = read(f"kernel-memory-{tag}.log")
+              oomd = read(f"systemd-oomd-{tag}.log")
+              control = read(f"runner-control-{tag}.log") + "\n" + read("runner-control-auth.log")
 
-          memory_text = (kernel + "\n" + oomd).lower()
-          control_lower = control.lower()
-          service_lower = service.lower()
+              memory_text = (kernel + "\n" + oomd).lower()
+              control_lower = control.lower()
+              service_lower = service.lower()
 
-          explicit_control = any(
-              token in control_lower
-              for token in (
-                  "systemctl restart actions.runner.zennay-haxlab.vps-bb300bba-haxlab.service",
-                  "systemctl stop actions.runner.zennay-haxlab.vps-bb300bba-haxlab.service",
+              explicit_control = any(
+                  token in control_lower
+                  for token in (
+                      "systemctl restart actions.runner.zennay-haxlab.vps-bb300bba-haxlab.service",
+                      "systemctl stop actions.runner.zennay-haxlab.vps-bb300bba-haxlab.service",
+                  )
               )
-          )
-          oom_evidence = any(
-              token in memory_text
-              for token in (
-                  "out of memory",
-                  "oom-kill",
-                  "oom killer",
-                  "killed process",
-                  "memory cgroup",
-                  "systemd-oomd",
+              oom_evidence = any(
+                  token in memory_text
+                  for token in (
+                      "out of memory",
+                      "oom-kill",
+                      "oom killer",
+                      "killed process",
+                      "memory cgroup",
+                      "systemd-oomd",
+                  )
               )
-          )
-          service_stop = any(
-              token in service_lower
-              for token in ("stopping", "stopped", "shutdown", "terminat")
-          )
+              service_stop = any(
+                  token in service_lower
+                  for token in ("stopping", "stopped", "shutdown", "terminat")
+              )
 
-          if explicit_control and oom_evidence:
-              classification = "explicit_control_and_memory_pressure"
-          elif explicit_control:
-              classification = "explicit_runner_control"
-          elif oom_evidence:
-              classification = "memory_pressure_or_oom"
-          elif service_stop:
-              classification = "service_stopped_actor_unresolved"
-          else:
-              classification = "host_cause_unresolved"
+              if explicit_control and oom_evidence:
+                  classification = "explicit_control_and_memory_pressure"
+              elif explicit_control:
+                  classification = "explicit_runner_control"
+              elif oom_evidence:
+                  classification = "memory_pressure_or_oom"
+              elif service_stop:
+                  classification = "service_stopped_actor_unresolved"
+              else:
+                  classification = "host_cause_unresolved"
 
-          receipt = {
-              "schema": "haxlab-arena-runner-interruption-diagnostic-v1",
-              "incident_run_id": 37635081630,
-              "incident_job_id": 112839058581,
-              "incident_sha": "c0ec9ef22a54e1d65a9160aba295589fcf8f6b81",
-              "window_utc": {
+              return {
+                  "classification": classification,
+                  "explicit_runner_control": explicit_control,
+                  "memory_pressure_or_oom": oom_evidence,
+                  "runner_service_stop_evidence": service_stop,
+                  "runner_service_lines": len([x for x in service.splitlines() if x.strip()]),
+                  "memory_lines": len([x for x in (kernel + "\n" + oomd).splitlines() if x.strip()]),
+                  "runner_control_lines": len([x for x in control.splitlines() if x.strip()]),
+              }
+
+          windows = {
+              "first": {
                   "start": "2026-10-07T14:24:00Z",
                   "end": "2026-10-07T14:29:30Z",
+                  "incident_job_id": 112839058581,
+                  **classify("first"),
               },
-              "classification": classification,
-              "explicit_runner_control": explicit_control,
-              "memory_pressure_or_oom": oom_evidence,
-              "runner_service_stop_evidence": service_stop,
-              "runner_service_lines": len([x for x in service.splitlines() if x.strip()]),
-              "memory_lines": len([x for x in (kernel + "\n" + oomd).splitlines() if x.strip()]),
-              "runner_control_lines": len([x for x in control.splitlines() if x.strip()]),
+              "second": {
+                  "start": "2026-10-07T15:06:00Z",
+                  "end": "2026-10-07T15:08:30Z",
+                  "incident_job_id": 112851349867,
+                  **classify("second"),
+              },
+          }
+
+          classifications = {v["classification"] for v in windows.values()}
+          if len(classifications) == 1:
+              overall = next(iter(classifications))
+          elif any(v["explicit_runner_control"] for v in windows.values()) and any(
+              v["memory_pressure_or_oom"] for v in windows.values()
+          ):
+              overall = "mixed_explicit_control_and_memory_pressure"
+          elif any(v["explicit_runner_control"] for v in windows.values()):
+              overall = "mixed_with_explicit_runner_control"
+          elif any(v["memory_pressure_or_oom"] for v in windows.values()):
+              overall = "mixed_with_memory_pressure_or_oom"
+          else:
+              overall = "mixed_or_unresolved_host_causes"
+
+          receipt = {
+              "schema": "haxlab-arena-runner-interruption-diagnostic-v2",
+              "incident_run_id": 37635081630,
+              "incident_sha": "c0ec9ef22a54e1d65a9160aba295589fcf8f6b81",
+              "capture_host": "vps-bb300bba",
+              "classification": overall,
+              "windows": windows,
           }
           (root / "receipt.json").write_text(
               json.dumps(receipt, indent=2, sort_keys=True) + "\n",
               encoding="utf-8",
           )
-          print("HAXLAB_INTERRUPTION_CLASSIFICATION=" + classification)
+          print("HAXLAB_INTERRUPTION_CLASSIFICATION=" + overall)
           print(json.dumps(receipt, sort_keys=True))
           PY
 
@@ -185,37 +259,31 @@ jobs:
             const fs = require("fs");
             const path = require("path");
             const root = path.join(process.env.RUNNER_TEMP, "haxlab-interruption-diagnostic");
-            let receipt = {classification: "diagnostic_incomplete"};
+            let receipt = {classification: "diagnostic_incomplete", windows: {}};
             try {
               receipt = JSON.parse(fs.readFileSync(path.join(root, "receipt.json"), "utf8"));
             } catch (_) {}
-            const read = (name) => {
-              try {
-                return fs.readFileSync(path.join(root, name), "utf8").trim();
-              } catch (_) {
-                return "";
-              }
+
+            const windowLine = (name) => {
+              const w = receipt.windows?.[name] || {};
+              return `- ${name} window: **${w.classification || "diagnostic_incomplete"}**; explicit_control=${Boolean(w.explicit_runner_control)}; memory_oom=${Boolean(w.memory_pressure_or_oom)}; service_stop=${Boolean(w.runner_service_stop_evidence)}`;
             };
-            const compact = (text) => text.split("\n").filter(Boolean).slice(-12).join("\n");
-            const memory = compact(read("kernel-memory.log") + "\n" + read("systemd-oomd.log"));
-            const control = compact(read("runner-control.log"));
+
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: 414,
               body: [
-                `Exact-head host diagnostic: **${process.env.JOB_STATUS === "success" ? "SUCCESS" : "FAILURE"}**`,
+                `Independent-runner host diagnostic: **${process.env.JOB_STATUS === "success" ? "SUCCESS" : "FAILURE"}**`,
                 "",
                 `- run: \`${context.runId}\``,
                 `- exact/live head: \`${context.sha}\``,
-                `- incident: calibration \`37635081630\` / job \`112839058581\` / \`c0ec9ef2…\``,
-                `- classification: **${receipt.classification || "diagnostic_incomplete"}**`,
-                `- explicit runner control: \`${Boolean(receipt.explicit_runner_control)}\``,
-                `- memory/OOM evidence: \`${Boolean(receipt.memory_pressure_or_oom)}\``,
-                `- runner-service stop evidence: \`${Boolean(receipt.runner_service_stop_evidence)}\``,
+                `- capture host: \`${receipt.capture_host || "unknown"}\``,
+                `- incident: calibration \`37635081630\` / \`c0ec9ef2…\``,
+                `- combined classification: **${receipt.classification || "diagnostic_incomplete"}**`,
+                windowLine("first"),
+                windowLine("second"),
                 "",
-                control ? "Sanitized control evidence:\n\`\`\`text\n" + control + "\n\`\`\`" : "Sanitized control evidence: none in bounded window.",
-                "",
-                memory ? "Sanitized memory evidence:\n\`\`\`text\n" + memory + "\n\`\`\`" : "Sanitized memory evidence: none in bounded window.",
+                "Evidence artifact is sanitized and bounded to 14:24–14:29:30 UTC and 15:06–15:08:30 UTC.",
               ].join("\n"),
             });
