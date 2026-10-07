@@ -8,6 +8,7 @@ from haxlab.evaluation.evidence_io import (
     parse_evaluation_evidence,
     parse_promotion_policy,
 )
+from haxlab.evaluation.promotion import decide_promotion
 
 
 def _payload(**overrides):
@@ -331,3 +332,26 @@ def test_policy_loader_parses_regular_file(tmp_path) -> None:
     assert result.valid
     assert result.policy is not None
     assert result.policy.minimum_scenario_pass_rate == 0.98
+
+
+def test_strict_serialized_inputs_feed_existing_promotion_gate() -> None:
+    evidence_result = parse_evaluation_evidence(_payload())
+    policy_result = parse_promotion_policy(_policy())
+
+    assert evidence_result.valid
+    assert policy_result.valid
+    assert evidence_result.evidence is not None
+    assert policy_result.policy is not None
+
+    decision = decide_promotion(
+        evidence_result.evidence,
+        policy_result.policy,
+    )
+
+    assert decision.promote
+    assert decision.reasons == (
+        "head_to_head_gate_passed",
+        "frozen_scenarios_passed",
+        "no_blocking_regressions",
+        "run_reproducible",
+    )
