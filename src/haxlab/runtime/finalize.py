@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from haxlab.learning.selector import MANIFEST_SCHEMA, build_training_manifest
+from haxlab.runtime.analysis_audit import audit_analysis_artifacts
 from haxlab.runtime.state import CURRENT_ANALYZER_VERSION, RuntimeState
 from haxlab.skill.leaderboard import build_leaderboard
 
@@ -106,6 +107,35 @@ def finalize_analysis_if_ready(
                 "training_manifest_path": str(training_manifest_path),
             }
 
+
+    artifact_audit = audit_analysis_artifacts(
+        state,
+        derived_root=derived_root,
+        analyzer_version=CURRENT_ANALYZER_VERSION,
+        max_issues=20,
+    )
+    artifact_audit_summary = {
+        "schema": artifact_audit["schema"],
+        "audited_at": artifact_audit["audited_at"],
+        "checked_records": artifact_audit["checked_records"],
+        "valid_objects": artifact_audit["valid_objects"],
+        "objects_with_issues": artifact_audit["objects_with_issues"],
+    }
+    if not bool(artifact_audit["ok"]):
+        state.event(
+            "analysis_artifact_audit_failed",
+            subject=CURRENT_ANALYZER_VERSION,
+            detail=(
+                f"checked={artifact_audit['checked_records']};"
+                f"issues={artifact_audit['objects_with_issues']}"
+            ),
+        )
+        return {
+            "status": "artifact_audit_failed",
+            "analysis_version": CURRENT_ANALYZER_VERSION,
+            "artifact_audit": artifact_audit,
+        }
+
     rows = [
         row
         for row in build_leaderboard(analysis_root)
@@ -147,6 +177,7 @@ def finalize_analysis_if_ready(
             snapshot.get("analysis_sampled_states", 0)
         ),
         "analysis_raw_events": int(snapshot.get("analysis_raw_events", 0)),
+        "analysis_artifact_audit": artifact_audit_summary,
         "leaderboard_players": len(rows),
         "leaderboard_path": str(leaderboard_path),
         "training_manifest_path": str(training_manifest_path),
@@ -196,4 +227,5 @@ def finalize_analysis_if_ready(
         "holdout_replays": int(
             training_manifest["stats"]["holdout_replay_count"]
         ),
+        "analysis_artifact_audit": artifact_audit_summary,
     }

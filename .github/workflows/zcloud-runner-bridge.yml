@@ -50,6 +50,7 @@ jobs:
               "status",
               "deploy",
               "audit-archive",
+              "audit-analysis",
               "champion-info",
               "champion-runtime",
               "live-play-probe",
