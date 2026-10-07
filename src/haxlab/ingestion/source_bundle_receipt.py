@@ -269,7 +269,7 @@ def _read_regular_file(
     parts: tuple[str, ...],
     relative: str,
     directory_identities: dict[str, tuple[int, int]],
-) -> tuple[int, str]:
+) -> tuple[int, str, tuple[int, int, int, int, int]]:
     parent_fd = _open_bound_parent(root_fd, parts[:-1], directory_identities)
     name = parts[-1]
     try:
@@ -329,7 +329,34 @@ def _read_regular_file(
                 f"source_file_changed_after_read:{relative}"
             )
 
-        return total, digest.hexdigest()
+        return total, digest.hexdigest(), _stat_identity(after)
+    finally:
+        os.close(parent_fd)
+
+
+def _assert_hashed_file_identity(
+    root_fd: int,
+    parts: tuple[str, ...],
+    relative: str,
+    directory_identities: dict[str, tuple[int, int]],
+    expected_identity: tuple[int, int, int, int, int],
+) -> None:
+    parent_fd = _open_bound_parent(root_fd, parts[:-1], directory_identities)
+    try:
+        try:
+            current = os.stat(parts[-1], dir_fd=parent_fd, follow_symlinks=False)
+        except OSError as exc:
+            raise SourceBundleReceiptError(
+                f"source_file_changed_after_hash:{relative}:{exc}"
+            ) from exc
+        if (
+            stat.S_ISLNK(current.st_mode)
+            or not stat.S_ISREG(current.st_mode)
+            or _stat_identity(current) != expected_identity
+        ):
+            raise SourceBundleReceiptError(
+                f"source_file_changed_after_hash:{relative}"
+            )
     finally:
         os.close(parent_fd)
 
@@ -365,14 +392,16 @@ def create_source_bundle_receipt(export_root: Path) -> dict[str, Any]:
         hbr2_count = 0
         discord_json_count = 0
         total_size_bytes = 0
+        file_identities: dict[str, tuple[int, int, int, int, int]] = {}
 
         for kind, relative, parts in inventory:
-            size_bytes, sha256 = _read_regular_file(
+            size_bytes, sha256, file_identity = _read_regular_file(
                 root_fd,
                 parts,
                 relative,
                 directory_identities,
             )
+            file_identities[relative] = file_identity
             files.append(
                 {
                     "kind": kind,
@@ -398,6 +427,14 @@ def create_source_bundle_receipt(export_root: Path) -> dict[str, Any]:
         ):
             raise SourceBundleReceiptError(
                 "source_inventory_changed_during_receipt"
+            )
+        for _kind, relative, parts in inventory:
+            _assert_hashed_file_identity(
+                root_fd,
+                parts,
+                relative,
+                directory_identities,
+                file_identities[relative],
             )
         if _reopen_root_identity(logical_root) != root_identity:
             raise SourceBundleReceiptError("source_root_changed_during_receipt")

@@ -257,6 +257,70 @@ def test_receipt_rejects_logical_root_swap(
         receipt.create_source_bundle_receipt(root)
 
 
+def test_receipt_rejects_same_inode_mutation_after_earlier_hash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "export"
+    root.mkdir()
+    first = root / "a.hbr2"
+    second = root / "z.hbr2"
+    first.write_bytes(b"before")
+    second.write_bytes(b"second")
+
+    original = receipt._read_regular_file
+    calls = 0
+
+    def mutate_after_hash(*args, **kwargs):
+        nonlocal calls
+        result = original(*args, **kwargs)
+        calls += 1
+        if calls == 1:
+            first.write_bytes(b"after!")
+        return result
+
+    monkeypatch.setattr(receipt, "_read_regular_file", mutate_after_hash)
+
+    with pytest.raises(
+        receipt.SourceBundleReceiptError,
+        match="source_file_changed_after_hash:a.hbr2",
+    ):
+        receipt.create_source_bundle_receipt(root)
+
+
+def test_receipt_rejects_inode_replacement_after_earlier_hash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "export"
+    root.mkdir()
+    first = root / "a.hbr2"
+    second = root / "z.hbr2"
+    first.write_bytes(b"stable")
+    second.write_bytes(b"second")
+
+    original = receipt._read_regular_file
+    calls = 0
+
+    def replace_after_hash(*args, **kwargs):
+        nonlocal calls
+        result = original(*args, **kwargs)
+        calls += 1
+        if calls == 1:
+            replacement = tmp_path / "replacement.hbr2"
+            replacement.write_bytes(b"stable")
+            replacement.replace(first)
+        return result
+
+    monkeypatch.setattr(receipt, "_read_regular_file", replace_after_hash)
+
+    with pytest.raises(
+        receipt.SourceBundleReceiptError,
+        match="source_file_changed_after_hash:a.hbr2",
+    ):
+        receipt.create_source_bundle_receipt(root)
+
+
 def test_receipt_rejects_file_mutation_during_read(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
