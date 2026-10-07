@@ -12,9 +12,9 @@ Production Python modules under `src/haxlab/evaluation/` are recursively checked
 - shell execution through `os.system()` or `os.popen()`;
 - asyncio subprocess creation.
 
-Local immutable/file evidence and the existing read-only/local SQLite scenario-source path remain allowed. Node Arena execution stays an explicit workflow/tool boundary outside the Python decision package.
+Local immutable/file evidence and the existing read-only/local SQLite scenario-source path remain allowed. Node Arena execution stays an explicit workflow/tool boundary outside the Python decision package. The separately owned `evaluation/resync_guard.py` is the single approved local subprocess exception because it runs a bounded local `git diff`; only `subprocess.run` is allowed there, while networking and shell APIs remain prohibited.
 
-This contract is intentionally narrow: it prevents hidden external side effects without changing evaluation algorithms, thresholds, evidence schemas, models, champion state or orchestration.
+This contract is intentionally narrow: it prevents hidden external side effects without changing evaluation algorithms, thresholds, evidence schemas, models, champion state or orchestration. The explicit resync-guard exception prevents this contract from conflicting with active PR #84 ownership.
 
 ## Integration
 
