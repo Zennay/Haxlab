@@ -8,10 +8,10 @@ from pathlib import Path
 from statistics import mean, pstdev
 
 
-def _name_key(name: str | None) -> str | None:
-    if not name:
+def _name_key(name: object) -> str | None:
+    if type(name) is not str or not name:
         return None
-    cleaned = " ".join(str(name).strip().split())
+    cleaned = " ".join(name.strip().split())
     return cleaned.casefold() or None
 
 
@@ -35,6 +35,59 @@ def _z(values: list[float]) -> list[float]:
     if sd <= 1e-12:
         return [0.0 for _ in values]
     return [(value - avg) / sd for value in values]
+
+
+_COUNT_FIELDS = {
+    "samples": "samples",
+    "nearestBallSamples": "nearest_ball_samples",
+    "closeBallSamples": "close_ball_samples",
+    "inputEvents": "input_events",
+    "kickEvents": "kick_events",
+    "kickPressedInputs": "kick_pressed_inputs",
+    "touches": "touches",
+    "selfRetouches": "self_retouches",
+    "teamTouchTransfersOut": "team_touch_transfers_out",
+    "turnovers": "turnovers",
+    "recoveries": "recoveries",
+    "pressuredTransitions": "pressured_transitions",
+    "retainedUnderPressure": "retained_under_pressure",
+    "touchProgressionEvents": "touch_progression_events",
+    "touchGoals": "touch_goals",
+    "touchAssists": "touch_assists",
+}
+
+
+def _validated_player_metrics(player: object) -> dict[str, int | float] | None:
+    if type(player) is not dict:
+        return None
+
+    for identity_field in ("name", "authHash"):
+        value = player.get(identity_field)
+        if value is not None and type(value) is not str:
+            return None
+
+    metrics: dict[str, int | float] = {}
+    for source_name, target_name in _COUNT_FIELDS.items():
+        value = player.get(source_name, 0)
+        if type(value) is not int or value < 0:
+            return None
+        metrics[target_name] = value
+
+    progression_sum = player.get("touchProgressionSum", 0.0)
+    if type(progression_sum) not in (int, float) or not math.isfinite(
+        float(progression_sum)
+    ):
+        return None
+    metrics["touch_progression_sum"] = float(progression_sum)
+
+    samples = int(metrics["samples"])
+    if (
+        int(metrics["nearest_ball_samples"]) > samples
+        or int(metrics["close_ball_samples"]) > samples
+    ):
+        return None
+
+    return metrics
 
 
 def collect(root: Path) -> list[dict]:
@@ -69,17 +122,35 @@ def collect(root: Path) -> list[dict]:
         except (OSError, json.JSONDecodeError):
             continue
 
-        if int(payload.get("schemaVersion") or 0) not in (3, 4):
+        if type(payload) is not dict:
+            continue
+
+        schema_version = payload.get("schemaVersion")
+        players = payload.get("players")
+        if type(schema_version) is not int or schema_version not in (3, 4):
+            continue
+        if type(players) is not list:
+            continue
+
+        validated_players: list[tuple[dict, dict[str, int | float]]] = []
+        artifact_valid = True
+        for player in players:
+            metrics = _validated_player_metrics(player)
+            if metrics is None:
+                artifact_valid = False
+                break
+            validated_players.append((player, metrics))
+        if not artifact_valid:
             continue
 
         seen: set[str] = set()
-        for player in payload.get("players") or []:
+        for player, metrics in validated_players:
             key = _identity_key(player)
             if key is None:
                 continue
 
             row = totals[key]
-            display_name = " ".join(str(player.get("name")).strip().split())
+            display_name = " ".join((player.get("name") or "").strip().split())
             if display_name:
                 row["name_counts"][display_name] += 1
 
@@ -87,33 +158,8 @@ def collect(root: Path) -> list[dict]:
                 row["matches"] += 1
                 seen.add(key)
 
-            row["samples"] += int(player.get("samples") or 0)
-            row["nearest_ball_samples"] += int(player.get("nearestBallSamples") or 0)
-            row["close_ball_samples"] += int(player.get("closeBallSamples") or 0)
-            row["input_events"] += int(player.get("inputEvents") or 0)
-            row["kick_events"] += int(player.get("kickEvents") or 0)
-            row["kick_pressed_inputs"] += int(player.get("kickPressedInputs") or 0)
-            row["touches"] += int(player.get("touches") or 0)
-            row["self_retouches"] += int(player.get("selfRetouches") or 0)
-            row["team_touch_transfers_out"] += int(
-                player.get("teamTouchTransfersOut") or 0
-            )
-            row["turnovers"] += int(player.get("turnovers") or 0)
-            row["recoveries"] += int(player.get("recoveries") or 0)
-            row["pressured_transitions"] += int(
-                player.get("pressuredTransitions") or 0
-            )
-            row["retained_under_pressure"] += int(
-                player.get("retainedUnderPressure") or 0
-            )
-            row["touch_progression_events"] += int(
-                player.get("touchProgressionEvents") or 0
-            )
-            row["touch_progression_sum"] += float(
-                player.get("touchProgressionSum") or 0.0
-            )
-            row["touch_goals"] += int(player.get("touchGoals") or 0)
-            row["touch_assists"] += int(player.get("touchAssists") or 0)
+            for metric_name, value in metrics.items():
+                row[metric_name] += value
 
     rows: list[dict] = []
     for row in totals.values():
