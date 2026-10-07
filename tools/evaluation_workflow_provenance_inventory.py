@@ -134,6 +134,26 @@ def _checkout_blocks(text: str) -> tuple[str, ...]:
     return tuple(blocks)
 
 
+def _checkout_ref_kind(block: str) -> str:
+    ref_lines = [
+        line.strip()
+        for line in block.splitlines()
+        if line.strip().startswith("ref:")
+    ]
+    if len(ref_lines) != 1:
+        return "missing_or_ambiguous"
+    ref_line = ref_lines[0]
+    if any(marker in ref_line for marker in SOURCE_SHA_MARKERS):
+        return "event_source"
+    match = re.fullmatch(
+        r"""ref:\s*["']?([0-9a-f]{40})["']?\s*(?:#.*)?""",
+        ref_line,
+    )
+    if match:
+        return "immutable_commit"
+    return "mutable_or_unbound"
+
+
 def _source_bound_vars(lines: Sequence[str]) -> set[str]:
     variables: set[str] = set()
     for line in lines:
@@ -251,10 +271,10 @@ def audit_workflow_text(path: str, text: str) -> dict[str, object]:
         re.search(r"(?m)^\s+clean:\s*true\s*$", block)
         for block in checkout_blocks
     )
-    checkout_source_bound = bool(checkout_blocks) and all(
-        "ref:" in block
-        and any(marker in block for marker in SOURCE_SHA_MARKERS)
-        for block in checkout_blocks
+    checkout_ref_kinds = [_checkout_ref_kind(block) for block in checkout_blocks]
+    checkout_refs_bound = bool(checkout_blocks) and all(
+        kind in {"event_source", "immutable_commit"}
+        for kind in checkout_ref_kinds
     )
     records_head = "git rev-parse HEAD" in text
     exact_head_guard = _has_exact_head_guard(text)
@@ -270,8 +290,8 @@ def audit_workflow_text(path: str, text: str) -> dict[str, object]:
         findings.append("checkout_persists_credentials")
     if checkout_blocks and not checkout_clean:
         findings.append("checkout_not_clean")
-    if checkout_blocks and not checkout_source_bound:
-        findings.append("checkout_source_unbound")
+    if checkout_blocks and not checkout_refs_bound:
+        findings.append("checkout_ref_unbound")
     if not exact_head_guard:
         findings.append("missing_exact_head_guard")
     if not contents_read_only:
@@ -286,7 +306,8 @@ def audit_workflow_text(path: str, text: str) -> dict[str, object]:
         "checkout_count": len(checkout_blocks),
         "checkout_credentials_disabled": checkout_credentials_disabled,
         "checkout_clean": checkout_clean,
-        "checkout_source_bound": checkout_source_bound,
+        "checkout_ref_kinds": checkout_ref_kinds,
+        "checkout_refs_bound": checkout_refs_bound,
         "records_head": records_head,
         "has_exact_head_guard": exact_head_guard,
         "top_level_contents_read_only": contents_read_only,
@@ -303,7 +324,8 @@ def _missing_workflow_report(path: str) -> dict[str, object]:
         "checkout_count": 0,
         "checkout_credentials_disabled": False,
         "checkout_clean": False,
-        "checkout_source_bound": False,
+        "checkout_ref_kinds": [],
+        "checkout_refs_bound": False,
         "records_head": False,
         "has_exact_head_guard": False,
         "top_level_contents_read_only": False,
