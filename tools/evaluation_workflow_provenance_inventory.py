@@ -312,22 +312,47 @@ def _has_exact_head_guard(text: str) -> bool:
     return False
 
 
-def _top_level_contents_read_only(text: str) -> bool:
+def _permission_blocks(text: str) -> list[tuple[int, dict[str, str]]]:
     lines = text.splitlines()
-    try:
-        start = lines.index("permissions:")
-    except ValueError:
-        return False
+    blocks: list[tuple[int, dict[str, str]]] = []
+    for index, line in enumerate(lines):
+        if line.strip() != "permissions:":
+            continue
+        base_indent = len(line) - len(line.lstrip(" "))
+        values: dict[str, str] = {}
+        for child in lines[index + 1 :]:
+            if not child.strip():
+                continue
+            indent = len(child) - len(child.lstrip(" "))
+            if indent <= base_indent:
+                break
+            if indent != base_indent + 2:
+                continue
+            match = re.fullmatch(
+                r"\s*([A-Za-z0-9_-]+):\s*([^#]+?)\s*",
+                child,
+            )
+            if match:
+                values[match.group(1)] = match.group(2)
+        blocks.append((base_indent, values))
+    return blocks
 
-    values: dict[str, str] = {}
-    for line in lines[start + 1 :]:
-        if line and not line.startswith(" "):
-            break
-        match = re.fullmatch(r"  ([A-Za-z0-9_-]+):\s*([^#]+?)\s*", line)
-        if match:
-            values[match.group(1)] = match.group(2)
 
-    return values.get("contents") == "read"
+def _top_level_contents_read_only(text: str) -> bool:
+    for indent, values in _permission_blocks(text):
+        if indent == 0:
+            return values.get("contents") == "read"
+    return False
+
+
+def _write_permissions(text: str) -> list[str]:
+    writes = {
+        f"{name}: write"
+        for _indent, values in _permission_blocks(text)
+        for name, value in values.items()
+        if value == "write"
+    }
+    return sorted(writes)
 
 
 def _runner_is_haxlab_self_hosted(spec: str) -> bool:
@@ -375,9 +400,7 @@ def audit_workflow_text(path: str, text: str) -> dict[str, object]:
     )
     records_head = "git rev-parse HEAD" in text
     exact_head_guard = _has_exact_head_guard(text)
-    write_permissions = sorted(
-        {match.group(0).strip() for match in WRITE_PERMISSION_LINE.finditer(text)}
-    )
+    write_permissions = _write_permissions(text)
     contents_read_only = _top_level_contents_read_only(text)
     runner_specs = RUNNER_LINE.findall(text)
     self_hosted_haxlab_only = bool(runner_specs) and all(
