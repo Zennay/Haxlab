@@ -28,6 +28,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           clean: true
+          fetch-depth: 0
 
       - name: Checkout frozen Candidate D source
         uses: actions/checkout@v4
@@ -84,6 +85,32 @@ jobs:
             exit 1
           fi
           OUT="/var/lib/haxlab/derived/evaluation/closed-loop-arena-v2-calibration-v1/${GITHUB_SHA:0:12}"
+          REUSE_SOURCE_SHA="1c186d5d8927ab55722615631e0e61e5bda56971"
+          REUSE_OUT="/var/lib/haxlab/derived/evaluation/closed-loop-arena-v2-calibration-v1/${REUSE_SOURCE_SHA:0:12}"
+          REUSE_RUNTIME_SAFE=false
+
+          # Cross-SHA reuse is allowed only for this known timed-out exact head,
+          # and only when every file that can affect Arena rollout bytes remains
+          # identical. calibration_resume performs the second fail-closed layer
+          # by rebinding model/input hashes and all evaluation request fields.
+          if git merge-base --is-ancestor "$REUSE_SOURCE_SHA" "$GITHUB_SHA" && \
+            git diff --quiet "$REUSE_SOURCE_SHA" "$GITHUB_SHA" -- \
+              package.json \
+              tools/elite_closed_loop_arena_v2.js \
+              tools/elite_policy_runtime.js \
+              tools/elite_features.js \
+              tools/elite_tactics.js \
+              tools/sandbox_replay_start.js \
+              tools/sandbox_neutral_start.js \
+              src/haxlab/evaluation/calibration_resume.py \
+              src/haxlab/evaluation/closed_loop_arena.py; then
+            REUSE_RUNTIME_SAFE=true
+          fi
+          if [ "$REUSE_RUNTIME_SAFE" = "true" ] && sudo -u haxlab test -d "$REUSE_OUT"; then
+            echo "ARENA_CROSS_SHA_REUSE_READY source_sha=$REUSE_SOURCE_SHA source_dir=$REUSE_OUT"
+          else
+            echo "ARENA_CROSS_SHA_REUSE_DISABLED source_sha=$REUSE_SOURCE_SHA"
+          fi
 
           # Preserve only source result files so interrupted same-SHA runs can
           # reuse expensive Arena rollouts after strict provenance/config validation.
@@ -348,6 +375,9 @@ jobs:
             echo "ARENA_PARTNER_C_SHA_BEFORE=$PARTNER_C_SHA_BEFORE"
             echo "ARENA_WEAK_SHA_BEFORE=$WEAK_SHA_BEFORE"
             echo "ARENA_FROZEN_INPUT_SNAPSHOT=$FROZEN_INPUT_SNAPSHOT"
+            echo "ARENA_REUSE_SOURCE_SHA=$REUSE_SOURCE_SHA"
+            echo "ARENA_REUSE_OUT=$REUSE_OUT"
+            echo "ARENA_REUSE_RUNTIME_SAFE=$REUSE_RUNTIME_SAFE"
           } >> "$GITHUB_ENV"
 
       - name: Run full frozen paired calibration batch
@@ -385,6 +415,34 @@ jobs:
                 /opt/haxlab/.venv/bin/python -m haxlab.evaluation.closed_loop_arena \
                 "$RESULT" --calibrated --output "$DECISION" >/dev/null
               return 0
+            fi
+
+            if [ "${ARENA_REUSE_RUNTIME_SAFE:-false}" = "true" ] && [ -n "${ARENA_REUSE_OUT:-}" ]; then
+              local REUSE_RESULT="$ARENA_REUSE_OUT/$LABEL-source-$I.json"
+              if [ "$REUSE_RESULT" != "$RESULT" ] && \
+                sudo -u haxlab test -r "$REUSE_RESULT" && \
+                sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+                  /opt/haxlab/.venv/bin/python -m haxlab.evaluation.calibration_resume \
+                  "$REUSE_RESULT" \
+                  --challenger "$CHALLENGER" \
+                  --champion "$ARENA_LIVE" \
+                  --partner-model "$ARENA_LIVE" \
+                  --partner-model "$ARENA_PARTNER_B" \
+                  --partner-model "$ARENA_PARTNER_C" \
+                  --stadium "$SOURCE/stadium.hbs" \
+                  --scenarios "$SOURCE/scenarios.json" \
+                  --max-scenarios 16 \
+                  --seconds 30 \
+                  --sample-every 6 \
+                  --plug-repeats 1 \
+                  --seed 1337; then
+                sudo -u haxlab cp "$REUSE_RESULT" "$RESULT"
+                echo "ARENA_CALIBRATION_SOURCE_REUSED_CROSS_SHA label=$LABEL source=$I from=$ARENA_REUSE_SOURCE_SHA"
+                sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+                  /opt/haxlab/.venv/bin/python -m haxlab.evaluation.closed_loop_arena \
+                  "$RESULT" --calibrated --output "$DECISION" >/dev/null
+                return 0
+              fi
             fi
 
             sudo -u haxlab rm -f "$RESULT" "$DECISION"
