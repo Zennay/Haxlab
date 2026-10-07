@@ -17,6 +17,12 @@ from haxlab.runtime.state import CURRENT_ANALYZER_VERSION, RawReplayRecord, Runt
 ANALYZER_VERSION = CURRENT_ANALYZER_VERSION
 
 
+def _positive_native_int(value: object, *, name: str) -> int:
+    if type(value) is not int or value <= 0:
+        raise ValueError(f"{name} must be a native positive integer")
+    return value
+
+
 def _analyze_one(
     replay: RawReplayRecord,
     *,
@@ -104,8 +110,9 @@ def analyze_batch(
     sample_every_ticks: int = 6,
     timeout_seconds: int = 120,
 ) -> dict[str, int]:
+    validated_workers = _positive_native_int(workers, name="workers")
     pending = state.list_unanalyzed_replays(
-        limit=max(1, batch_size),
+        limit=batch_size,
         analyzer_version=ANALYZER_VERSION,
     )
     ok = failed = 0
@@ -113,7 +120,7 @@ def analyze_batch(
     if not pending:
         return {"selected": 0, "ok": 0, "failed": 0}
 
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
+    with ThreadPoolExecutor(max_workers=validated_workers) as executor:
         futures = [
             executor.submit(
                 _analyze_one,
@@ -225,8 +232,8 @@ def main() -> int:
                 state,
                 decoder_script=args.decoder_script,
                 derived_root=args.derived_root,
-                batch_size=max(1, args.batch_size),
-                workers=max(1, args.workers),
+                batch_size=args.batch_size,
+                workers=args.workers,
                 sample_every_ticks=max(1, args.sample_every_ticks),
                 timeout_seconds=max(10, args.timeout_seconds),
             )
