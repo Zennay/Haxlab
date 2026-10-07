@@ -9,86 +9,204 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 EVALUATION_ROOT = ROOT / "src" / "haxlab" / "evaluation"
 
-_FORBIDDEN_PATH_METHODS = {"glob", "rglob", "iterdir", "walk"}
-_FORBIDDEN_MODULE_CALLS = {
-    "glob": {"glob", "iglob"},
-    "os": {"fwalk", "listdir", "scandir", "walk"},
+DIRECT_DISCOVERY_CALLS = {
+    "glob.glob",
+    "glob.iglob",
+    "os.fwalk",
+    "os.listdir",
+    "os.scandir",
+    "os.walk",
 }
+PATH_DISCOVERY_METHODS = {"glob", "iterdir", "rglob", "walk"}
+TRACKED_MODULES = {"builtins", "glob", "os", "pathlib"}
+
+
+def _simple_assignment(node: ast.AST) -> tuple[str, ast.AST] | None:
+    if (
+        isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+    ):
+        return node.targets[0].id, node.value
+    if (
+        isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.value is not None
+    ):
+        return node.target.id, node.value
+    if isinstance(node, ast.NamedExpr) and isinstance(node.target, ast.Name):
+        return node.target.id, node.value
+    return None
+
+
+def _canonical_name(node: ast.AST | None, aliases: dict[str, str]) -> str | None:
+    if node is None:
+        return None
+    if isinstance(node, ast.Name):
+        return aliases.get(node.id, node.id)
+    if isinstance(node, ast.Attribute):
+        parent = _canonical_name(node.value, aliases)
+        return f"{parent}.{node.attr}" if parent else node.attr
+    if isinstance(node, ast.Call):
+        accessor = _canonical_name(node.func, aliases)
+        if (
+            accessor in {"getattr", "builtins.getattr"}
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and isinstance(node.args[1].value, str)
+        ):
+            owner = _canonical_name(node.args[0], aliases)
+            if owner:
+                return f"{owner}.{node.args[1].value}"
+    return None
+
+
+def _aliases(tree: ast.AST) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in TRACKED_MODULES:
+                    aliases[alias.asname or alias.name.split(".", 1)[0]] = alias.name
+        elif isinstance(node, ast.ImportFrom) and node.module in TRACKED_MODULES:
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+
+    changed = True
+    while changed:
+        changed = False
+        for node in ast.walk(tree):
+            assignment = _simple_assignment(node)
+            if assignment is None:
+                continue
+            local, expression = assignment
+            value = _canonical_name(expression, aliases)
+            if value in DIRECT_DISCOVERY_CALLS and aliases.get(local) != value:
+                aliases[local] = value
+                changed = True
+    return aliases
+
+
+def _path_object(
+    node: ast.AST | None,
+    aliases: dict[str, str],
+    path_objects: set[str],
+) -> bool:
+    if node is None:
+        return False
+    if isinstance(node, ast.Name):
+        return node.id in path_objects
+    if isinstance(node, ast.Call):
+        return _canonical_name(node.func, aliases) == "pathlib.Path"
+    return False
+
+
+def _path_objects(tree: ast.AST, aliases: dict[str, str]) -> set[str]:
+    objects: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for node in ast.walk(tree):
+            assignment = _simple_assignment(node)
+            if assignment is None:
+                continue
+            local, expression = assignment
+            if _path_object(expression, aliases, objects) and local not in objects:
+                objects.add(local)
+                changed = True
+    return objects
+
+
+def _callable_name(
+    node: ast.AST | None,
+    aliases: dict[str, str],
+    path_objects: set[str],
+    callable_aliases: dict[str, str],
+) -> str | None:
+    if node is None:
+        return None
+    if isinstance(node, ast.Name) and node.id in callable_aliases:
+        return callable_aliases[node.id]
+
+    direct = _canonical_name(node, aliases)
+    if direct in DIRECT_DISCOVERY_CALLS:
+        return direct
+
+    if isinstance(node, ast.Attribute):
+        if _path_object(node.value, aliases, path_objects) and (
+            node.attr in PATH_DISCOVERY_METHODS
+        ):
+            return f"pathlib.Path.{node.attr}"
+
+    if isinstance(node, ast.Call):
+        accessor = _canonical_name(node.func, aliases)
+        if (
+            accessor in {"getattr", "builtins.getattr"}
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and isinstance(node.args[1].value, str)
+        ):
+            method = node.args[1].value
+            if _path_object(node.args[0], aliases, path_objects) and (
+                method in PATH_DISCOVERY_METHODS
+            ):
+                return f"pathlib.Path.{method}"
+
+    return None
+
+
+def _callable_aliases(
+    tree: ast.AST,
+    aliases: dict[str, str],
+    path_objects: set[str],
+) -> dict[str, str]:
+    callable_aliases: dict[str, str] = {}
+    changed = True
+    while changed:
+        changed = False
+        for node in ast.walk(tree):
+            assignment = _simple_assignment(node)
+            if assignment is None:
+                continue
+            local, expression = assignment
+            value = _callable_name(
+                expression,
+                aliases,
+                path_objects,
+                callable_aliases,
+            )
+            if value and callable_aliases.get(local) != value:
+                callable_aliases[local] = value
+                changed = True
+    return callable_aliases
 
 
 def _violations(source: str, *, filename: str = "<source>") -> list[str]:
     tree = ast.parse(source, filename=filename)
-    module_aliases: dict[str, str] = {}
-    direct_aliases: set[str] = set()
-    assigned_aliases: set[str] = set()
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                if alias.name in _FORBIDDEN_MODULE_CALLS:
-                    module_aliases[alias.asname or alias.name] = alias.name
-        elif isinstance(node, ast.ImportFrom) and node.module in _FORBIDDEN_MODULE_CALLS:
-            forbidden = _FORBIDDEN_MODULE_CALLS[node.module]
-            for alias in node.names:
-                if alias.name in forbidden:
-                    direct_aliases.add(alias.asname or alias.name)
-
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
-            continue
-        value = node.value
-        if not isinstance(value, ast.Attribute):
-            continue
-
-        is_forbidden_path_method = value.attr in _FORBIDDEN_PATH_METHODS
-        is_forbidden_module_call = False
-        if isinstance(value.value, ast.Name):
-            module = module_aliases.get(value.value.id)
-            is_forbidden_module_call = (
-                module is not None
-                and value.attr in _FORBIDDEN_MODULE_CALLS[module]
-            )
-
-        if not (is_forbidden_path_method or is_forbidden_module_call):
-            continue
-
-        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-        for target in targets:
-            if isinstance(target, ast.Name):
-                assigned_aliases.add(target.id)
+    aliases = _aliases(tree)
+    path_objects = _path_objects(tree, aliases)
+    callable_aliases = _callable_aliases(tree, aliases, path_objects)
 
     violations: list[str] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-
-        func = node.func
-        if isinstance(func, ast.Name) and (
-            func.id in direct_aliases or func.id in assigned_aliases
+        target = _callable_name(
+            node.func,
+            aliases,
+            path_objects,
+            callable_aliases,
+        )
+        if target in DIRECT_DISCOVERY_CALLS or (
+            target is not None and target.startswith("pathlib.Path.")
         ):
             violations.append(
-                f"{filename}:{node.lineno}:ambient_filesystem_discovery:{func.id}"
+                f"{filename}:{node.lineno}:ambient_filesystem_discovery:{target}"
             )
-            continue
 
-        if not isinstance(func, ast.Attribute):
-            continue
-
-        if func.attr in _FORBIDDEN_PATH_METHODS:
-            violations.append(
-                f"{filename}:{node.lineno}:ambient_filesystem_discovery:{func.attr}"
-            )
-            continue
-
-        if isinstance(func.value, ast.Name):
-            module = module_aliases.get(func.value.id)
-            if module is not None and func.attr in _FORBIDDEN_MODULE_CALLS[module]:
-                violations.append(
-                    f"{filename}:{node.lineno}:ambient_filesystem_discovery:"
-                    f"{module}.{func.attr}"
-                )
-
-    return violations
+    return sorted(set(violations))
 
 
 @pytest.mark.parametrize(
@@ -98,6 +216,7 @@ def _violations(source: str, *, filename: str = "<source>") -> list[str]:
         "from pathlib import Path\nPath('/tmp').rglob('*.json')\n",
         "from pathlib import Path\nPath('/tmp').iterdir()\n",
         "from pathlib import Path\nPath('/tmp').walk()\n",
+        "import pathlib as pl\np = pl.Path('/tmp')\np.rglob('*')\n",
         "import os\nos.walk('/tmp')\n",
         "import os\nos.fwalk('/tmp')\n",
         "import os as operating_system\noperating_system.listdir('/tmp')\n",
@@ -105,7 +224,12 @@ def _violations(source: str, *, filename: str = "<source>") -> list[str]:
         "import glob as glob_module\nglob_module.iglob('/tmp/*')\n",
         "from glob import glob as discover\ndiscover('/tmp/*')\n",
         "import os\ndiscover = os.walk\ndiscover('/tmp')\n",
+        "import os\ndiscover = getattr(os, 'walk')\ndiscover('/tmp')\n",
         "from pathlib import Path\np = Path('/tmp')\ndiscover = p.glob\ndiscover('*')\n",
+        (
+            "from pathlib import Path\np = Path('/tmp')\n"
+            "discover = getattr(p, 'rglob')\ndiscover('*')\n"
+        ),
     ],
 )
 def test_contract_rejects_ambient_filesystem_discovery(source: str) -> None:
@@ -118,9 +242,17 @@ def test_contract_rejects_ambient_filesystem_discovery(source: str) -> None:
         "from pathlib import Path\nPath('/tmp/evidence.json').read_text()\n",
         "from pathlib import Path\nPath('/tmp/evidence.json').open('rb')\n",
         "import os\nos.stat('/tmp/evidence.json')\n",
+        (
+            "class ExplicitIndex:\n"
+            "    def walk(self):\n"
+            "        return ('already-bound-entry',)\n"
+            "ExplicitIndex().walk()\n"
+        ),
     ],
 )
-def test_contract_allows_explicit_evidence_paths(source: str) -> None:
+def test_contract_allows_explicit_evidence_paths_and_unrelated_methods(
+    source: str,
+) -> None:
     assert _violations(source) == []
 
 
