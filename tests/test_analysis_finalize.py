@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -596,3 +597,162 @@ def test_finalize_rejects_coerced_training_manifest_counts(
     assert not (
         derived / CURRENT_ANALYZER_VERSION / "_complete.json"
     ).exists()
+
+
+def _seed_finalized_artifacts(tmp_path: Path) -> tuple[Path, Path]:
+    db = tmp_path / "state.sqlite3"
+    derived = tmp_path / "derived"
+    replay = tmp_path / "provenance.hbr2"
+    replay.write_bytes(b"x")
+    sha = "5" * 64
+
+    analysis_root = derived / CURRENT_ANALYZER_VERSION / sha[:2] / sha[2:4]
+    analysis_root.mkdir(parents=True)
+    output = analysis_root / f"{sha}.json"
+    output.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 4,
+                "totalFrames": 600,
+                "simulation": {"sampleEveryTicks": 6},
+                "players": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with RuntimeState(db) as state:
+        state.register_raw(
+            sha256=sha,
+            archive_path=str(replay),
+            size_bytes=1,
+        )
+        state.mark_replay_processing(
+            sha256=sha,
+            status="ok",
+            format_version=3,
+            total_frames=600,
+            duration_seconds=10.0,
+            decompressed_bytes=10,
+        )
+        state.mark_replay_analysis(
+            sha256=sha,
+            analyzer_version=CURRENT_ANALYZER_VERSION,
+            status="ok",
+            output_path=str(output),
+            sampled_state_count=100,
+            player_count=0,
+            raw_event_count=50,
+            tick_count=600,
+        )
+        first = finalize_analysis_if_ready(state, derived_root=derived)
+
+    assert first["status"] == "finalized"
+    return db, derived
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("analysis_version", "stale-analysis"),
+        ("analysis_root", "/stale/analysis"),
+        ("leaderboard_path", "/stale/leaderboard.json"),
+        ("raw_root", "/stale/raw"),
+        ("leaderboard_sha256", "0" * 64),
+    ],
+)
+def test_finalize_rebuilds_schema_valid_manifest_with_stale_provenance(
+    tmp_path: Path,
+    field: str,
+    replacement: object,
+) -> None:
+    db, derived = _seed_finalized_artifacts(tmp_path)
+    leaderboard_path = (
+        derived / "leaderboards" / f"{CURRENT_ANALYZER_VERSION}.json"
+    )
+    manifest_path = (
+        derived
+        / "training"
+        / f"human-imitation-{CURRENT_ANALYZER_VERSION}.json"
+    )
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest[field] = replacement
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with RuntimeState(db) as state:
+        second = finalize_analysis_if_ready(state, derived_root=derived)
+
+    assert second["status"] == "finalized"
+    refreshed = json.loads(manifest_path.read_text(encoding="utf-8"))
+    leaderboard_bytes = leaderboard_path.read_bytes()
+    assert refreshed["analysis_version"] == CURRENT_ANALYZER_VERSION
+    assert refreshed["analysis_root"] == str(derived / CURRENT_ANALYZER_VERSION)
+    assert refreshed["leaderboard_path"] == str(leaderboard_path)
+    assert refreshed["raw_root"] == str(derived.parent / "raw" / "replays")
+    assert refreshed["leaderboard_sha256"] == hashlib.sha256(
+        leaderboard_bytes
+    ).hexdigest()
+    assert refreshed["leaderboard_size_bytes"] == len(leaderboard_bytes)
+
+
+def test_finalize_rebuilds_when_manifest_body_changes_with_valid_provenance(
+    tmp_path: Path,
+) -> None:
+    db, derived = _seed_finalized_artifacts(tmp_path)
+    manifest_path = (
+        derived
+        / "training"
+        / f"human-imitation-{CURRENT_ANALYZER_VERSION}.json"
+    )
+    completion_path = derived / CURRENT_ANALYZER_VERSION / "_complete.json"
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["selected_players"] = [{"player_id": "tampered"}]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with RuntimeState(db) as state:
+        second = finalize_analysis_if_ready(state, derived_root=derived)
+
+    assert second["status"] == "finalized"
+    refreshed_manifest_bytes = manifest_path.read_bytes()
+    refreshed_manifest = json.loads(refreshed_manifest_bytes)
+    completion = json.loads(completion_path.read_text(encoding="utf-8"))
+    assert refreshed_manifest["selected_players"] == []
+    assert completion["training_manifest_sha256"] == hashlib.sha256(
+        refreshed_manifest_bytes
+    ).hexdigest()
+    assert completion["training_manifest_size_bytes"] == len(
+        refreshed_manifest_bytes
+    )
+
+
+def test_finalize_rebuilds_when_completion_cross_artifact_counts_drift(
+    tmp_path: Path,
+) -> None:
+    db, derived = _seed_finalized_artifacts(tmp_path)
+    manifest_path = (
+        derived
+        / "training"
+        / f"human-imitation-{CURRENT_ANALYZER_VERSION}.json"
+    )
+    completion_path = derived / CURRENT_ANALYZER_VERSION / "_complete.json"
+
+    completion = json.loads(completion_path.read_text(encoding="utf-8"))
+    completion["training_replays"] = completion["training_replays"] + 1
+    completion["leaderboard_players"] = completion["leaderboard_players"] + 1
+    completion_path.write_text(json.dumps(completion), encoding="utf-8")
+
+    with RuntimeState(db) as state:
+        second = finalize_analysis_if_ready(state, derived_root=derived)
+
+    assert second["status"] == "finalized"
+    refreshed_completion = json.loads(
+        completion_path.read_text(encoding="utf-8")
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert (
+        refreshed_completion["training_replays"]
+        == manifest["stats"]["train_replay_count"]
+    )
+    assert refreshed_completion["leaderboard_players"] == 0
