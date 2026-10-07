@@ -1,0 +1,179 @@
+from __future__ import annotations
+
+import json
+import sqlite3
+from pathlib import Path
+
+from haxlab.runtime.state import CURRENT_ANALYZER_VERSION, RuntimeState
+from haxlab.runtime.state_audit import AUDIT_SCHEMA, audit_runtime_state, main
+
+
+def _healthy_state(db: Path, tmp_path: Path, *, sha: str = "a" * 64) -> None:
+    replay = tmp_path / f"{sha[:8]}.hbr2"
+    replay.write_bytes(b"x")
+    output = tmp_path / "derived" / CURRENT_ANALYZER_VERSION / f"{sha}.json"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text("{}", encoding="utf-8")
+
+    with RuntimeState(db) as state:
+        state.register_raw(
+            sha256=sha,
+            archive_path=str(replay),
+            size_bytes=1,
+        )
+        state.mark_replay_processing(
+            sha256=sha,
+            status="ok",
+            format_version=3,
+            total_frames=600,
+            duration_seconds=10.0,
+            decompressed_bytes=1024,
+        )
+        state.mark_replay_analysis(
+            sha256=sha,
+            analyzer_version=CURRENT_ANALYZER_VERSION,
+            status="ok",
+            output_path=str(output),
+            sampled_state_count=100,
+            player_count=8,
+            raw_event_count=40,
+            tick_count=600,
+        )
+
+
+def test_runtime_state_audit_accepts_healthy_ledger(tmp_path: Path) -> None:
+    db = tmp_path / "state.sqlite3"
+    _healthy_state(db, tmp_path)
+
+    result = audit_runtime_state(db)
+
+    assert result.schema == AUDIT_SCHEMA
+    assert result.ok is True
+    assert result.issues == ()
+    assert "raw_replays" in result.tables
+    assert "replay_analysis_versions" in result.tables
+
+
+def test_runtime_state_audit_rejects_analysis_without_successful_processing(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "state.sqlite3"
+    replay = tmp_path / "failed.hbr2"
+    replay.write_bytes(b"x")
+    sha = "b" * 64
+
+    with RuntimeState(db) as state:
+        state.register_raw(
+            sha256=sha,
+            archive_path=str(replay),
+            size_bytes=1,
+        )
+        state.mark_replay_processing(
+            sha256=sha,
+            status="failed",
+            error="bad replay payload",
+        )
+        state.mark_replay_analysis(
+            sha256=sha,
+            analyzer_version=CURRENT_ANALYZER_VERSION,
+            status="ok",
+            output_path=str(tmp_path / "impossible.json"),
+            sampled_state_count=1,
+            player_count=1,
+            raw_event_count=1,
+            tick_count=1,
+        )
+
+    result = audit_runtime_state(db)
+    codes = {issue.code for issue in result.issues}
+
+    assert result.ok is False
+    assert "analysis_without_successful_processing" in codes
+
+
+def test_runtime_state_audit_rejects_malformed_semantic_rows(tmp_path: Path) -> None:
+    db = tmp_path / "state.sqlite3"
+    _healthy_state(db, tmp_path, sha="c" * 64)
+
+    with sqlite3.connect(db) as connection:
+        connection.execute(
+            """
+            INSERT INTO source_files (
+                source_path, size_bytes, mtime_ns, sha256, status, error
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            ("bad-source.hbr2", -1, -1, "NOT-A-SHA", "archived", "stale error"),
+        )
+        connection.execute(
+            """
+            UPDATE replay_analysis_versions
+            SET sampled_state_count = -1,
+                output_path = '',
+                error = 'stale success error'
+            WHERE sha256 = ?
+            """,
+            ("c" * 64,),
+        )
+        connection.commit()
+
+    result = audit_runtime_state(db)
+    codes = {issue.code for issue in result.issues}
+
+    assert result.ok is False
+    assert {
+        "source_size_invalid",
+        "source_mtime_invalid",
+        "source_sha256_invalid",
+        "source_success_has_error",
+        "analysis_sampled_state_count_invalid",
+        "analysis_output_path_invalid",
+        "analysis_success_has_error",
+    } <= codes
+
+
+def test_runtime_state_audit_reports_missing_and_unsafe_database_paths(
+    tmp_path: Path,
+) -> None:
+    missing = audit_runtime_state(tmp_path / "missing.sqlite3")
+    assert missing.ok is False
+    assert [issue.code for issue in missing.issues] == ["database_missing"]
+
+    db = tmp_path / "state.sqlite3"
+    _healthy_state(db, tmp_path)
+    link = tmp_path / "state-link.sqlite3"
+    link.symlink_to(db)
+
+    unsafe = audit_runtime_state(link)
+    assert unsafe.ok is False
+    assert [issue.code for issue in unsafe.issues] == ["database_path_unsafe"]
+
+
+def test_runtime_state_audit_reports_missing_schema_without_crashing(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "empty.sqlite3"
+    with sqlite3.connect(db):
+        pass
+
+    result = audit_runtime_state(db)
+    codes = [issue.code for issue in result.issues]
+
+    assert result.ok is False
+    assert codes.count("required_table_missing") == 6
+
+
+def test_runtime_state_audit_cli_is_machine_readable(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    db = tmp_path / "state.sqlite3"
+    _healthy_state(db, tmp_path)
+
+    exit_code = main([str(db)])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["schema"] == AUDIT_SCHEMA
+    assert payload["ok"] is True
+    assert payload["issue_count"] == 0
