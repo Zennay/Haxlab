@@ -75,6 +75,35 @@ def _canonical_name(node: ast.AST | None, aliases: dict[str, str]) -> str | None
             owner = _canonical_name(node.args[0], aliases)
             if owner:
                 return f"{owner}.{node.args[1].value}"
+
+        if (
+            accessor in {"vars", "builtins.vars"}
+            and len(node.args) == 1
+        ):
+            owner = _canonical_name(node.args[0], aliases)
+            if owner:
+                return f"{owner}.__dict__"
+
+        if (
+            accessor is not None
+            and accessor.endswith(".__dict__.get")
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
+            owner = accessor.removesuffix(".__dict__.get")
+            return f"{owner}.{node.args[0].value}"
+
+    if isinstance(node, ast.Subscript):
+        owner = _canonical_name(node.value, aliases)
+        if (
+            owner is not None
+            and owner.endswith(".__dict__")
+            and isinstance(node.slice, ast.Constant)
+            and isinstance(node.slice.value, str)
+        ):
+            return f"{owner.removesuffix('.__dict__')}.{node.slice.value}"
+
     return None
 
 
@@ -179,6 +208,16 @@ def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
     findings: list[str] = []
 
     for node in nodes:
+        if (
+            isinstance(node, ast.ImportFrom)
+            and node.module in {"_thread", "contextvars", "threading"}
+            and any(alias.name == "*" for alias in node.names)
+        ):
+            findings.append(
+                f"line {node.lineno}: wildcard import can hide context/thread-local state factories: {node.module}"
+            )
+
+    for node in nodes:
         value: ast.AST | None = None
         if isinstance(node, ast.Assign):
             value = node.value
@@ -247,6 +286,18 @@ def test_evaluation_package_has_no_context_or_thread_local_persistent_state() ->
             "contextvars.ContextVar",
         ),
         (
+            "import contextvars\nFactory = contextvars.__dict__['ContextVar']\nCURRENT = Factory('current')\n",
+            "contextvars.ContextVar",
+        ),
+        (
+            "import contextvars\nFactory = vars(contextvars).get('ContextVar')\nCURRENT = Factory('current')\n",
+            "contextvars.ContextVar",
+        ),
+        (
+            "import threading\nFactory = vars(threading)['local']\nLOCAL = Factory()\n",
+            "threading.local",
+        ),
+        (
             "import contextvars\n(Factory := contextvars.ContextVar)\nCURRENT = Factory('current')\n",
             "contextvars.ContextVar",
         ),
@@ -257,6 +308,14 @@ def test_evaluation_package_has_no_context_or_thread_local_persistent_state() ->
         (
             "import threading\nclass ScopedState(threading.local):\n    pass\n",
             "threading.local",
+        ),
+        (
+            "from contextvars import *\nCURRENT = ContextVar('current')\n",
+            "wildcard import",
+        ),
+        (
+            "from threading import *\nLOCAL = local()\n",
+            "wildcard import",
         ),
     ],
 )
