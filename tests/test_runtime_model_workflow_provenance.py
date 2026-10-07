@@ -59,10 +59,12 @@ def test_runtime_model_preserves_trigger_and_final_identity_evidence() -> None:
     assert "pull_request:" in text
     assert '"tools/elite_policy_runtime.js"' in text
     assert '"tests/test_elite_policy_runtime_integrity.js"' in text
-    assert '" .github/workflows/runtime-model-integrity-validation.yml"' not in text
     assert '".github/workflows/runtime-model-integrity-validation.yml"' in text
-    assert "RUNTIME_MODEL_INTEGRITY_TRIGGER_SHA=" in text
-    assert 'test "$(git rev-parse HEAD)" = "' in text
+    assert f"RUNTIME_MODEL_INTEGRITY_TRIGGER_SHA={EXPECTED_SOURCE_EXPR}" in text
+    assert (
+        f'test "$(git rev-parse HEAD)" = "{EXPECTED_SOURCE_EXPR}"'
+        in text
+    )
 
 
 def test_manual_proof_is_source_only_and_live_head_bound() -> None:
@@ -75,6 +77,7 @@ def test_manual_proof_is_source_only_and_live_head_bound() -> None:
         in workflow
     )
     assert "ref: ${{ github.sha }}" in workflow
+    assert "clean: true" in workflow
     assert "persist-credentials: false" in workflow
     assert 'test "$HEAD_SHA" = "${GITHUB_SHA}"' in workflow
     assert 'git ls-remote --exit-code origin "${GITHUB_REF}"' in workflow
