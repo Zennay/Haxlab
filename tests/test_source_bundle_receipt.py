@@ -212,3 +212,29 @@ def test_cli_emits_machine_readable_failure(
     assert payload["schema"] == receipt.SCHEMA
     assert payload["clean"] is False
     assert payload["error"].startswith("source_root_unreadable:")
+
+
+
+def test_receipt_fails_closed_on_walk_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "export"
+    root.mkdir()
+
+    def failing_walk(
+        *_args: object,
+        onerror=None,
+        **_kwargs: object,
+    ):
+        assert onerror is not None
+        onerror(OSError("walk denied"))
+        yield None
+
+    monkeypatch.setattr(receipt.os, "walk", failing_walk)
+
+    with pytest.raises(
+        receipt.SourceBundleReceiptError,
+        match="source_inventory_failed:walk denied",
+    ):
+        receipt.create_source_bundle_receipt(root)
