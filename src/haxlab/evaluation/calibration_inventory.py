@@ -60,14 +60,17 @@ def inventory_calibration_results(
         str(label) for label in challengers if label not in expected_labels
     )
     request_errors: list[str] = []
+    global_request_errors: list[str] = []
     if missing_labels:
         request_errors.append(
             "challengers:missing:" + ",".join(missing_labels)
         )
     if unexpected_labels:
-        request_errors.append(
+        unexpected_reason = (
             "challengers:unexpected:" + ",".join(unexpected_labels)
         )
+        request_errors.append(unexpected_reason)
+        global_request_errors.append(unexpected_reason)
 
     rows: list[dict[str, Any]] = []
     per_label: dict[str, dict[str, Any]] = {}
@@ -77,15 +80,18 @@ def inventory_calibration_results(
         challenger = challengers.get(label)
         for source_id in SOURCE_IDS:
             result_path = result_root / f"{label}-source-{source_id}.json"
-            if request_errors or not isinstance(challenger, Path):
-                reasons = list(request_errors)
-                if not isinstance(challenger, Path):
-                    reasons.append(f"challenger:{label}:not_path")
+            blocked_reasons = list(global_request_errors)
+            if challenger is None:
+                blocked_reasons.append(f"challenger:{label}:missing")
+            elif not isinstance(challenger, Path):
+                blocked_reasons.append(f"challenger:{label}:not_path")
+
+            if blocked_reasons:
                 row = _blocked_row(
                     label=label,
                     source_id=source_id,
                     result_path=result_path,
-                    reasons=tuple(dict.fromkeys(reasons)),
+                    reasons=blocked_reasons,
                 )
             else:
                 source = source_root / f"source-{source_id}"
@@ -105,9 +111,7 @@ def inventory_calibration_results(
                     )
                 except (OSError, TypeError, ValueError) as exc:
                     reusable = False
-                    reasons = (
-                        f"validator_error:{type(exc).__name__}",
-                    )
+                    reasons = (f"validator_error:{type(exc).__name__}",)
 
                 row = {
                     "label": label,
