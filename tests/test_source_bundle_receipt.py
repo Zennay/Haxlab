@@ -395,3 +395,47 @@ def test_receipt_fails_closed_on_inventory_read_error(
         match="source_inventory_failed:walk denied",
     ):
         receipt.create_source_bundle_receipt(root)
+
+
+
+def test_receipt_wraps_descriptor_read_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "export"
+    root.mkdir()
+    (root / "match.hbr2").write_bytes(b"replay")
+
+    def failing_read(_fd: int, _size: int) -> bytes:
+        raise OSError("simulated source read failure")
+
+    monkeypatch.setattr(receipt.os, "read", failing_read)
+
+    with pytest.raises(
+        receipt.SourceBundleReceiptError,
+        match=r"source_file_read_failed:match\.hbr2:simulated source read failure",
+    ):
+        receipt.create_source_bundle_receipt(root)
+
+
+def test_receipt_cli_keeps_machine_readable_error_on_read_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = tmp_path / "export"
+    root.mkdir()
+    (root / "match.hbr2").write_bytes(b"replay")
+
+    def failing_read(_fd: int, _size: int) -> bytes:
+        raise OSError("simulated source read failure")
+
+    monkeypatch.setattr(receipt.os, "read", failing_read)
+
+    assert receipt.main([str(root)]) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["schema"] == receipt.SCHEMA
+    assert payload["clean"] is False
+    assert payload["error"].startswith(
+        "source_file_read_failed:match.hbr2:simulated source read failure"
+    )
