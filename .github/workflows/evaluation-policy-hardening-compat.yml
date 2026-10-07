@@ -1,0 +1,108 @@
+name: Evaluation policy hardening compatibility proof
+
+on:
+  push:
+    branches:
+      - ops/evaluation-policy-hardening-compat-20261007
+  pull_request:
+    branches:
+      - feature/arena-v2-current-main-20261004
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-evaluation-policy-hardening-compat-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  prove:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    env:
+      CARRIER_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      CARRIER_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
+
+    steps:
+      - name: Checkout exact canonical Arena v2
+        uses: actions/checkout@v5
+        with:
+          ref: ee5ab508e9d8504de12b7cbb5fdeca43a58ae1a4
+          clean: true
+          fetch-depth: 0
+
+      - name: Verify canonical and exact live owner heads
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "ee5ab508e9d8504de12b7cbb5fdeca43a58ae1a4"
+          test -z "$(git status --porcelain)"
+          carrier="$(git ls-remote --heads origin "refs/heads/$CARRIER_REF" | awk 'NR == 1 {print $1}')"
+          test -n "$carrier"
+          test "$carrier" = "$CARRIER_SHA"
+          while read -r expected owner_branch; do
+            actual="$(git ls-remote --heads origin "refs/heads/${owner_branch}" | awk 'NR == 1 {print $1}')"
+            test -n "$actual"
+            if [ "$actual" != "$expected" ]; then
+              echo "stale owner head: ${owner_branch} expected=${expected} actual=${actual}" >&2
+              exit 1
+            fi
+            echo "HAXLAB_POLICY_HARDENING_OWNER ${owner_branch}=${actual}"
+          done <<'EOF'
+          689e384540f5ac8f7cba6c84b3b55d75f3f66839 validation/multisource-strict-integer-config-20261007
+          9b6eb665693048348fc725a39dcde6ed7486840d validation/multisource-duel-policy-boundary-20261007
+          b628530178ff8b92dcde8905fd6cbe8848d318e8 validation/closed-loop-arena-policy-contract-20261007
+          EOF
+
+      - name: Materialize exact product and regression files
+        shell: bash
+        run: |
+          set -euo pipefail
+          while read -r sha path; do
+            if ! git cat-file -e "${sha}^{commit}" 2>/dev/null; then
+              git fetch --no-tags --depth=1 origin "${sha}"
+            fi
+            git show "${sha}:${path}" > "${path}"
+          done <<'EOF'
+          689e384540f5ac8f7cba6c84b3b55d75f3f66839 src/haxlab/evaluation/multisource_suite.py
+          689e384540f5ac8f7cba6c84b3b55d75f3f66839 tests/test_multisource_suite.py
+          9b6eb665693048348fc725a39dcde6ed7486840d src/haxlab/evaluation/multisource_duel.py
+          9b6eb665693048348fc725a39dcde6ed7486840d tests/test_multisource_duel.py
+          b628530178ff8b92dcde8905fd6cbe8848d318e8 src/haxlab/evaluation/closed_loop_arena.py
+          b628530178ff8b92dcde8905fd6cbe8848d318e8 tests/test_closed_loop_arena.py
+          EOF
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .evaluation-policy-hardening-compat-venv
+          python3 -m venv .evaluation-policy-hardening-compat-venv
+          .evaluation-policy-hardening-compat-venv/bin/pip install --upgrade pip
+          .evaluation-policy-hardening-compat-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile integrated evaluation surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          .evaluation-policy-hardening-compat-venv/bin/python -m compileall -q             src/haxlab/evaluation/multisource_suite.py             src/haxlab/evaluation/multisource_duel.py             src/haxlab/evaluation/closed_loop_arena.py             tests/test_multisource_suite.py             tests/test_multisource_duel.py             tests/test_closed_loop_arena.py
+
+      - name: Run combined hardened evaluation suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" .evaluation-policy-hardening-compat-venv/bin/pytest -q             tests/test_multisource_suite.py             tests/test_multisource_duel.py             tests/test_closed_loop_arena.py
+
+      - name: Run adjacent canonical evaluation regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" .evaluation-policy-hardening-compat-venv/bin/pytest -q             tests/test_duel_gate.py             tests/test_calibration_gate.py             tests/test_calibration_resume.py             tests/test_arena_v2_integration_workflow_contract.py             tests/test_calibration_cross_sha_resume_contract.py             tests/test_calibration_workflow_evidence_contract.py             tests/test_ci_workflow_exact_head_contract.py
+
+      - name: Record compatibility result
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HAXLAB_EVALUATION_POLICY_HARDENING_COMPAT_RESULT=green"
