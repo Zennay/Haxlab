@@ -9,7 +9,7 @@ Both `read_replay_header()` and `decompress_replay_payload()` consume replay byt
 - the lexical replay path must name a regular file directly, not a symlink;
 - non-regular filesystem objects are rejected before content is trusted;
 - the file descriptor opened for reading must still match the device/inode observed for the lexical path immediately before open;
-- where the host supports `O_NOFOLLOW`, the open itself also refuses a final-component symlink.
+- `O_NOFOLLOW` support is required; the helper fails closed when the host cannot guarantee a no-follow final-component open.
 
 A pathname replacement race therefore fails closed as `unsafe_replay_path:identity_changed` instead of silently consuming bytes from a different replay.
 
