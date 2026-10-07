@@ -10,3 +10,5 @@ Synthetic proof inputs:
 - active resync guard: #84 @ `b9b12c5611872cd85c00ab0850f117c198d0a586`
 
 Do not merge.
+
+PR carrier opened for exact synthetic proof; this marker is execution-only.
