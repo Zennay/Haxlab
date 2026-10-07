@@ -9,7 +9,7 @@ The validation contract rejects:
 - `Path.glob(...)`, `Path.rglob(...)`, `Path.iterdir()`, and `Path.walk()`;
 - `os.walk(...)`, `os.fwalk(...)`, `os.listdir(...)`, and `os.scandir(...)`;
 - `glob.glob(...)` and `glob.iglob(...)`;
-- direct import aliases, simple/annotated/named-expression aliases, and constant-`getattr(...)` aliases of those discovery callables.
+- direct import aliases, simple/annotated/named-expression aliases, constant-`getattr(...)` aliases, and unbound `Path.glob(path, ...)` / `Path.rglob(path, ...)` style calls.
 
 The scanner resolves actual `pathlib.Path` instances before classifying path discovery methods. Unrelated application objects that happen to expose a method named `walk`, `glob`, or similar are not rejected.
 
