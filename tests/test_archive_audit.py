@@ -116,7 +116,11 @@ def test_archive_audit_rejects_regular_file_replacement_before_open(
 
         def swapping_open(target, flags, *args, **kwargs):
             nonlocal swapped
-            if not swapped and Path(target) == path:
+            if (
+                not swapped
+                and os.fspath(target) == path.name
+                and kwargs.get("dir_fd") is not None
+            ):
                 swapped = True
                 replacement.replace(path)
             return real_open(target, flags, *args, **kwargs)
@@ -194,7 +198,11 @@ def test_archive_audit_rejects_symlink_replacement_before_open(
 
         def swapping_open(target, flags, *args, **kwargs):
             nonlocal swapped
-            if not swapped and Path(target) == path:
+            if (
+                not swapped
+                and os.fspath(target) == path.name
+                and kwargs.get("dir_fd") is not None
+            ):
                 swapped = True
                 path.unlink()
                 path.symlink_to(other)
@@ -204,6 +212,82 @@ def test_archive_audit_rejects_symlink_replacement_before_open(
         report = audit_raw_archive(state)
 
     assert swapped is True
+    assert report["ok"] is False
+    assert report["existing_files"] == 0
+    assert report["symlink_entries"] == 1
+    assert report["read_failures"] == 0
+    assert report["issues"][0]["reasons"] == ["symlink_not_allowed"]
+
+
+def test_archive_audit_rejects_parent_directory_replacement_during_read(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db = tmp_path / "state.sqlite3"
+    raw = tmp_path / "raw"
+    expected_payload = b"stable replay through rebound parent"
+    digest, path = _write_content_addressed(raw, expected_payload)
+    parent = path.parent
+    moved_parent = tmp_path / "original-second-prefix"
+
+    with RuntimeState(db) as state:
+        state.register_raw(
+            sha256=digest,
+            archive_path=str(path),
+            size_bytes=len(expected_payload),
+        )
+
+        real_open = os.open
+        swapped = False
+
+        def swapping_open(target, flags, *args, **kwargs):
+            nonlocal swapped
+            if (
+                not swapped
+                and os.fspath(target) == path.name
+                and kwargs.get("dir_fd") is not None
+            ):
+                swapped = True
+                parent.rename(moved_parent)
+                parent.mkdir()
+                (parent / path.name).write_bytes(expected_payload)
+            return real_open(target, flags, *args, **kwargs)
+
+        monkeypatch.setattr(archive_audit.os, "open", swapping_open)
+        report = audit_raw_archive(state)
+
+    assert swapped is True
+    assert report["ok"] is False
+    assert report["existing_files"] == 0
+    assert report["read_failures"] == 1
+    assert report["hash_mismatches"] == 0
+    assert report["issues"][0]["reasons"] == [
+        "archive_parent_changed_during_read"
+    ]
+    assert (moved_parent / path.name).read_bytes() == expected_payload
+    assert path.read_bytes() == expected_payload
+
+
+def test_archive_audit_rejects_symlinked_content_address_parent(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "state.sqlite3"
+    raw = tmp_path / "raw"
+    payload = b"replay behind parent symlink"
+    digest, path = _write_content_addressed(raw, payload)
+    parent = path.parent
+    external_parent = tmp_path / "external-second-prefix"
+    parent.rename(external_parent)
+    parent.symlink_to(external_parent, target_is_directory=True)
+
+    with RuntimeState(db) as state:
+        state.register_raw(
+            sha256=digest,
+            archive_path=str(path),
+            size_bytes=len(payload),
+        )
+        report = audit_raw_archive(state)
+
     assert report["ok"] is False
     assert report["existing_files"] == 0
     assert report["symlink_entries"] == 1
