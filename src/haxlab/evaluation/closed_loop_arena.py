@@ -55,6 +55,134 @@ class ClosedLoopArenaDecision:
     checks: dict[str, Any]
 
 
+def _policy_integer(
+    failures: list[str],
+    value: Any,
+    label: str,
+    *,
+    minimum: int,
+) -> None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        failures.append(f"invalid_policy:{label}:not_integer")
+        return
+    if value < minimum:
+        failures.append(
+            f"invalid_policy:{label}:below_minimum:{value}<{minimum}"
+        )
+
+
+def _policy_number(
+    failures: list[str],
+    value: Any,
+    label: str,
+    *,
+    minimum: float,
+    maximum: float | None = None,
+) -> None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        failures.append(f"invalid_policy:{label}:non_numeric")
+        return
+    number = float(value)
+    if not math.isfinite(number):
+        failures.append(f"invalid_policy:{label}:non_finite")
+        return
+    if number < minimum:
+        failures.append(
+            f"invalid_policy:{label}:below_minimum:"
+            f"{number:.6f}<{minimum:.6f}"
+        )
+    if maximum is not None and number > maximum:
+        failures.append(
+            f"invalid_policy:{label}:above_maximum:"
+            f"{number:.6f}>{maximum:.6f}"
+        )
+
+
+def _validate_policy(policy: Any) -> tuple[str, ...]:
+    if not isinstance(policy, ClosedLoopArenaPolicy):
+        return ("invalid_policy:object_type",)
+
+    failures: list[str] = []
+    if (
+        not isinstance(policy.policy_version, str)
+        or not policy.policy_version.strip()
+    ):
+        failures.append("invalid_policy:policy_version:not_nonempty_string")
+    if type(policy.calibrated) is not bool:
+        failures.append("invalid_policy:calibrated:not_boolean")
+
+    for label, value, minimum in (
+        ("minimum_team_matches", policy.minimum_team_matches, 1),
+        (
+            "minimum_plug_matches_per_role",
+            policy.minimum_plug_matches_per_role,
+            1,
+        ),
+        ("minimum_partner_models", policy.minimum_partner_models, 1),
+        ("max_runtime_errors", policy.max_runtime_errors, 0),
+    ):
+        _policy_integer(failures, value, label, minimum=minimum)
+
+    for label, value in (
+        ("max_boundary_regression", policy.max_boundary_regression),
+        ("max_ood_regression", policy.max_ood_regression),
+        ("max_far_stall_regression", policy.max_far_stall_regression),
+        (
+            "max_context_adaptation_regression",
+            policy.max_context_adaptation_regression,
+        ),
+        (
+            "max_formation_order_regression",
+            policy.max_formation_order_regression,
+        ),
+        (
+            "max_shape_collapse_regression",
+            policy.max_shape_collapse_regression,
+        ),
+        (
+            "minimum_team_proxy_match_score",
+            policy.minimum_team_proxy_match_score,
+        ),
+        (
+            "minimum_plug_proxy_match_score",
+            policy.minimum_plug_proxy_match_score,
+        ),
+        (
+            "max_absolute_far_stall_rate",
+            policy.max_absolute_far_stall_rate,
+        ),
+        (
+            "minimum_absolute_context_adaptation_rate",
+            policy.minimum_absolute_context_adaptation_rate,
+        ),
+    ):
+        _policy_number(
+            failures,
+            value,
+            label,
+            minimum=0.0,
+            maximum=1.0,
+        )
+
+    for label, value in (
+        (
+            "max_role_deviation_regression",
+            policy.max_role_deviation_regression,
+        ),
+        (
+            "max_held_action_regression_seconds",
+            policy.max_held_action_regression_seconds,
+        ),
+        (
+            "max_absolute_held_action_seconds",
+            policy.max_absolute_held_action_seconds,
+        ),
+    ):
+        _policy_number(failures, value, label, minimum=0.0)
+
+    return tuple(failures)
+
+
 def _number(value: Any, default: float = 0.0) -> float:
     try:
         return float(value)
@@ -207,6 +335,16 @@ def decide_closed_loop_arena(
     *,
     policy: ClosedLoopArenaPolicy = ClosedLoopArenaPolicy(),
 ) -> ClosedLoopArenaDecision:
+    policy_failures = _validate_policy(policy)
+    if policy_failures:
+        return ClosedLoopArenaDecision(
+            structurally_valid=False,
+            behavior_gate_passed=False,
+            eligible_for_live_promotion=False,
+            reasons=policy_failures,
+            checks={},
+        )
+
     structural_failures: list[str] = []
     behavior_failures: list[str] = []
     if not isinstance(payload, dict):
