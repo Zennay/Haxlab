@@ -9,7 +9,11 @@ This lane adds a side-effect-free pre-publication validator:
 - every candidate canonical row must have a native, non-empty, whitespace-canonical
   `match_id`;
 - optional replay/message provenance must also be native canonical strings;
-- duplicate `match_id` values fail closed and report both source provenances;
+- duplicate `match_id` values fail closed and report the complete provenance set for
+  every duplicate identity;
+- duplicate diagnostics are canonicalized by `match_id` and provenance, so the same
+  conflicting source set produces exactly the same failure evidence regardless of
+  source ordering;
 - successful validation returns the complete identity set in deterministic sorted
   order, independent of source ordering.
 
@@ -22,3 +26,12 @@ preventing duplicate canonical identities from reaching `matches.jsonl`.
 Integration is only complete once the producer owner wires this validator into that
 pre-publication boundary and the end-to-end duplicate-`report_id` fixture proves that
 no M0 artifact set containing duplicate canonical match IDs can be published.
+
+## Deterministic failure semantics
+
+Validation consumes the complete candidate set before deciding whether duplicate
+identities exist. Duplicate groups are then rendered in canonical `match_id` order,
+with each group's `(replay_sha256, source_message_id)` provenances sorted
+lexicographically. This avoids an otherwise subtle observability drift where two
+reruns over identical evidence could emit different failure text solely because source
+discovery order changed.
