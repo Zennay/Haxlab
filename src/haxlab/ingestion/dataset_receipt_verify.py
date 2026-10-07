@@ -19,6 +19,7 @@ from haxlab.ingestion.dataset_receipt import (
 
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+MAX_RECEIPT_BYTES = 64 * 1024
 
 
 class DatasetReceiptVerificationError(ValueError):
@@ -51,9 +52,27 @@ def load_receipt(path: Path) -> dict[str, object]:
             raise DatasetReceiptVerificationError(
                 "receipt evidence is not a regular file"
             )
+        if metadata.st_size > MAX_RECEIPT_BYTES:
+            raise DatasetReceiptVerificationError(
+                f"receipt evidence exceeds {MAX_RECEIPT_BYTES} bytes"
+            )
         with os.fdopen(fd, "rb", closefd=True) as handle:
             fd = -1
-            raw = handle.read()
+            raw = handle.read(MAX_RECEIPT_BYTES + 1)
+            after = os.fstat(handle.fileno())
+            if len(raw) > MAX_RECEIPT_BYTES:
+                raise DatasetReceiptVerificationError(
+                    f"receipt evidence exceeds {MAX_RECEIPT_BYTES} bytes"
+                )
+            if (
+                len(raw) != metadata.st_size
+                or after.st_size != metadata.st_size
+                or after.st_mtime_ns != metadata.st_mtime_ns
+                or after.st_ctime_ns != metadata.st_ctime_ns
+            ):
+                raise DatasetReceiptVerificationError(
+                    "receipt evidence changed while reading"
+                )
     except FileNotFoundError as exc:
         raise DatasetReceiptVerificationError(
             f"receipt evidence does not exist: {path}"
