@@ -5,6 +5,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 import haxlab.evaluation.scenario_source as scenario_source
 
 
