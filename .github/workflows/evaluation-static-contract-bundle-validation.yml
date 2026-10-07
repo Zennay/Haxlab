@@ -49,7 +49,8 @@ jobs:
             tests/test_evaluation_safe_deserialization_contract.py \
             tests/test_evaluation_control_plane_import_contract.py \
             tests/test_evaluation_exception_boundary_contract.py \
-            tests/test_evaluation_global_state_contract.py
+            tests/test_evaluation_global_state_contract.py \
+            tests/test_evaluation_dynamic_loading_contract.py
 
       - name: Run bundled evaluation contracts
         shell: bash
@@ -60,7 +61,8 @@ jobs:
               tests/test_evaluation_safe_deserialization_contract.py \
               tests/test_evaluation_control_plane_import_contract.py \
               tests/test_evaluation_exception_boundary_contract.py \
-              tests/test_evaluation_global_state_contract.py
+              tests/test_evaluation_global_state_contract.py \
+              tests/test_evaluation_dynamic_loading_contract.py
 
       - name: Run adjacent canonical evaluation regressions
         shell: bash
