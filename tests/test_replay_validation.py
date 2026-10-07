@@ -36,3 +36,17 @@ def test_invalid_total_frames_precedes_payload_presence(tmp_path: Path) -> None:
 
     assert validation.valid is False
     assert validation.reasons == ("invalid_total_frames",)
+
+
+def test_truncated_header_keeps_header_diagnostic_precedence(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "truncated-header.hbr2"
+    path.write_bytes(b"HBR2" + b"\x00" * 7)
+
+    validation = validate_replay_basic(path)
+
+    assert validation.valid is False
+    assert validation.reasons == ("truncated_header",)
+    assert validation.version is None
+    assert validation.total_frames is None
