@@ -58,6 +58,27 @@ MAPPING_FUNCTION_MUTATORS = {
     "operator.delitem",
 }
 
+REFLECTION_ACCESSORS = {
+    "getattr",
+    "builtins.getattr",
+    "vars",
+    "builtins.vars",
+}
+
+ALIASABLE_ROOTS = {
+    "builtins",
+    "object",
+    "builtins.object",
+    "type",
+    "builtins.type",
+    "dict",
+    "builtins.dict",
+    "operator",
+}
+
+MAPPING_ALIAS_PREFIX = "__reflection_mapping__:"
+MAPPING_MUTATOR_ALIAS_PREFIX = "__reflection_mapping_mutator__:"
+
 
 def _evaluation_modules() -> list[Path]:
     return sorted(path for path in EVALUATION_ROOT.rglob("*.py") if path.is_file())
@@ -82,6 +103,37 @@ def _canonical_name(node: ast.AST | None, aliases: dict[str, str]) -> str | None
             owner = _canonical_name(node.args[0], aliases)
             if owner:
                 return f"{owner}.{node.args[1].value}"
+    return None
+
+
+def _mapping_root(node: ast.AST | None, aliases: dict[str, str]) -> str | None:
+    if node is None:
+        return None
+    if isinstance(node, ast.Name):
+        target = aliases.get(node.id)
+        if target and target.startswith(MAPPING_ALIAS_PREFIX):
+            return target[len(MAPPING_ALIAS_PREFIX):]
+    if isinstance(node, ast.Attribute) and node.attr == "__dict__":
+        owner = _canonical_name(node.value, aliases) or "<expression>"
+        return f"{owner}.__dict__"
+    if isinstance(node, ast.Call):
+        target = _canonical_name(node.func, aliases)
+        if target in {"vars", "builtins.vars"} and len(node.args) == 1:
+            return "vars(...)"
+    if isinstance(node, ast.Subscript):
+        return _mapping_root(node.value, aliases)
+    return None
+
+
+def _bound_mapping_mutator(
+    node: ast.AST | None,
+    aliases: dict[str, str],
+) -> str | None:
+    if not isinstance(node, ast.Attribute):
+        return None
+    root = _mapping_root(node.value, aliases)
+    if root and node.attr in MAPPING_MUTATING_METHODS:
+        return f"{root}.{node.attr}"
     return None
 
 
@@ -111,34 +163,36 @@ def _aliases(tree: ast.AST) -> dict[str, str]:
     while changed:
         changed = False
         for node in ast.walk(tree):
-            if (
+            if not (
                 isinstance(node, ast.Assign)
                 and len(node.targets) == 1
                 and isinstance(node.targets[0], ast.Name)
             ):
-                target = _canonical_name(node.value, aliases)
-                if target in FORBIDDEN_ATTRIBUTE_MUTATORS:
-                    local = node.targets[0].id
-                    if aliases.get(local) != target:
-                        aliases[local] = target
-                        changed = True
+                continue
+
+            local = node.targets[0].id
+            target = _canonical_name(node.value, aliases)
+            mapping_root = _mapping_root(node.value, aliases)
+            bound_mutator = _bound_mapping_mutator(node.value, aliases)
+
+            resolved: str | None = None
+            if target in (
+                FORBIDDEN_ATTRIBUTE_MUTATORS
+                | MAPPING_FUNCTION_MUTATORS
+                | REFLECTION_ACCESSORS
+                | ALIASABLE_ROOTS
+            ):
+                resolved = target
+            elif mapping_root:
+                resolved = f"{MAPPING_ALIAS_PREFIX}{mapping_root}"
+            elif bound_mutator:
+                resolved = f"{MAPPING_MUTATOR_ALIAS_PREFIX}{bound_mutator}"
+
+            if resolved and aliases.get(local) != resolved:
+                aliases[local] = resolved
+                changed = True
 
     return aliases
-
-
-def _mapping_root(node: ast.AST | None, aliases: dict[str, str]) -> str | None:
-    if node is None:
-        return None
-    if isinstance(node, ast.Attribute) and node.attr == "__dict__":
-        owner = _canonical_name(node.value, aliases) or "<expression>"
-        return f"{owner}.__dict__"
-    if isinstance(node, ast.Call):
-        target = _canonical_name(node.func, aliases)
-        if target in {"vars", "builtins.vars"} and len(node.args) == 1:
-            return "vars(...)"
-    if isinstance(node, ast.Subscript):
-        return _mapping_root(node.value, aliases)
-    return None
 
 
 def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
@@ -152,6 +206,13 @@ def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
             if target in FORBIDDEN_ATTRIBUTE_MUTATORS:
                 findings.append(
                     f"line {node.lineno}: reflective attribute mutation: {target}"
+                )
+                continue
+
+            if target and target.startswith(MAPPING_MUTATOR_ALIAS_PREFIX):
+                findings.append(
+                    f"line {node.lineno}: immutable-object mapping mutation: "
+                    f"{target[len(MAPPING_MUTATOR_ALIAS_PREFIX):]}"
                 )
                 continue
 
@@ -244,7 +305,8 @@ def test_contract_rejects_alias_and_getattr_mutation_bypasses() -> None:
         import builtins
         from builtins import setattr as mutate
 
-        force = object.__setattr__
+        base_object = object
+        force = base_object.__setattr__
         indirect = getattr(type, "__setattr__")
         read_attr = builtins.getattr
         indirect_object = read_attr(object, "__setattr__")
@@ -261,6 +323,25 @@ def test_contract_rejects_alias_and_getattr_mutation_bypasses() -> None:
     assert "builtins.setattr" in findings
     assert "object.__setattr__" in findings
     assert "type.__setattr__" in findings
+    assert len([line for line in findings.splitlines() if "object.__setattr__" in line]) >= 2
+
+
+def test_contract_rejects_assigned_getattr_accessor_chain() -> None:
+    source = textwrap.dedent(
+        """
+        import builtins
+
+        read_attr = builtins.getattr
+        writer = read_attr(object, "__setattr__")
+
+        def probe(policy):
+            writer(policy, "threshold", 0.0)
+        """
+    )
+
+    findings = scan_source(source)
+    assert len(findings) == 1
+    assert "object.__setattr__" in findings[0]
 
 
 def test_contract_rejects_dunder_dict_and_vars_mapping_mutation() -> None:
@@ -289,6 +370,55 @@ def test_contract_rejects_dunder_dict_and_vars_mapping_mutation() -> None:
         "operator.delitem",
     ):
         assert expected in findings
+
+
+def test_contract_rejects_stored_mapping_and_mutator_aliases() -> None:
+    source = textwrap.dedent(
+        """
+        import operator
+
+        def probe(policy):
+            mapping = vars(policy)
+            attrs = policy.__dict__
+            mutate = mapping.update
+            set_item = dict.__setitem__
+            remove = operator.delitem
+
+            mapping["a"] = 1
+            attrs["b"] = 2
+            mutate({"c": 3})
+            set_item(mapping, "d", 4)
+            remove(attrs, "b")
+        """
+    )
+
+    findings = "\n".join(scan_source(source))
+    for expected in (
+        "vars(...)",
+        "__dict__",
+        "update",
+        "dict.__setitem__",
+        "operator.delitem",
+    ):
+        assert expected in findings
+
+
+def test_contract_rejects_vars_accessor_alias() -> None:
+    source = textwrap.dedent(
+        """
+        import builtins
+
+        reflect = builtins.vars
+
+        def probe(policy):
+            mapping = reflect(policy)
+            mapping["threshold"] = 1.0
+        """
+    )
+
+    findings = scan_source(source)
+    assert findings
+    assert any("vars(...)" in finding for finding in findings)
 
 
 def test_contract_allows_read_only_reflection_and_immutable_replacement() -> None:
