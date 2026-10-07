@@ -48,6 +48,7 @@ jobs:
         env:
           EXPECTED_SHA: github.sha
         run: |
+          set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 """
 
@@ -176,6 +177,22 @@ def test_mutable_secondary_checkout_ref_is_reported() -> None:
     ]
     assert report["checkout_refs_bound"] is False
     assert "checkout_ref_unbound" in report["findings"]
+
+
+def test_non_enforcing_equality_is_not_an_exact_head_guard() -> None:
+    text = _clean_workflow().replace(
+        "          set -euo pipefail\n",
+        "",
+        1,
+    ).replace(
+        'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"',
+        'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"\n'
+        '          echo continued',
+    )
+    report = audit_workflow_text(".github/workflows/non-enforcing.yml", text)
+
+    assert report["has_exact_head_guard"] is False
+    assert "missing_exact_head_guard" in report["findings"]
 
 
 def test_recording_head_without_comparison_is_not_an_exact_head_guard() -> None:
