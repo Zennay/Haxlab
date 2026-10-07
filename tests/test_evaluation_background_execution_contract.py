@@ -7,6 +7,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EVALUATION_ROOT = REPO_ROOT / "src" / "haxlab" / "evaluation"
+WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "evaluation-background-execution-validation.yml"
 
 FORBIDDEN_CALLS = {
     "_thread.start_new_thread",
@@ -322,3 +323,15 @@ def test_contract_allows_synchronous_and_unscheduled_async_code() -> None:
     )
 
     assert scan_source(source) == []
+
+
+def test_exact_head_workflow_rejects_stale_push_concurrency() -> None:
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+
+    assert (
+        "group: haxlab-evaluation-background-execution-validation-${{ github.sha }}"
+        in workflow
+    )
+    assert "cancel-in-progress: true" in workflow
+    assert 'git ls-remote origin "refs/heads/${GITHUB_REF_NAME}"' in workflow
+    assert 'test "$remote_head" = "${{ github.sha }}"' in workflow
