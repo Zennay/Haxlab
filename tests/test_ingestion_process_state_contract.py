@@ -24,6 +24,11 @@ FORBIDDEN_CALLS = {
     "sys.setswitchinterval",
     "sys.settrace",
 }
+ROOT_CONTAINER_TYPES = {
+    "os.environ": "dict",
+    "sys.modules": "dict",
+    "sys.path": "list",
+}
 MUTATING_METHODS = {
     "os.environ": {
         "__delitem__",
@@ -107,7 +112,9 @@ def _tracked_alias_target(value: str) -> bool:
         return True
     if any(value == f"{root}.{method}" for root, methods in MUTATING_METHODS.items() for method in methods):
         return True
-    return value.startswith(("builtins.", "locale.", "os.", "signal.", "sys."))
+    return value.startswith(
+        ("builtins.", "dict.", "list.", "locale.", "os.", "signal.", "sys.")
+    )
 
 
 def _aliases(tree: ast.AST) -> dict[str, str]:
@@ -149,6 +156,23 @@ def _target_root(node: ast.AST, aliases: dict[str, str]) -> str | None:
     return None
 
 
+def _unbound_mutation_from_call(
+    target: str | None,
+    node: ast.Call,
+    aliases: dict[str, str],
+) -> str | None:
+    if target is None or not node.args:
+        return None
+    root = _canonical_name(node.args[0], aliases)
+    if root not in ROOT_CONTAINER_TYPES:
+        return None
+    container = ROOT_CONTAINER_TYPES[root]
+    for method in MUTATING_METHODS[root]:
+        if target in {f"{container}.{method}", f"builtins.{container}.{method}"}:
+            return f"mutation:{root}.{method}"
+    return None
+
+
 def _mutation_from_call(target: str | None) -> str | None:
     if target is None:
         return None
@@ -170,6 +194,8 @@ def _violations(source: str) -> list[str]:
         if isinstance(node, ast.Call):
             target = _canonical_name(node.func, aliases)
             mutation = _mutation_from_call(target)
+            if mutation is None:
+                mutation = _unbound_mutation_from_call(target, node, aliases)
             if mutation is not None:
                 findings.append(f"line:{node.lineno}:{mutation}")
                 continue
@@ -268,6 +294,8 @@ def test_contract_resolves_import_assignment_and_getattr_aliases() -> None:
         append_path = sys.path.append
         pop_module = getattr(sys.modules, "pop")
         set_path = bi.getattr(sys.path, "insert")
+        update_mapping = dict.update
+        append_list = list.append
 
         def ingest():
             env.clear()
@@ -275,6 +303,8 @@ def test_contract_resolves_import_assignment_and_getattr_aliases() -> None:
             append_path("/tmp")
             pop_module("haxlab.plugin", None)
             set_path(0, "/tmp")
+            update_mapping(env, {"Y": "2"})
+            append_list(sys.path, "/opt/plugin")
             install(2, lambda *_: None)
         """
     )
