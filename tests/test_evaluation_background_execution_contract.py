@@ -15,6 +15,18 @@ FORBIDDEN_CALLS = {
     "asyncio.ensure_future",
     "asyncio.run_coroutine_threadsafe",
     "asyncio.to_thread",
+    "asyncio.get_event_loop().add_reader",
+    "asyncio.get_event_loop().add_writer",
+    "asyncio.get_event_loop().call_at",
+    "asyncio.get_event_loop().call_later",
+    "asyncio.get_event_loop().call_soon",
+    "asyncio.get_event_loop().call_soon_threadsafe",
+    "asyncio.get_running_loop().add_reader",
+    "asyncio.get_running_loop().add_writer",
+    "asyncio.get_running_loop().call_at",
+    "asyncio.get_running_loop().call_later",
+    "asyncio.get_running_loop().call_soon",
+    "asyncio.get_running_loop().call_soon_threadsafe",
     "asyncio.get_event_loop().create_task",
     "asyncio.get_event_loop().run_in_executor",
     "asyncio.get_running_loop().create_task",
@@ -220,6 +232,9 @@ def test_contract_rejects_detached_asyncio_scheduling() -> None:
         async def probe():
             loop = aio.get_running_loop()
             loop.create_task(work())
+            loop.call_soon(lambda: None)
+            loop.call_later(0.1, lambda: None)
+            loop.add_reader(0, lambda: None)
             aio.create_task(work())
             detach(work())
             aio.to_thread(lambda: None)
@@ -233,6 +248,9 @@ def test_contract_rejects_detached_asyncio_scheduling() -> None:
     findings = "\n".join(scan_source(source))
     for expected in (
         "asyncio.get_running_loop().create_task",
+        "asyncio.get_running_loop().call_soon",
+        "asyncio.get_running_loop().call_later",
+        "asyncio.get_running_loop().add_reader",
         "asyncio.create_task",
         "asyncio.ensure_future",
         "asyncio.to_thread",
