@@ -42,6 +42,19 @@ CONTAINER_MUTATORS = {
     "__setitem__",
 }
 
+UNBOUND_CONTEXT_CONTAINER_MUTATORS = {
+    "dict.__delitem__",
+    "dict.__ior__",
+    "dict.__setitem__",
+    "dict.clear",
+    "dict.pop",
+    "dict.popitem",
+    "dict.setdefault",
+    "dict.update",
+    "operator.delitem",
+    "operator.setitem",
+}
+
 TORCH_BACKEND_MUTABLE_ATTRIBUTES = {
     "torch.backends.cudnn.allow_tf32",
     "torch.backends.cudnn.benchmark",
@@ -253,11 +266,96 @@ def _mutation_context_target(
     return None
 
 
+def _context_mutator_name(
+    node: ast.AST,
+    aliases: dict[str, str],
+    value_aliases: dict[str, str],
+    decimal_aliases: dict[str, str],
+) -> str | None:
+    owner: str | None = None
+    method: str | None = None
+
+    if isinstance(node, ast.Attribute):
+        owner = _context_root(
+            node.value, aliases, value_aliases, decimal_aliases
+        )
+        method = node.attr
+    elif isinstance(node, ast.Call):
+        accessor = _canonical(node.func, aliases, value_aliases)
+        if (
+            accessor == "builtins.getattr"
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and isinstance(node.args[1].value, str)
+        ):
+            owner = _context_root(
+                node.args[0], aliases, value_aliases, decimal_aliases
+            )
+            method = node.args[1].value
+
+    if not owner or not method:
+        return None
+    if method in DECIMAL_CONTEXT_MUTATORS:
+        return f"{owner}.{method}"
+    if (
+        (owner.endswith(".flags") or owner.endswith(".traps"))
+        and method in CONTAINER_MUTATORS
+    ):
+        return f"{owner}.{method}"
+    return None
+
+
+def _context_mutator_aliases(
+    tree: ast.Module,
+    aliases: dict[str, str],
+    value_aliases: dict[str, str],
+    decimal_aliases: dict[str, str],
+) -> dict[str, str]:
+    mutators: dict[str, str] = {}
+    changed = True
+    while changed:
+        changed = False
+        for node in ast.walk(tree):
+            value: ast.AST | None = None
+            targets: list[ast.AST] = []
+            if isinstance(node, ast.Assign):
+                value = node.value
+                targets = list(node.targets)
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                value = node.value
+                targets = [node.target]
+            elif isinstance(node, ast.NamedExpr):
+                value = node.value
+                targets = [node.target]
+            if value is None:
+                continue
+
+            resolved = (
+                mutators.get(value.id)
+                if isinstance(value, ast.Name)
+                else _context_mutator_name(
+                    value, aliases, value_aliases, decimal_aliases
+                )
+            )
+            if not resolved:
+                continue
+
+            for target in targets:
+                for name in _assignment_names(target):
+                    if mutators.get(name) != resolved:
+                        mutators[name] = resolved
+                        changed = True
+    return mutators
+
+
 def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
     tree = ast.parse(source, filename=filename)
     aliases = _imports(tree)
     value_aliases = _resolve_aliases(tree, aliases)
     context_aliases = _decimal_aliases(tree, aliases, value_aliases)
+    context_mutator_aliases = _context_mutator_aliases(
+        tree, aliases, value_aliases, context_aliases
+    )
     findings: list[str] = []
 
     for node in ast.walk(tree):
@@ -268,6 +366,42 @@ def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
                     f"line {node.lineno}: numeric runtime state mutation call: {target}"
                 )
                 continue
+
+            if (
+                isinstance(node.func, ast.Name)
+                and node.func.id in context_mutator_aliases
+            ):
+                findings.append(
+                    f"line {node.lineno}: decimal context mutation alias: "
+                    f"{context_mutator_aliases[node.func.id]}"
+                )
+                continue
+
+            reflected_context_mutator = _context_mutator_name(
+                node.func, aliases, value_aliases, context_aliases
+            )
+            if reflected_context_mutator:
+                findings.append(
+                    f"line {node.lineno}: decimal context mutation call: "
+                    f"{reflected_context_mutator}"
+                )
+                continue
+
+            if (
+                target in UNBOUND_CONTEXT_CONTAINER_MUTATORS
+                and node.args
+            ):
+                root = _context_root(
+                    node.args[0], aliases, value_aliases, context_aliases
+                )
+                if root and (
+                    root.endswith(".flags") or root.endswith(".traps")
+                ):
+                    findings.append(
+                        f"line {node.lineno}: decimal context container mutation: "
+                        f"{target}({root}, ...)"
+                    )
+                    continue
 
             owner = None
             method = None
@@ -383,6 +517,10 @@ def test_evaluation_package_has_no_numeric_runtime_state_mutation() -> None:
         ("import decimal\nctx = decimal.getcontext()\nctx.prec = 50\n", "decimal.getcontext().prec"),
         ("from decimal import getcontext as gc\nctx = gc()\nctx.traps[ValueError] = True\n", "decimal.getcontext().traps"),
         ("import decimal\nctx = decimal.getcontext()\nctx.flags.clear()\n", "decimal.getcontext().flags.clear"),
+        ("import decimal\nctx = decimal.getcontext()\nmutate = ctx.flags.clear\nmutate()\n", "decimal.getcontext().flags.clear"),
+        ("import decimal\nctx = decimal.getcontext()\nmutate = getattr(ctx.traps, 'update')\nmutate({ValueError: True})\n", "decimal.getcontext().traps.update"),
+        ("import decimal\nctx = decimal.getcontext()\ndict.update(ctx.flags, {ValueError: True})\n", "dict.update(decimal.getcontext().flags"),
+        ("import decimal\nimport operator\nctx = decimal.getcontext()\noperator.setitem(ctx.traps, ValueError, True)\n", "operator.setitem(decimal.getcontext().traps"),
         ("import decimal\nctx = decimal.getcontext()\nsetattr(ctx, 'prec', 64)\n", "decimal.getcontext().prec"),
         ("import decimal\ngetattr(decimal, 'setcontext')(decimal.Context())\n", "decimal.setcontext"),
         ("import numpy as np\nmutate = np.seterr\nmutate(over='raise')\n", "numpy.seterr"),
