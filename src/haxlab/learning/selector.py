@@ -433,18 +433,21 @@ def main() -> int:
     parser.add_argument("--holdout-bucket", type=int, default=0)
     args = parser.parse_args()
 
-    manifest = build_training_manifest(
-        analysis_root=args.analysis_root,
-        leaderboard_path=args.leaderboard,
-        raw_root=args.raw_root,
-        top_fraction_per_role=args.top_fraction_per_role,
-        min_players_per_role=max(1, args.min_players_per_role),
-        min_matches=max(1, args.min_matches),
-        min_minutes=max(0.0, args.min_minutes),
-        max_uncertainty=max(0.0, args.max_uncertainty),
-        holdout_modulus=max(2, args.holdout_modulus),
-        holdout_bucket=max(0, args.holdout_bucket),
-    )
+    try:
+        manifest = build_training_manifest(
+            analysis_root=args.analysis_root,
+            leaderboard_path=args.leaderboard,
+            raw_root=args.raw_root,
+            top_fraction_per_role=args.top_fraction_per_role,
+            min_players_per_role=args.min_players_per_role,
+            min_matches=args.min_matches,
+            min_minutes=args.min_minutes,
+            max_uncertainty=args.max_uncertainty,
+            holdout_modulus=args.holdout_modulus,
+            holdout_bucket=args.holdout_bucket,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
