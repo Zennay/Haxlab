@@ -73,16 +73,32 @@ def _load_shard(entry: dict[str, Any]) -> tuple[np.ndarray, list[str]]:
             shard_path.name.removesuffix(".f32.gz") + ".meta.json"
         )
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    row_width = int(meta["rowWidth"])
-    columns = list(meta["columns"])
+    row_width = meta.get("rowWidth")
+    columns = meta.get("columns")
+    if type(row_width) is not int or row_width <= 0:
+        raise ValueError(f"{meta_path}: rowWidth must be a native positive integer")
+    if (
+        type(columns) is not list
+        or not columns
+        or any(type(name) is not str or not name for name in columns)
+        or len(set(columns)) != len(columns)
+    ):
+        raise ValueError(f"{meta_path}: columns must be unique non-empty strings")
+    if row_width != len(columns):
+        raise ValueError(
+            f"{meta_path}: rowWidth {row_width} does not match "
+            f"{len(columns)} declared columns"
+        )
 
     with gzip.open(shard_path, "rb") as handle:
         raw = handle.read()
     values = np.frombuffer(raw, dtype="<f4")
-    if row_width <= 0 or values.size % row_width != 0:
+    if values.size % row_width != 0:
         raise ValueError(
             f"{shard_path}: invalid float32 size {values.size} for row width {row_width}"
         )
+    if not np.isfinite(values).all():
+        raise ValueError(f"{shard_path}: non-finite float32 value")
     rows = values.reshape(-1, row_width)
     return rows, columns
 
