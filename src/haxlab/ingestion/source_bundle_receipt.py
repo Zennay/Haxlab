@@ -304,7 +304,12 @@ def _read_regular_file(
                 )
 
             while True:
-                chunk = os.read(fd, 1024 * 1024)
+                try:
+                    chunk = os.read(fd, 1024 * 1024)
+                except OSError as exc:
+                    raise SourceBundleReceiptError(
+                        f"source_file_read_failed:{relative}:{exc}"
+                    ) from exc
                 if not chunk:
                     break
                 digest.update(chunk)
