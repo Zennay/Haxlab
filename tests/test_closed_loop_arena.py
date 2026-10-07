@@ -567,3 +567,59 @@ def test_stringified_role_metric_fails_closed() -> None:
         "invalid_metric:st:candidate:far_stall_rate:non_numeric"
         in decision.reasons
     )
+
+
+class _ExplodingFloat(float):
+    def __float__(self) -> float:
+        raise AssertionError("custom __float__ must not run at Arena evidence boundary")
+
+
+class _ExplodingInt(int):
+    def __int__(self) -> int:
+        raise AssertionError("custom __int__ must not run at Arena evidence boundary")
+
+
+def test_float_subclass_fails_closed_without_conversion_hook() -> None:
+    payload = _payload()
+    payload["plug_and_play"]["by_role"]["st"]["individual"]["candidate"][
+        "far_stall_rate"
+    ] = _ExplodingFloat(0.05)
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert (
+        "invalid_metric:st:candidate:far_stall_rate:non_numeric"
+        in decision.reasons
+    )
+
+
+def test_int_subclass_fails_closed_without_conversion_hook() -> None:
+    payload = _payload()
+    payload["plug_and_play"]["by_role"]["gk"]["team_outcome"][
+        "matches"
+    ] = _ExplodingInt(4)
+
+    decision = decide_closed_loop_arena(
+        payload,
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert not decision.structurally_valid
+    assert not decision.eligible_for_live_promotion
+    assert "invalid_metric:gk:matches:non_numeric" in decision.reasons
+
+
+def test_native_float_and_int_metrics_remain_accepted() -> None:
+    decision = decide_closed_loop_arena(
+        _payload(),
+        policy=ClosedLoopArenaPolicy(calibrated=True),
+    )
+
+    assert decision.structurally_valid
+    assert decision.behavior_gate_passed
+    assert decision.eligible_for_live_promotion
