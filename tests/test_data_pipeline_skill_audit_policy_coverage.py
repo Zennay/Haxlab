@@ -14,7 +14,7 @@ POLICIES = (
     ("ambient_determinism", "test_data_pipeline_audit_determinism_contract.py", "_ambient_violations"),
     ("exception_boundary", "test_data_pipeline_audit_exception_boundary.py", "_violations"),
     ("module_global_state", "test_data_pipeline_audit_global_state_contract.py", "scan_source"),
-    ("hermeticity", "test_data_pipeline_audit_hermeticity.py", "_forbidden_effects"),
+    ("hermeticity", "test_data_pipeline_audit_hermeticity.py", "_forbidden_effects"),\n    ("gc_state", "test_data_pipeline_audit_gc_state_contract.py", "scan_source"),
     ("instrumentation_state", "test_data_pipeline_audit_instrumentation_state_contract.py", "scan_source"),
     ("interpreter_tuning", "test_data_pipeline_audit_interpreter_tuning_contract.py", "scan_source"),
     ("layer_boundary", "test_data_pipeline_audit_layer_boundary.py", "scan_source"),
