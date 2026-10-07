@@ -136,6 +136,13 @@ def _audit_source_files(
                     "archived/duplicate source must not retain error text",
                 )
         elif status == "failed":
+            if row["sha256"] is not None:
+                _append_issue(
+                    issues,
+                    "source_failure_has_sha256",
+                    subject,
+                    "failed source must not claim an archived replay sha256",
+                )
             if not _nonempty_text(row["error"]):
                 _append_issue(
                     issues,
@@ -364,12 +371,16 @@ def _audit_analysis(
                     subject,
                     "successful analysis must not retain error text",
                 )
-        elif status == "failed" and not _nonempty_text(row["error"]):
+        elif status in {"failed", "retry"} and not _nonempty_text(row["error"]):
             _append_issue(
                 issues,
-                "analysis_failure_missing_error",
+                (
+                    "analysis_failure_missing_error"
+                    if status == "failed"
+                    else "analysis_retry_missing_error"
+                ),
                 subject,
-                "failed analysis requires non-empty error evidence",
+                f"{status} analysis requires retained non-empty error evidence",
             )
 
     for row in connection.execute(
