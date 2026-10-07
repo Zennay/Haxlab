@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from itertools import permutations
+
 import pytest
 
 from haxlab.ingestion.match_id_contract import (
@@ -201,3 +203,31 @@ def test_canonical_match_id_rejects_malformed_replay_sha(
             report_id=None,
             replay_sha256=replay_sha256,
         )
+
+
+def test_duplicate_evidence_is_invariant_across_all_source_permutations() -> None:
+    rows = [
+        _row("match-x", "c" * 64, "300"),
+        _row("match-y", "d" * 64, "400"),
+        _row("match-x", "a" * 64, "100"),
+        _row("match-x", "b" * 64, "200"),
+    ]
+    expected_conflicts = (
+        (
+            "match-x",
+            (
+                ("a" * 64, "100"),
+                ("b" * 64, "200"),
+                ("c" * 64, "300"),
+            ),
+        ),
+    )
+    messages: set[str] = set()
+
+    for candidate in permutations(rows):
+        with pytest.raises(DuplicateMatchIdError) as exc:
+            validate_unique_match_ids(candidate)
+        assert exc.value.conflicts == expected_conflicts
+        messages.add(str(exc.value))
+
+    assert len(messages) == 1
