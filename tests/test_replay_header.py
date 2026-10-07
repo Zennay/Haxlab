@@ -2,6 +2,8 @@ import struct
 import zlib
 from pathlib import Path
 
+import pytest
+
 from haxlab.replay.header import (
     ReplayFormatError,
     decompress_replay_payload,
@@ -39,3 +41,40 @@ def test_rejects_unknown_version(tmp_path: Path) -> None:
         assert "unsupported_version" in str(exc)
     else:
         raise AssertionError("expected ReplayFormatError")
+
+
+
+def test_rejects_trailing_bytes_after_deflate_member(tmp_path: Path) -> None:
+    path = tmp_path / "trailing.hbr2"
+    path.write_bytes(
+        struct.pack(">4sII", b"HBR2", 3, 120)
+        + _raw_deflate(b"payload")
+        + b"trailing-garbage"
+    )
+
+    with pytest.raises(ReplayFormatError, match="deflate_trailing_data"):
+        decompress_replay_payload(path)
+
+
+def test_rejects_incomplete_deflate_member(tmp_path: Path) -> None:
+    compressed = _raw_deflate(b"payload-that-needs-a-complete-stream")
+    assert len(compressed) > 1
+    path = tmp_path / "incomplete.hbr2"
+    path.write_bytes(
+        struct.pack(">4sII", b"HBR2", 3, 120)
+        + compressed[:-1]
+    )
+
+    with pytest.raises(ReplayFormatError, match="deflate_incomplete"):
+        decompress_replay_payload(path)
+
+
+def test_rejects_invalid_raw_deflate_bytes(tmp_path: Path) -> None:
+    path = tmp_path / "invalid-deflate.hbr2"
+    path.write_bytes(
+        struct.pack(">4sII", b"HBR2", 3, 120)
+        + b"not-a-deflate-stream"
+    )
+
+    with pytest.raises(ReplayFormatError, match="deflate_error:"):
+        decompress_replay_payload(path)
