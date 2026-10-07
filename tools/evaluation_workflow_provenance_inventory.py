@@ -16,11 +16,11 @@ USES_LINE = re.compile(r"""(?m)^[ \t]+uses:[ \t]*["']?([^"'\s#]+)["']?""")
 WRITE_PERMISSION_LINE = re.compile(
     r"(?m)^[ \t]+[A-Za-z0-9_-]+:[ \t]*write[ \t]*$"
 )
-SOURCE_SHA_MARKERS = (
+EVENT_SHA_MARKERS = (
     "github.sha",
     "github.event.pull_request.head.sha",
-    "inputs.ref",
 )
+INPUT_REF_MARKER = "inputs.ref"
 
 DEFAULT_WORKFLOWS: tuple[str, ...] = (
     ".github/workflows/arena-runner-config-integrity-validation.yml",
@@ -134,7 +134,18 @@ def _checkout_blocks(text: str) -> tuple[str, ...]:
     return tuple(blocks)
 
 
-def _checkout_ref_kind(block: str) -> str:
+def _validates_exact_sha_input(text: str) -> bool:
+    if INPUT_REF_MARKER not in text:
+        return False
+    return bool(
+        re.search(
+            r"""\^\[0-9a-f\]\{40\}\$""",
+            text,
+        )
+    )
+
+
+def _checkout_ref_kind(block: str, *, exact_input_validated: bool) -> str:
     ref_lines = [
         line.strip()
         for line in block.splitlines()
@@ -143,8 +154,10 @@ def _checkout_ref_kind(block: str) -> str:
     if len(ref_lines) != 1:
         return "missing_or_ambiguous"
     ref_line = ref_lines[0]
-    if any(marker in ref_line for marker in SOURCE_SHA_MARKERS):
+    if any(marker in ref_line for marker in EVENT_SHA_MARKERS):
         return "event_source"
+    if INPUT_REF_MARKER in ref_line:
+        return "validated_input" if exact_input_validated else "mutable_input"
     match = re.fullmatch(
         r"""ref:\s*["']?([0-9a-f]{40})["']?\s*(?:#.*)?""",
         ref_line,
@@ -154,10 +167,16 @@ def _checkout_ref_kind(block: str) -> str:
     return "mutable_or_unbound"
 
 
-def _source_bound_vars(lines: Sequence[str]) -> set[str]:
+def _source_bound_vars(
+    lines: Sequence[str],
+    *,
+    exact_input_validated: bool,
+) -> set[str]:
     variables: set[str] = set()
     for line in lines:
-        if not any(marker in line for marker in SOURCE_SHA_MARKERS):
+        has_event_sha = any(marker in line for marker in EVENT_SHA_MARKERS)
+        has_validated_input = exact_input_validated and INPUT_REF_MARKER in line
+        if not (has_event_sha or has_validated_input):
             continue
         match = re.match(
             r"^\s*(?:export\s+)?([A-Z_][A-Z0-9_]*)\s*(?::|=)",
@@ -195,13 +214,19 @@ def _block_exits_nonzero(lines: Sequence[str], start: int) -> bool:
 
 def _has_exact_head_guard(text: str) -> bool:
     lines = text.splitlines()
-    expected_vars = _source_bound_vars(lines)
+    exact_input_validated = _validates_exact_sha_input(text)
+    expected_vars = _source_bound_vars(
+        lines,
+        exact_input_validated=exact_input_validated,
+    )
 
     # Direct source-bound equality assertion.
     for line in lines:
         if "git rev-parse HEAD" not in line or not _is_equality_assertion(line):
             continue
-        if any(marker in line for marker in SOURCE_SHA_MARKERS):
+        has_event_sha = any(marker in line for marker in EVENT_SHA_MARKERS)
+        has_validated_input = exact_input_validated and INPUT_REF_MARKER in line
+        if has_event_sha or has_validated_input:
             return True
         if any(_shell_var_on_line(name, line) for name in expected_vars):
             return True
@@ -271,9 +296,16 @@ def audit_workflow_text(path: str, text: str) -> dict[str, object]:
         re.search(r"(?m)^\s+clean:\s*true\s*$", block)
         for block in checkout_blocks
     )
-    checkout_ref_kinds = [_checkout_ref_kind(block) for block in checkout_blocks]
+    exact_input_validated = _validates_exact_sha_input(text)
+    checkout_ref_kinds = [
+        _checkout_ref_kind(
+            block,
+            exact_input_validated=exact_input_validated,
+        )
+        for block in checkout_blocks
+    ]
     checkout_refs_bound = bool(checkout_blocks) and all(
-        kind in {"event_source", "immutable_commit"}
+        kind in {"event_source", "validated_input", "immutable_commit"}
         for kind in checkout_ref_kinds
     )
     records_head = "git rev-parse HEAD" in text
