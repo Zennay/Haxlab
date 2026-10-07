@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 
 import pytest
 import haxlab.skill.leaderboard_audit as audit_module
 
+from haxlab.skill.leaderboard import main as leaderboard_main
 from haxlab.skill.leaderboard_audit import (
     AUDIT_SCHEMA,
     DIMENSIONS,
@@ -251,3 +253,89 @@ def test_audit_handles_short_regular_file_reads(
 
     assert receipt["ok"] is True
     assert receipt["row_count"] == 1
+
+
+def test_audit_accepts_real_producer_snapshot(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    analysis_root = tmp_path / "state-pass-v4"
+    analysis_root.mkdir()
+    (analysis_root / "match.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 3,
+                "totalFrames": 21600,
+                "simulation": {"sampleEveryTicks": 6},
+                "players": [
+                    {
+                        "id": 1,
+                        "name": "Alpha",
+                        "teamId": 1,
+                        "samples": 3600,
+                        "averageX": 0.0,
+                        "averageY": 0.0,
+                        "nearestBallSamples": 1000,
+                        "closeBallSamples": 400,
+                        "kickEvents": 20,
+                        "inferredRetainedChains": 12,
+                        "inferredLostChains": 3,
+                        "inferredRecoveries": 5,
+                        "inferredGoals": 1,
+                        "inferredAssists": 1,
+                        "progressionEvents": 8,
+                        "progressionSum": 80.0,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "leaderboard.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "haxlab-skill",
+            "--root",
+            str(analysis_root),
+            "--top",
+            "10",
+            "--min-matches",
+            "1",
+            "--min-minutes",
+            "0",
+            "--format",
+            "json",
+            "--output",
+            str(output),
+        ],
+    )
+
+    assert leaderboard_main() == 0
+    capsys.readouterr()
+
+    receipt = audit_leaderboard(output)
+
+    assert receipt["ok"] is True
+    assert receipt["row_count"] == 1
+
+
+def test_audit_cli_failure_is_machine_readable(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    path = tmp_path / "leaderboard.json"
+    path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["haxlab-skill-leaderboard-audit", str(path)])
+
+    assert audit_module.main() == 2
+    captured = capsys.readouterr()
+    error = json.loads(captured.err)
+
+    assert captured.out == ""
+    assert error["schema"] == AUDIT_SCHEMA
+    assert error["ok"] is False
+    assert error["error"]
