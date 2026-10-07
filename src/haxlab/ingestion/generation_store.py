@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 import secrets
 import stat
-from typing import BinaryIO
 
 from haxlab.ingestion.dataset_receipt import (
     M0_ARTIFACTS,
@@ -245,7 +244,7 @@ def _cleanup_stage(generations_fd: int, stage_name: str) -> None:
             except FileNotFoundError:
                 pass
         os.fsync(stage_fd)
-    except GenerationStoreError:
+    except (GenerationStoreError, OSError):
         return
     finally:
         if stage_fd >= 0:
@@ -306,15 +305,24 @@ def publish_generation(
     generation_id = str(commit["generation_id"])
 
     try:
+        resolved_source = source_root.resolve(strict=True)
+        prospective_store = store_root.resolve(strict=False)
+    except OSError as exc:
+        raise GenerationStoreError("source/store paths cannot be resolved safely") from exc
+    if prospective_store == resolved_source or prospective_store.is_relative_to(
+        resolved_source
+    ):
+        raise GenerationStoreError("store_root must be outside source_root")
+
+    try:
         store_root.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise GenerationStoreError(f"failed to create store root: {store_root}") from exc
 
     try:
-        resolved_source = source_root.resolve(strict=True)
         resolved_store = store_root.resolve(strict=True)
     except OSError as exc:
-        raise GenerationStoreError("source/store paths cannot be resolved safely") from exc
+        raise GenerationStoreError("store_root cannot be resolved safely") from exc
     if resolved_store == resolved_source or resolved_store.is_relative_to(resolved_source):
         raise GenerationStoreError("store_root must be outside source_root")
 
@@ -372,9 +380,15 @@ def publish_generation(
                     src_dir_fd=generations_fd,
                     dst_dir_fd=generations_fd,
                 )
+                stage_name = None
             except OSError as exc:
-                raise GenerationStoreError("failed to publish immutable generation") from exc
-            stage_name = None
+                if not _entry_exists(generations_fd, generation_id):
+                    raise GenerationStoreError(
+                        "failed to publish immutable generation"
+                    ) from exc
+                _validate_existing_generation(generation_root, commit)
+                _cleanup_stage(generations_fd, stage_name)
+                stage_name = None
             os.fsync(generations_fd)
             _emit_fault(_fault, "after_generation_publish")
             _validate_existing_generation(generation_root, commit)
