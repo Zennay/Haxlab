@@ -136,3 +136,22 @@ def test_systemd_flags_are_declared_by_the_bound_runtime_modules() -> None:
             f"{PIPELINE_SERVICES[name].name} passes undeclared flags: "
             f"{sorted(service_flags - declared_flags)}"
         )
+
+
+def _installed_cli_links(script_name: str) -> set[str]:
+    text = (DEPLOY / script_name).read_text(encoding="utf-8")
+    return set(
+        re.findall(
+            r'ln -sf "\$\{APP_DIR\}/\.venv/bin/(haxlab[^"]*)" '
+            r'/usr/local/bin/[^\s]+',
+            text,
+        )
+    )
+
+
+def test_fresh_install_and_update_publish_the_same_haxlab_clis() -> None:
+    fresh_install = _installed_cli_links("install-vps.sh")
+    update_install = _installed_cli_links("update-vps.sh")
+
+    assert fresh_install == update_install
+    assert "haxlab-generation-loop" in fresh_install
