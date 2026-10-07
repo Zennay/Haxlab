@@ -53,14 +53,16 @@ jobs:
           .policy-config-venv/bin/pip install --upgrade pip
           .policy-config-venv/bin/pip install -e '.[dev]'
 
-      - name: Compile policy config boundary
+      - name: Compile evaluation package
         shell: bash
         run: |
           set -euo pipefail
-          .policy-config-venv/bin/python -m compileall -q src/haxlab/evaluation/policy_config.py
+          .policy-config-venv/bin/python -m compileall -q src/haxlab/evaluation
 
-      - name: Run focused policy config regressions
+      - name: Run focused policy config and promotion regressions
         shell: bash
         run: |
           set -euo pipefail
-          .policy-config-venv/bin/pytest -q tests/test_evaluation_policy_config.py
+          .policy-config-venv/bin/pytest -q \
+            tests/test_evaluation_policy_config.py \
+            tests/test_promotion.py
