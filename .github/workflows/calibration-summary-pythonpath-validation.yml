@@ -1,0 +1,106 @@
+name: Calibration summary import validation
+
+on:
+  push:
+    branches:
+      - validation/calibration-summary-pythonpath-20261007
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: haxlab-calibration-summary-pythonpath-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Verify exact live head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk 'NR == 1 {print $1}')"
+          test -n "$remote_head"
+          test "$remote_head" = "${{ github.sha }}"
+          echo "HAXLAB_CALIBRATION_SUMMARY_IMPORT_HEAD=$remote_head"
+
+      - name: Create isolated proof environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .calibration-summary-proof-venv
+          python3 -m venv .calibration-summary-proof-venv
+          .calibration-summary-proof-venv/bin/pip install --upgrade pip
+          .calibration-summary-proof-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile focused contract and calibration gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          .calibration-summary-proof-venv/bin/python -m py_compile \
+            tests/test_calibration_summary_pythonpath_contract.py \
+            src/haxlab/evaluation/calibration_gate.py
+
+      - name: Prove exact-checkout calibration import
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .calibration-summary-proof-venv/bin/python - <<'PY'
+          from haxlab.evaluation.calibration_gate import decide_calibration_gate
+          assert callable(decide_calibration_gate)
+          print("HAXLAB_CALIBRATION_SUMMARY_IMPORT_PROVENANCE=green")
+          PY
+
+      - name: Run focused and adjacent calibration regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .calibration-summary-proof-venv/bin/pytest -q \
+              tests/test_calibration_summary_pythonpath_contract.py \
+              tests/test_calibration_gate.py \
+              tests/test_calibration_resume.py \
+              tests/test_calibration_workflow_evidence_contract.py
+
+      - name: Record green result
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HAXLAB_CALIBRATION_SUMMARY_PYTHONPATH_RESULT=green"
+
+      - name: Publish exact-head proof receipt
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          JOB_STATUS: ${{ job.status }}
+        with:
+          script: |
+            const success = process.env.JOB_STATUS === "success";
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: 375,
+              body: [
+                `Exact-head self-hosted proof: **${success ? "SUCCESS" : "FAILURE"}**`,
+                "",
+                `- run: \`${context.runId}\``,
+                `- exact/live head: \`${context.sha}\``,
+                `- branch: \`${context.ref.replace("refs/heads/", "")}\``,
+                `- job status: \`${process.env.JOB_STATUS}\``,
+                "- focused workflow contract + exact-checkout calibration import + adjacent calibration regressions required on success",
+                "- green marker: `HAXLAB_CALIBRATION_SUMMARY_PYTHONPATH_RESULT=green`",
+              ].join("\n"),
+            });

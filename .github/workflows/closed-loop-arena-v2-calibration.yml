@@ -471,7 +471,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sudo -u haxlab env ARENA_OUT="$ARENA_OUT" GITHUB_SHA="$GITHUB_SHA"             /opt/haxlab/.venv/bin/python - <<'PY'
+          sudo -u haxlab env \
+            PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            ARENA_OUT="$ARENA_OUT" \
+            GITHUB_SHA="$GITHUB_SHA" \
+            /opt/haxlab/.venv/bin/python - <<'PY'
           import json
           import os
           import statistics
