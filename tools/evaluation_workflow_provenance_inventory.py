@@ -146,10 +146,14 @@ def _checkout_ref_kind(block: str, *, exact_input_validated: bool) -> str:
     if len(ref_lines) != 1:
         return "missing_or_ambiguous"
     ref_line = ref_lines[0]
+    if INPUT_REF_MARKER in ref_line:
+        if not exact_input_validated:
+            return "mutable_input"
+        if any(marker in ref_line for marker in EVENT_SHA_MARKERS):
+            return "validated_input_or_event"
+        return "validated_input"
     if any(marker in ref_line for marker in EVENT_SHA_MARKERS):
         return "event_source"
-    if INPUT_REF_MARKER in ref_line:
-        return "validated_input" if exact_input_validated else "mutable_input"
     match = re.fullmatch(
         r"""ref:\s*["']?([0-9a-f]{40})["']?\s*(?:#.*)?""",
         ref_line,
@@ -397,7 +401,12 @@ def audit_workflow_text(path: str, text: str) -> dict[str, object]:
         for block in checkout_blocks
     ]
     checkout_refs_bound = bool(checkout_blocks) and all(
-        kind in {"event_source", "validated_input", "immutable_commit"}
+        kind in {
+            "event_source",
+            "validated_input",
+            "validated_input_or_event",
+            "immutable_commit",
+        }
         for kind in checkout_ref_kinds
     )
     records_head = "git rev-parse HEAD" in text
