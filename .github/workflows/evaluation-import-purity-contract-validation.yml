@@ -1,16 +1,21 @@
 name: Evaluation import purity contract validation
 
 on:
-  push:
+  pull_request:
     branches:
-      - validation/evaluation-import-purity-contract-20261007
+      - feature/arena-v2-current-main-20261004
+    paths:
+      - "src/haxlab/evaluation/**"
+      - "tests/test_evaluation_import_purity_contract.py"
+      - "docs/evaluation-import-purity-contract.md"
+      - ".github/workflows/evaluation-import-purity-contract-validation.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: haxlab-evaluation-import-purity-${{ github.ref }}
+  group: haxlab-evaluation-import-purity-${{ github.event.pull_request.head.ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -21,14 +26,16 @@ jobs:
       - name: Checkout exact validation head
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           clean: true
 
       - name: Verify immutable checkout
         shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           echo "HAXLAB_EVALUATION_IMPORT_PURITY_HEAD=$(git rev-parse HEAD)"
 
       - name: Create isolated test environment
