@@ -277,3 +277,20 @@ def test_audit_rejects_match_id_drift(tmp_path: Path) -> None:
 
     assert result.ok is False
     assert "matches:0:match_id_mismatch" in result.issues
+
+
+def test_audit_rejects_match_to_basic_invalid_replay(tmp_path: Path) -> None:
+    root = tmp_path / "m0"
+    _write_dataset(root)
+
+    replays = json.loads((root / "replays.json").read_text(encoding="utf-8"))
+    replays[0]["basic_validation"] = {
+        "valid": False,
+        "reasons": ["invalid_total_frames"],
+    }
+    (root / "replays.json").write_text(json.dumps(replays), encoding="utf-8")
+
+    result = audit_dataset(root)
+
+    assert result.ok is False
+    assert "matches:0:matched_invalid_replay" in result.issues
