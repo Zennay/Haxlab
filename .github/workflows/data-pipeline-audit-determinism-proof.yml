@@ -1,0 +1,55 @@
+name: HaxLab data pipeline audit determinism proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact branch SHA to prove
+        required: true
+        type: string
+  push:
+    branches:
+      - validation/data-pipeline-audit-determinism-contract-20261007
+    paths:
+      - "tests/test_data_pipeline_audit_determinism_contract.py"
+      - "docs/data-pipeline-audit-determinism.md"
+      - ".github/workflows/data-pipeline-audit-determinism-proof.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-audit-determinism-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate exact-head audit determinism contract
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    env:
+      EXPECTED_HEAD: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_sha || github.sha }}
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+
+      - name: Assert exact head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Run focused proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .audit-determinism-venv
+          python3 -m venv .audit-determinism-venv
+          .audit-determinism-venv/bin/pip install -q --upgrade pip
+          .audit-determinism-venv/bin/pip install -q -e '.[dev]'
+          .audit-determinism-venv/bin/python -m compileall -q tests/test_data_pipeline_audit_determinism_contract.py
+          .audit-determinism-venv/bin/pytest -q tests/test_data_pipeline_audit_determinism_contract.py
+          .audit-determinism-venv/bin/pytest --collect-only -q >/dev/null
