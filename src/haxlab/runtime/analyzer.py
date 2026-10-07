@@ -35,12 +35,10 @@ def _analyze_one(
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{replay.sha256}.json"
 
-    if output_path.exists():
-        try:
-            return replay, json.loads(output_path.read_text(encoding="utf-8")), None, output_path
-        except (OSError, json.JSONDecodeError):
-            pass
-
+    # Selection means there is no committed successful analysis row for this
+    # analyzer version. A pre-existing derived file can only be orphan/stale
+    # evidence from an interrupted or tampered run, so never promote it by
+    # reuse. Re-run the decoder and replace it atomically below.
     command = [
         "node",
         str(decoder_script),
