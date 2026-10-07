@@ -15,6 +15,7 @@ POLICIES = (
     ("exception_boundary", "test_data_pipeline_audit_exception_boundary.py", "_violations"),
     ("module_global_state", "test_data_pipeline_audit_global_state_contract.py", "scan_source"),
     ("hermeticity", "test_data_pipeline_audit_hermeticity.py", "_forbidden_effects"),
+    ("gc_state", "test_data_pipeline_audit_gc_state_contract.py", "scan_source"),
     ("instrumentation_state", "test_data_pipeline_audit_instrumentation_state_contract.py", "scan_source"),
     ("interpreter_tuning", "test_data_pipeline_audit_interpreter_tuning_contract.py", "scan_source"),
     ("layer_boundary", "test_data_pipeline_audit_layer_boundary.py", "scan_source"),
@@ -53,6 +54,7 @@ SMOKE_SOURCES = {
         "    CACHE.append('x')\n"
     ),
     "hermeticity": "import socket\nsocket.socket()\n",
+    "gc_state": "import gc\ngc.disable()\n",
     "instrumentation_state": "import sys\nsys.addaudithook(lambda *args: None)\n",
     "interpreter_tuning": "import sys\nsys.setrecursionlimit(2000)\n",
     "layer_boundary": "import haxlab.evaluation.promotion as promotion\n",
