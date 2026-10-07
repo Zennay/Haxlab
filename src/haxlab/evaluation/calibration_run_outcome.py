@@ -7,7 +7,7 @@ from typing import Any, Sequence
 
 
 SCHEMA = "haxlab-calibration-run-outcome-v1"
-MODEL_REJECTION_MARKER = "frozen policy validation failed:"
+GATE_REJECTION_MARKER = "frozen policy validation failed:"
 
 PREP_STEPS = (
     "Checkout exact event SHA",
@@ -187,7 +187,7 @@ def classify_calibration_job(
 
     summary_conclusion = step_conclusion(SUMMARY_STEP)
     if summary_conclusion in FAILURE_CONCLUSIONS:
-        if isinstance(job_log, str) and MODEL_REJECTION_MARKER in job_log:
+        if isinstance(job_log, str) and GATE_REJECTION_MARKER in job_log:
             return _result(
                 run_id=run_id,
                 job_id=job_id,
