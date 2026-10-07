@@ -15,7 +15,8 @@ A clean audit exits 0 and emits `haxlab-imitation-shard-audit-v1`. Any structura
 
 The verifier fails closed when:
 
-- the shard root, index, metadata, or shard is missing, symlinked, non-regular, unreadable, or malformed;
+- the shard root is not a stable non-symlink directory: it is pinned with `O_DIRECTORY|O_NOFOLLOW`, all audit members are opened relative to that descriptor, and the logical root path must still resolve to the same directory identity before success;
+- index, metadata, or shard members are missing, symlinked, non-regular, unreadable, malformed, or change logical inode/size while being audited;
 - index/metadata JSON contains duplicate object keys or non-standard `NaN` / `Infinity` / `-Infinity` numeric constants;
 - index schema, manifest schema, split, cadence, replay identity, native integer counters, or success/failure identity sets are invalid;
 - a success entry does not have exactly the canonical `<replay_sha256>.meta.json` and `<replay_sha256>.f32.gz` pair;
@@ -25,7 +26,8 @@ The verifier fails closed when:
 - actual compressed bytes differ from producer metadata;
 - index aggregates differ from the audited artifacts;
 - orphan shard/metadata files or abandoned `.f32.gz.tmp-*` outputs exist;
-- `_index.json` changes while the audit is in progress.
+- `_index.json` changes while the audit is in progress;
+- the logical shard root is replaced or redirected while the audit is in progress.
 
 The receipt includes the exact index SHA-256 and a deterministic inventory SHA-256 over each audited replay identity, compressed-content SHA-256, compressed byte size, uncompressed byte size, and sample count.
 

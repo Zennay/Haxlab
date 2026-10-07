@@ -142,6 +142,217 @@ def _load_object(path: Path) -> tuple[dict[str, Any], bytes]:
     return value, payload
 
 
+
+def _open_shard_root(path: Path) -> tuple[int, tuple[int, int]]:
+    try:
+        initial = path.lstat()
+    except OSError as exc:
+        raise AuditInputError(
+            f"unsafe_or_missing_shard_root:{exc}"
+        ) from exc
+    if stat.S_ISLNK(initial.st_mode) or not stat.S_ISDIR(initial.st_mode):
+        raise AuditInputError(
+            "shard_root_must_be_regular_directory"
+        )
+
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    directory = getattr(os, "O_DIRECTORY", None)
+    if nofollow is None or directory is None:
+        raise AuditInputError(
+            "platform_lacks_directory_no_follow_support"
+        )
+    flags = os.O_RDONLY | nofollow | directory
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise AuditInputError(
+            f"unsafe_or_missing_shard_root:{exc}"
+        ) from exc
+
+    try:
+        opened = os.fstat(fd)
+    except OSError as exc:
+        os.close(fd)
+        raise AuditInputError(
+            f"unreadable_shard_root_descriptor:{exc}"
+        ) from exc
+    if not stat.S_ISDIR(opened.st_mode):
+        os.close(fd)
+        raise AuditInputError(
+            "shard_root_descriptor_not_directory"
+        )
+    if (opened.st_dev, opened.st_ino) != (initial.st_dev, initial.st_ino):
+        os.close(fd)
+        raise AuditInputError(
+            "shard_root_identity_changed_during_open"
+        )
+    return fd, (opened.st_dev, opened.st_ino)
+
+
+def _reconfirm_shard_root(
+    path: Path,
+    *,
+    root_fd: int,
+    identity: tuple[int, int],
+) -> None:
+    try:
+        opened = os.fstat(root_fd)
+    except OSError as exc:
+        raise AuditInputError(
+            f"unreadable_shard_root_descriptor:{exc}"
+        ) from exc
+    if (
+        not stat.S_ISDIR(opened.st_mode)
+        or (opened.st_dev, opened.st_ino) != identity
+    ):
+        raise AuditInputError(
+            "shard_root_descriptor_identity_changed"
+        )
+
+    try:
+        current = path.lstat()
+    except OSError as exc:
+        raise AuditInputError(
+            f"shard_root_path_changed_during_audit:{exc}"
+        ) from exc
+    if (
+        stat.S_ISLNK(current.st_mode)
+        or not stat.S_ISDIR(current.st_mode)
+        or (current.st_dev, current.st_ino) != identity
+    ):
+        raise AuditInputError(
+            "shard_root_identity_changed_during_audit"
+        )
+
+
+def _member_name(name: str) -> str:
+    if (
+        type(name) is not str
+        or not name
+        or name in {".", ".."}
+        or "/" in name
+        or "\\" in name
+    ):
+        raise AuditInputError("unsafe_shard_member_name")
+    return name
+
+
+def _open_regular_at(
+    root_fd: int,
+    name: str,
+) -> tuple[BinaryIO, tuple[int, int, int]]:
+    name = _member_name(name)
+    try:
+        initial = os.stat(
+            name,
+            dir_fd=root_fd,
+            follow_symlinks=False,
+        )
+    except OSError as exc:
+        raise AuditInputError(
+            f"unsafe_or_unreadable_file:{name}:{exc}"
+        ) from exc
+    if stat.S_ISLNK(initial.st_mode) or not stat.S_ISREG(initial.st_mode):
+        raise AuditInputError(f"not_regular_file:{name}")
+
+    flags = os.O_RDONLY
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(name, flags, dir_fd=root_fd)
+    except OSError as exc:
+        raise AuditInputError(
+            f"unsafe_or_unreadable_file:{name}:{exc}"
+        ) from exc
+
+    try:
+        opened = os.fstat(fd)
+    except OSError as exc:
+        os.close(fd)
+        raise AuditInputError(
+            f"unreadable_file_descriptor:{name}:{exc}"
+        ) from exc
+    identity = (opened.st_dev, opened.st_ino, opened.st_size)
+    if not stat.S_ISREG(opened.st_mode):
+        os.close(fd)
+        raise AuditInputError(f"not_regular_file:{name}")
+    if identity != (initial.st_dev, initial.st_ino, initial.st_size):
+        os.close(fd)
+        raise AuditInputError(
+            f"file_identity_changed_during_open:{name}"
+        )
+    try:
+        handle = os.fdopen(fd, "rb", closefd=True)
+    except OSError as exc:
+        os.close(fd)
+        raise AuditInputError(
+            f"cannot_wrap_file_descriptor:{name}:{exc}"
+        ) from exc
+    return handle, identity
+
+
+def _reconfirm_member(
+    root_fd: int,
+    name: str,
+    identity: tuple[int, int, int],
+) -> None:
+    name = _member_name(name)
+    try:
+        current = os.stat(
+            name,
+            dir_fd=root_fd,
+            follow_symlinks=False,
+        )
+    except OSError as exc:
+        raise AuditInputError(
+            f"logical_path_changed:{name}:{exc}"
+        ) from exc
+    if (
+        stat.S_ISLNK(current.st_mode)
+        or not stat.S_ISREG(current.st_mode)
+        or (current.st_dev, current.st_ino, current.st_size) != identity
+    ):
+        raise AuditInputError(
+            f"logical_path_identity_changed:{name}"
+        )
+
+
+def _read_regular_bytes_at(
+    root_fd: int,
+    name: str,
+    *,
+    max_bytes: int = _MAX_JSON_BYTES,
+) -> bytes:
+    handle, identity = _open_regular_at(root_fd, name)
+    with handle:
+        payload = handle.read(max_bytes + 1)
+    if len(payload) > max_bytes:
+        raise AuditInputError(f"file_too_large:{name}")
+    _reconfirm_member(root_fd, name, identity)
+    return payload
+
+
+def _load_object_at(
+    root_fd: int,
+    name: str,
+) -> tuple[dict[str, Any], bytes]:
+    payload = _read_regular_bytes_at(root_fd, name)
+    try:
+        value = json.loads(
+            payload,
+            object_pairs_hook=_unique_object,
+            parse_constant=_invalid_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AuditInputError(f"invalid_json:{name}:{exc}") from exc
+    if not isinstance(value, dict):
+        raise AuditInputError(f"json_not_object:{name}")
+    return value, payload
+
 def _validate_identity_map(
     value: Any,
     *,
@@ -241,6 +452,51 @@ def _inspect_gzip_shard(
         )
     return compressed_bytes, uncompressed_bytes, digest.hexdigest()
 
+
+
+def _inspect_gzip_shard_at(
+    root_fd: int,
+    name: str,
+    *,
+    expected_uncompressed_bytes: int,
+) -> tuple[int, int, str]:
+    handle, identity = _open_regular_at(root_fd, name)
+    with handle:
+        digest = hashlib.sha256()
+        compressed_bytes = 0
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+            compressed_bytes += len(chunk)
+
+        handle.seek(0)
+        uncompressed_bytes = 0
+        try:
+            with gzip.GzipFile(fileobj=handle, mode="rb") as decompressed:
+                while True:
+                    chunk = decompressed.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    uncompressed_bytes += len(chunk)
+                    if uncompressed_bytes > expected_uncompressed_bytes:
+                        raise AuditInputError(
+                            "uncompressed_size_exceeds_metadata:"
+                            f"{name}"
+                        )
+        except (OSError, EOFError) as exc:
+            raise AuditInputError(
+                f"invalid_gzip:{name}:{exc}"
+            ) from exc
+
+    _reconfirm_member(root_fd, name, identity)
+    if uncompressed_bytes != expected_uncompressed_bytes:
+        raise AuditInputError(
+            f"uncompressed_size_mismatch:{name}:"
+            f"{uncompressed_bytes}!={expected_uncompressed_bytes}"
+        )
+    return compressed_bytes, uncompressed_bytes, digest.hexdigest()
 
 def _validate_index_header(
     index: dict[str, Any],
@@ -424,221 +680,220 @@ def _validate_meta(
 
 
 def audit_shard_directory(shard_dir: Path) -> dict[str, Any]:
+    root_fd, root_identity = _open_shard_root(shard_dir)
     try:
-        root_stat = os.stat(shard_dir, follow_symlinks=False)
-    except OSError as exc:
-        raise AuditInputError(
-            f"unsafe_or_missing_shard_root:{exc}"
-        ) from exc
-    if (
-        not stat.S_ISDIR(root_stat.st_mode)
-        or shard_dir.is_symlink()
-    ):
-        raise AuditInputError(
-            "shard_root_must_be_regular_directory"
+        index, index_bytes_before = _load_object_at(
+            root_fd,
+            "_index.json",
         )
+        index_sha256 = hashlib.sha256(index_bytes_before).hexdigest()
+        errors: list[str] = []
+        _validate_index_header(index, errors)
 
-    index_path = shard_dir / "_index.json"
-    index, index_bytes_before = _load_object(index_path)
-    index_sha256 = hashlib.sha256(index_bytes_before).hexdigest()
-    errors: list[str] = []
-    _validate_index_header(index, errors)
+        entries_value = index.get("entries")
+        failures_value = index.get("failures")
+        entries = entries_value if isinstance(entries_value, list) else []
+        failures = failures_value if isinstance(failures_value, list) else []
 
-    entries_value = index.get("entries")
-    failures_value = index.get("failures")
-    entries = entries_value if isinstance(entries_value, list) else []
-    failures = failures_value if isinstance(failures_value, list) else []
-
-    entry_by_sha: dict[str, dict[str, Any]] = {}
-    for position, entry in enumerate(entries):
-        if not isinstance(entry, dict):
-            errors.append(f"entry_{position}:not_object")
-            continue
-        replay_sha = entry.get("replay_sha256")
-        if not _canonical_sha(replay_sha):
-            errors.append(
-                f"entry_{position}:invalid_replay_sha256"
-            )
-            continue
-        if replay_sha in entry_by_sha:
-            errors.append(
-                f"{replay_sha}:duplicate_index_entry"
-            )
-            continue
-        entry_by_sha[replay_sha] = entry
-
-    failure_shas: set[str] = set()
-    for position, failure in enumerate(failures):
-        if not isinstance(failure, dict):
-            errors.append(f"failure_{position}:not_object")
-            continue
-        replay_sha = failure.get("replay_sha256")
-        error = failure.get("error")
-        if not _canonical_sha(replay_sha):
-            errors.append(
-                f"failure_{position}:invalid_replay_sha256"
-            )
-            continue
-        if replay_sha in failure_shas:
-            errors.append(f"{replay_sha}:duplicate_failure")
-        failure_shas.add(replay_sha)
-        if not isinstance(error, str) or not error.strip():
-            errors.append(
-                f"{replay_sha}:missing_failure_error"
-            )
-
-    for replay_sha in sorted(set(entry_by_sha) & failure_shas):
-        errors.append(f"{replay_sha}:both_success_and_failure")
-
-    expected_files = {"_index.json"}
-    inventory_lines: list[str] = []
-    aggregate_samples = 0
-    aggregate_compressed = 0
-    aggregate_seen = 0
-    aggregate_skipped = 0
-    aggregate_uncompressed = 0
-    sample_every_ticks = index.get("sample_every_ticks")
-    cadence = (
-        sample_every_ticks
-        if _native_int(sample_every_ticks, minimum=1)
-        else -1
-    )
-
-    for replay_sha in sorted(entry_by_sha):
-        entry = entry_by_sha[replay_sha]
-        meta_name = f"{replay_sha}.meta.json"
-        shard_name = f"{replay_sha}.f32.gz"
-        expected_files.update({meta_name, shard_name})
-        meta_path = shard_dir / meta_name
-        shard_path = shard_dir / shard_name
-        try:
-            meta, _ = _load_object(meta_path)
-        except AuditInputError as exc:
-            errors.append(f"{replay_sha}:meta:{exc}")
-            continue
-
-        validated = _validate_meta(
-            replay_sha,
-            meta,
-            entry,
-            sample_every_ticks=cadence,
-            errors=errors,
-        )
-        if validated is None:
-            continue
-        samples, declared_compressed, seen, skipped = validated
-        expected_uncompressed = (
-            samples * EXPECTED_ROW_WIDTH * _FLOAT32_BYTES
-        )
-        try:
-            (
-                actual_compressed,
-                actual_uncompressed,
-                compressed_sha,
-            ) = _inspect_gzip_shard(
-                shard_path,
-                expected_uncompressed_bytes=expected_uncompressed,
-            )
-        except AuditInputError as exc:
-            errors.append(f"{replay_sha}:shard:{exc}")
-            continue
-
-        if actual_compressed != declared_compressed:
-            errors.append(
-                f"{replay_sha}:compressed_size:"
-                f"{actual_compressed}!={declared_compressed}"
-            )
-        aggregate_samples += samples
-        aggregate_compressed += actual_compressed
-        aggregate_seen += seen
-        aggregate_skipped += skipped
-        aggregate_uncompressed += actual_uncompressed
-        inventory_lines.append(
-            "\t".join(
-                (
-                    replay_sha,
-                    compressed_sha,
-                    str(actual_compressed),
-                    str(actual_uncompressed),
-                    str(samples),
+        entry_by_sha: dict[str, dict[str, Any]] = {}
+        for position, entry in enumerate(entries):
+            if not isinstance(entry, dict):
+                errors.append(f"entry_{position}:not_object")
+                continue
+            replay_sha = entry.get("replay_sha256")
+            if not _canonical_sha(replay_sha):
+                errors.append(
+                    f"entry_{position}:invalid_replay_sha256"
                 )
-            )
-            + "\n"
+                continue
+            if replay_sha in entry_by_sha:
+                errors.append(
+                    f"{replay_sha}:duplicate_index_entry"
+                )
+                continue
+            entry_by_sha[replay_sha] = entry
+
+        failure_shas: set[str] = set()
+        for position, failure in enumerate(failures):
+            if not isinstance(failure, dict):
+                errors.append(f"failure_{position}:not_object")
+                continue
+            replay_sha = failure.get("replay_sha256")
+            error = failure.get("error")
+            if not _canonical_sha(replay_sha):
+                errors.append(
+                    f"failure_{position}:invalid_replay_sha256"
+                )
+                continue
+            if replay_sha in failure_shas:
+                errors.append(f"{replay_sha}:duplicate_failure")
+            failure_shas.add(replay_sha)
+            if not isinstance(error, str) or not error.strip():
+                errors.append(
+                    f"{replay_sha}:missing_failure_error"
+                )
+
+        for replay_sha in sorted(set(entry_by_sha) & failure_shas):
+            errors.append(f"{replay_sha}:both_success_and_failure")
+
+        expected_files = {"_index.json"}
+        inventory_lines: list[str] = []
+        aggregate_samples = 0
+        aggregate_compressed = 0
+        aggregate_seen = 0
+        aggregate_skipped = 0
+        aggregate_uncompressed = 0
+        sample_every_ticks = index.get("sample_every_ticks")
+        cadence = (
+            sample_every_ticks
+            if _native_int(sample_every_ticks, minimum=1)
+            else -1
         )
 
-    try:
-        present = list(os.scandir(shard_dir))
-    except OSError as exc:
-        raise AuditInputError(
-            f"cannot_list_shard_root:{exc}"
-        ) from exc
-    for item in present:
-        name = item.name
-        if item.is_symlink():
-            errors.append(f"symlink_artifact:{name}")
-            continue
-        if (
-            name.endswith(".f32.gz")
-            or name.endswith(".meta.json")
-            or ".f32.gz.tmp-" in name
-        ) and name not in expected_files:
-            errors.append(f"orphan_artifact:{name}")
+        for replay_sha in sorted(entry_by_sha):
+            entry = entry_by_sha[replay_sha]
+            meta_name = f"{replay_sha}.meta.json"
+            shard_name = f"{replay_sha}.f32.gz"
+            expected_files.update({meta_name, shard_name})
+            try:
+                meta, _ = _load_object_at(root_fd, meta_name)
+            except AuditInputError as exc:
+                errors.append(f"{replay_sha}:meta:{exc}")
+                continue
 
-    def _check_count(key: str, expected: int) -> None:
-        value = index.get(key)
-        if _native_int(value) and value != expected:
-            errors.append(
-                f"{key}_mismatch:{value}!={expected}"
+            validated = _validate_meta(
+                replay_sha,
+                meta,
+                entry,
+                sample_every_ticks=cadence,
+                errors=errors,
+            )
+            if validated is None:
+                continue
+            samples, declared_compressed, seen, skipped = validated
+            expected_uncompressed = (
+                samples * EXPECTED_ROW_WIDTH * _FLOAT32_BYTES
+            )
+            try:
+                (
+                    actual_compressed,
+                    actual_uncompressed,
+                    compressed_sha,
+                ) = _inspect_gzip_shard_at(
+                    root_fd,
+                    shard_name,
+                    expected_uncompressed_bytes=expected_uncompressed,
+                )
+            except AuditInputError as exc:
+                errors.append(f"{replay_sha}:shard:{exc}")
+                continue
+
+            if actual_compressed != declared_compressed:
+                errors.append(
+                    f"{replay_sha}:compressed_size:"
+                    f"{actual_compressed}!={declared_compressed}"
+                )
+            aggregate_samples += samples
+            aggregate_compressed += actual_compressed
+            aggregate_seen += seen
+            aggregate_skipped += skipped
+            aggregate_uncompressed += actual_uncompressed
+            inventory_lines.append(
+                "\t".join(
+                    (
+                        replay_sha,
+                        compressed_sha,
+                        str(actual_compressed),
+                        str(actual_uncompressed),
+                        str(samples),
+                    )
+                )
+                + "\n"
             )
 
-    _check_count("successful_replays", len(entries))
-    _check_count("failed_replays", len(failures))
-    _check_count(
-        "requested_replays",
-        len(entries) + len(failures),
-    )
-    _check_count("samples", aggregate_samples)
-    _check_count("compressed_bytes", aggregate_compressed)
-    _check_count("selected_players_seen", aggregate_seen)
-    _check_count(
-        "unknown_input_samples_skipped",
-        aggregate_skipped,
-    )
+        try:
+            present = list(os.scandir(root_fd))
+        except OSError as exc:
+            raise AuditInputError(
+                f"cannot_list_shard_root:{exc}"
+            ) from exc
+        for item in present:
+            name = item.name
+            if item.is_symlink():
+                errors.append(f"symlink_artifact:{name}")
+                continue
+            if (
+                name.endswith(".f32.gz")
+                or name.endswith(".meta.json")
+                or ".f32.gz.tmp-" in name
+            ) and name not in expected_files:
+                errors.append(f"orphan_artifact:{name}")
 
-    try:
-        index_bytes_after = _read_regular_bytes(index_path)
-    except AuditInputError as exc:
-        errors.append(f"index_recheck:{exc}")
-        index_bytes_after = b""
-    if index_bytes_after != index_bytes_before:
-        errors.append("index_changed_during_audit")
+        def _check_count(key: str, expected: int) -> None:
+            value = index.get(key)
+            if _native_int(value) and value != expected:
+                errors.append(
+                    f"{key}_mismatch:{value}!={expected}"
+                )
 
-    inventory_sha256 = hashlib.sha256(
-        "".join(inventory_lines).encode("utf-8")
-    ).hexdigest()
-    errors = sorted(set(errors))
-    return {
-        "schema": AUDIT_SCHEMA,
-        "clean": not errors,
-        "index_schema": index.get("schema"),
-        "manifest_schema": index.get("manifest_schema"),
-        "analysis_version": index.get("analysis_version"),
-        "split": index.get("split"),
-        "sample_every_ticks": index.get("sample_every_ticks"),
-        "requested_replays": index.get("requested_replays"),
-        "successful_replays": index.get("successful_replays"),
-        "failed_replays": index.get("failed_replays"),
-        "audited_shards": len(inventory_lines),
-        "samples": aggregate_samples,
-        "compressed_bytes": aggregate_compressed,
-        "uncompressed_bytes": aggregate_uncompressed,
-        "selected_players_seen": aggregate_seen,
-        "unknown_input_samples_skipped": aggregate_skipped,
-        "index_sha256": index_sha256,
-        "inventory_sha256": inventory_sha256,
-        "errors": errors,
-    }
+        _check_count("successful_replays", len(entries))
+        _check_count("failed_replays", len(failures))
+        _check_count(
+            "requested_replays",
+            len(entries) + len(failures),
+        )
+        _check_count("samples", aggregate_samples)
+        _check_count("compressed_bytes", aggregate_compressed)
+        _check_count("selected_players_seen", aggregate_seen)
+        _check_count(
+            "unknown_input_samples_skipped",
+            aggregate_skipped,
+        )
 
+        try:
+            index_bytes_after = _read_regular_bytes_at(
+                root_fd,
+                "_index.json",
+            )
+        except AuditInputError as exc:
+            errors.append(f"index_recheck:{exc}")
+            index_bytes_after = b""
+        if index_bytes_after != index_bytes_before:
+            errors.append("index_changed_during_audit")
+
+        _reconfirm_shard_root(
+            shard_dir,
+            root_fd=root_fd,
+            identity=root_identity,
+        )
+
+        inventory_sha256 = hashlib.sha256(
+            "".join(inventory_lines).encode("utf-8")
+        ).hexdigest()
+        errors = sorted(set(errors))
+        return {
+            "schema": AUDIT_SCHEMA,
+            "clean": not errors,
+            "index_schema": index.get("schema"),
+            "manifest_schema": index.get("manifest_schema"),
+            "analysis_version": index.get("analysis_version"),
+            "split": index.get("split"),
+            "sample_every_ticks": index.get("sample_every_ticks"),
+            "requested_replays": index.get("requested_replays"),
+            "successful_replays": index.get("successful_replays"),
+            "failed_replays": index.get("failed_replays"),
+            "audited_shards": len(inventory_lines),
+            "samples": aggregate_samples,
+            "compressed_bytes": aggregate_compressed,
+            "uncompressed_bytes": aggregate_uncompressed,
+            "selected_players_seen": aggregate_seen,
+            "unknown_input_samples_skipped": aggregate_skipped,
+            "index_sha256": index_sha256,
+            "inventory_sha256": inventory_sha256,
+            "errors": errors,
+        }
+    finally:
+        os.close(root_fd)
 
 def main() -> int:
     parser = argparse.ArgumentParser(
