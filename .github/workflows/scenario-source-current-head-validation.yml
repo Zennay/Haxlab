@@ -1,0 +1,146 @@
+name: Scenario source current-head validation
+
+on:
+  push:
+    branches:
+      - validation/scenario-source-current-head-integrity-20261007
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-scenario-source-current-head-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Verify exact source checkout
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          test "$ACTUAL_SHA" = "$EXPECTED_SHA"
+          echo "SCENARIO_SOURCE_EXACT_HEAD=$ACTUAL_SHA"
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .scenario-source-validation-venv
+          python3 -m venv .scenario-source-validation-venv
+          .scenario-source-validation-venv/bin/pip install --upgrade pip
+          .scenario-source-validation-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile focused evaluation modules
+        shell: bash
+        run: |
+          set -euo pipefail
+          .scenario-source-validation-venv/bin/python -m compileall -q \
+            src/haxlab/evaluation/scenario_source.py \
+            tests/test_scenario_source.py
+
+      - name: Run scenario-source and multisource regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .scenario-source-validation-venv/bin/pytest -q \
+              tests/test_scenario_source.py \
+              tests/test_multisource_suite.py
+
+      - name: Verify frozen replay bytes on VPS
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=/var/lib/haxlab/derived/evaluation/candidate-d-multisource-holdout-v1
+          DB=/var/lib/haxlab/state/haxlab.sqlite3
+          sudo -u haxlab env ROOT="$ROOT" DB="$DB" \
+            .scenario-source-validation-venv/bin/python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import sqlite3
+          from pathlib import Path
+
+          from haxlab.evaluation.scenario_source import _healthy_candidate
+
+          root = Path(os.environ["ROOT"])
+          manifest = json.loads((root / "frozen-manifest.json").read_text())
+          entries = list(manifest.get("sources") or [])
+          if len(entries) != 3:
+              raise SystemExit(f"expected 3 frozen replay sources, got {len(entries)}")
+
+          db = sqlite3.connect(os.environ["DB"])
+          try:
+              verified = []
+              for index, entry in enumerate(entries, start=1):
+                  replay_sha = str(
+                      entry.get("replay_sha256")
+                      or entry.get("sha256")
+                      or (entry.get("source") or {}).get("sha256")
+                      or ""
+                  ).strip().lower()
+                  if len(replay_sha) != 64 or any(ch not in "0123456789abcdef" for ch in replay_sha):
+                      raise SystemExit(f"source-{index:02d}: invalid replay SHA-256")
+                  row = db.execute(
+                      """
+                      SELECT r.archive_path, a.output_path, a.sampled_state_count
+                      FROM raw_replays r
+                      JOIN replay_analysis_versions a ON a.sha256 = r.sha256
+                      WHERE r.sha256 = ?
+                        AND a.analyzer_version = 'state-pass-v4'
+                        AND a.status = 'ok'
+                        AND a.output_path IS NOT NULL
+                      """,
+                      (replay_sha,),
+                  ).fetchone()
+                  if row is None:
+                      raise SystemExit(
+                          f"source-{index:02d}: replay/analysis provenance absent from state DB"
+                      )
+                  raw = Path(row[0])
+                  analysis = Path(row[1])
+                  sampled_states = row[2]
+                  if raw.is_symlink() or not raw.is_file():
+                      raise SystemExit(f"source-{index:02d}: unsafe/missing archive: {raw}")
+                  candidate = _healthy_candidate(
+                      sha256=replay_sha,
+                      raw_path=str(raw),
+                      analysis_path=str(analysis),
+                      sampled_states=sampled_states,
+                  )
+                  if candidate is None:
+                      raise SystemExit(
+                          f"source-{index:02d}: current scenario-source validation rejected frozen source"
+                      )
+                  if not candidate.get("analysis_sha256"):
+                      raise SystemExit(
+                          f"source-{index:02d}: missing analysis-byte provenance"
+                      )
+                  digest = hashlib.sha256()
+                  with raw.open("rb") as handle:
+                      for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                          digest.update(chunk)
+                  actual = digest.hexdigest()
+                  if actual != replay_sha:
+                      raise SystemExit(f"source-{index:02d}: archive hash mismatch {actual} != {replay_sha}")
+                  verified.append(replay_sha)
+          finally:
+              db.close()
+
+          if len(set(verified)) != 3:
+              raise SystemExit("frozen suite replay sources are not disjoint")
+          print("FROZEN_SOURCE_BYTES_GREEN " + ",".join(verified))
+          PY
