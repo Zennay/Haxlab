@@ -262,6 +262,8 @@ permissions:
 
 jobs:
   validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
