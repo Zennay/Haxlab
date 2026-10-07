@@ -145,8 +145,40 @@ def _path_object(
     return False
 
 
+def _path_annotation(node: ast.AST | None, aliases: dict[str, str]) -> bool:
+    if node is None:
+        return False
+    if _canonical_name(node, aliases) == "pathlib.Path":
+        return True
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        return _path_annotation(node.left, aliases) or _path_annotation(
+            node.right,
+            aliases,
+        )
+    if isinstance(node, ast.Subscript):
+        wrapper = _canonical_name(node.value, aliases)
+        if wrapper in {"Optional", "typing.Optional"}:
+            return _path_annotation(node.slice, aliases)
+    return False
+
+
 def _path_objects(tree: ast.AST, aliases: dict[str, str]) -> set[str]:
     objects: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        arguments = [
+            *node.args.posonlyargs,
+            *node.args.args,
+            *node.args.kwonlyargs,
+        ]
+        if node.args.vararg is not None:
+            arguments.append(node.args.vararg)
+        if node.args.kwarg is not None:
+            arguments.append(node.args.kwarg)
+        for argument in arguments:
+            if _path_annotation(argument.annotation, aliases):
+                objects.add(argument.arg)
     changed = True
     while changed:
         changed = False
@@ -314,6 +346,32 @@ def test_contract_rejects_discovery_from_derived_path_objects(source: str) -> No
 @pytest.mark.parametrize(
     "source",
     [
+        (
+            "from pathlib import Path\n"
+            "def discover(root: Path):\n"
+            "    return root.glob('*.json')\n"
+        ),
+        (
+            "from pathlib import Path\n"
+            "def discover(root: Path | None):\n"
+            "    if root is not None:\n"
+            "        return root.rglob('*.json')\n"
+        ),
+        (
+            "from pathlib import Path\nfrom typing import Optional\n"
+            "def discover(root: Optional[Path]):\n"
+            "    if root is not None:\n"
+            "        return root.iterdir()\n"
+        ),
+    ],
+)
+def test_contract_rejects_discovery_from_path_typed_parameters(source: str) -> None:
+    assert _violations(source)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
         "from pathlib import Path\nPath('/tmp/evidence.json').read_text()\n",
         "from pathlib import Path\nPath('/tmp/evidence.json').open('rb')\n",
         "import os\nos.stat('/tmp/evidence.json')\n",
@@ -328,6 +386,18 @@ def test_contract_rejects_discovery_from_derived_path_objects(source: str) -> No
 def test_contract_allows_explicit_evidence_paths_and_unrelated_methods(
     source: str,
 ) -> None:
+    assert _violations(source) == []
+
+
+def test_container_of_paths_is_not_a_path_object() -> None:
+    source = (
+        "from pathlib import Path\nfrom typing import Sequence\n"
+        "class Bucket:\n"
+        "    def glob(self, pattern):\n"
+        "        return ()\n"
+        "def inspect(paths: Sequence[Path], bucket: Bucket):\n"
+        "    return bucket.glob('*.json')\n"
+    )
     assert _violations(source) == []
 
 
