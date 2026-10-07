@@ -14,7 +14,7 @@ def _require_message_id(message_id: str) -> str:
         or not message_id
         or message_id != message_id.strip()
         or "#" in message_id
-        or any(ord(character) < 32 for character in message_id)
+        or any(ord(character) < 32 or ord(character) == 127 for character in message_id)
     ):
         raise ValueError("message_id must be a non-empty canonical source token")
     return message_id
