@@ -250,3 +250,86 @@ def test_disappearing_candidate_does_not_crash_ingest(
     assert event is not None
     assert event["event_type"] == "replay_disappeared"
     assert event["detail"] == "disappeared_before_stat"
+
+
+def test_scanner_ignores_symlinked_replay_source(tmp_path: Path) -> None:
+    incoming = tmp_path / "incoming"
+    raw = tmp_path / "raw"
+    db = tmp_path / "state.sqlite3"
+    incoming.mkdir()
+
+    outside = tmp_path / "outside.hbr2"
+    payload = _valid_hbr2(total_frames=900, payload=b"outside-source")
+    outside.write_bytes(payload)
+    link = incoming / "linked.hbr2"
+    link.symlink_to(outside)
+
+    with RuntimeState(db) as state:
+        summary = scan_once(
+            incoming,
+            raw,
+            state,
+            minimum_file_age_seconds=0,
+            now=time.time() + 10,
+        )
+        snapshot = state.status_snapshot()
+        source_count = state.connection.execute(
+            "SELECT COUNT(*) FROM source_files"
+        ).fetchone()[0]
+
+    assert summary.discovered == 0
+    assert summary.archived == 0
+    assert summary.duplicates == 0
+    assert summary.failed == 0
+    assert snapshot["raw_unique_replays"] == 0
+    assert source_count == 0
+    assert not list(raw.rglob("*.hbr2"))
+
+
+def test_scanner_rechecks_symlink_status_before_processing(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    incoming = tmp_path / "incoming"
+    raw = tmp_path / "raw"
+    db = tmp_path / "state.sqlite3"
+    incoming.mkdir()
+
+    outside = tmp_path / "outside.hbr2"
+    outside.write_bytes(_valid_hbr2(total_frames=901, payload=b"outside-race"))
+    replay = incoming / "queued.hbr2"
+    replay.write_bytes(_valid_hbr2(total_frames=600, payload=b"initial"))
+
+    original_is_symlink = Path.is_symlink
+    checks = 0
+
+    def becomes_symlink_after_discovery(self: Path) -> bool:
+        nonlocal checks
+        if self == replay:
+            checks += 1
+            if checks == 1:
+                return False
+            if checks == 2:
+                replay.unlink()
+                replay.symlink_to(outside)
+                return True
+        return original_is_symlink(self)
+
+    monkeypatch.setattr(Path, "is_symlink", becomes_symlink_after_discovery)
+
+    with RuntimeState(db) as state:
+        summary = scan_once(
+            incoming,
+            raw,
+            state,
+            minimum_file_age_seconds=0,
+            now=time.time() + 10,
+        )
+        snapshot = state.status_snapshot()
+
+    assert checks >= 2
+    assert summary.discovered == 0
+    assert summary.archived == 0
+    assert summary.failed == 0
+    assert snapshot["raw_unique_replays"] == 0
+    assert not list(raw.rglob("*.hbr2"))
