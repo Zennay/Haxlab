@@ -30,6 +30,7 @@ FORBIDDEN_CALLS = {
     "tracemalloc.start",
     "tracemalloc.stop",
     "tracemalloc.reset_peak",
+    "tracemalloc.clear_traces",
     "threading.settrace",
     "threading.setprofile",
     "threading.settrace_all_threads",
@@ -84,22 +85,32 @@ def _canonical_name(node: ast.AST | None, aliases: dict[str, str]) -> str | None
     return None
 
 
-def _simple_assignment(node: ast.AST) -> tuple[str, ast.AST] | None:
-    if (
-        isinstance(node, ast.Assign)
-        and len(node.targets) == 1
-        and isinstance(node.targets[0], ast.Name)
-    ):
-        return node.targets[0].id, node.value
+def _assignment_pairs(node: ast.AST) -> list[tuple[str, ast.AST]]:
+    if isinstance(node, ast.Assign):
+        pairs: list[tuple[str, ast.AST]] = []
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                pairs.append((target.id, node.value))
+            elif (
+                isinstance(target, (ast.Tuple, ast.List))
+                and isinstance(node.value, (ast.Tuple, ast.List))
+                and len(target.elts) == len(node.value.elts)
+            ):
+                pairs.extend(
+                    (left.id, right)
+                    for left, right in zip(target.elts, node.value.elts, strict=True)
+                    if isinstance(left, ast.Name)
+                )
+        return pairs
     if (
         isinstance(node, ast.AnnAssign)
         and isinstance(node.target, ast.Name)
         and node.value is not None
     ):
-        return node.target.id, node.value
+        return [(node.target.id, node.value)]
     if isinstance(node, ast.NamedExpr) and isinstance(node.target, ast.Name):
-        return node.target.id, node.value
-    return None
+        return [(node.target.id, node.value)]
+    return []
 
 
 def _tracked_alias(name: str | None) -> bool:
@@ -132,14 +143,11 @@ def _aliases(tree: ast.AST) -> dict[str, str]:
     while changed:
         changed = False
         for node in ast.walk(tree):
-            assignment = _simple_assignment(node)
-            if assignment is None:
-                continue
-            local, expression = assignment
-            target = _canonical_name(expression, aliases)
-            if _tracked_alias(target) and aliases.get(local) != target:
-                aliases[local] = target
-                changed = True
+            for local, expression in _assignment_pairs(node):
+                target = _canonical_name(expression, aliases)
+                if _tracked_alias(target) and aliases.get(local) != target:
+                    aliases[local] = target
+                    changed = True
 
     return aliases
 
@@ -201,6 +209,20 @@ def test_data_pipeline_auditors_do_not_mutate_process_instrumentation() -> None:
         ),
         (
             "import tracemalloc\ngetattr(tracemalloc, 'stop')()\n",
+            "tracemalloc.stop",
+        ),
+        (
+            "import tracemalloc\ntracemalloc.clear_traces()\n",
+            "tracemalloc.clear_traces",
+        ),
+        (
+            "import tracemalloc\na = b = tracemalloc.start\na()\n",
+            "tracemalloc.start",
+        ),
+        (
+            "import faulthandler, tracemalloc\n"
+            "turn_on, turn_off = faulthandler.enable, tracemalloc.stop\n"
+            "turn_off()\n",
             "tracemalloc.stop",
         ),
         (
