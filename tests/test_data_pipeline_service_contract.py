@@ -155,3 +155,35 @@ def test_fresh_install_and_update_publish_the_same_haxlab_clis() -> None:
 
     assert fresh_install == update_install
     assert "haxlab-generation-loop" in fresh_install
+
+
+def _installed_units(script_name: str) -> set[str]:
+    text = (DEPLOY / script_name).read_text(encoding="utf-8")
+    return set(
+        re.findall(
+            r'install -m 0644 "\$\{APP_DIR\}/deploy/(haxlab-[^"]+\.(?:service|timer))" ',
+            text,
+        )
+    )
+
+
+def test_deployed_cli_links_are_backed_by_pyproject_entrypoints() -> None:
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    scripts = set(pyproject["project"]["scripts"])
+    deployed = _installed_cli_links("install-vps.sh")
+
+    assert deployed <= scripts
+
+
+def test_fresh_install_and_update_copy_the_same_systemd_units() -> None:
+    fresh_units = _installed_units("install-vps.sh")
+    update_units = _installed_units("update-vps.sh")
+
+    assert fresh_units == update_units
+    assert {
+        "haxlab-ingest.service",
+        "haxlab-worker.service",
+        "haxlab-analyzer.service",
+        "haxlab-autonomy.service",
+        "haxlab-autonomy.timer",
+    } <= fresh_units
