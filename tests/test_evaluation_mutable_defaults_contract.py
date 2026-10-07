@@ -35,6 +35,10 @@ class MutableDefaultVisitor(ast.NodeVisitor):
                 self._record_import(statement)
             elif isinstance(statement, ast.ImportFrom):
                 self._record_import_from(statement)
+            elif isinstance(statement, ast.Assign):
+                self._record_assignment_alias(statement.targets, statement.value)
+            elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
+                self._record_assignment_alias([statement.target], statement.value)
         self.visit(tree)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
@@ -80,6 +84,18 @@ class MutableDefaultVisitor(ast.NodeVisitor):
                 continue
             local = alias.asname or alias.name
             self.aliases[local] = f"{node.module}.{alias.name}"
+
+    def _record_assignment_alias(
+        self,
+        targets: list[ast.expr],
+        value: ast.expr,
+    ) -> None:
+        qualified = self._qualified_name(value)
+        if qualified not in MUTABLE_CONSTRUCTORS:
+            return
+        for target in targets:
+            if isinstance(target, ast.Name):
+                self.aliases[target.id] = qualified
 
     def _is_mutable_default(self, node: ast.expr) -> bool:
         if isinstance(
@@ -146,6 +162,8 @@ def test_evaluation_package_has_no_mutable_default_arguments() -> None:
         "import collections as c\ndef f(cache=c.defaultdict(list)):\n    return cache\n",
         "from collections import deque as Queue\ndef f(queue=Queue()):\n    return queue\n",
         "from builtins import list as MutableList\ndef f(cache=MutableList()):\n    return cache\n",
+        "Factory = dict\ndef f(cache=Factory()):\n    return cache\n",
+        "import collections\nQueue = collections.deque\ndef f(queue=Queue()):\n    return queue\n",
     ],
 )
 def test_detector_rejects_mutable_defaults(source: str) -> None:
