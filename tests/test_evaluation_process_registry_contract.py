@@ -49,6 +49,12 @@ CONTAINER_MUTATORS = {
     "sort",
 }
 
+FORBIDDEN_WARNING_ATTRIBUTES = {
+    "defaultaction",
+    "filters",
+    "onceregistry",
+}
+
 TRACKED_MODULES = {"builtins", "logging", "warnings"}
 
 
@@ -62,8 +68,7 @@ def _canonical_name(node: ast.AST | None, aliases: dict[str, str]) -> str | None
         return f"{parent}.{node.attr}" if parent else node.attr
     if isinstance(node, ast.Subscript):
         parent = _canonical_name(node.value, aliases)
-        if isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
-            return f"{parent}[{node.slice.value!r}]" if parent else None
+        return f"{parent}[]" if parent else None
     if isinstance(node, ast.Call):
         accessor = _canonical_name(node.func, aliases)
         if accessor == "logging.getLogger":
@@ -104,8 +109,19 @@ def _is_forbidden_logger_target(name: str | None) -> bool:
         return True
     return any(
         name == f"logging.root.{attribute}"
+        or name.startswith(f"logging.root.{attribute}[")
         or name.startswith(f"logging.getLogger().{attribute}")
         for attribute in FORBIDDEN_LOGGER_ATTRIBUTES
+    )
+
+
+def _is_forbidden_warning_target(name: str | None) -> bool:
+    if not name:
+        return False
+    return any(
+        name == f"warnings.{attribute}"
+        or name.startswith(f"warnings.{attribute}[")
+        for attribute in FORBIDDEN_WARNING_ATTRIBUTES
     )
 
 
@@ -153,6 +169,7 @@ def _aliases(tree: ast.Module) -> dict[str, str]:
                 resolved in FORBIDDEN_PROCESS_REGISTRY_CALLS
                 or resolved in {"logging.getLogger", "logging.getLogger()", "logging.root"}
                 or _is_forbidden_logger_target(resolved)
+                or _is_forbidden_warning_target(resolved)
                 or any(
                     resolved.endswith(f".{method}")
                     and _is_process_logger_name(resolved[: -(len(method) + 1)])
@@ -160,7 +177,10 @@ def _aliases(tree: ast.Module) -> dict[str, str]:
                 )
                 or any(
                     resolved.endswith(f".{method}")
-                    and _is_forbidden_logger_target(resolved[: -(len(method) + 1)])
+                    and (
+                        _is_forbidden_logger_target(resolved[: -(len(method) + 1)])
+                        or _is_forbidden_warning_target(resolved[: -(len(method) + 1)])
+                    )
                     for method in CONTAINER_MUTATORS
                 )
             )
@@ -187,6 +207,12 @@ def _is_logger_mutator(target: str) -> bool:
         if target.endswith(f".{method}"):
             receiver = target[: -(len(method) + 1)]
             if _is_forbidden_logger_target(receiver):
+                return True
+
+    for method in CONTAINER_MUTATORS:
+        if target.endswith(f".{method}"):
+            receiver = target[: -(len(method) + 1)]
+            if _is_forbidden_warning_target(receiver):
                 return True
 
     return False
@@ -231,6 +257,10 @@ def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
             if target and _is_forbidden_logger_target(target):
                 findings.append(
                     f"line {node.lineno}: process-wide logger attribute mutation: {target}"
+                )
+            elif target and _is_forbidden_warning_target(target):
+                findings.append(
+                    f"line {node.lineno}: process-wide warning registry mutation: {target}"
                 )
 
     return sorted(set(findings))
@@ -304,6 +334,22 @@ def test_evaluation_package_does_not_mutate_process_logging_or_warning_registrie
         (
             "import logging\nlogging.root.handlers = []\n",
             "handlers",
+        ),
+        (
+            "import logging\nlog = logging.getLogger('gate')\nlog.handlers[0] = logging.NullHandler()\n",
+            "handlers",
+        ),
+        (
+            "import warnings\nwarnings.filters.clear()\n",
+            "warnings.filters.clear",
+        ),
+        (
+            "import warnings\nregistry = warnings.onceregistry\nregistry.clear()\n",
+            "warnings.onceregistry.clear",
+        ),
+        (
+            "import warnings\nwarnings.defaultaction = 'ignore'\n",
+            "warnings.defaultaction",
         ),
     ],
 )
