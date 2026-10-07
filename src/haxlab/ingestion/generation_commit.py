@@ -13,6 +13,9 @@ GENERATION_COMMIT_SCHEMA = "haxlab-m0-generation-commit-v1"
 GENERATION_POINTER_SCHEMA = "haxlab-m0-generation-pointer-v1"
 MAX_GENERATION_COMMIT_BYTES = 16 * 1024
 MAX_GENERATION_POINTER_BYTES = 1024
+GENERATIONS_DIRECTORY = "generations"
+GENERATION_COMMIT_FILE = "generation-commit.json"
+CURRENT_GENERATION_POINTER_FILE = "current-generation.json"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -230,6 +233,19 @@ def generation_pointer_bytes(commit: Mapping[str, Any]) -> bytes:
     """Return canonical bytes for the atomically replaceable generation pointer."""
 
     return _canonical_bytes(build_generation_pointer(commit)) + b"\n"
+
+
+def generation_directory(commit: Mapping[str, Any]) -> str:
+    """Return the canonical relative directory for one committed generation."""
+
+    valid = _validated_commit(commit)
+    return f"{GENERATIONS_DIRECTORY}/{valid['generation_id']}"
+
+
+def generation_commit_path(commit: Mapping[str, Any]) -> str:
+    """Return the canonical relative generation-commit path."""
+
+    return f"{generation_directory(commit)}/{GENERATION_COMMIT_FILE}"
 
 
 def parse_generation_commit_bytes(payload: bytes) -> dict[str, object]:
