@@ -161,8 +161,6 @@ def _read_regular_file_nofollow(path: Path) -> bytes:
         if before_identity != after_identity or len(raw) != after.st_size:
             raise ValueError("promotion policy config changed while being read")
         return raw
-        except OSError as exc:
-            raise ValueError("promotion policy config is unreadable") from exc
     finally:
         os.close(fd)
 
