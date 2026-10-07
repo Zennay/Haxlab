@@ -70,3 +70,12 @@ promotion, multisource, scenario source, resync guard, evaluation receipt/finali
 models, thresholds or champion pointers. Future integration should consume this
 classifier only as diagnostic state; mandatory exact-head gate receipts remain the
 authority for promotion eligibility.
+
+
+## Focused exact-head validation
+
+The branch carries `.github/workflows/calibration-run-outcome-contract-validation.yml`.
+It checks out and asserts the exact event SHA, builds an isolated environment, compiles
+the diagnostic contract and runs only `tests/test_calibration_run_outcome.py` on
+the self-hosted HaxLab runner. The workflow is intentionally branch-scoped and its
+push job runs only for an explicit `[calibration-outcome-proof]` commit marker.
