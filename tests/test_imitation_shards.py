@@ -61,6 +61,110 @@ def test_extract_one_uses_cached_valid_shard(
     assert result["samples"] == 123
 
 
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"sample_every_ticks": 0}, "sample_every_ticks"),
+        ({"sample_every_ticks": -1}, "sample_every_ticks"),
+        ({"sample_every_ticks": True}, "sample_every_ticks"),
+        ({"sample_every_ticks": 1.5}, "sample_every_ticks"),
+        ({"sample_every_ticks": "6"}, "sample_every_ticks"),
+        ({"workers": 0}, "workers"),
+        ({"workers": True}, "workers"),
+        ({"workers": 2.0}, "workers"),
+        ({"limit": -1}, "limit"),
+        ({"limit": True}, "limit"),
+        ({"limit": 1.0}, "limit"),
+        ({"timeout_seconds": 29}, "timeout_seconds"),
+        ({"timeout_seconds": True}, "timeout_seconds"),
+        ({"timeout_seconds": 30.0}, "timeout_seconds"),
+    ],
+)
+def test_build_shards_rejects_malformed_numeric_config_before_manifest_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kwargs: dict,
+    message: str,
+) -> None:
+    manifest = tmp_path / "manifest.json"
+
+    def unexpected_read(*args, **kwargs):
+        raise AssertionError("manifest must not be read for invalid configuration")
+
+    monkeypatch.setattr(Path, "read_text", unexpected_read)
+
+    with pytest.raises(ValueError, match=message):
+        shards.build_shards(
+            manifest_path=manifest,
+            split="train",
+            output_root=tmp_path / "out",
+            node_script=tmp_path / "extract.js",
+            **kwargs,
+        )
+
+
+def test_build_shards_preserves_valid_numeric_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": MANIFEST_SCHEMA,
+                "analysis_version": "state-pass-v4",
+                "train_replays": [
+                    {
+                        "replay_sha256": "a" * 64,
+                        "raw_path": str(tmp_path / "a.hbr2"),
+                        "selected_players": [
+                            {
+                                "replay_player_id": 1,
+                                "identity": "name:a",
+                                "samples": 10,
+                            }
+                        ],
+                    }
+                ],
+                "holdout_replays": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_extract(entry, **kwargs):
+        captured.update(kwargs)
+        return {
+            "schema": "haxlab-imitation-extract-summary-v2",
+            "replay_sha256": entry["replay_sha256"],
+            "samples": 1,
+            "compressedBytes": 1,
+            "selectedPlayersSeen": 1,
+            "skippedUnknownInput": 0,
+            "status": "ok",
+        }
+
+    monkeypatch.setattr(shards, "_extract_one", fake_extract)
+
+    index = shards.build_shards(
+        manifest_path=manifest,
+        split="train",
+        output_root=tmp_path / "out",
+        node_script=tmp_path / "extract.js",
+        sample_every_ticks=12,
+        workers=1,
+        limit=1,
+        timeout_seconds=45,
+    )
+
+    assert captured["sample_every_ticks"] == 12
+    assert captured["timeout_seconds"] == 45
+    assert index["sample_every_ticks"] == 12
+    assert index["requested_replays"] == 1
+
+
 def test_build_shards_rejects_wrong_manifest_schema(tmp_path: Path) -> None:
     manifest = tmp_path / "manifest.json"
     manifest.write_text(
