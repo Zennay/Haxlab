@@ -5,9 +5,9 @@ from pathlib import Path
 
 
 EVALUATION_ROOT = Path("src/haxlab/evaluation")
+APPROVED_LOCAL_SUBPROCESS_PATH = Path("src/haxlab/evaluation/resync_guard.py")
 
-BANNED_IMPORTS = (
-    "subprocess",
+BANNED_NETWORK_IMPORTS = (
     "socket",
     "requests",
     "httpx",
@@ -24,8 +24,8 @@ BANNED_CALLS = {
 }
 
 
-def _is_banned_import(name: str) -> bool:
-    return any(name == banned or name.startswith(f"{banned}.") for banned in BANNED_IMPORTS)
+def _matches_import(name: str, banned: tuple[str, ...]) -> bool:
+    return any(name == item or name.startswith(f"{item}.") for item in banned)
 
 
 def _qualified_name(
@@ -52,14 +52,30 @@ def test_evaluation_product_code_is_network_and_subprocess_hermetic() -> None:
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    if _is_banned_import(alias.name):
-                        violations.append(f"{path}:{node.lineno}:import:{alias.name}")
+                    if _matches_import(alias.name, BANNED_NETWORK_IMPORTS):
+                        violations.append(f"{path}:{node.lineno}:network-import:{alias.name}")
+                    if (
+                        _matches_import(alias.name, ("subprocess",))
+                        and path != APPROVED_LOCAL_SUBPROCESS_PATH
+                    ):
+                        violations.append(f"{path}:{node.lineno}:subprocess-import:{alias.name}")
                     module_aliases[alias.asname or alias.name.split(".")[0]] = alias.name
             elif isinstance(node, ast.ImportFrom) and node.module:
                 for alias in node.names:
                     qualified = f"{node.module}.{alias.name}"
-                    if _is_banned_import(node.module) or _is_banned_import(qualified):
-                        violations.append(f"{path}:{node.lineno}:import:{qualified}")
+                    if (
+                        _matches_import(node.module, BANNED_NETWORK_IMPORTS)
+                        or _matches_import(qualified, BANNED_NETWORK_IMPORTS)
+                    ):
+                        violations.append(f"{path}:{node.lineno}:network-import:{qualified}")
+                    if (
+                        (
+                            _matches_import(node.module, ("subprocess",))
+                            or _matches_import(qualified, ("subprocess",))
+                        )
+                        and path != APPROVED_LOCAL_SUBPROCESS_PATH
+                    ):
+                        violations.append(f"{path}:{node.lineno}:subprocess-import:{qualified}")
                     if alias.name != "*":
                         symbol_aliases[alias.asname or alias.name] = qualified
 
@@ -69,9 +85,12 @@ def test_evaluation_product_code_is_network_and_subprocess_hermetic() -> None:
             name = _qualified_name(node.func, module_aliases, symbol_aliases)
             if name in BANNED_CALLS:
                 violations.append(f"{path}:{node.lineno}:call:{name}")
+            if name and name.startswith("subprocess."):
+                if path != APPROVED_LOCAL_SUBPROCESS_PATH or name != "subprocess.run":
+                    violations.append(f"{path}:{node.lineno}:subprocess-call:{name}")
 
     assert not violations, (
         "evaluation product code must stay hermetic from network state and "
-        "child-process/shell execution; violations: "
+        "unapproved child-process/shell execution; violations: "
         + ", ".join(sorted(set(violations)))
     )
