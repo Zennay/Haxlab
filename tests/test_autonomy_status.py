@@ -12,6 +12,8 @@ from haxlab.runtime import autonomy_status
 
 def _valid_payload() -> dict[str, object]:
     return {
+        "raw_unique_replays": 30,
+        "processing_ok": 20,
         "processing_pending": 2,
         "analysis_pending": 3,
         "processing_failed": 4,
@@ -25,6 +27,8 @@ def _valid_payload() -> dict[str, object]:
 def test_parse_autonomy_status_accepts_native_control_evidence() -> None:
     snapshot = autonomy_status.parse_autonomy_status(_valid_payload())
 
+    assert snapshot.raw_unique_replays == 30
+    assert snapshot.processing_ok == 20
     assert snapshot.processing_pending == 2
     assert snapshot.analysis_pending == 3
     assert snapshot.processing_failed == 4
@@ -82,8 +86,54 @@ def test_parse_autonomy_status_rejects_noncanonical_analysis_version(
         autonomy_status.parse_autonomy_status(payload)
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("raw_unique_replays", True),
+        ("raw_unique_replays", "30"),
+        ("raw_unique_replays", -1),
+        ("processing_ok", 20.0),
+        ("processing_ok", "20"),
+        ("processing_ok", -1),
+    ],
+)
+def test_parse_autonomy_status_rejects_invalid_capacity_counters(
+    field: str,
+    value: object,
+) -> None:
+    payload = _valid_payload()
+    payload[field] = value
+
+    with pytest.raises(autonomy_status.AutonomyStatusError):
+        autonomy_status.parse_autonomy_status(payload)
+
+
+def test_parse_autonomy_status_rejects_processing_totals_above_raw() -> None:
+    payload = _valid_payload()
+    payload["raw_unique_replays"] = 25
+
+    with pytest.raises(
+        autonomy_status.AutonomyStatusError,
+        match="processing counters cannot exceed raw_unique_replays",
+    ):
+        autonomy_status.parse_autonomy_status(payload)
+
+
+def test_parse_autonomy_status_rejects_analysis_totals_above_processing_ok() -> None:
+    payload = _valid_payload()
+    payload["processing_ok"] = 13
+
+    with pytest.raises(
+        autonomy_status.AutonomyStatusError,
+        match="analysis counters cannot exceed processing_ok",
+    ):
+        autonomy_status.parse_autonomy_status(payload)
+
+
 def test_parse_autonomy_status_requires_every_control_field() -> None:
     for field in (
+        "raw_unique_replays",
+        "processing_ok",
         "processing_pending",
         "analysis_pending",
         "processing_failed",
