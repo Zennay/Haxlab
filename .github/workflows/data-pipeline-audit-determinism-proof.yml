@@ -18,7 +18,7 @@ on:
     paths:
       - ".github/workflows/data-pipeline-audit-determinism-proof.yml"
       - "docs/data-pipeline-audit-determinism.md"
-      - "tests/test_data_pipeline_audit-determinism_contract.py"
+      - "tests/test_data_pipeline_audit_determinism_contract.py"
 
 permissions:
   contents: read
