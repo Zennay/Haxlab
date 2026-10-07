@@ -21,10 +21,11 @@ jobs:
 
     steps:
       - name: Checkout exact validation head
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
           clean: true
+          persist-credentials: false
 
       - name: Verify exact live head
         shell: bash
@@ -83,7 +84,7 @@ jobs:
 
       - name: Publish exact-head proof receipt
         if: always()
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
           JOB_STATUS: ${{ job.status }}
         with:
