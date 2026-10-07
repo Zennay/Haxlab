@@ -10,13 +10,20 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 EVALUATION_ROOT = REPO_ROOT / "src" / "haxlab" / "evaluation"
 
 TRACKED_MODULES = {"builtins", "os", "sys"}
+STDIO_STREAMS = {
+    "sys.stderr",
+    "sys.stderr.buffer",
+    "sys.stdout",
+    "sys.stdout.buffer",
+    "sys.__stderr__",
+    "sys.__stderr__.buffer",
+    "sys.__stdout__",
+    "sys.__stdout__.buffer",
+}
 DIRECT_OUTPUT_CALLS = {
     "builtins.print",
     "print",
-    "sys.stderr.write",
-    "sys.stderr.buffer.write",
-    "sys.stdout.write",
-    "sys.stdout.buffer.write",
+    *(f"{stream}.{method}" for stream in STDIO_STREAMS for method in {"write", "writelines"}),
 }
 
 
@@ -84,7 +91,7 @@ def _aliases(tree: ast.AST) -> dict[str, str]:
             value = _canonical_name(expression, aliases)
             if value and (
                 value in DIRECT_OUTPUT_CALLS
-                or value in {"sys.stdout", "sys.stderr", "sys.stdout.buffer", "sys.stderr.buffer"}
+                or value in STDIO_STREAMS
             ):
                 if aliases.get(local) != value:
                     aliases[local] = value
@@ -136,6 +143,21 @@ class OutputVisitor(ast.NodeVisitor):
                     self.findings.append(
                         f"line {node.lineno}: runtime output outside main(): os.write({fd.value}, ...)"
                     )
+            elif isinstance(node.func, ast.Attribute) and node.func.attr in {"write", "writelines"}:
+                owner = node.func.value
+                if isinstance(owner, ast.Call) and _canonical_name(owner.func, self.aliases) == "os.fdopen":
+                    if owner.args:
+                        fd = owner.args[0]
+                        if (
+                            isinstance(fd, ast.Constant)
+                            and isinstance(fd.value, int)
+                            and not isinstance(fd.value, bool)
+                            and fd.value in {1, 2}
+                        ):
+                            self.findings.append(
+                                f"line {node.lineno}: runtime output outside main(): "
+                                f"os.fdopen({fd.value}, ...).{node.func.attr}"
+                            )
 
         self.generic_visit(node)
 
@@ -182,12 +204,24 @@ def test_evaluation_library_is_silent_outside_cli_main() -> None:
             "sys.stderr.write",
         ),
         (
+            "import sys\ndef gate():\n    sys.stdout.writelines(['noise'])\n",
+            "sys.stdout.writelines",
+        ),
+        (
+            "import sys\ndef gate():\n    sys.__stderr__.write('noise')\n",
+            "sys.__stderr__.write",
+        ),
+        (
             "import os\ndef gate():\n    os.write(1, b'noise')\n",
             "os.write(1",
         ),
         (
             "from os import write\ndef gate():\n    write(2, b'noise')\n",
             "os.write(2",
+        ),
+        (
+            "import os\ndef gate():\n    os.fdopen(1, 'w', closefd=False).write('noise')\n",
+            "os.fdopen(1",
         ),
     ],
 )
