@@ -4,6 +4,9 @@ import argparse
 import hashlib
 import json
 import math
+import os
+import re
+import tempfile
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,27 +14,99 @@ from typing import Any
 
 
 MANIFEST_SCHEMA = "haxlab-human-imitation-manifest-v3"
+_CANONICAL_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, path)
+    except Exception:
+        try:
+            os.unlink(temporary_name)
+        except OSError:
+            pass
+        raise
 
 
 def _name_key(name: str | None) -> str | None:
-    if not name:
+    if not isinstance(name, str):
         return None
-    cleaned = " ".join(str(name).strip().split())
+    cleaned = " ".join(name.strip().split())
     return cleaned.casefold() or None
 
 
 def _identity_key(player: dict[str, Any]) -> str | None:
     auth_hash = player.get("authHash")
-    if auth_hash:
-        return f"auth:{auth_hash}"
+    if auth_hash is not None:
+        if not isinstance(auth_hash, str) or not auth_hash.strip():
+            return None
+        return f"auth:{auth_hash.strip()}"
     name = _name_key(player.get("name"))
     return f"name:{name}" if name else None
+
+
+def _native_finite_number(value: Any) -> bool:
+    return type(value) in (int, float) and math.isfinite(float(value))
+
+
+def _valid_leaderboard_row(row: Any) -> bool:
+    if not isinstance(row, dict):
+        return False
+    player_id = row.get("player_id")
+    role = row.get("role")
+    matches = row.get("matches")
+    return (
+        isinstance(player_id, str)
+        and bool(player_id.strip())
+        and isinstance(role, str)
+        and bool(role.strip())
+        and type(matches) is int
+        and matches >= 0
+        and _native_finite_number(row.get("minutes"))
+        and float(row["minutes"]) >= 0.0
+        and _native_finite_number(row.get("rating"))
+        and _native_finite_number(row.get("rating_uncertainty"))
+        and float(row["rating_uncertainty"]) >= 0.0
+    )
 
 
 def _conservative_score(row: dict[str, Any]) -> float:
     return float(row.get("rating", 0.0)) - float(
         row.get("rating_uncertainty", 0.0)
     )
+
+
+def _validate_selection_config(
+    *,
+    top_fraction_per_role: float,
+    min_players_per_role: int,
+    min_matches: int,
+    min_minutes: float,
+    max_uncertainty: float,
+) -> None:
+    if not _native_finite_number(top_fraction_per_role) or not (
+        0.0 <= float(top_fraction_per_role) <= 1.0
+    ):
+        raise ValueError("top_fraction_per_role must be finite and in [0, 1]")
+    if type(min_players_per_role) is not int or min_players_per_role < 1:
+        raise ValueError("min_players_per_role must be a native integer >= 1")
+    if type(min_matches) is not int or min_matches < 1:
+        raise ValueError("min_matches must be a native integer >= 1")
+    if not _native_finite_number(min_minutes) or float(min_minutes) < 0.0:
+        raise ValueError("min_minutes must be finite and >= 0")
+    if not _native_finite_number(max_uncertainty) or float(max_uncertainty) < 0.0:
+        raise ValueError("max_uncertainty must be finite and >= 0")
 
 
 def select_players(
@@ -43,17 +118,25 @@ def select_players(
     min_minutes: float = 120.0,
     max_uncertainty: float = 1.5,
 ) -> list[dict[str, Any]]:
+    _validate_selection_config(
+        top_fraction_per_role=top_fraction_per_role,
+        min_players_per_role=min_players_per_role,
+        min_matches=min_matches,
+        min_minutes=min_minutes,
+        max_uncertainty=max_uncertainty,
+    )
     eligible = [
         row
         for row in leaderboard_rows
-        if int(row.get("matches", 0)) >= min_matches
-        and float(row.get("minutes", 0.0)) >= min_minutes
-        and float(row.get("rating_uncertainty", math.inf)) <= max_uncertainty
+        if _valid_leaderboard_row(row)
+        and row["matches"] >= min_matches
+        and float(row["minutes"]) >= min_minutes
+        and float(row["rating_uncertainty"]) <= max_uncertainty
     ]
 
     by_role: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in eligible:
-        by_role[str(row.get("role") or "unknown")].append(row)
+        by_role[row["role"].strip()].append(row)
 
     selected: list[dict[str, Any]] = []
     for role, rows in sorted(by_role.items()):
@@ -96,6 +179,20 @@ def select_players(
     return selected
 
 
+def _analysis_replay_sha256(path: Path) -> str | None:
+    stem = path.stem
+    return stem if _CANONICAL_SHA256.fullmatch(stem) else None
+
+
+def _validate_holdout_partition(modulus: int, bucket: int) -> None:
+    if type(modulus) is not int or modulus < 2:
+        raise ValueError("holdout_modulus must be a native integer >= 2")
+    if type(bucket) is not int or bucket < 0 or bucket >= modulus:
+        raise ValueError(
+            "holdout_bucket must be a native integer in [0, holdout_modulus)"
+        )
+
+
 def _holdout_bucket(replay_sha256: str, modulus: int = 10) -> int:
     digest = hashlib.sha256(
         f"haxlab-holdout-v1:{replay_sha256}".encode("utf-8")
@@ -105,22 +202,42 @@ def _holdout_bucket(replay_sha256: str, modulus: int = 10) -> int:
 
 def _replay_quality(payload: dict[str, Any]) -> tuple[bool, list[str]]:
     reasons: list[str] = []
-    total_frames = int(payload.get("totalFrames") or 0)
-    duration_seconds = total_frames / 60.0
-    players = list(payload.get("players") or [])
-    simulation = payload.get("simulation") or {}
-    feature_summary = payload.get("featureSummary") or {}
+    schema_version = payload.get("schemaVersion")
+    total_frames = payload.get("totalFrames")
+    players = payload.get("players")
+    simulation = payload.get("simulation")
+    feature_summary = payload.get("featureSummary")
 
-    if int(payload.get("schemaVersion") or 0) < 4:
+    if type(schema_version) is not int:
+        reasons.append("invalid_schema_version")
+    elif schema_version < 4:
         reasons.append("schema_before_v4")
-    if duration_seconds < 120.0:
+
+    if type(total_frames) is not int or total_frames < 0:
+        reasons.append("invalid_total_frames")
+    elif total_frames / 60.0 < 120.0:
         reasons.append("shorter_than_2m")
-    if int(simulation.get("sampledStateCount") or 0) <= 0:
-        reasons.append("no_sampled_state")
-    if len(players) < 4:
+
+    if not isinstance(simulation, dict):
+        reasons.append("invalid_simulation")
+    else:
+        sampled_state_count = simulation.get("sampledStateCount")
+        if type(sampled_state_count) is not int or sampled_state_count <= 0:
+            reasons.append("no_sampled_state")
+
+    if not isinstance(players, list) or any(
+        not isinstance(player, dict) for player in players
+    ):
+        reasons.append("invalid_players")
+    elif len(players) < 4:
         reasons.append("fewer_than_4_players")
-    if int(feature_summary.get("touches") or 0) <= 0:
-        reasons.append("no_touch_evidence")
+
+    if not isinstance(feature_summary, dict):
+        reasons.append("invalid_feature_summary")
+    else:
+        touches = feature_summary.get("touches")
+        if type(touches) is not int or touches <= 0:
+            reasons.append("no_touch_evidence")
 
     return not reasons, reasons
 
@@ -138,11 +255,29 @@ def build_training_manifest(
     holdout_modulus: int = 10,
     holdout_bucket: int = 0,
 ) -> dict[str, Any]:
+    _validate_holdout_partition(holdout_modulus, holdout_bucket)
+    if leaderboard_path.is_symlink() or not leaderboard_path.is_file():
+        raise ValueError("leaderboard must be a regular non-symlink file")
     leaderboard_bytes = leaderboard_path.read_bytes()
     leaderboard_sha256 = hashlib.sha256(leaderboard_bytes).hexdigest()
     leaderboard = json.loads(leaderboard_bytes)
+    if not isinstance(leaderboard, dict):
+        raise ValueError("leaderboard must be a JSON object")
+    analysis_version = leaderboard.get("analysis_version")
+    if not isinstance(analysis_version, str) or not analysis_version.strip():
+        raise ValueError("leaderboard analysis_version must be a non-empty string")
+    leaderboard_rows = leaderboard.get("rows")
+    if not isinstance(leaderboard_rows, list):
+        raise ValueError("leaderboard rows must be a JSON list")
+    valid_player_ids = [
+        row["player_id"]
+        for row in leaderboard_rows
+        if _valid_leaderboard_row(row)
+    ]
+    if len(valid_player_ids) != len(set(valid_player_ids)):
+        raise ValueError("leaderboard contains duplicate valid player_id rows")
     selected_players = select_players(
-        list(leaderboard.get("rows") or []),
+        leaderboard_rows,
         top_fraction_per_role=top_fraction_per_role,
         min_players_per_role=min_players_per_role,
         min_matches=min_matches,
@@ -159,17 +294,32 @@ def build_training_manifest(
     rejected = 0
     rejection_reasons: Counter[str] = Counter()
     scanned = 0
+    seen_replay_sha256: set[str] = set()
 
     for path in analysis_root.rglob("*.json"):
         if path.name.startswith("_"):
             continue
         scanned += 1
+        replay_sha256 = _analysis_replay_sha256(path)
+        if replay_sha256 is None or path.is_symlink() or not path.is_file():
+            rejected += 1
+            rejection_reasons.update(["invalid_analysis_provenance"])
+            continue
+        if replay_sha256 in seen_replay_sha256:
+            raise ValueError(
+                f"duplicate analysis provenance for replay {replay_sha256}"
+            )
+        seen_replay_sha256.add(replay_sha256)
         try:
             analysis_bytes = path.read_bytes()
             analysis_sha256 = hashlib.sha256(analysis_bytes).hexdigest()
             payload = json.loads(analysis_bytes)
         except (OSError, json.JSONDecodeError):
             rejected += 1
+            continue
+        if not isinstance(payload, dict):
+            rejected += 1
+            rejection_reasons.update(["invalid_analysis_payload"])
             continue
 
         quality_ok, quality_reasons = _replay_quality(payload)
@@ -179,20 +329,23 @@ def build_training_manifest(
             continue
 
         selected_in_replay: list[dict[str, Any]] = []
-        for player in payload.get("players") or []:
+        for player in payload["players"]:
             identity = _identity_key(player)
-            team_id = int(player.get("teamId") or 0)
-            samples = int(player.get("samples") or 0)
+            team_id = player.get("teamId")
+            samples = player.get("samples")
             replay_player_id = player.get("id")
             if (
                 identity in selected_ids
+                and type(team_id) is int
                 and team_id in (1, 2)
+                and type(samples) is int
                 and samples > 0
-                and replay_player_id is not None
+                and type(replay_player_id) is int
+                and replay_player_id >= 0
             ):
                 selected_in_replay.append(
                     {
-                        "replay_player_id": int(replay_player_id),
+                        "replay_player_id": replay_player_id,
                         "identity": identity,
                         "samples": samples,
                     }
@@ -201,6 +354,14 @@ def build_training_manifest(
         if not selected_in_replay:
             continue
 
+        replay_player_ids = [
+            row["replay_player_id"] for row in selected_in_replay
+        ]
+        if len(replay_player_ids) != len(set(replay_player_ids)):
+            raise ValueError(
+                f"{replay_sha256}: duplicate selected replay_player_id"
+            )
+
         selected_in_replay.sort(
             key=lambda row: (row["replay_player_id"], row["identity"])
         )
@@ -208,7 +369,6 @@ def build_training_manifest(
             {row["identity"] for row in selected_in_replay}
         )
 
-        replay_sha256 = path.stem
         raw_path = (
             raw_root
             / replay_sha256[:2]
@@ -250,7 +410,7 @@ def build_training_manifest(
     return {
         "schema": MANIFEST_SCHEMA,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "analysis_version": leaderboard.get("analysis_version"),
+        "analysis_version": analysis_version,
         "analysis_root": str(analysis_root),
         "leaderboard_path": str(leaderboard_path),
         "leaderboard_sha256": leaderboard_sha256,
@@ -317,26 +477,22 @@ def main() -> int:
     parser.add_argument("--holdout-bucket", type=int, default=0)
     args = parser.parse_args()
 
-    manifest = build_training_manifest(
-        analysis_root=args.analysis_root,
-        leaderboard_path=args.leaderboard,
-        raw_root=args.raw_root,
-        top_fraction_per_role=args.top_fraction_per_role,
-        min_players_per_role=max(1, args.min_players_per_role),
-        min_matches=max(1, args.min_matches),
-        min_minutes=max(0.0, args.min_minutes),
-        max_uncertainty=max(0.0, args.max_uncertainty),
-        holdout_modulus=max(2, args.holdout_modulus),
-        holdout_bucket=max(0, args.holdout_bucket),
-    )
-    if manifest["selection"]["holdout_bucket"] >= manifest["selection"]["holdout_modulus"]:
-        raise SystemExit("holdout-bucket must be smaller than holdout-modulus")
-
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    try:
+        manifest = build_training_manifest(
+            analysis_root=args.analysis_root,
+            leaderboard_path=args.leaderboard,
+            raw_root=args.raw_root,
+            top_fraction_per_role=args.top_fraction_per_role,
+            min_players_per_role=args.min_players_per_role,
+            min_matches=args.min_matches,
+            min_minutes=args.min_minutes,
+            max_uncertainty=args.max_uncertainty,
+            holdout_modulus=args.holdout_modulus,
+            holdout_bucket=args.holdout_bucket,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+    _atomic_json(args.output, manifest)
     print(json.dumps(manifest["stats"], indent=2, sort_keys=True))
     print(f"manifest: {args.output}")
     return 0
