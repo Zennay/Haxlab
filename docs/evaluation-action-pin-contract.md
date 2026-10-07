@@ -1,10 +1,14 @@
 # Evaluation action pin contract
 
-HaxLab evaluation evidence is bound to an exact repository commit. The workflow implementation that materializes that commit must be reproducible too.
+HaxLab evaluation evidence is bound to an exact repository commit. The workflow implementation that materializes that commit must be reproducible too, and the checked-out worktree must be verified before tests begin.
 
-## Invariant
+## Invariants
 
-`.github/workflows/arena-v2-evaluation-validation.yml` must reference official GitHub Actions by immutable 40-character commit SHA, not a moving major/minor tag.
+`.github/workflows/arena-v2-evaluation-validation.yml` must:
+
+1. reference official GitHub Actions by immutable 40-character commit SHA, not a moving major/minor tag;
+2. checkout the event's exact `github.sha`;
+3. verify `git rev-parse HEAD == github.sha` before creating the test environment or executing evaluation regressions.
 
 The reviewed `actions/checkout` v4 tag resolved to:
 
@@ -16,8 +20,10 @@ The workflow keeps a trailing `# v4` comment for readability, but the executable
 
 A branch or candidate SHA can be rerun days later. With `actions/checkout@v4`, that rerun may execute different action code even though HaxLab source is unchanged. A green rerun would therefore not be fully reproducible from the HaxLab SHA alone.
 
-Pinning the action closes that gap without changing Arena thresholds, evaluation semantics, models, champion state, or frozen inputs.
+Even with an immutable action implementation, exact-head evidence should fail closed if the resulting worktree does not equal the requested event SHA. The explicit post-checkout identity check establishes that boundary before any test evidence is produced.
+
+These invariants close the provenance gap without changing Arena thresholds, evaluation semantics, models, champion state, or frozen inputs.
 
 ## Change policy
 
-Advance the pin only through a reviewed change that records the new immutable action commit and keeps `tests/test_evaluation_workflow_action_pins.py` green.
+Advance the action pin only through a reviewed change that records the new immutable action commit. Any checkout/provenance change must keep `tests/test_evaluation_workflow_action_pins.py` green and preserve verification before test setup.
