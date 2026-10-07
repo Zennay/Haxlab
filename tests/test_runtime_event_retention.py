@@ -110,6 +110,25 @@ def test_delete_batch_is_bounded_and_oldest_first(tmp_path: Path) -> None:
     assert _ids(path) == [5, 6]
 
 
+def test_large_batch_does_not_depend_on_sqlite_bind_variable_limit(tmp_path: Path) -> None:
+    path = _db(tmp_path)
+    _insert(path, "2000-01-01 00:00:00", 1_205)
+
+    receipt = apply_event_retention(
+        path,
+        keep_hours=1,
+        keep_latest=0,
+        max_delete=1_200,
+        evaluated_at=datetime(2026, 10, 7, 4, 0, tzinfo=timezone.utc),
+    )
+
+    assert receipt.rows_eligible == 1_205
+    assert receipt.rows_selected == 1_200
+    assert receipt.rows_deleted == 1_200
+    assert receipt.rows_remaining_eligible == 5
+    assert _ids(path) == [1201, 1202, 1203, 1204, 1205]
+
+
 def test_equal_timestamps_use_id_as_deterministic_tiebreaker(tmp_path: Path) -> None:
     path = _db(tmp_path)
     _insert(path, "2000-01-01 00:00:00", 5)
