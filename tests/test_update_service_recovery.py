@@ -179,7 +179,14 @@ def test_update_preparses_destructive_phase_before_checkout_reset() -> None:
     source_index = text.index('source "${SCRIPT_DIR}/update-service-recovery.sh"')
     capture_index = text.index("haxlab_capture_update_service_state")
     function_index = text.index("haxlab_apply_verified_main_update() {")
-    stop_index = text.index('systemctl stop "${HAXLAB_UPDATE_MANAGED_SERVICES[@]}"')
+    stop_guard = 'if ! systemctl stop "${HAXLAB_UPDATE_MANAGED_SERVICES[@]}"; then'
+    stop_index = text.index(stop_guard)
+    stop_failure_index = text.index(
+        "Failed to stop all managed HaxLab services; refusing to update checkout.",
+        stop_index,
+    )
+    stop_return_index = text.index("    return 1", stop_failure_index)
+    apt_index = text.index("apt-get install -y nodejs npm", stop_return_index)
     reset_index = text.index('git -C "${APP_DIR}" reset --hard origin/main')
     restart_index = text.index(
         "systemctl start haxlab-ingest.service haxlab-worker.service "
@@ -202,8 +209,10 @@ def test_update_preparses_destructive_phase_before_checkout_reset() -> None:
     call_index = text.index(call, trap_index)
 
     assert source_index < capture_index < function_index
-    assert function_index < stop_index < reset_index < restart_index
+    assert function_index < stop_index < stop_failure_index < stop_return_index
+    assert stop_return_index < apt_index < reset_index < restart_index
     assert restart_index < status_index < disable_index < function_end_index
+    assert 'systemctl stop "${HAXLAB_UPDATE_MANAGED_SERVICES[@]}" 2>/dev/null || true' not in text
     assert function_end_index < trap_index < call_index
     assert text[call_index + len(call) :].strip() == ""
 
