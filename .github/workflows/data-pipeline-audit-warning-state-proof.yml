@@ -4,6 +4,13 @@ on:
   push:
     branches:
       - validation/data-pipeline-audit-warning-state-20261007
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/data-pipeline-audit-warning-state-proof.yml"
+      - "docs/data-pipeline-audit-warning-state.md"
+      - "tests/test_data_pipeline_audit_warning_state_contract.py"
   workflow_dispatch:
 
 permissions:
@@ -17,12 +24,14 @@ jobs:
   validate:
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 20
+    env:
+      SOURCE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
     steps:
       - name: Checkout exact validation head
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.SOURCE_SHA }}
           clean: true
           persist-credentials: false
 
@@ -30,16 +39,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           echo "HAXLAB_DATA_PIPELINE_AUDIT_WARNING_STATE_HEAD=$(git rev-parse HEAD)"
 
       - name: Verify candidate is still the live branch head
         shell: bash
         run: |
           set -euo pipefail
-          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk 'NR == 1 {print $1}')"
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            branch="${{ github.head_ref }}"
+          else
+            branch="$GITHUB_REF_NAME"
+          fi
+          test -n "$branch"
+          remote_head="$(git ls-remote origin "refs/heads/$branch" | awk 'NR == 1 {print $1}')"
           test -n "$remote_head"
-          test "$remote_head" = "${{ github.sha }}"
+          test "$remote_head" = "$SOURCE_SHA"
           echo "HAXLAB_DATA_PIPELINE_AUDIT_WARNING_STATE_LIVE_HEAD=$remote_head"
 
       - name: Create isolated test environment
