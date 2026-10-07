@@ -59,6 +59,10 @@ class MemoizationStateVisitor(ast.NodeVisitor):
         self._check_decorators(node.decorator_list)
         self.generic_visit(node)
 
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self._check_decorators(node.decorator_list)
+        self.generic_visit(node)
+
     def visit_Call(self, node: ast.Call) -> None:
         target = self._qualified_name(node.func)
         if target in BANNED_MEMOIZATION_HELPERS:
@@ -147,6 +151,7 @@ def test_evaluation_package_has_no_stateful_memoization() -> None:
         ("import functools\nmemo = getattr(functools, 'cache')\nwrapped = memo(lambda x: x)\n", "functools.cache"),
         ("import functools as ft\nmemo = getattr(ft, 'lru_cache')\n@memo(maxsize=None)\ndef f(x):\n    return x\n", "functools.lru_cache"),
         ("from functools import cached_property as cp\nwrapper = cp\nclass C:\n    @wrapper\n    def value(self):\n        return 1\n", "functools.cached_property"),
+        ("from functools import cache\n@cache\nclass C:\n    pass\n", "functools.cache"),
     ],
 )
 def test_detector_rejects_stateful_memoization(
