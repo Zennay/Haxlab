@@ -330,6 +330,14 @@ def build_training_manifest(
         if not selected_in_replay:
             continue
 
+        replay_player_ids = [
+            row["replay_player_id"] for row in selected_in_replay
+        ]
+        if len(replay_player_ids) != len(set(replay_player_ids)):
+            raise ValueError(
+                f"{replay_sha256}: duplicate selected replay_player_id"
+            )
+
         selected_in_replay.sort(
             key=lambda row: (row["replay_player_id"], row["identity"])
         )
