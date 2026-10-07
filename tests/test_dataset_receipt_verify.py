@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from haxlab.ingestion import dataset_receipt_verify as receipt_verify
+
 from haxlab.ingestion.dataset_receipt import M0_ARTIFACTS, build_dataset_receipt
 from haxlab.ingestion.dataset_receipt_verify import (
+    MAX_RECEIPT_BYTES,
     DatasetReceiptVerificationError,
     load_receipt,
     validate_receipt_payload,
@@ -181,3 +185,46 @@ def test_load_receipt_rejects_symlink_evidence(tmp_path: Path) -> None:
         match="receipt evidence is unsafe or unreadable",
     ):
         load_receipt(linked)
+
+
+
+def test_load_receipt_rejects_oversized_evidence(tmp_path: Path) -> None:
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_bytes(b"{" + b" " * MAX_RECEIPT_BYTES + b"}")
+
+    with pytest.raises(
+        DatasetReceiptVerificationError,
+        match=rf"receipt evidence exceeds {MAX_RECEIPT_BYTES} bytes",
+    ):
+        load_receipt(receipt_path)
+
+
+def test_load_receipt_rejects_evidence_changed_while_reading(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text('{"schema":"test"}\n', encoding="utf-8")
+    real_fstat = receipt_verify.os.fstat
+    calls = 0
+
+    def drifting_fstat(fd: int) -> object:
+        nonlocal calls
+        calls += 1
+        current = real_fstat(fd)
+        if calls == 2:
+            return SimpleNamespace(
+                st_mode=current.st_mode,
+                st_size=current.st_size,
+                st_mtime_ns=current.st_mtime_ns + 1,
+                st_ctime_ns=current.st_ctime_ns,
+            )
+        return current
+
+    monkeypatch.setattr(receipt_verify.os, "fstat", drifting_fstat)
+
+    with pytest.raises(
+        DatasetReceiptVerificationError,
+        match="receipt evidence changed while reading",
+    ):
+        load_receipt(receipt_path)
