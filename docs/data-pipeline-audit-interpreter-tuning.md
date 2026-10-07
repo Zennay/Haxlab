@@ -21,7 +21,7 @@ Audit modules must not invoke:
 - `sys.set_int_max_str_digits(...)`;
 - `threading.stack_size(...)` when an argument is supplied.
 
-The scanner resolves normal imports, direct imports, aliases, chained/tuple assignment aliases and constant-string `getattr(...)`. Wildcard imports from `sys` or `threading` are rejected because mutator provenance becomes statically ambiguous.
+The scanner resolves normal imports, direct imports, aliases, chained/tuple assignment aliases and constant-string `getattr(...)`. Dynamic `getattr(sys/threading, name)` capability selection and wildcard imports from `sys` or `threading` are rejected because mutator provenance becomes statically ambiguous.
 
 ## Allowed inspection
 
