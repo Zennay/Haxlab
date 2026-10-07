@@ -144,22 +144,42 @@ def _holdout_bucket(replay_sha256: str, modulus: int = 10) -> int:
 
 def _replay_quality(payload: dict[str, Any]) -> tuple[bool, list[str]]:
     reasons: list[str] = []
-    total_frames = int(payload.get("totalFrames") or 0)
-    duration_seconds = total_frames / 60.0
-    players = list(payload.get("players") or [])
-    simulation = payload.get("simulation") or {}
-    feature_summary = payload.get("featureSummary") or {}
+    schema_version = payload.get("schemaVersion")
+    total_frames = payload.get("totalFrames")
+    players = payload.get("players")
+    simulation = payload.get("simulation")
+    feature_summary = payload.get("featureSummary")
 
-    if int(payload.get("schemaVersion") or 0) < 4:
+    if type(schema_version) is not int:
+        reasons.append("invalid_schema_version")
+    elif schema_version < 4:
         reasons.append("schema_before_v4")
-    if duration_seconds < 120.0:
+
+    if type(total_frames) is not int or total_frames < 0:
+        reasons.append("invalid_total_frames")
+    elif total_frames / 60.0 < 120.0:
         reasons.append("shorter_than_2m")
-    if int(simulation.get("sampledStateCount") or 0) <= 0:
-        reasons.append("no_sampled_state")
-    if len(players) < 4:
+
+    if not isinstance(simulation, dict):
+        reasons.append("invalid_simulation")
+    else:
+        sampled_state_count = simulation.get("sampledStateCount")
+        if type(sampled_state_count) is not int or sampled_state_count <= 0:
+            reasons.append("no_sampled_state")
+
+    if not isinstance(players, list) or any(
+        not isinstance(player, dict) for player in players
+    ):
+        reasons.append("invalid_players")
+    elif len(players) < 4:
         reasons.append("fewer_than_4_players")
-    if int(feature_summary.get("touches") or 0) <= 0:
-        reasons.append("no_touch_evidence")
+
+    if not isinstance(feature_summary, dict):
+        reasons.append("invalid_feature_summary")
+    else:
+        touches = feature_summary.get("touches")
+        if type(touches) is not int or touches <= 0:
+            reasons.append("no_touch_evidence")
 
     return not reasons, reasons
 
@@ -227,6 +247,10 @@ def build_training_manifest(
         except (OSError, json.JSONDecodeError):
             rejected += 1
             continue
+        if not isinstance(payload, dict):
+            rejected += 1
+            rejection_reasons.update(["invalid_analysis_payload"])
+            continue
 
         quality_ok, quality_reasons = _replay_quality(payload)
         if not quality_ok:
@@ -235,20 +259,23 @@ def build_training_manifest(
             continue
 
         selected_in_replay: list[dict[str, Any]] = []
-        for player in payload.get("players") or []:
+        for player in payload["players"]:
             identity = _identity_key(player)
-            team_id = int(player.get("teamId") or 0)
-            samples = int(player.get("samples") or 0)
+            team_id = player.get("teamId")
+            samples = player.get("samples")
             replay_player_id = player.get("id")
             if (
                 identity in selected_ids
+                and type(team_id) is int
                 and team_id in (1, 2)
+                and type(samples) is int
                 and samples > 0
-                and replay_player_id is not None
+                and type(replay_player_id) is int
+                and replay_player_id >= 0
             ):
                 selected_in_replay.append(
                     {
-                        "replay_player_id": int(replay_player_id),
+                        "replay_player_id": replay_player_id,
                         "identity": identity,
                         "samples": samples,
                     }
