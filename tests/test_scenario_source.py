@@ -693,3 +693,50 @@ def test_healthy_candidate_rejects_noncanonical_source_paths(
         is None
     )
 
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    [
+        ("id", -1),
+        ("teamId", -1),
+        ("teamId", 3),
+    ],
+)
+def test_healthy_candidate_rejects_impossible_player_identity(
+    tmp_path: Path,
+    field: str,
+    bad_value: int,
+) -> None:
+    raw, analysis, raw_sha = _candidate_files(tmp_path)
+    payload = json.loads(analysis.read_text(encoding="utf-8"))
+    payload["players"][0][field] = bad_value
+    analysis.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert (
+        scenario_source._healthy_candidate(
+            sha256=raw_sha,
+            raw_path=str(raw),
+            analysis_path=str(analysis),
+            sampled_states=100,
+        )
+        is None
+    )
+
+
+def test_healthy_candidate_rejects_falsey_non_object_simulation(
+    tmp_path: Path,
+) -> None:
+    raw, analysis, raw_sha = _candidate_files(tmp_path)
+    payload = json.loads(analysis.read_text(encoding="utf-8"))
+    payload["simulation"] = []
+    analysis.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert (
+        scenario_source._healthy_candidate(
+            sha256=raw_sha,
+            raw_path=str(raw),
+            analysis_path=str(analysis),
+            sampled_states=100,
+        )
+        is None
+    )
+
