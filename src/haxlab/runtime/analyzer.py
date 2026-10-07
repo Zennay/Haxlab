@@ -252,24 +252,47 @@ def _analyze_one(
             None,
         )
 
-    fd, temporary_name = tempfile.mkstemp(
-        prefix=f".{replay.sha256}.",
-        suffix=".tmp",
-        dir=output_dir,
-    )
+    directory_fd = -1
+    temporary_name: str | None = None
     try:
+        directory_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+        nofollow = getattr(os, "O_NOFOLLOW", None)
+        directory = getattr(os, "O_DIRECTORY", None)
+        if nofollow is None or directory is None:
+            raise OSError("derived_output_directory_sync_unsupported")
+        directory_flags |= nofollow | directory
+        directory_fd = os.open(output_dir, directory_flags)
+
+        fd, temporary_name = tempfile.mkstemp(
+            prefix=f".{replay.sha256}.",
+            suffix=".tmp",
+            dir=output_dir,
+        )
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary_name, output_path)
+        temporary_name = None
+        os.fsync(directory_fd)
+    except OSError as exc:
+        if temporary_name is not None:
+            try:
+                os.unlink(temporary_name)
+            except OSError:
+                pass
+        return replay, None, f"derived_output_publish_error:{exc}", None
     except Exception:
-        try:
-            os.unlink(temporary_name)
-        except OSError:
-            pass
+        if temporary_name is not None:
+            try:
+                os.unlink(temporary_name)
+            except OSError:
+                pass
         raise
+    finally:
+        if directory_fd >= 0:
+            os.close(directory_fd)
 
     return replay, payload, None, output_path
 
