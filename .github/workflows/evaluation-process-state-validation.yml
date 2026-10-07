@@ -1,0 +1,60 @@
+name: Evaluation process-state validation
+
+on:
+  push:
+    branches:
+      - validation/evaluation-process-state-contract-20261007
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-evaluation-process-state-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Verify exact checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          echo "HAXLAB_EVALUATION_PROCESS_STATE_HEAD=$(git rev-parse HEAD)"
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .evaluation-process-state-venv
+          python3 -m venv .evaluation-process-state-venv
+          .evaluation-process-state-venv/bin/pip install --upgrade pip
+          .evaluation-process-state-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile evaluation package and contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          .evaluation-process-state-venv/bin/python -m compileall -q             src/haxlab/evaluation             tests/test_evaluation_process_state_contract.py
+
+      - name: Run process-state contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src"             .evaluation-process-state-venv/bin/pytest -q               tests/test_evaluation_process_state_contract.py
+
+      - name: Record green result
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HAXLAB_EVALUATION_PROCESS_STATE_RESULT=green"
