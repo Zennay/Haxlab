@@ -42,7 +42,6 @@ chmod 0755 "${APP_DIR}/deploy/haxlab-autonomy-tick.sh"
 
 ln -sf "${APP_DIR}/.venv/bin/haxlab" /usr/local/bin/haxlab
 ln -sf "${APP_DIR}/.venv/bin/haxlab-status" /usr/local/bin/haxlab-status
-haxlab_disable_update_recovery_trap
 ln -sf "${APP_DIR}/.venv/bin/haxlab-worker" /usr/local/bin/haxlab-worker
 ln -sf "${APP_DIR}/.venv/bin/haxlab-daemon" /usr/local/bin/haxlab-daemon
 ln -sf "${APP_DIR}/.venv/bin/haxlab-analyzer" /usr/local/bin/haxlab-analyzer
@@ -67,3 +66,4 @@ systemctl is-active --quiet haxlab-analyzer.service
 systemctl is-active --quiet haxlab-autonomy.timer
 
 haxlab-status
+haxlab_disable_update_recovery_trap
