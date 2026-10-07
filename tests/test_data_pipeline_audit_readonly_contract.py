@@ -183,7 +183,7 @@ class _AuditMutationVisitor(ast.NodeVisitor):
             self._add(node, f"direct_write_method:{attr}")
 
         is_builtin_open = name in {"open", "builtins.open"}
-        is_method_open = attr == "open"
+        is_method_open = attr == "open" and name != "os.open"
         is_fdopen = name == "os.fdopen"
         if is_builtin_open or is_method_open or is_fdopen:
             mode = _literal_mode(node)
