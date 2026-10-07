@@ -448,6 +448,11 @@ def audit_runtime_state(path: Path) -> RuntimeStateAudit:
         connection = sqlite3.connect(uri, uri=True)
         connection.row_factory = sqlite3.Row
         try:
+            # The ingest/analyzer services may keep writing while this audit is
+            # running. Pin all reads to one SQLite snapshot so cross-record
+            # checks never compare rows from different moments in time.
+            connection.execute("PRAGMA query_only = ON")
+            connection.execute("BEGIN")
             tables = _table_names(connection)
             missing = [name for name in _REQUIRED_TABLES if name not in tables]
             for name in missing:
@@ -486,6 +491,8 @@ def audit_runtime_state(path: Path) -> RuntimeStateAudit:
             if "replay_analysis_versions" in tables:
                 _audit_analysis(connection, issues)
         finally:
+            if connection.in_transaction:
+                connection.rollback()
             connection.close()
     except (OSError, sqlite3.DatabaseError) as exc:
         _append_issue(
