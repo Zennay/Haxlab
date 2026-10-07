@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -11,6 +12,10 @@ from haxlab.runtime.analyzer import ANALYZER_VERSION, analyze_batch
 from haxlab.runtime.state import RuntimeState
 
 
+REPLAY_BYTES = b"raw replay bytes"
+REPLAY_SHA = hashlib.sha256(REPLAY_BYTES).hexdigest()
+
+
 def _register_processed_replay(
     state: RuntimeState,
     tmp_path: Path,
@@ -19,7 +24,7 @@ def _register_processed_replay(
 ) -> Path:
     replay = tmp_path / "raw" / f"{sha256}.hbr2"
     replay.parent.mkdir(parents=True, exist_ok=True)
-    replay.write_bytes(b"raw replay bytes")
+    replay.write_bytes(REPLAY_BYTES)
     state.register_raw(
         sha256=sha256,
         archive_path=str(replay),
@@ -76,7 +81,7 @@ def test_pending_replay_recomputes_and_replaces_orphan_json(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    sha256 = "a" * 64
+    sha256 = REPLAY_SHA
     derived_root = tmp_path / "derived"
     orphan_path = _analysis_output(derived_root, sha256)
     orphan_path.parent.mkdir(parents=True, exist_ok=True)
@@ -99,6 +104,7 @@ def test_pending_replay_recomputes_and_replaces_orphan_json(
     calls: list[list[str]] = []
 
     def fake_run(command, **_kwargs):
+        assert Path(command[2]).read_bytes() == REPLAY_BYTES
         calls.append(list(command))
         return subprocess.CompletedProcess(
             command,
@@ -123,7 +129,8 @@ def test_pending_replay_recomputes_and_replaces_orphan_json(
 
     assert result == {"selected": 1, "ok": 1, "failed": 0}
     assert len(calls) == 1
-    assert calls[0][2] == str(replay)
+    assert calls[0][2] != str(replay)
+    assert not Path(calls[0][2]).exists()
     assert json.loads(orphan_path.read_text(encoding="utf-8")) == _fresh_payload()
     assert row["status"] == "ok"
     assert row["output_path"] == str(orphan_path)
@@ -138,7 +145,7 @@ def test_retry_replay_does_not_promote_orphan_when_decoder_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    sha256 = "b" * 64
+    sha256 = REPLAY_SHA
     derived_root = tmp_path / "derived"
     orphan_path = _analysis_output(derived_root, sha256)
     orphan_path.parent.mkdir(parents=True, exist_ok=True)
@@ -186,7 +193,7 @@ def test_pending_replay_without_orphan_preserves_healthy_analysis(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    sha256 = "c" * 64
+    sha256 = REPLAY_SHA
     derived_root = tmp_path / "derived"
 
     def fake_run(command, **_kwargs):
