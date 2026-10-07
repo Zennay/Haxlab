@@ -29,13 +29,19 @@ def gate_receipt():
             {
                 "gate": gate,
                 "workflow_path": workflow_path,
+                "workflow_name": workflow_name,
                 "head_sha": HEAD,
                 "run_id": 100 + index,
                 "run_attempt": 1,
                 "status": "completed",
                 "conclusion": "success",
+                "event": "workflow_dispatch",
+                "html_url": (
+                    "https://github.com/Zennay/Haxlab/actions/runs/"
+                    f"{100 + index}"
+                ),
             }
-            for index, (gate, workflow_path) in enumerate(
+            for index, (gate, (workflow_path, workflow_name)) in enumerate(
                 REQUIRED_GATES.items()
             )
         ],
@@ -258,6 +264,32 @@ def test_gate_workflow_path_is_part_of_authorization_boundary() -> None:
     with pytest.raises(
         PromotionAuthorizationError,
         match="workflow path mismatch",
+    ):
+        authorize(gate_receipt=receipt)
+
+
+def test_gate_workflow_name_event_and_url_are_pinned() -> None:
+    receipt = gate_receipt()
+    receipt["gates"][0]["workflow_name"] = "Wrong workflow"
+    with pytest.raises(
+        PromotionAuthorizationError,
+        match="workflow name mismatch",
+    ):
+        authorize(gate_receipt=receipt)
+
+    receipt = gate_receipt()
+    receipt["gates"][0]["event"] = "schedule"
+    with pytest.raises(
+        PromotionAuthorizationError,
+        match="unsupported event type",
+    ):
+        authorize(gate_receipt=receipt)
+
+    receipt = gate_receipt()
+    receipt["gates"][0]["html_url"] += "-forged"
+    with pytest.raises(
+        PromotionAuthorizationError,
+        match="workflow run URL mismatch",
     ):
         authorize(gate_receipt=receipt)
 
