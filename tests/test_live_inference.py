@@ -605,22 +605,22 @@ def test_role_order_cannot_be_overridden_by_environment(
     assert _resolve_role_order({}) == ["gk", "dm", "am", "st"]
 
 
-def test_runtime_role_order_remains_explicitly_supported() -> None:
+def test_hashed_metrics_role_ids_define_live_role_order() -> None:
     assert _resolve_role_order(
-        {"role_order": ["st", "am", "dm", "gk"]}
-    ) == ["st", "am", "dm", "gk"]
+        {"role_ids": {"gk": 0, "dm": 1, "am": 2, "st": 3}}
+    ) == ["gk", "dm", "am", "st"]
 
 
 @pytest.mark.parametrize(
-    "role_order",
+    "role_ids",
     [
-        ["gk", "dm", "am", "xx"],
-        ["gk", "dm", "am", "am"],
+        {"gk": 0, "dm": 1, "am": 2, "xx": 3},
+        {"gk": 0, "dm": 1, "am": 2, "st": 2},
     ],
 )
-def test_runtime_role_order_requires_exact_canonical_role_set(
-    role_order: list[str],
+def test_hashed_metrics_role_ids_require_exact_canonical_role_set(
+    role_ids: dict[str, int],
 ) -> None:
     with pytest.raises(ValueError, match="invalid role order"):
-        _resolve_role_order({"role_order": role_order})
+        _resolve_role_order({"role_ids": role_ids})
 
