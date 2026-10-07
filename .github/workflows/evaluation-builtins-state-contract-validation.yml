@@ -1,0 +1,75 @@
+name: Evaluation builtins-state contract validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Exact 40-character candidate SHA
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-evaluation-builtins-state-${{ inputs.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    steps:
+      - name: Validate immutable candidate SHA
+        shell: bash
+        env:
+          TARGET_SHA: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error title=Mutable proof ref::exact lowercase 40-character SHA required"
+            exit 1
+          fi
+
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          clean: true
+
+      - name: Verify exact live validation head
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.ref }}
+          VALIDATION_BRANCH: validation/evaluation-builtins-state-contract-20261007
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          test "$actual_sha" = "$EXPECTED_SHA"
+          live_sha="$(git ls-remote origin "refs/heads/$VALIDATION_BRANCH" | awk 'NR == 1 {print $1}')"
+          test -n "$live_sha"
+          test "$live_sha" = "$EXPECTED_SHA"
+          echo "HAXLAB_EVALUATION_BUILTINS_STATE_HEAD=$actual_sha"
+
+      - name: Compile evaluation package and contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          /opt/haxlab/.venv/bin/python -m compileall -q             src/haxlab/evaluation             tests/test_evaluation_builtins_state_contract.py
+
+      - name: Run focused builtins-state contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src"             /opt/haxlab/.venv/bin/python -m pytest -q               tests/test_evaluation_builtins_state_contract.py
+
+      - name: Run adjacent canonical evaluation regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src"             /opt/haxlab/.venv/bin/python -m pytest -q               tests/test_calibration_gate.py               tests/test_calibration_resume.py               tests/test_closed_loop_arena.py               tests/test_duel_gate.py               tests/test_elite_gate_preflight.py               tests/test_multisource_duel.py               tests/test_multisource_suite.py               tests/test_promotion.py               tests/test_scenario_source.py
+
+      - name: Record green result
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HAXLAB_EVALUATION_BUILTINS_STATE_RESULT=green"
