@@ -1,0 +1,61 @@
+name: Evaluation determinism exact-head carrier
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/evaluation-determinism-proof-carrier.yml
+      - ops/evaluation-determinism-proof-carrier.md
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-evaluation-determinism-proof-carrier
+  cancel-in-progress: true
+
+jobs:
+  prove:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact evaluation candidate
+        uses: actions/checkout@v4
+        with:
+          ref: 69646fd0817b162be31add2bf8e87be3cb9b4fc7
+          clean: true
+
+      - name: Verify exact candidate SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "69646fd0817b162be31add2bf8e87be3cb9b4fc7"
+          echo "HAXLAB_EVALUATION_DETERMINISM_HEAD=$(git rev-parse HEAD)"
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .evaluation-determinism-proof-venv
+          python3 -m venv .evaluation-determinism-proof-venv
+          .evaluation-determinism-proof-venv/bin/pip install --upgrade pip
+          .evaluation-determinism-proof-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile evaluation package and contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          .evaluation-determinism-proof-venv/bin/python -m compileall -q src/haxlab/evaluation tests/test_evaluation_determinism_contract.py
+
+      - name: Run determinism contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" .evaluation-determinism-proof-venv/bin/pytest -q tests/test_evaluation_determinism_contract.py
+
+      - name: Record proof result
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HAXLAB_EVALUATION_DETERMINISM_RESULT=green"
