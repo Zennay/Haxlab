@@ -339,3 +339,40 @@ def test_audit_cli_failure_is_machine_readable(
     assert error["schema"] == AUDIT_SCHEMA
     assert error["ok"] is False
     assert error["error"]
+
+
+
+def test_audit_rejects_logical_path_replacement_after_secure_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "leaderboard.json"
+    _write(
+        path,
+        _snapshot(_row("auth:alpha", name="Alpha", rating=60.0)),
+    )
+    replacement = tmp_path / "replacement.json"
+    replacement.write_bytes(path.read_bytes())
+    original = tmp_path / "leaderboard-original.json"
+
+    real_read = audit_module._read_bounded
+    reads = 0
+
+    def racing_read(fd: int) -> bytes:
+        nonlocal reads
+        payload = real_read(fd)
+        reads += 1
+        if reads == 2:
+            path.rename(original)
+            replacement.rename(path)
+        return payload
+
+    monkeypatch.setattr(audit_module, "_read_bounded", racing_read)
+
+    with pytest.raises(
+        LeaderboardAuditError,
+        match="logical path identity changed during audit",
+    ):
+        audit_leaderboard(path)
+
+    assert reads == 2

@@ -11,6 +11,7 @@ The auditor:
 - opens the final leaderboard with no-follow and non-blocking file semantics;
 - requires a regular file and rejects oversized input;
 - reads the same descriptor twice and rejects byte or file-identity drift during the audit;
+- rechecks the final logical pathname after the descriptor read and rejects path replacement, redirection, or disappearance before success;
 - rejects invalid UTF-8, invalid JSON, duplicate object keys and non-finite JSON constants;
 - requires the exact v1 top-level contract, while allowing the active producer follow-up's optional `analysis_version`;
 - validates native threshold types and row compatibility with `min_matches` / `min_minutes`;
