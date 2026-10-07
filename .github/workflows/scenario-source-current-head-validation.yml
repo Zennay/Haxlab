@@ -74,6 +74,8 @@ jobs:
           import sqlite3
           from pathlib import Path
 
+          from haxlab.evaluation.scenario_source import _healthy_candidate
+
           root = Path(os.environ["ROOT"])
           manifest = json.loads((root / "frozen-manifest.json").read_text())
           entries = list(manifest.get("sources") or [])
@@ -93,14 +95,40 @@ jobs:
                   if len(replay_sha) != 64 or any(ch not in "0123456789abcdef" for ch in replay_sha):
                       raise SystemExit(f"source-{index:02d}: invalid replay SHA-256")
                   row = db.execute(
-                      "SELECT archive_path FROM raw_replays WHERE sha256 = ?",
+                      """
+                      SELECT r.archive_path, a.output_path, a.sampled_state_count
+                      FROM raw_replays r
+                      JOIN replay_analysis_versions a ON a.sha256 = r.sha256
+                      WHERE r.sha256 = ?
+                        AND a.analyzer_version = 'state-pass-v4'
+                        AND a.status = 'ok'
+                        AND a.output_path IS NOT NULL
+                      """,
                       (replay_sha,),
                   ).fetchone()
                   if row is None:
-                      raise SystemExit(f"source-{index:02d}: replay absent from raw_replays")
+                      raise SystemExit(
+                          f"source-{index:02d}: replay/analysis provenance absent from state DB"
+                      )
                   raw = Path(row[0])
+                  analysis = Path(row[1])
+                  sampled_states = row[2]
                   if raw.is_symlink() or not raw.is_file():
                       raise SystemExit(f"source-{index:02d}: unsafe/missing archive: {raw}")
+                  candidate = _healthy_candidate(
+                      sha256=replay_sha,
+                      raw_path=str(raw),
+                      analysis_path=str(analysis),
+                      sampled_states=sampled_states,
+                  )
+                  if candidate is None:
+                      raise SystemExit(
+                          f"source-{index:02d}: current scenario-source validation rejected frozen source"
+                      )
+                  if not candidate.get("analysis_sha256"):
+                      raise SystemExit(
+                          f"source-{index:02d}: missing analysis-byte provenance"
+                      )
                   digest = hashlib.sha256()
                   with raw.open("rb") as handle:
                       for chunk in iter(lambda: handle.read(1024 * 1024), b""):
