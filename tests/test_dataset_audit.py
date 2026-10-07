@@ -165,3 +165,51 @@ def test_cli_returns_nonzero_and_machine_readable_evidence(
     assert payload["schema"] == AUDIT_SCHEMA
     assert payload["ok"] is False
     assert "duplicates:missing" in payload["issues"]
+
+
+def test_real_import_output_satisfies_audit_contract(tmp_path: Path) -> None:
+    import struct
+
+    from haxlab.ingestion.pipeline import run_import
+
+    raw = tmp_path / "raw"
+    out = tmp_path / "derived"
+    raw.mkdir()
+
+    replay_name = "24-09-26-22h12-aavsmko-deadbeefcafebabe.hbr2"
+    replay = raw / replay_name
+    replay.write_bytes(struct.pack(">4sII", b"HBR2", 3, 600) + b"payload")
+
+    export = {
+        "channel": {"id": "726932424172371968"},
+        "messages": [
+            {
+                "id": "1552774764110815262",
+                "timestamp": "2026-09-24T22:12:27+02:00",
+                "content": (
+                    "MATCH REPORT SCRIM #20260924T221227749-R2\n"
+                    "Red Team 3 - 2 Blue Team\n"
+                    "Possession: 🔴 52.34% 🔵 47.66%"
+                ),
+                "attachments": [
+                    {
+                        "fileName": "24-09-26-22h12-aavsmko.hbr2",
+                        "fileSizeBytes": replay.stat().st_size,
+                    }
+                ],
+            }
+        ],
+    }
+    (raw / "channel.json").write_text(
+        json.dumps(export, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    run_import(raw, out)
+    result = audit_dataset(out)
+
+    assert result.ok is True
+    assert result.issues == ()
+    assert result.replay_count == 1
+    assert result.report_count == 1
+    assert result.match_count == 1
