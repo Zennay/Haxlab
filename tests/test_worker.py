@@ -35,3 +35,27 @@ def test_worker_probes_unprocessed_replay(tmp_path: Path) -> None:
     assert status["processing_ok"] == 1
     assert status["processing_pending"] == 0
     assert status["total_frames_probed"] == 3600
+
+
+def test_worker_rejects_trailing_bytes_after_deflate_member(tmp_path: Path) -> None:
+    replay = tmp_path / "raw" / "trailing.hbr2"
+    replay.parent.mkdir()
+    replay.write_bytes(_valid_hbr2() + b"trailing-garbage")
+
+    sha = sha256_file(replay)
+    db = tmp_path / "state.sqlite3"
+
+    with RuntimeState(db) as state:
+        state.register_raw(
+            sha256=sha,
+            archive_path=str(replay),
+            size_bytes=replay.stat().st_size,
+        )
+
+        result = process_batch(state, batch_size=10)
+        status = state.status_snapshot()
+
+    assert result == {"selected": 1, "ok": 0, "failed": 1}
+    assert status["processing_ok"] == 0
+    assert status["processing_failed"] == 1
+    assert status["processing_pending"] == 0
