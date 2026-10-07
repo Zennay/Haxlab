@@ -9,10 +9,10 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 EVALUATION_ROOT = ROOT / "src" / "haxlab" / "evaluation"
 
-_FORBIDDEN_PATH_METHODS = {"glob", "rglob", "iterdir"}
+_FORBIDDEN_PATH_METHODS = {"glob", "rglob", "iterdir", "walk"}
 _FORBIDDEN_MODULE_CALLS = {
     "glob": {"glob", "iglob"},
-    "os": {"listdir", "scandir", "walk"},
+    "os": {"fwalk", "listdir", "scandir", "walk"},
 }
 
 
@@ -37,11 +37,21 @@ def _violations(source: str, *, filename: str = "<source>") -> list[str]:
         if not isinstance(node, (ast.Assign, ast.AnnAssign)):
             continue
         value = node.value
-        if not isinstance(value, ast.Attribute) or not isinstance(value.value, ast.Name):
+        if not isinstance(value, ast.Attribute):
             continue
-        module = module_aliases.get(value.value.id)
-        if module is None or value.attr not in _FORBIDDEN_MODULE_CALLS[module]:
+
+        is_forbidden_path_method = value.attr in _FORBIDDEN_PATH_METHODS
+        is_forbidden_module_call = False
+        if isinstance(value.value, ast.Name):
+            module = module_aliases.get(value.value.id)
+            is_forbidden_module_call = (
+                module is not None
+                and value.attr in _FORBIDDEN_MODULE_CALLS[module]
+            )
+
+        if not (is_forbidden_path_method or is_forbidden_module_call):
             continue
+
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
         for target in targets:
             if isinstance(target, ast.Name):
@@ -56,14 +66,18 @@ def _violations(source: str, *, filename: str = "<source>") -> list[str]:
         if isinstance(func, ast.Name) and (
             func.id in direct_aliases or func.id in assigned_aliases
         ):
-            violations.append(f"{filename}:{node.lineno}:ambient_filesystem_discovery:{func.id}")
+            violations.append(
+                f"{filename}:{node.lineno}:ambient_filesystem_discovery:{func.id}"
+            )
             continue
 
         if not isinstance(func, ast.Attribute):
             continue
 
         if func.attr in _FORBIDDEN_PATH_METHODS:
-            violations.append(f"{filename}:{node.lineno}:ambient_filesystem_discovery:{func.attr}")
+            violations.append(
+                f"{filename}:{node.lineno}:ambient_filesystem_discovery:{func.attr}"
+            )
             continue
 
         if isinstance(func.value, ast.Name):
@@ -83,12 +97,15 @@ def _violations(source: str, *, filename: str = "<source>") -> list[str]:
         "from pathlib import Path\nPath('/tmp').glob('*.json')\n",
         "from pathlib import Path\nPath('/tmp').rglob('*.json')\n",
         "from pathlib import Path\nPath('/tmp').iterdir()\n",
+        "from pathlib import Path\nPath('/tmp').walk()\n",
         "import os\nos.walk('/tmp')\n",
+        "import os\nos.fwalk('/tmp')\n",
         "import os as operating_system\noperating_system.listdir('/tmp')\n",
         "from os import scandir as scan\nscan('/tmp')\n",
         "import glob as glob_module\nglob_module.iglob('/tmp/*')\n",
         "from glob import glob as discover\ndiscover('/tmp/*')\n",
         "import os\ndiscover = os.walk\ndiscover('/tmp')\n",
+        "from pathlib import Path\np = Path('/tmp')\ndiscover = p.glob\ndiscover('*')\n",
     ],
 )
 def test_contract_rejects_ambient_filesystem_discovery(source: str) -> None:
@@ -108,8 +125,11 @@ def test_contract_allows_explicit_evidence_paths(source: str) -> None:
 
 
 def test_evaluation_package_uses_only_explicit_evidence_paths() -> None:
+    paths = sorted(EVALUATION_ROOT.rglob("*.py"))
+    assert paths, "evaluation package unexpectedly contains no Python modules"
+
     violations: list[str] = []
-    for path in sorted(EVALUATION_ROOT.rglob("*.py")):
+    for path in paths:
         relative = path.relative_to(ROOT).as_posix()
         violations.extend(
             _violations(path.read_text(encoding="utf-8"), filename=relative)
