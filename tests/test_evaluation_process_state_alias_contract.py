@@ -217,15 +217,16 @@ class ProcessStateAliasVisitor(ast.NodeVisitor):
 
     def visit_Assign(self, node: ast.Assign) -> None:
         self.visit(node.value)
-        self._bind_assignment(list(node.targets), node.value)
         for target in node.targets:
             self._record_target_mutation(node, target)
+        self._bind_assignment(list(node.targets), node.value)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
         if node.value is not None:
             self.visit(node.value)
-            self._bind_assignment([node.target], node.value)
         self._record_target_mutation(node, node.target)
+        if node.value is not None:
+            self._bind_assignment([node.target], node.value)
 
     def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
         self.visit(node.value)
