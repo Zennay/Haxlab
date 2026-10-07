@@ -151,7 +151,30 @@ class ProcessStateAliasVisitor(ast.NodeVisitor):
             return False
         if target in FORBIDDEN_CALLS or target in GUARDED_ROOTS:
             return True
-        return any(target == f"{root}.{method}" for root in GUARDED_ROOTS for method in ROOT_MUTATORS)
+
+        normalized = target[len("builtins.") :] if target.startswith("builtins.") else target
+        if normalized in {
+            "dict",
+            "getattr",
+            "list",
+        } or target in {
+            "builtins.getattr",
+            "builtins",
+            "locale",
+            "operator",
+            "os",
+            "signal",
+            "sys",
+        }:
+            return True
+        if normalized in UNBOUND_MUTATORS:
+            return True
+
+        return any(
+            target == f"{root}.{method}"
+            for root in GUARDED_ROOTS
+            for method in ROOT_MUTATORS
+        )
 
     @staticmethod
     def _normalize_builtin(target: str | None) -> str | None:
@@ -331,6 +354,14 @@ def test_evaluation_package_has_no_process_state_alias_mutation() -> None:
         (
             "import operator\nimport sys\npaths = sys.path\nwrite = operator.setitem\nwrite(paths, 0, '/tmp')\n",
             "operator.setitem(sys.path",
+        ),
+        (
+            "import os\nstate = os\nenv = state.environ\npop = dict.pop\npop(env, 'MODE', None)\n",
+            "dict.pop(os.environ",
+        ),
+        (
+            "import sys\nsystem = sys\npaths = system.path\nmutate = list.append\nmutate(paths, '/tmp')\n",
+            "list.append(sys.path",
         ),
         (
             "from sys import settrace as trace\nalias = trace\nalias(lambda *args: None)\n",
