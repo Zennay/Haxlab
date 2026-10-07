@@ -341,7 +341,21 @@ def validate_source_receipt(payload: dict[str, Any]) -> None:
         raise SourceBundleVerifyError("receipt_self_digest_mismatch")
 
 
+def _assert_receipt_outside_export_root(
+    export_root: Path,
+    receipt_path: Path,
+) -> None:
+    logical_root = Path(os.path.abspath(os.fspath(export_root)))
+    logical_receipt = Path(os.path.abspath(os.fspath(receipt_path)))
+    try:
+        logical_receipt.relative_to(logical_root)
+    except ValueError:
+        return
+    raise SourceBundleVerifyError("receipt_inside_source_root")
+
+
 def verify_source_bundle(export_root: Path, receipt_path: Path) -> dict[str, Any]:
+    _assert_receipt_outside_export_root(Path(export_root), Path(receipt_path))
     expected, first_raw, receipt_binding = _load_receipt(Path(receipt_path))
     validate_source_receipt(expected)
 
