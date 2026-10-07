@@ -184,10 +184,26 @@ def apply_event_retention(
         last_selected_id = selected_ids[-1] if selected_ids else None
 
         if not dry_run and selected_ids:
-            placeholders = ",".join("?" for _ in selected_ids)
             cursor = connection.execute(
-                f"DELETE FROM runtime_events WHERE id IN ({placeholders})",
-                selected_ids,
+                """
+                WITH newest AS (
+                    SELECT id
+                    FROM runtime_events
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT ?
+                ),
+                selected AS (
+                    SELECT id
+                    FROM runtime_events
+                    WHERE created_at < ?
+                      AND id NOT IN (SELECT id FROM newest)
+                    ORDER BY created_at ASC, id ASC
+                    LIMIT ?
+                )
+                DELETE FROM runtime_events
+                WHERE id IN (SELECT id FROM selected)
+                """,
+                (keep_latest, cutoff_sql, max_delete),
             )
             if cursor.rowcount not in (-1, rows_selected):
                 raise EventRetentionError(
