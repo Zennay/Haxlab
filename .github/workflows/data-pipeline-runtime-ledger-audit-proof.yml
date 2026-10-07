@@ -1,0 +1,46 @@
+name: Data-pipeline runtime ledger exact-head proof
+
+on:
+  push:
+    branches:
+      - feature/data-pipeline-runtime-ledger-audit-20261007
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: data-pipeline-runtime-ledger-exact-head
+  cancel-in-progress: true
+
+jobs:
+  proof:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[runtime-ledger-proof]')
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout exact event head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Verify immutable checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Run focused runtime-ledger proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv .venv-ledger-proof
+          .venv-ledger-proof/bin/python -m pip install -q -e ".[dev]"
+          .venv-ledger-proof/bin/python -m py_compile src/haxlab/runtime/state_audit.py
+          .venv-ledger-proof/bin/python -m pytest -q tests/test_runtime_state_audit.py
+          echo "HAXLAB_RUNTIME_LEDGER_AUDIT_PROOF=success"
