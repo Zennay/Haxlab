@@ -285,3 +285,42 @@ def test_baseline_rejects_noncanonical_action_labels_before_model_publication(
         )
 
     assert not output.exists()
+
+
+
+def test_baseline_rejects_holdout_feature_order_drift_before_model_publication(
+    tmp_path: Path,
+) -> None:
+    train_dir = tmp_path / "train"
+    holdout_dir = tmp_path / "holdout"
+    train_entry = _write_shard(train_dir, "train-a", _synthetic_rows(64, 41))
+    holdout_entry = _write_shard(
+        holdout_dir,
+        "holdout-a",
+        _synthetic_rows(64, 42),
+    )
+
+    holdout_meta = holdout_dir / "holdout-a.meta.json"
+    payload = json.loads(holdout_meta.read_text(encoding="utf-8"))
+    columns = list(payload["columns"])
+    first = columns.index("own_x")
+    second = columns.index("ball_dx")
+    columns[first], columns[second] = columns[second], columns[first]
+    payload["columns"] = columns
+    holdout_meta.write_text(json.dumps(payload), encoding="utf-8")
+
+    train_index = tmp_path / "train-index.json"
+    holdout_index = tmp_path / "holdout-index.json"
+    _write_index(train_index, [train_entry])
+    _write_index(holdout_index, [holdout_entry])
+    output = tmp_path / "model"
+
+    with pytest.raises(ValueError, match="inconsistent shard column layout"):
+        train_baseline(
+            train_index_path=train_index,
+            holdout_index_path=holdout_index,
+            output_dir=output,
+            epochs=1,
+        )
+
+    assert not output.exists()
