@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from itertools import permutations
+import json
+from pathlib import Path
+import struct
 
 import pytest
 
@@ -9,6 +12,7 @@ from haxlab.ingestion.match_id_contract import (
     derive_canonical_match_id,
     validate_unique_match_ids,
 )
+from haxlab.ingestion.pipeline import run_import
 
 
 def _row(
@@ -231,3 +235,53 @@ def test_duplicate_evidence_is_invariant_across_all_source_permutations() -> Non
         messages.add(str(exc.value))
 
     assert len(messages) == 1
+
+
+def test_current_importer_matches_canonical_identity_contract(tmp_path: Path) -> None:
+    raw = tmp_path / "raw"
+    out = tmp_path / "derived"
+    raw.mkdir()
+
+    replay = raw / "24-09-26-22h12-aavsmko-deadbeefcafebabe.hbr2"
+    replay.write_bytes(
+        struct.pack(">4sII", b"HBR2", 3, 600) + b"match-id-contract-replay"
+    )
+    export = {
+        "channel": {"id": "726932424172371968"},
+        "messages": [
+            {
+                "id": "1552774764110815262",
+                "timestamp": "2026-09-24T22:12:27+02:00",
+                "content": (
+                    "MATCH REPORT SCRIM #20260924T221227749-R2\n"
+                    "Red Team 3 - 2 Blue Team\n"
+                    "Possession: 🔴 52.34% 🔵 47.66%"
+                ),
+                "attachments": [
+                    {
+                        "fileName": "24-09-26-22h12-aavsmko.hbr2",
+                        "fileSizeBytes": replay.stat().st_size,
+                    }
+                ],
+            }
+        ],
+    }
+    (raw / "channel.json").write_text(
+        json.dumps(export, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    manifest = run_import(raw, out)
+    rows = [
+        json.loads(line)
+        for line in (out / "matches.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+
+    assert manifest.match_count == 1
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["match_id"] == derive_canonical_match_id(
+        report_id=row["report"]["report_id"],
+        replay_sha256=row["replay_sha256"],
+    )
+    assert validate_unique_match_ids(rows) == (row["match_id"],)
