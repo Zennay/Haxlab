@@ -412,6 +412,26 @@ def test_runtime_state_audit_uses_one_consistent_live_snapshot(
     assert "raw_size_invalid" in second_codes
 
 
+def test_runtime_state_audit_proof_workflow_is_runner_safe() -> None:
+    root = Path(__file__).resolve().parents[1]
+    workflow = (
+        root
+        / ".github"
+        / "workflows"
+        / "data-pipeline-runtime-ledger-audit-proof.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "runs-on: [self-hosted, haxlab]" in workflow
+    assert "ubuntu-latest" not in workflow
+    assert "contents: read" in workflow
+    assert "contents: write" not in workflow
+    assert "github.event_name == 'workflow_dispatch'" in workflow
+    assert (
+        "contains(github.event.head_commit.message, '[runtime-ledger-proof]')"
+        in workflow
+    )
+
+
 def test_runtime_state_audit_cli_is_machine_readable(
     tmp_path: Path,
     capsys,
