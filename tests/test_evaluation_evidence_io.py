@@ -462,7 +462,7 @@ class _ListSubclass(list):
 
 
 def test_evidence_parser_rejects_scalar_subclasses_without_conversion_hooks() -> None:
-    payload = _valid_evidence_payload()
+    payload = _payload()
     payload["challenger_id"] = _ExplodingString("challenger")
     payload["score_rate_vs_champion"] = _ExplodingFloat(0.6)
     payload["games_vs_champion"] = _ExplodingInt(500)
@@ -477,7 +477,7 @@ def test_evidence_parser_rejects_scalar_subclasses_without_conversion_hooks() ->
 
 
 def test_policy_parser_rejects_numeric_subclasses_without_conversion_hooks() -> None:
-    payload = _valid_policy_payload()
+    payload = _policy()
     payload["minimum_games"] = _ExplodingInt(500)
     payload["minimum_score_rate_lower_bound"] = _ExplodingFloat(0.51)
 
@@ -490,7 +490,7 @@ def test_policy_parser_rejects_numeric_subclasses_without_conversion_hooks() -> 
 
 
 def test_evidence_parser_requires_exact_json_container_types() -> None:
-    payload = _DictSubclass(_valid_evidence_payload())
+    payload = _DictSubclass(_payload())
 
     result = parse_evaluation_evidence(payload)
 
@@ -499,7 +499,7 @@ def test_evidence_parser_requires_exact_json_container_types() -> None:
 
 
 def test_regressions_require_exact_json_list_type() -> None:
-    payload = _valid_evidence_payload()
+    payload = _payload()
     payload["regressions"] = _ListSubclass(payload["regressions"])
 
     result = parse_evaluation_evidence(payload)
