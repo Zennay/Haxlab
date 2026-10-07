@@ -1,0 +1,50 @@
+name: Data-pipeline exact-head workflow contract proof
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - tests/test_data_pipeline_exact_head_workflow_contract.py
+      - docs/data-pipeline-exact-head-workflow-contract.md
+      - .github/workflows/data-pipeline-exact-head-workflow-contract-proof.yml
+      - .github/workflows/data-pipeline-*.yml
+      - .github/workflows/data-pipeline-*.yaml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: data-pipeline-exact-head-workflow-contract-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  proof:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout exact candidate head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 1
+
+      - name: Verify immutable candidate checkout
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(hostname)" = "vps-bb300bba"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Run exact-head workflow contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv .venv-exact-head-contract
+          .venv-exact-head-contract/bin/python -m pip install -q -e ".[dev]"
+          .venv-exact-head-contract/bin/python -m pytest -q tests/test_data_pipeline_exact_head_workflow_contract.py
+          echo "HAXLAB_EXACT_HEAD_WORKFLOW_CONTRACT=success"
