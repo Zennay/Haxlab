@@ -831,3 +831,87 @@ def test_training_manifest_cli_rejects_invalid_values_without_clamping(
         main()
 
     assert exc.value.code == 2
+
+
+
+def test_training_manifest_rejects_symlinked_leaderboard(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "leaderboard-target.json"
+    target.write_text(
+        json.dumps({"analysis_version": "state-pass-v4", "rows": []}),
+        encoding="utf-8",
+    )
+    link = tmp_path / "leaderboard.json"
+    link.symlink_to(target)
+
+    with pytest.raises(
+        ValueError,
+        match="leaderboard must be a regular non-symlink file",
+    ):
+        build_training_manifest(
+            analysis_root=tmp_path / "analysis",
+            leaderboard_path=link,
+            raw_root=tmp_path / "raw",
+        )
+
+
+@pytest.mark.parametrize(
+    "analysis_version",
+    [None, "", "   ", 4, True, []],
+)
+def test_training_manifest_rejects_invalid_analysis_version(
+    tmp_path: Path,
+    analysis_version: object,
+) -> None:
+    leaderboard_path = tmp_path / "leaderboard.json"
+    leaderboard_path.write_text(
+        json.dumps({"analysis_version": analysis_version, "rows": []}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="leaderboard analysis_version must be a non-empty string",
+    ):
+        build_training_manifest(
+            analysis_root=tmp_path / "analysis",
+            leaderboard_path=leaderboard_path,
+            raw_root=tmp_path / "raw",
+        )
+
+
+def test_training_manifest_rejects_duplicate_valid_player_ids(
+    tmp_path: Path,
+) -> None:
+    leaderboard_path = tmp_path / "leaderboard.json"
+    row = {
+        "player_id": "name:alpha",
+        "name": "Alpha",
+        "role": "forward",
+        "rating": 56.0,
+        "rating_uncertainty": 0.8,
+        "matches": 80,
+        "minutes": 500.0,
+    }
+    leaderboard_path.write_text(
+        json.dumps(
+            {
+                "analysis_version": "state-pass-v4",
+                "rows": [row, {**row, "role": "defender"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="leaderboard contains duplicate valid player_id rows",
+    ):
+        build_training_manifest(
+            analysis_root=tmp_path / "analysis",
+            leaderboard_path=leaderboard_path,
+            raw_root=tmp_path / "raw",
+            min_matches=1,
+            min_minutes=0.0,
+        )
