@@ -162,6 +162,7 @@ def test_static_checker_rejects_network_and_process_execution() -> None:
         "import:http.client",
         "import:socket",
         "import:subprocess",
+        "import:subprocess.run",
         "import:urllib.request",
     ]
 
