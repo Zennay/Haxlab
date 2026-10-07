@@ -279,6 +279,14 @@ def test_scanner_ignores_symlinked_replay_source(tmp_path: Path) -> None:
         source_count = state.connection.execute(
             "SELECT COUNT(*) FROM source_files"
         ).fetchone()[0]
+        event = state.connection.execute(
+            """
+            SELECT event_type, subject, detail
+            FROM runtime_events
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
 
     assert summary.discovered == 0
     assert summary.archived == 0
@@ -286,6 +294,10 @@ def test_scanner_ignores_symlinked_replay_source(tmp_path: Path) -> None:
     assert summary.failed == 0
     assert snapshot["raw_unique_replays"] == 0
     assert source_count == 0
+    assert event is not None
+    assert event["event_type"] == "replay_rejected"
+    assert event["subject"] == str(link)
+    assert event["detail"] == "symlink_source"
     assert not list(raw.rglob("*.hbr2"))
 
 
@@ -363,8 +375,20 @@ def test_scanner_rejects_symlinked_incoming_root(tmp_path: Path) -> None:
                 now=time.time() + 10,
             )
         snapshot = state.status_snapshot()
+        event = state.connection.execute(
+            """
+            SELECT event_type, subject, detail
+            FROM runtime_events
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
 
     assert snapshot["raw_unique_replays"] == 0
+    assert event is not None
+    assert event["event_type"] == "ingest_root_rejected"
+    assert event["subject"] == str(incoming)
+    assert event["detail"] == "symlink_root"
     assert not list(raw.rglob("*.hbr2"))
 
 
