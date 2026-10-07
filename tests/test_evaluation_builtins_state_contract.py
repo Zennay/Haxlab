@@ -317,6 +317,12 @@ def _scan_nodes(
         if isinstance(node, ast.Call):
             target = _canonical_name(node.func, aliases)
 
+            if target in {"builtins.__setattr__", "builtins.__delattr__"}:
+                findings.append(
+                    f"line {node.lineno}: builtins namespace mutation: {target}"
+                )
+                continue
+
             if (
                 target in {"builtins.setattr", "builtins.delattr"}
                 and node.args
@@ -467,6 +473,10 @@ def test_contract_rejects_direct_builtin_namespace_mutation() -> None:
             getattr(builtins, "__dict__").pop("sum", None)
             setattr(builtins, "max", lambda *values: values[0])
             delattr(builtins, "min")
+            builtins.__setattr__("any", lambda values: True)
+            getattr(builtins, "__delattr__")("next")
+            bound_setter = builtins.__setattr__
+            bound_setter("repr", lambda value: "<value>")
             del builtins.__dict__["sorted"]
         """
     )
@@ -477,6 +487,8 @@ def test_contract_rejects_direct_builtin_namespace_mutation() -> None:
         "builtins.__dict__",
         "builtins.setattr",
         "builtins.delattr",
+        "builtins.__setattr__",
+        "builtins.__delattr__",
     ):
         assert expected in findings
 
