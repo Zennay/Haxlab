@@ -21,14 +21,34 @@ EVALUATION_WORKFLOW_TOKENS = (
 )
 
 VENV_CREATE_RE = re.compile(r"\bpython3\s+-m\s+venv\s+[^\s]+")
-PYTEST_COMMAND_RE = re.compile(
+VENV_PYTEST_RE = re.compile(
     r"(?P<command>"
     r"(?:[^\s#]+/bin/pytest\b)"
     r"|(?:[^\s#]+/bin/python(?:3)?\b\s+-m\s+pytest\b)"
-    r"|(?:\bpython(?:3)?\b\s+-m\s+pytest\b)"
-    r"|(?:\bpytest\b)"
     r")"
 )
+SYSTEM_PYTEST_RE = re.compile(r"\bpython(?:3)?\b\s+-m\s+pytest\b")
+BARE_PYTEST_RE = re.compile(
+    r"^(?:(?:[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|[^\s]+))\s+)*"
+    r"(?:sudo\s+)?pytest(?:\s|$)"
+)
+
+
+def _pytest_command(line: str) -> str | None:
+    venv_match = VENV_PYTEST_RE.search(line)
+    if venv_match is not None:
+        return venv_match.group("command")
+
+    system_match = SYSTEM_PYTEST_RE.search(line)
+    if system_match is not None:
+        return system_match.group(0)
+
+    stripped = line.strip()
+    bare_match = BARE_PYTEST_RE.match(stripped)
+    if bare_match is not None:
+        return "pytest"
+
+    return None
 
 
 def scan_workflow_text(source: str, *, filename: str = "<memory>") -> list[str]:
@@ -44,18 +64,17 @@ def scan_workflow_text(source: str, *, filename: str = "<memory>") -> list[str]:
         if not stripped or stripped.startswith("#"):
             continue
 
-        match = PYTEST_COMMAND_RE.search(line)
-        if match is None:
+        command = _pytest_command(line)
+        if command is None:
             continue
 
-        command = match.group("command")
         if "/opt/haxlab/.venv/" in line:
             findings.append(
                 f"{filename}:{line_number}: pytest depends on shared /opt/haxlab/.venv"
             )
             continue
 
-        if command.startswith("pytest"):
+        if command == "pytest":
             findings.append(
                 f"{filename}:{line_number}: bare pytest is not bound to an isolated venv"
             )
@@ -172,6 +191,19 @@ def test_scanner_accepts_venv_python_module_invocation() -> None:
         run: |
           python3 -m venv .proof-venv
           .proof-venv/bin/python -m pytest -q tests/test_gate.py
+        """
+    )
+
+    assert scan_workflow_text(source) == []
+
+
+def test_scanner_does_not_confuse_installing_pytest_with_running_it() -> None:
+    source = textwrap.dedent(
+        """
+        run: |
+          python3 -m venv .proof-venv
+          .proof-venv/bin/python -m pip install --disable-pip-version-check pytest
+          .proof-venv/bin/pytest -q tests/test_gate.py
         """
     )
 
