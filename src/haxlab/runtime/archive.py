@@ -136,12 +136,20 @@ def archive_replay(
 ) -> ArchiveResult:
     """Archive a settled replay without trusting a source that changes mid-copy."""
 
+    source_before = source_path.stat()
     staging_path, sha256, copied_bytes = _copy_to_staging_and_hash(
         source_path,
         raw_root,
     )
 
     try:
+        source_after = source_path.stat()
+        if (
+            copied_bytes != source_before.st_size
+            or _source_signature(source_before) != _source_signature(source_after)
+        ):
+            raise RuntimeError("source_changed_during_archive")
+
         validation = validate_replay_basic(staging_path)
         if not validation.valid:
             raise ValueError("invalid_hbr2:" + ",".join(validation.reasons))
