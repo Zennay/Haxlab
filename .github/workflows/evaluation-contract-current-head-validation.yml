@@ -31,7 +31,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: haxlab-evaluation-contract-current-head-${{ github.event.pull_request.number || github.ref }}
+  group: haxlab-evaluation-contract-current-head-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
