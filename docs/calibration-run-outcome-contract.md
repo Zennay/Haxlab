@@ -87,3 +87,6 @@ push job runs only for an explicit `[calibration-outcome-proof]` commit marker.
 The proof must bind the current semantic head. Earlier proof attempts from heads
 before the gate-rejection/model-attribution split are superseded and must not be
 used as validation evidence.
+
+The implementation names the trusted log sentinel `GATE_REJECTION_MARKER` to
+make that non-attribution boundary explicit in code as well as documentation.
