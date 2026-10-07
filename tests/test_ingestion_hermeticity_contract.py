@@ -19,12 +19,21 @@ FORBIDDEN_IMPORTS = {
     "ftplib",
     "http.client",
     "httpx",
+    "imaplib",
     "multiprocessing",
     "pexpect",
+    "poplib",
+    "pty",
     "requests",
+    "smtplib",
     "socket",
     "subprocess",
+    "telnetlib",
     "urllib.request",
+    "urllib3",
+    "websocket",
+    "websockets",
+    "xmlrpc.client",
 }
 FORBIDDEN_CALLS = {
     "__import__",
@@ -72,16 +81,16 @@ def _resolve_expr(node: ast.AST, aliases: dict[str, str]) -> str | None:
     if isinstance(node, ast.Attribute):
         parent = _resolve_expr(node.value, aliases)
         return f"{parent}.{node.attr}" if parent else None
-    if (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "getattr"
-        and len(node.args) >= 2
-        and isinstance(node.args[1], ast.Constant)
-        and isinstance(node.args[1].value, str)
-    ):
-        parent = _resolve_expr(node.args[0], aliases)
-        return f"{parent}.{node.args[1].value}" if parent else None
+    if isinstance(node, ast.Call):
+        accessor = _resolve_expr(node.func, aliases)
+        if (
+            accessor in {"getattr", "builtins.getattr"}
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and isinstance(node.args[1].value, str)
+        ):
+            parent = _resolve_expr(node.args[0], aliases)
+            return f"{parent}.{node.args[1].value}" if parent else None
     return None
 
 
@@ -173,6 +182,7 @@ def test_ingestion_modules_are_offline_and_process_hermetic() -> None:
 def test_contract_rejects_network_process_and_dynamic_import_surfaces() -> None:
     source = textwrap.dedent(
         """
+        import builtins as bi
         import socket as net
         import subprocess as sp
         from urllib import request as request_api
@@ -182,12 +192,14 @@ def test_contract_rejects_network_process_and_dynamic_import_surfaces() -> None:
 
         launch = sp.run
         imported = getattr(importlib, "import_module")
+        imported_via_builtin = bi.getattr(importlib, "import_module")
 
         net.socket()
         mp.Process(target=lambda: None)
         launch(["echo", "unexpected"])
         request_api.urlopen("https://example.invalid")
         imported("socket")
+        imported_via_builtin("socket")
         __import__("subprocess")
         os.spawnlp(os.P_WAIT, "echo", "echo", "unexpected")
         """
