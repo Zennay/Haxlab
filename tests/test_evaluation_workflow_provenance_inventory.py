@@ -96,6 +96,44 @@ def test_exact_sha_validated_dispatch_input_is_bound() -> None:
     assert "checkout_ref_unbound" not in report["findings"]
 
 
+def test_unrelated_sha_regex_does_not_validate_dispatch_input() -> None:
+    text = _clean_workflow().replace(
+        "      - name: Checkout exact source",
+        """      - name: Pretend validation
+        env:
+          TARGET_SHA: inputs.ref
+          OTHER_VALUE: deadbeef
+        run: |
+          set -euo pipefail
+          if ! [[ "$OTHER_VALUE" =~ ^[0-9a-f]{40}$ ]]; then
+            exit 1
+          fi
+      - name: Checkout exact source""",
+    ).replace("ref: github.sha", "ref: inputs.ref")
+    report = audit_workflow_text(".github/workflows/unrelated-regex.yml", text)
+
+    assert report["checkout_ref_kinds"] == ["mutable_input"]
+    assert report["checkout_refs_bound"] is False
+
+
+def test_nonfailing_sha_regex_does_not_validate_dispatch_input() -> None:
+    text = _clean_workflow().replace(
+        "      - name: Checkout exact source",
+        """      - name: Nonfailing validation
+        env:
+          TARGET_SHA: inputs.ref
+        run: |
+          if [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo valid
+          fi
+      - name: Checkout exact source""",
+    ).replace("ref: github.sha", "ref: inputs.ref")
+    report = audit_workflow_text(".github/workflows/nonfailing-input.yml", text)
+
+    assert report["checkout_ref_kinds"] == ["mutable_input"]
+    assert report["checkout_refs_bound"] is False
+
+
 def test_immutable_secondary_checkout_is_provenance_bound() -> None:
     text = _clean_workflow().replace(
         "      - name: Verify exact source",
