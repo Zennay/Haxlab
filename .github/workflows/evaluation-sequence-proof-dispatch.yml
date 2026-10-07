@@ -1,0 +1,100 @@
+name: Evaluation sequencing proof dispatch
+
+on:
+  push:
+    branches:
+      - ops/evaluation-sequence-proof-dispatch-20261007
+    paths:
+      - ".github/workflows/evaluation-sequence-proof-dispatch.yml"
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: haxlab-evaluation-sequence-proof-dispatch
+  cancel-in-progress: false
+
+jobs:
+  dispatch-next:
+    runs-on: [self-hosted, zcloud, vps]
+    timeout-minutes: 5
+    env:
+      REQUIRED_RUN_ID: "37666946317"
+      REQUIRED_HEAD: "9d707210b16db8cb3f7348e89d41b93c48730a88"
+      TARGET_BRANCH: "validation/arena-integration-test-manifest-current-20261007"
+      TARGET_SHA: "730c8d6146e2feb4e95f0cdd3396788000db9d49"
+      TARGET_WORKFLOW: "arena-integration-test-manifest-current-proof.yml"
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Verify prerequisite and target live head
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          token = os.environ["GH_TOKEN"]
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {token}",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+
+          def get(url: str) -> dict:
+              request = urllib.request.Request(url, headers=headers)
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  return json.load(response)
+
+          required = get(
+              f"https://api.github.com/repos/{repo}/actions/runs/"
+              f"{os.environ['REQUIRED_RUN_ID']}"
+          )
+          assert required["status"] == "completed", required["status"]
+          assert required["conclusion"] == "success", required["conclusion"]
+          assert required["head_sha"] == os.environ["REQUIRED_HEAD"], required["head_sha"]
+
+          branch = urllib.parse.quote(os.environ["TARGET_BRANCH"], safe="")
+          live = get(f"https://api.github.com/repos/{repo}/branches/{branch}")
+          assert live["commit"]["sha"] == os.environ["TARGET_SHA"], live["commit"]["sha"]
+          print("HAXLAB_SEQUENCE_PREREQUISITE=green")
+          print(f"HAXLAB_SEQUENCE_TARGET={os.environ['TARGET_SHA']}")
+          PY
+
+      - name: Dispatch exact SHA proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          workflow = os.environ["TARGET_WORKFLOW"]
+          payload = json.dumps(
+              {
+                  "ref": os.environ["TARGET_BRANCH"],
+                  "inputs": {"ref": os.environ["TARGET_SHA"]},
+              }
+          ).encode()
+          request = urllib.request.Request(
+              f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}/dispatches",
+              data=payload,
+              method="POST",
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                  "Content-Type": "application/json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              },
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              assert response.status == 204, response.status
+          print("HAXLAB_SEQUENCE_DISPATCH=#100")
+          print(f"HAXLAB_SEQUENCE_DISPATCH_SHA={os.environ['TARGET_SHA']}")
+          PY
