@@ -65,7 +65,9 @@ def test_invalid_quality_evidence_is_rejected(
     overrides: dict[str, object],
     reason: str,
 ) -> None:
-    evidence = MatchQualityEvidence(replay_valid=True, **overrides)  # type: ignore[arg-type]
+    values: dict[str, object] = {"replay_valid": True}
+    values.update(overrides)
+    evidence = MatchQualityEvidence(**values)  # type: ignore[arg-type]
     assessment = assess_match_quality(evidence)
 
     assert assessment.tier == QualityTier.REJECTED
