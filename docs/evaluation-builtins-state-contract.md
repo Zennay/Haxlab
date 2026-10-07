@@ -25,7 +25,14 @@ The contract rejects:
 - static recovery of the same interpreter module through
   `sys.modules["builtins"]` / `sys.modules.get("builtins")`;
 - static recovery of the backing dictionary through
-  `globals()["__builtins__"]` / `globals().get("__builtins__")`.
+  `globals()["__builtins__"]` / `globals().get("__builtins__")`;
+- mutations hidden in definition-time expressions such as function/lambda defaults,
+  decorators, class bases and class keyword arguments.
+
+The detector is lexical-scope aware: function parameters and local assignments
+that shadow imported builtin aliases are treated as local state, while aliases
+closed over by nested functions remain traced back to the shared builtins
+namespace.
 
 Read-only lookup and ordinary builtin calls remain valid. Reading
 `vars(builtins)`, calling `getattr(builtins, "open")`, comparing a static
@@ -49,8 +56,9 @@ state-leak boundary.
 
 `tests/test_evaluation_builtins_state_contract.py` performs an additive AST
 scan over the complete evaluation package and includes self-tests for direct,
-aliased, mapping-backed, magic-`__builtins__`, static-module-lookup,
-reflective, unbound-dict, operator and in-place mutation forms.
+aliased, mapping-backed, magic-`__builtins__`, static-module-lookup, definition-time execution,
+reflection, lexical shadowing/closures, unbound-dict, operator and in-place
+mutation forms.
 
 The branch proof workflow is dispatch-only. It accepts one immutable 40-character
 candidate SHA, checks out and verifies that exact SHA and the live validation
