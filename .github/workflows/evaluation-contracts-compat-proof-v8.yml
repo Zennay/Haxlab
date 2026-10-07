@@ -130,7 +130,7 @@ jobs:
           19b4d05c4e47a2cff7ae83bbf156efa3731dc520 .github/workflows/evaluation-native-ffi-validation.yml
           0372395d465ef5d86550212df7b4c35a8246b4fa tests/test_evaluation_memoization_state_contract.py
           0372395d465ef5d86550212df7b4c35a8246b4fa .github/workflows/evaluation-memoization-state-validation.yml
-          8f83595f0e1ce18730100c57b9ebc7ee626a762e tests/test_evaluation_class_state_contract.py             tests/test_evaluation_function_attribute_state_contract.py             tests/test_evaluation_context_local_state_contract.py             tests/test_evaluation_module_object_state_contract.py             tests/test_evaluation_logging_warnings_state_contract.py             tests/test_evaluation_process_registry_contract.py             tests/test_evaluation_atexit_registry_contract.py
+          8f83595f0e1ce18730100c57b9ebc7ee626a762e tests/test_evaluation_class_state_contract.py
           8f83595f0e1ce18730100c57b9ebc7ee626a762e .github/workflows/evaluation-class-state-validation.yml
           db1061c2d3a6ede6bbae5c2d7a184361cc96d2c5 tests/test_evaluation_function_attribute_state_contract.py
           db1061c2d3a6ede6bbae5c2d7a184361cc96d2c5 .github/workflows/evaluation-function-attribute-state-validation.yml
