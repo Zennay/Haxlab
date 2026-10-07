@@ -1,9 +1,11 @@
 import hashlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
+from haxlab.evaluation import policy_config as policy_config_module
 from haxlab.evaluation.models import PromotionPolicy
 from haxlab.evaluation.policy_config import (
     POLICY_CONFIG_SCHEMA,
@@ -78,6 +80,34 @@ def test_policy_config_maps_external_names_to_runtime_policy(tmp_path: Path) -> 
         minimum_scenario_pass_rate=0.99,
         allow_critical_regressions=False,
     )
+
+
+def test_policy_config_fails_closed_on_runtime_policy_schema_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    @dataclass(frozen=True)
+    class ExpandedPromotionPolicy:
+        minimum_games: int = 500
+        minimum_score_rate_lower_bound: float = 0.51
+        minimum_scenario_pass_rate: float = 0.98
+        allow_critical_regressions: bool = False
+        new_unbound_threshold: float = 0.25
+
+    path = _write_policy(
+        tmp_path,
+        "minimum_games_vs_champion = 500\n"
+        "minimum_score_rate_lower_bound = 0.51\n"
+        "minimum_frozen_scenario_pass_rate = 0.98\n",
+    )
+    monkeypatch.setattr(
+        policy_config_module,
+        "PromotionPolicy",
+        ExpandedPromotionPolicy,
+    )
+
+    with pytest.raises(ValueError, match="runtime schema mismatch"):
+        policy_config_module.load_promotion_policy_config(path)
 
 
 def test_policy_config_cli_emits_versioned_policy_and_source_provenance(
