@@ -64,6 +64,33 @@ def test_clean_pinned_workflow_has_no_findings() -> None:
     assert report["top_level_contents_read_only"] is True
 
 
+
+
+def test_recording_head_without_comparison_is_not_an_exact_head_guard() -> None:
+    text = _clean_workflow().replace(
+        'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"',
+        'echo "VALIDATION_HEAD=$(git rev-parse HEAD)"',
+    )
+    report = audit_workflow_text(".github/workflows/record-only.yml", text)
+
+    assert report["has_exact_head_guard"] is False
+    assert "missing_exact_head_guard" in report["findings"]
+
+
+def test_ci_style_actual_expected_comparison_is_an_exact_head_guard() -> None:
+    text = _clean_workflow().replace(
+        'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"',
+        'ACTUAL_SHA="$(git rev-parse HEAD)"\n'
+        '          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then\n'
+        '            exit 1\n'
+        '          fi',
+    )
+    report = audit_workflow_text(".github/workflows/ci-style.yml", text)
+
+    assert report["has_exact_head_guard"] is True
+    assert "missing_exact_head_guard" not in report["findings"]
+
+
 def test_mutable_checkout_and_missing_guard_are_reported() -> None:
     text = """name: mutable fixture
 
