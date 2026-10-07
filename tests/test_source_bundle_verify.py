@@ -466,3 +466,63 @@ def test_cli_exit_codes_are_machine_readable(
     invalid = json.loads(capsys.readouterr().out)
     assert invalid["clean"] is False
     assert invalid["error"].startswith("invalid_receipt_json:")
+
+
+
+def test_verify_wraps_receipt_descriptor_read_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    export_root = tmp_path / "export"
+    export_root.mkdir()
+    _source_tree(export_root)
+    receipt_path = tmp_path / "receipt.json"
+    _write_receipt(export_root, receipt_path)
+
+    original_read = verify.os.read
+    calls = 0
+
+    def failing_first_read(fd: int, size: int) -> bytes:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("simulated receipt read failure")
+        return original_read(fd, size)
+
+    monkeypatch.setattr(verify.os, "read", failing_first_read)
+
+    with pytest.raises(
+        verify.SourceBundleVerifyError,
+        match="receipt_read_failed:simulated receipt read failure",
+    ):
+        verify.verify_source_bundle(export_root, receipt_path)
+
+
+def test_verify_cli_keeps_machine_readable_error_on_receipt_read_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    export_root = tmp_path / "export"
+    export_root.mkdir()
+    _source_tree(export_root)
+    receipt_path = tmp_path / "receipt.json"
+    _write_receipt(export_root, receipt_path)
+
+    original_read = verify.os.read
+    calls = 0
+
+    def failing_first_read(fd: int, size: int) -> bytes:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("simulated receipt read failure")
+        return original_read(fd, size)
+
+    monkeypatch.setattr(verify.os, "read", failing_first_read)
+
+    assert verify.main([str(export_root), str(receipt_path)]) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["schema"] == verify.VERIFY_SCHEMA
+    assert payload["clean"] is False
+    assert payload["error"] == "receipt_read_failed:simulated receipt read failure"
