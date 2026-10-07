@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from haxlab.ingestion.generation_commit import (
 )
 from haxlab.ingestion.generation_store import (
     GenerationStoreError,
+    PUBLISH_LOCK_FILE,
     PUBLICATION_STAGES,
     publish_generation,
     resolve_current_generation,
@@ -372,3 +374,87 @@ def test_reader_rejects_fifo_artifact_without_blocking(tmp_path: Path) -> None:
         match="dataset artifact is not a regular file: reports.json",
     ):
         resolve_current_generation(store)
+
+
+def test_concurrent_publishers_of_same_generation_serialize(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    store = tmp_path / "store"
+    _write_dataset(source, match_id="same")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(publish_generation, source, store)
+            for _ in range(2)
+        ]
+        results = [future.result() for future in futures]
+
+    assert results[0] == results[1]
+    assert resolve_current_generation(store) == results[0]
+    generation_dirs = [
+        path.name
+        for path in (store / GENERATIONS_DIRECTORY).iterdir()
+        if path.is_dir() and not path.name.startswith(".staging-")
+    ]
+    assert generation_dirs == [results[0].generation_id]
+
+
+def test_concurrent_distinct_publishers_never_expose_mixed_generation(
+    tmp_path: Path,
+) -> None:
+    first_source = tmp_path / "first-source"
+    second_source = tmp_path / "second-source"
+    store = tmp_path / "store"
+    _write_dataset(first_source, match_id="first")
+    _write_dataset(second_source, match_id="second")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(publish_generation, first_source, store)
+        second_future = executor.submit(publish_generation, second_source, store)
+        first = first_future.result()
+        second = second_future.result()
+
+    assert first.generation_id != second.generation_id
+    assert first.root.is_dir()
+    assert second.root.is_dir()
+    current = resolve_current_generation(store)
+    assert current in {first, second}
+    current_match = (current.root / "matches.jsonl").read_text(encoding="utf-8")
+    assert (
+        ('"match_id":"first"' in current_match)
+        ^ ('"match_id":"second"' in current_match)
+    )
+
+
+def test_publish_lock_symlink_fails_closed(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    store = tmp_path / "store"
+    _write_dataset(source, match_id="m-1")
+    store.mkdir()
+    target = tmp_path / "lock-target"
+    target.write_text("not-a-lock", encoding="utf-8")
+    (store / PUBLISH_LOCK_FILE).symlink_to(target)
+
+    with pytest.raises(
+        GenerationStoreError,
+        match="failed to acquire generation publish lock",
+    ):
+        publish_generation(source, store)
+
+
+def test_fault_releases_publish_lock_for_retry(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    store = tmp_path / "store"
+    _write_dataset(source, match_id="old")
+    previous = publish_generation(source, store)
+
+    _write_dataset(source, match_id="new")
+    with pytest.raises(InjectedCrash):
+        publish_generation(
+            source,
+            store,
+            _fault=_fault_at("after_stage_commit"),
+        )
+
+    retried = publish_generation(source, store)
+    assert retried.generation_id != previous.generation_id
+    assert resolve_current_generation(store) == retried
