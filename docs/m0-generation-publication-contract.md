@@ -41,6 +41,18 @@ metadata first, then atomically replace only this small pointer. A reader that t
 the pointer can resolve one content-addressed generation and validate its commit and
 receipt rather than opening five mutable top-level files independently.
 
+## Reader contract
+
+`parse_generation_commit_bytes()` and `parse_generation_pointer_bytes()` accept only
+bounded native byte payloads, strict UTF-8 JSON objects, no duplicate JSON keys and the
+exact canonical serialization (including one trailing newline). The commit reader
+recomputes both the embedded receipt digest and the generation commit digest.
+
+`validate_generation_pointer(pointer, commit)` then requires the reader-visible
+pointer to equal the pointer derived from the exact validated commit. A stale pointer,
+cross-generation commit or tampered digest therefore fails closed before artifact
+consumption.
+
 ## Fail-closed semantics
 
 The contract rejects:
@@ -51,7 +63,10 @@ The contract rejects:
 - non-native/negative sizes or malformed SHA-256 values;
 - receipt evidence whose claimed digest does not recompute exactly;
 - generation IDs that do not match the bound receipt;
-- generation commits whose `commit_sha256` does not recompute exactly.
+- generation commits whose `commit_sha256` does not recompute exactly;
+- oversized/non-byte/non-UTF-8/noncanonical persisted evidence;
+- duplicate JSON keys in commit or pointer evidence;
+- pointers that do not bind the exact generation commit supplied by the reader.
 
 ## What remains for Issue #91
 
