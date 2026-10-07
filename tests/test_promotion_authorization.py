@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import UserDict
 from pathlib import Path
 
 import pytest
@@ -461,3 +462,67 @@ def test_cli_rejects_invalid_json_without_partial_authorization(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "promotion authorization rejected" in captured.err
+
+
+def test_promoting_decision_requires_canonical_pass_reasons() -> None:
+    forged = PromotionDecision(promote=True, reasons=("looks_good",))
+    with pytest.raises(
+        PromotionAuthorizationError,
+        match="canonical pass reasons",
+    ):
+        authorize(promotion_decision=forged)
+
+    contradictory = PromotionDecision(
+        promote=False,
+        reasons=(
+            "head_to_head_gate_passed",
+            "frozen_scenarios_passed",
+            "no_blocking_regressions",
+            "run_reproducible",
+        ),
+    )
+    with pytest.raises(
+        PromotionAuthorizationError,
+        match="cannot carry canonical pass reasons",
+    ):
+        authorize(promotion_decision=contradictory)
+
+
+def test_identity_strings_reject_ambiguous_surrounding_whitespace() -> None:
+    with pytest.raises(
+        PromotionAuthorizationError,
+        match="leading or trailing whitespace",
+    ):
+        authorize(candidate_id=" candidate-d")
+
+    receipt = gate_receipt()
+    receipt["gates"][0]["event"] = "workflow_dispatch "
+    with pytest.raises(
+        PromotionAuthorizationError,
+        match="leading or trailing whitespace",
+    ):
+        authorize(gate_receipt=receipt)
+
+
+def test_direct_api_rejects_non_native_receipt_containers() -> None:
+    with pytest.raises(
+        PromotionAuthorizationError,
+        match="gate_receipt must be a native object",
+    ):
+        authorize(gate_receipt=UserDict(gate_receipt()))
+
+    receipt = gate_receipt()
+    receipt["gates"] = tuple(receipt["gates"])
+    with pytest.raises(
+        PromotionAuthorizationError,
+        match="gate_receipt.gates must be a native array",
+    ):
+        authorize(gate_receipt=receipt)
+
+    receipt = gate_receipt()
+    receipt["gates"][0] = UserDict(receipt["gates"][0])
+    with pytest.raises(
+        PromotionAuthorizationError,
+        match=r"gates\[0\] must be a native object",
+    ):
+        authorize(gate_receipt=receipt)
