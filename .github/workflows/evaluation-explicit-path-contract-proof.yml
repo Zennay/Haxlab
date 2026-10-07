@@ -1,0 +1,43 @@
+name: Evaluation explicit-path contract proof
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Verify exact checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+
+      - name: Create isolated proof environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv .proof-venv
+          .proof-venv/bin/python -m pip install --disable-pip-version-check pytest
+
+      - name: Compile evaluation package
+        shell: bash
+        run: |
+          set -euo pipefail
+          .proof-venv/bin/python -m compileall -q src/haxlab/evaluation
+
+      - name: Run explicit-path contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH=src .proof-venv/bin/python -m pytest -q tests/test_evaluation_explicit_path_contract.py
+          echo "HAXLAB_EVALUATION_EXPLICIT_PATH_RESULT=green"
