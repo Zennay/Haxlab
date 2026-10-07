@@ -76,6 +76,10 @@ def _healthy_candidate(
     if not isinstance(payload, dict):
         return None
 
+    source_file = payload.get("sourceFile")
+    if not isinstance(source_file, str) or source_file != raw.name:
+        return None
+
     schema_version = _native_int(payload.get("schemaVersion"))
     total_frames = _native_int(payload.get("totalFrames"))
     if schema_version is None or schema_version < 4:
