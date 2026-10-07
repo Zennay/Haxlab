@@ -47,6 +47,15 @@ PATH_MUTATIONS = {
     "unlink",
 }
 
+PATH_TRANSFORMS = {
+    "absolute",
+    "expanduser",
+    "joinpath",
+    "resolve",
+    "with_name",
+    "with_suffix",
+}
+
 TRACKED_MODULES = {"os", "pathlib", "shutil"}
 
 
@@ -65,19 +74,6 @@ def _simple_assignment(node: ast.AST) -> tuple[str, ast.AST] | None:
         return node.target.id, node.value
     if isinstance(node, ast.NamedExpr) and isinstance(node.target, ast.Name):
         return node.target.id, node.value
-    return None
-
-
-def _annotation_name(node: ast.AST | None, aliases: dict[str, str]) -> str | None:
-    if node is None:
-        return None
-    if isinstance(node, ast.Name):
-        return aliases.get(node.id, node.id)
-    if isinstance(node, ast.Attribute):
-        parent = _annotation_name(node.value, aliases)
-        return f"{parent}.{node.attr}" if parent else node.attr
-    if isinstance(node, ast.Subscript):
-        return _annotation_name(node.value, aliases)
     return None
 
 
@@ -103,8 +99,22 @@ def _canonical_name(node: ast.AST | None, aliases: dict[str, str]) -> str | None
     return None
 
 
+def _annotation_contains_path(
+    node: ast.AST | None,
+    aliases: dict[str, str],
+) -> bool:
+    if node is None:
+        return False
+    if _canonical_name(node, aliases) == "pathlib.Path":
+        return True
+    return any(
+        _annotation_contains_path(child, aliases)
+        for child in ast.iter_child_nodes(node)
+    )
+
+
 def _aliases(tree: ast.AST) -> dict[str, str]:
-    aliases: dict[str, str] = {"Path": "pathlib.Path"}
+    aliases: dict[str, str] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -142,15 +152,16 @@ def _is_path_expression(
         return False
     if isinstance(node, ast.Name):
         return node.id in path_names
+    if isinstance(node, ast.Attribute) and node.attr == "parent":
+        return _is_path_expression(node.value, aliases, path_names)
     if isinstance(node, ast.Call):
         target = _canonical_name(node.func, aliases)
-        if target == "pathlib.Path":
+        if target in {"pathlib.Path", "pathlib.Path.cwd", "pathlib.Path.home"}:
             return True
-        if isinstance(node.func, ast.Attribute) and node.func.attr in {
-            "absolute",
-            "expanduser",
-            "resolve",
-        }:
+        if (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr in PATH_TRANSFORMS
+        ):
             return _is_path_expression(node.func.value, aliases, path_names)
         return False
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
@@ -173,7 +184,7 @@ def _path_names(tree: ast.AST, aliases: dict[str, str]) -> set[str]:
             if node.args.kwarg is not None:
                 args.append(node.args.kwarg)
             for arg in args:
-                if _annotation_name(arg.annotation, aliases) == "pathlib.Path":
+                if _annotation_contains_path(arg.annotation, aliases):
                     names.add(arg.arg)
 
     changed = True
@@ -328,6 +339,12 @@ def test_evaluation_library_has_no_destructive_filesystem_mutation() -> None:
             "    truncate = os.truncate\n    truncate(path, 0)\n",
             "os.truncate",
         ),
+        (
+            "from pathlib import Path as P\ndef gate(path: P | None):\n"
+            "    if path is not None:\n"
+            "        path.parent.with_name('victim').unlink()\n",
+            "pathlib.Path.unlink",
+        ),
     ],
 )
 def test_contract_rejects_destructive_filesystem_mutations(
@@ -355,5 +372,17 @@ from pathlib import Path
 
 def inspect(path: Path, label: str) -> tuple[bool, str]:
     return path.exists(), label.replace("old", "new")
+"""
+    assert scan_source(source) == []
+
+
+def test_contract_does_not_treat_unrelated_path_class_as_pathlib() -> None:
+    source = """
+class Path:
+    def replace(self, value: str) -> str:
+        return value
+
+def gate(path: Path) -> str:
+    return path.replace("ok")
 """
     assert scan_source(source) == []
