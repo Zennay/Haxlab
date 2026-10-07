@@ -341,12 +341,24 @@ def test_scanner_rechecks_symlink_status_before_processing(
             now=time.time() + 10,
         )
         snapshot = state.status_snapshot()
+        event = state.connection.execute(
+            """
+            SELECT event_type, subject, detail
+            FROM runtime_events
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
 
     assert checks >= 2
     assert summary.discovered == 0
     assert summary.archived == 0
     assert summary.failed == 0
     assert snapshot["raw_unique_replays"] == 0
+    assert event is not None
+    assert event["event_type"] == "replay_rejected"
+    assert event["subject"] == str(replay)
+    assert event["detail"] == "symlink_source"
     assert not list(raw.rglob("*.hbr2"))
 
 
