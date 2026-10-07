@@ -213,3 +213,35 @@ def test_real_import_output_satisfies_audit_contract(tmp_path: Path) -> None:
     assert result.replay_count == 1
     assert result.report_count == 1
     assert result.match_count == 1
+
+
+def test_audit_rejects_unsafe_relative_paths(tmp_path: Path) -> None:
+    root = tmp_path / "m0"
+    _write_dataset(root)
+
+    replays = json.loads((root / "replays.json").read_text(encoding="utf-8"))
+    replays[0]["source_path"] = "../escape/game.hbr2"
+    (root / "replays.json").write_text(json.dumps(replays), encoding="utf-8")
+
+    match = json.loads((root / "matches.jsonl").read_text(encoding="utf-8"))
+    match["replay_source_path"] = "../escape/game.hbr2"
+    (root / "matches.jsonl").write_text(json.dumps(match) + "\n", encoding="utf-8")
+
+    result = audit_dataset(root)
+
+    assert result.ok is False
+    assert "replays:0:invalid_source_path" in result.issues
+
+
+def test_audit_rejects_empty_duplicate_group(tmp_path: Path) -> None:
+    root = tmp_path / "m0"
+    _write_dataset(root)
+    (root / "duplicates.json").write_text(
+        json.dumps({SHA: []}),
+        encoding="utf-8",
+    )
+
+    result = audit_dataset(root)
+
+    assert result.ok is False
+    assert f"duplicates:{SHA}:empty_group" in result.issues
