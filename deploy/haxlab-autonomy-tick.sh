@@ -35,21 +35,15 @@ PY
 }
 
 STATUS_JSON="$("${APP_DIR}/.venv/bin/haxlab-status")"
-read -r PROCESSING_PENDING ANALYSIS_PENDING PROCESSING_FAILED ANALYSIS_FAILED ANALYSIS_OK ANALYSIS_VERSION < <(
-  STATUS_JSON="$STATUS_JSON" "${APP_DIR}/.venv/bin/python" - <<'PY'
-import json
-import os
-p=json.loads(os.environ["STATUS_JSON"])
-print(
-    int(p.get("processing_pending", 0)),
-    int(p.get("analysis_pending", 0)),
-    int(p.get("processing_failed", 0)),
-    int(p.get("analysis_failed", 0)),
-    int(p.get("analysis_ok", 0)),
-    str(p.get("analysis_version") or "unknown"),
-)
-PY
-)
+if ! STATUS_FIELDS="$(
+  printf '%s' "${STATUS_JSON}" |
+    "${APP_DIR}/.venv/bin/python" -m haxlab.runtime.autonomy_status
+)"; then
+  write_status     "FAILED_RETRYABLE"     "invalid_status_snapshot"     "haxlab-status returned malformed control evidence; downstream autonomy work was not started."
+  exit 0
+fi
+
+read -r PROCESSING_PENDING ANALYSIS_PENDING PROCESSING_FAILED ANALYSIS_FAILED ANALYSIS_OK ANALYSIS_VERSION <<<"${STATUS_FIELDS}"
 
 if (( PROCESSING_PENDING > 0 || ANALYSIS_PENDING > 0 )); then
   write_status "RUNNING" "await_pipeline" "processing_pending=${PROCESSING_PENDING}; analysis_pending=${ANALYSIS_PENDING}; processing_failed=${PROCESSING_FAILED}; analysis_failed=${ANALYSIS_FAILED}"
