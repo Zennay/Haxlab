@@ -95,11 +95,16 @@ def test_inventory_classifies_all_nine_sources_in_stable_order(
     assert report["results"][-1]["reasons"] == ["synthetic_blocker"]
 
     assert len(calls) == 9
-    first_result, first_kwargs = calls[0]
-    assert first_result.name == "champion-self-source-01.json"
-    assert first_kwargs["challenger"] == request["champion"]
-    assert str(first_kwargs["stadium"]).endswith("source-01/stadium.hbs")
-    assert str(first_kwargs["scenarios"]).endswith("source-01/scenarios.json")
+    challengers = request["challengers"]
+    source_root = request["source_root"]
+    assert isinstance(challengers, dict)
+    assert isinstance(source_root, Path)
+    for result_path, kwargs in calls:
+        label, source_suffix = result_path.stem.rsplit("-source-", 1)
+        assert kwargs["challenger"] == challengers[label]
+        source = source_root / f"source-{source_suffix}"
+        assert kwargs["stadium"] == source / "stadium.hbs"
+        assert kwargs["scenarios"] == source / "scenarios.json"
 
 
 def test_missing_challenger_blocks_only_its_three_sources(
@@ -138,6 +143,40 @@ def test_missing_challenger_blocks_only_its_three_sources(
     )
 
 
+def test_non_string_challenger_key_fails_closed_without_coercion(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    request = _request(tmp_path)
+
+    class HostileKey:
+        def __str__(self) -> str:
+            raise AssertionError("challenger keys must not be string-coerced")
+
+    challengers = dict(request["challengers"])
+    challengers[HostileKey()] = request["champion"]
+    request["challengers"] = challengers
+
+    def unexpected_validator(*args, **kwargs):
+        raise AssertionError("invalid challenger mapping must not reach validator")
+
+    monkeypatch.setattr(
+        inventory_module,
+        "reusable_result_or_reasons",
+        unexpected_validator,
+    )
+
+    report = inventory_calibration_results(**request)
+
+    assert report["request_errors"] == ["challengers:key_type"]
+    assert report["reusable_results"] == 0
+    assert report["blocked_results"] == 9
+    assert all(
+        row["reasons"] == ["challengers:key_type"]
+        for row in report["results"]
+    )
+
+
 def test_missing_results_are_reported_fail_closed_without_crashing(
     tmp_path: Path,
 ) -> None:
@@ -173,6 +212,35 @@ def test_validator_input_error_is_converted_to_blocked_rows(
     assert report["blocked_results"] == 9
     assert all(
         row["reasons"] == ["validator_error:FileNotFoundError"]
+        for row in report["results"]
+    )
+
+
+def test_inconsistent_validator_success_fails_closed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    request = _request(tmp_path)
+
+    def inconsistent_validator(result_path: Path, **kwargs):
+        return True, ("unexpected_reason",)
+
+    monkeypatch.setattr(
+        inventory_module,
+        "reusable_result_or_reasons",
+        inconsistent_validator,
+    )
+
+    report = inventory_calibration_results(**request)
+
+    assert report["reusable_results"] == 0
+    assert report["blocked_results"] == 9
+    assert all(
+        row["reasons"]
+        == [
+            "validator_error:reusable_with_reasons",
+            "unexpected_reason",
+        ]
         for row in report["results"]
     )
 
