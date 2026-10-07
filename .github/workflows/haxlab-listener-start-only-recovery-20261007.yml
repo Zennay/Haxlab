@@ -19,20 +19,33 @@ jobs:
     runs-on: [self-hosted, zcloud, vps]
     timeout-minutes: 3
     steps:
-      - name: Start HaxLab listener only when inactive
+      - name: Start HaxLab listener only when inactive and worker-free
         shell: bash
         run: |
           set -euo pipefail
           test "$(hostname)" = "vps-bb300bba"
 
           SERVICE=actions.runner.Zennay-Haxlab.vps-bb300bba-haxlab.service
+          RUN_USER=haxlab-runner
           pre_state="$(systemctl is-active "$SERVICE" || true)"
           pre_pid="$(systemctl show "$SERVICE" -p MainPID --value || true)"
-          action="preserve-$pre_state"
+          worker_before=0
+          if pgrep -u "$RUN_USER" -f 'Runner\.Worker' >/dev/null 2>&1; then
+            worker_before=1
+          fi
 
+          if [ "$worker_before" -eq 1 ]; then
+            # An active job is authoritative even if systemd's listener state is stale.
+            # Recovery must never stop/restart/start around an existing Worker.
+            pgrep -u "$RUN_USER" -f 'Runner\.Worker' >/dev/null 2>&1
+            echo "HAXLAB_START_ONLY_RECOVERY action=preserve-active-worker pre_state=$pre_state pre_pid=$pre_pid worker_before=1"
+            exit 0
+          fi
+
+          action="preserve-$pre_state"
           case "$pre_state" in
             active)
-              action=preserve-active
+              action=preserve-active-listener
               ;;
             inactive|failed)
               sudo -n systemctl reset-failed "$SERVICE" || true
@@ -43,7 +56,7 @@ jobs:
               action=preserve-activating
               ;;
             *)
-              echo "HAXLAB_START_ONLY_UNSAFE pre_state=$pre_state pre_pid=$pre_pid"
+              echo "HAXLAB_START_ONLY_UNSAFE pre_state=$pre_state pre_pid=$pre_pid worker_before=0"
               exit 2
               ;;
           esac
@@ -61,9 +74,9 @@ jobs:
           cmdline="$(tr '\0' ' ' < "/proc/$pid/cmdline")"
           [[ "$cmdline" == *"Runner.Listener"* || "$cmdline" == *"runsvc.sh"* ]]
 
-          echo "HAXLAB_START_ONLY_RECOVERY action=$action pre_state=$pre_state pre_pid=$pre_pid post_state=$state post_pid=$pid"
-          if pgrep -u haxlab-runner -f 'Runner\.Worker' >/dev/null 2>&1; then
-            echo "HAXLAB_START_ONLY_WORKER=present"
+          echo "HAXLAB_START_ONLY_RECOVERY action=$action pre_state=$pre_state pre_pid=$pre_pid worker_before=0 post_state=$state post_pid=$pid"
+          if pgrep -u "$RUN_USER" -f 'Runner\.Worker' >/dev/null 2>&1; then
+            echo "HAXLAB_START_ONLY_WORKER=present-after"
           else
-            echo "HAXLAB_START_ONLY_WORKER=absent"
+            echo "HAXLAB_START_ONLY_WORKER=absent-after"
           fi
