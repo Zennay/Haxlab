@@ -56,17 +56,15 @@ class ClosedLoopArenaDecision:
 
 
 def _number(value: Any, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
+    if type(value) not in (int, float):
         return default
+    return float(value)
 
 
 def _integer(value: Any, default: int = 0) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
+    if type(value) is not int:
         return default
+    return value
 
 
 def _require_numeric_field(
@@ -87,11 +85,15 @@ def _require_numeric_field(
     if isinstance(value, bool):
         failures.append(f"invalid_metric:{label}:boolean")
         return
-    if not isinstance(value, (int, float)):
+    if integer:
+        if type(value) is float:
+            failures.append(f"invalid_metric:{label}:not_integer")
+            return
+        if type(value) is not int:
+            failures.append(f"invalid_metric:{label}:non_numeric")
+            return
+    elif type(value) not in (int, float):
         failures.append(f"invalid_metric:{label}:non_numeric")
-        return
-    if integer and not isinstance(value, int):
-        failures.append(f"invalid_metric:{label}:not_integer")
         return
 
     number = float(value)
