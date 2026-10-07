@@ -18,13 +18,17 @@ This contract validates evidence; it does not normalize it.
 ## Numeric evidence
 
 Sizes, mtimes, frame/tick counts, decompressed-byte counts, sampled-state
-counts, player counts and raw-event counts are native non-negative integers.
-Booleans, strings and floats are not accepted as integer evidence.
+counts, player counts and raw-event counts are native non-negative integers
+within SQLite's signed 64-bit INTEGER range. Booleans, strings, floats,
+negative values and larger Python integers are rejected before sqlite3 can
+raise a binding overflow.
 
 Processing duration is optional native numeric evidence. When present it must
-be finite, non-negative and representable as a Python float. NaN, infinities,
-negative values, strings, booleans and overflowing integer magnitudes fail
-closed before any SQLite mutation.
+be finite, non-negative and representable as a Python float. Accepted integer
+durations are normalized to that float before SQLite binding so a large but
+float-representable Python integer cannot leak a sqlite3 integer-overflow.
+NaN, infinities, negative values, strings, booleans and float-unrepresentable
+integer magnitudes fail closed before any SQLite mutation.
 
 ## Failure atomicity
 
