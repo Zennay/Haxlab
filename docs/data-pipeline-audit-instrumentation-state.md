@@ -17,6 +17,7 @@ It is additive validation only. It does not modify auditor, producer, runtime, l
 Audit modules must not invoke:
 
 - `sys.addaudithook(...)`;
+- current-thread trace/profile setters: `sys.settrace(...)` and `sys.setprofile(...)`;
 - mutating `faulthandler` APIs: `enable`, `disable`, `register`, `unregister`, `dump_traceback_later`, `cancel_dump_traceback_later`;
 - `tracemalloc.start`, `stop`, `reset_peak`, or `clear_traces`;
 - threading-wide trace/profile setters: `threading.settrace`, `setprofile`, `settrace_all_threads`, `setprofile_all_threads`;
@@ -30,12 +31,13 @@ Read-only instrumentation inspection remains valid, including:
 
 - `faulthandler.is_enabled()`;
 - `tracemalloc.is_tracing()` and `tracemalloc.get_traced_memory()`;
+- `sys.gettrace()` and `sys.getprofile()`;
 - `threading.gettrace()` and `threading.getprofile()`;
 - `sys.monitoring.get_events(...)` and other non-mutating monitoring reads.
 
 ## Why this matters
 
-These APIs change interpreter-wide behavior. If an auditor installs an audit hook, trace/profile callback, fault handler, allocation tracer, or monitoring callback, later validation can observe different behavior solely because another audit ran first. Exact-head evidence must depend on explicit repository and data inputs, not hidden process instrumentation left behind by a verifier.
+These APIs change persistent interpreter or thread instrumentation. If an auditor installs an audit hook, current-thread trace/profile callback, threading-wide callback, fault handler, allocation tracer, or monitoring callback, later validation can observe different behavior solely because another audit ran first. Exact-head evidence must depend on explicit repository and data inputs, not hidden process instrumentation left behind by a verifier.
 
 ## Proof
 
