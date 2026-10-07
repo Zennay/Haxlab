@@ -10,11 +10,18 @@ from haxlab.evaluation.models import PromotionDecision
 
 SCHEMA_VERSION = "haxlab-promotion-authorization-v1"
 GATE_RECEIPT_SCHEMA = "haxlab-evaluation-gate-run-receipt-v1"
-REQUIRED_GATES: dict[str, str] = {
-    "calibration": ".github/workflows/closed-loop-arena-v2-calibration.yml",
-    "haxlab_ci": ".github/workflows/ci.yml",
-    "multisource": ".github/workflows/multisource-suite-v2.yml",
+REQUIRED_GATES: dict[str, tuple[str, str]] = {
+    "calibration": (
+        ".github/workflows/closed-loop-arena-v2-calibration.yml",
+        "Closed-Loop Arena v2 Frozen Policy Validation",
+    ),
+    "haxlab_ci": (".github/workflows/ci.yml", "HaxLab CI"),
+    "multisource": (
+        ".github/workflows/multisource-suite-v2.yml",
+        "Freeze Multisource Evaluation Suite v2 Current-Main",
+    ),
 }
+_ALLOWED_EVENTS = frozenset({"push", "pull_request", "workflow_dispatch"})
 
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -132,13 +139,23 @@ def _validate_gate_receipt(
                 f"duplicate mandatory gate in receipt: {gate!r}"
             )
 
+        expected_path, expected_name = REQUIRED_GATES[gate]
         workflow_path = _native_nonempty_string(
             raw.get("workflow_path"),
             f"gate_receipt.gates[{index}].workflow_path",
         )
-        if workflow_path != REQUIRED_GATES[gate]:
+        if workflow_path != expected_path:
             raise PromotionAuthorizationError(
                 f"{gate} workflow path mismatch"
+            )
+
+        workflow_name = _native_nonempty_string(
+            raw.get("workflow_name"),
+            f"gate_receipt.gates[{index}].workflow_name",
+        )
+        if workflow_name != expected_name:
+            raise PromotionAuthorizationError(
+                f"{gate} workflow name mismatch"
             )
 
         gate_head = _exact_commit_sha(
@@ -159,6 +176,14 @@ def _validate_gate_receipt(
                 f"{gate} is not terminal-success evidence"
             )
 
+        event = _native_nonempty_string(
+            raw.get("event"), f"gate_receipt.gates[{index}].event"
+        )
+        if event not in _ALLOWED_EVENTS:
+            raise PromotionAuthorizationError(
+                f"{gate} uses unsupported event type {event!r}"
+            )
+
         run_id = _positive_native_int(
             raw.get("run_id"), f"gate_receipt.gates[{index}].run_id"
         )
@@ -172,14 +197,27 @@ def _validate_gate_receipt(
             )
         seen_run_ids.add(run_id)
 
+        html_url = _native_nonempty_string(
+            raw.get("html_url"),
+            f"gate_receipt.gates[{index}].html_url",
+        )
+        expected_url = f"https://github.com/Zennay/Haxlab/actions/runs/{run_id}"
+        if html_url != expected_url:
+            raise PromotionAuthorizationError(
+                f"{gate} workflow run URL mismatch"
+            )
+
         seen[gate] = {
             "gate": gate,
             "workflow_path": workflow_path,
+            "workflow_name": workflow_name,
             "head_sha": gate_head,
             "run_id": run_id,
             "run_attempt": run_attempt,
             "status": "completed",
             "conclusion": "success",
+            "event": event,
+            "html_url": html_url,
         }
 
     missing = sorted(set(REQUIRED_GATES) - set(seen))
