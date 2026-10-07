@@ -17,6 +17,7 @@ WARNING_MUTATORS = {
     "warnings.simplefilter",
     "warnings.resetwarnings",
     "warnings.catch_warnings",
+    "warnings._filters_mutated",
 }
 WARNING_STATE = {
     "warnings.filters",
@@ -24,6 +25,8 @@ WARNING_STATE = {
     "warnings.onceregistry",
     "warnings._onceregistry",
     "warnings._defaultaction",
+    "warnings.showwarning",
+    "warnings.formatwarning",
 }
 STATE_MUTATOR_METHODS = {
     "append",
@@ -43,6 +46,18 @@ FUNCTIONAL_MUTATORS = {
     "operator.iconcat",
     "operator.ior",
     "operator.setitem",
+    "list.__delitem__",
+    "list.__iadd__",
+    "list.__imul__",
+    "list.__setitem__",
+    "list.append",
+    "list.clear",
+    "list.extend",
+    "list.insert",
+    "list.pop",
+    "list.remove",
+    "list.reverse",
+    "list.sort",
 }
 
 
@@ -330,6 +345,18 @@ def test_data_pipeline_auditors_do_not_mutate_warning_policy_state() -> None:
         (
             "import warnings\nsetattr(warnings, 'onceregistry', {})\n",
             "reflected warning state mutation",
+        ),
+        (
+            "import warnings\nwarnings.showwarning = lambda *args: None\n",
+            "warnings.showwarning",
+        ),
+        (
+            "import warnings\nlist.clear(warnings.filters)\n",
+            "list.clear",
+        ),
+        (
+            "import warnings\nwarnings._filters_mutated()\n",
+            "_filters_mutated",
         ),
         (
             "import operator as op\nimport warnings\n"
