@@ -8,7 +8,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EVALUATION_ROOT = REPO_ROOT / "src" / "haxlab" / "evaluation"
 
-BUILTIN_HELPERS = {"getattr", "setattr", "delattr", "vars"}
+BUILTIN_HELPERS = {"delattr", "getattr", "globals", "setattr", "vars"}
+BUILTIN_TYPES = {"dict"}
 MUTATING_MAPPING_METHODS = {
     "clear",
     "pop",
@@ -24,6 +25,13 @@ OPERATOR_MUTATORS = {
     "operator.delitem",
     "operator.ior",
 }
+MODULE_GLOBALS = "<module-globals>"
+
+
+def _constant_string(node: ast.AST | None) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
 
 
 def _canonical_name(node: ast.AST | None, aliases: dict[str, str]) -> str | None:
@@ -31,7 +39,9 @@ def _canonical_name(node: ast.AST | None, aliases: dict[str, str]) -> str | None
         return None
 
     if isinstance(node, ast.Name):
-        if node.id in BUILTIN_HELPERS:
+        if node.id == "__builtins__":
+            return "builtins.__dict__"
+        if node.id in BUILTIN_HELPERS | BUILTIN_TYPES:
             return f"builtins.{node.id}"
         return aliases.get(node.id)
 
@@ -39,21 +49,43 @@ def _canonical_name(node: ast.AST | None, aliases: dict[str, str]) -> str | None
         owner = _canonical_name(node.value, aliases)
         return f"{owner}.{node.attr}" if owner else None
 
+    if isinstance(node, ast.Subscript):
+        owner = _canonical_name(node.value, aliases)
+        key = _constant_string(node.slice)
+        if owner == "sys.modules" and key == "builtins":
+            return "builtins"
+        if owner == MODULE_GLOBALS and key == "__builtins__":
+            return "builtins.__dict__"
+        return None
+
     if isinstance(node, ast.Call):
         target = _canonical_name(node.func, aliases)
+
         if (
             target == "builtins.getattr"
             and len(node.args) >= 2
-            and isinstance(node.args[1], ast.Constant)
-            and isinstance(node.args[1].value, str)
+            and (attribute := _constant_string(node.args[1])) is not None
         ):
             owner = _canonical_name(node.args[0], aliases)
             if owner:
-                return f"{owner}.{node.args[1].value}"
+                return f"{owner}.{attribute}"
 
         if target == "builtins.vars" and len(node.args) == 1:
             owner = _canonical_name(node.args[0], aliases)
             if owner == "builtins":
+                return "builtins.__dict__"
+
+        if target == "builtins.globals" and not node.args and not node.keywords:
+            return MODULE_GLOBALS
+
+        if (
+            target in {"sys.modules.get", f"{MODULE_GLOBALS}.get"}
+            and node.args
+        ):
+            key = _constant_string(node.args[0])
+            if target == "sys.modules.get" and key == "builtins":
+                return "builtins"
+            if target == f"{MODULE_GLOBALS}.get" and key == "__builtins__":
                 return "builtins.__dict__"
 
     return None
@@ -65,13 +97,12 @@ def _collect_aliases(tree: ast.AST) -> dict[str, str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name == "builtins":
-                    aliases[alias.asname or "builtins"] = "builtins"
-                elif alias.name == "operator":
-                    aliases[alias.asname or "operator"] = "operator"
+                if alias.name in {"builtins", "operator", "sys"}:
+                    aliases[alias.asname or alias.name] = alias.name
         elif isinstance(node, ast.ImportFrom) and node.module in {
             "builtins",
             "operator",
+            "sys",
         }:
             for alias in node.names:
                 if alias.name == "*":
@@ -83,8 +114,8 @@ def _collect_aliases(tree: ast.AST) -> dict[str, str]:
     # Resolve ordinary assignment aliases such as:
     #   namespace = builtins.__dict__
     #   put = namespace.__setitem__
-    # A bounded fixed point is sufficient because the source tree is finite
-    # and aliases only ever move toward an already canonical object.
+    # A bounded fixed point is sufficient because aliases only move toward an
+    # already canonical object and the production tree is finite.
     for _ in range(16):
         changed = False
         for node in ast.walk(tree):
@@ -125,8 +156,8 @@ def _collect_aliases(tree: ast.AST) -> dict[str, str]:
 
 
 def _target_root(node: ast.AST, aliases: dict[str, str]) -> str | None:
-    # Assigning to a plain local name only rebinds the local alias; it does not
-    # mutate the object the previous alias referred to.
+    # Assigning to a plain local name only rebinds the alias. Subscript and
+    # attribute targets mutate the referenced object.
     if isinstance(node, ast.Name):
         return None
     if isinstance(node, ast.Attribute):
@@ -134,6 +165,18 @@ def _target_root(node: ast.AST, aliases: dict[str, str]) -> str | None:
     if isinstance(node, ast.Subscript):
         return _canonical_name(node.value, aliases)
     return None
+
+
+def _augmented_target_root(
+    node: ast.AST,
+    aliases: dict[str, str],
+) -> str | None:
+    # In-place operators on an alias can mutate the referenced dictionary, so
+    # a Name target is significant for AugAssign even though it is not for
+    # ordinary assignment.
+    if isinstance(node, ast.Name):
+        return _canonical_name(node, aliases)
+    return _target_root(node, aliases)
 
 
 def _is_builtin_namespace_mutation_root(name: str | None) -> bool:
@@ -183,6 +226,18 @@ def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
                     f"line {node.lineno}: builtins mapping mutation: {target}"
                 )
 
+            if (
+                target
+                and target.startswith("builtins.dict.")
+                and target.rsplit(".", 1)[-1] in MUTATING_MAPPING_METHODS
+                and node.args
+                and _canonical_name(node.args[0], aliases)
+                == "builtins.__dict__"
+            ):
+                findings.append(
+                    f"line {node.lineno}: builtins mapping mutation: {target}"
+                )
+
         if isinstance(node, ast.Assign):
             for target_node in node.targets:
                 root = _target_root(target_node, aliases)
@@ -199,7 +254,7 @@ def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
                 )
 
         elif isinstance(node, ast.AugAssign):
-            root = _target_root(node.target, aliases)
+            root = _augmented_target_root(node.target, aliases)
             if _is_builtin_namespace_mutation_root(root):
                 findings.append(
                     f"line {node.lineno}: builtins namespace augmented assignment: {root}"
@@ -262,7 +317,28 @@ def test_contract_rejects_direct_builtin_namespace_mutation() -> None:
         assert expected in findings
 
 
-def test_contract_resolves_assignment_and_operator_aliases() -> None:
+def test_contract_rejects_magic_and_static_module_lookup_bypasses() -> None:
+    source = textwrap.dedent(
+        """
+        import sys
+
+        def probe():
+            __builtins__["open"] = lambda *args, **kwargs: None
+            globals()["__builtins__"]["len"] = lambda value: 0
+            globals().get("__builtins__").update({"abs": lambda value: value})
+            sys.modules["builtins"].input = lambda prompt="": ""
+            vars(sys.modules.get("builtins")).pop("sum", None)
+            dict.__setitem__(__builtins__, "all", lambda values: True)
+        """
+    )
+
+    findings = "\n".join(scan_source(source))
+    assert "builtins.__dict__" in findings
+    assert "builtins.input" in findings
+    assert "builtins.dict.__setitem__" in findings
+
+
+def test_contract_resolves_assignment_operator_and_inplace_aliases() -> None:
     source = textwrap.dedent(
         """
         import builtins as bi
@@ -278,6 +354,7 @@ def test_contract_resolves_assignment_and_operator_aliases() -> None:
             write("print", lambda *args, **kwargs: None)
             erase(namespace, "enumerate")
             op.setitem(getattr(module, "__dict__"), "zip", lambda *args: ())
+            namespace |= {"pow": lambda value, exponent: value}
         """
     )
 
@@ -286,23 +363,26 @@ def test_contract_resolves_assignment_and_operator_aliases() -> None:
     assert "builtins.__dict__.__setitem__" in findings
     assert "operator.delitem" in findings
     assert "operator.setitem" in findings
+    assert "augmented assignment: builtins.__dict__" in findings
 
 
 def test_contract_allows_read_only_builtin_access_and_local_mutation() -> None:
     source = textwrap.dedent(
         """
         import builtins as bi
+        import sys
         from builtins import open as builtin_open
 
         def probe(path):
             namespace = vars(bi)
             names = sorted(namespace)
             opener = getattr(bi, "open")
+            same_module = sys.modules["builtins"] is bi
             local = {}
             local["count"] = len(names)
             local.update({"callable": callable(opener)})
             with builtin_open(path, "rb") as handle:
-                return local, handle.read(0)
+                return local, handle.read(0), same_module
         """
     )
 
