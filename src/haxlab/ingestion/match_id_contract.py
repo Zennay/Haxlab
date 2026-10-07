@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+import re
 from typing import Any
+
+
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class DuplicateMatchIdError(ValueError):
@@ -14,11 +18,17 @@ def _require_non_empty_string(value: Any, *, field: str) -> str:
     return value
 
 
+def _require_replay_sha256(value: Any, *, field: str) -> str:
+    if not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None:
+        raise ValueError(f"{field} must be a lowercase 64-character SHA-256")
+    return value
+
+
 def _provenance_sort_key(
-    provenance: tuple[str | None, str | None],
+    provenance: tuple[str, str | None],
 ) -> tuple[str, str]:
     replay_sha256, source_message_id = provenance
-    return replay_sha256 or "", source_message_id or ""
+    return replay_sha256, source_message_id or ""
 
 
 def validate_unique_match_ids(
@@ -32,7 +42,7 @@ def validate_unique_match_ids(
     reported with its complete, sorted provenance set.
     """
 
-    provenance_by_match_id: dict[str, list[tuple[str | None, str | None]]] = {}
+    provenance_by_match_id: dict[str, list[tuple[str, str | None]]] = {}
 
     for index, record in enumerate(records):
         if not isinstance(record, Mapping):
@@ -41,14 +51,12 @@ def validate_unique_match_ids(
         match_id = _require_non_empty_string(
             record.get("match_id"), field=f"canonical match row {index} match_id"
         )
-        replay_sha256 = record.get("replay_sha256")
+        replay_sha256 = _require_replay_sha256(
+            record.get("replay_sha256"),
+            field=f"canonical match row {index} replay_sha256",
+        )
         source_message_id = record.get("source_message_id")
 
-        if replay_sha256 is not None:
-            replay_sha256 = _require_non_empty_string(
-                replay_sha256,
-                field=f"canonical match row {index} replay_sha256",
-            )
         if source_message_id is not None:
             source_message_id = _require_non_empty_string(
                 source_message_id,
