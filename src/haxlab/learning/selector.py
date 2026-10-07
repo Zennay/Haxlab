@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import math
+import re
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import Any
 
 
 MANIFEST_SCHEMA = "haxlab-human-imitation-manifest-v3"
+_CANONICAL_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _name_key(name: str | None) -> str | None:
@@ -96,6 +98,11 @@ def select_players(
     return selected
 
 
+def _analysis_replay_sha256(path: Path) -> str | None:
+    stem = path.stem
+    return stem if _CANONICAL_SHA256.fullmatch(stem) else None
+
+
 def _holdout_bucket(replay_sha256: str, modulus: int = 10) -> int:
     digest = hashlib.sha256(
         f"haxlab-holdout-v1:{replay_sha256}".encode("utf-8")
@@ -164,6 +171,11 @@ def build_training_manifest(
         if path.name.startswith("_"):
             continue
         scanned += 1
+        replay_sha256 = _analysis_replay_sha256(path)
+        if replay_sha256 is None or path.is_symlink() or not path.is_file():
+            rejected += 1
+            rejection_reasons.update(["invalid_analysis_provenance"])
+            continue
         try:
             analysis_bytes = path.read_bytes()
             analysis_sha256 = hashlib.sha256(analysis_bytes).hexdigest()
@@ -208,7 +220,6 @@ def build_training_manifest(
             {row["identity"] for row in selected_in_replay}
         )
 
-        replay_sha256 = path.stem
         raw_path = (
             raw_root
             / replay_sha256[:2]
