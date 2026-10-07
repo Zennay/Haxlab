@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -541,3 +542,64 @@ def test_evidence_loader_rejects_path_swap_between_lstat_and_open(
     assert result.reasons == (
         "invalid_evidence:path:unreadable_or_invalid_json",
     )
+
+
+class _ExplodingPath(type(Path("."))):
+    def is_symlink(self) -> bool:
+        raise AssertionError("Path subclass methods must not run at evidence IO boundary")
+
+    def is_file(self) -> bool:
+        raise AssertionError("Path subclass methods must not run at evidence IO boundary")
+
+
+def test_evidence_parser_rejects_non_string_mapping_keys_without_exception() -> None:
+    payload = _payload()
+    payload[1] = "unexpected"
+
+    result = parse_evaluation_evidence(payload)
+
+    assert not result.valid
+    assert result.evidence is None
+    assert "invalid_evidence:payload:non_string_key" in result.reasons
+
+
+def test_policy_parser_rejects_non_string_mapping_keys_without_exception() -> None:
+    payload = _policy()
+    payload[1] = "unexpected"
+
+    result = parse_promotion_policy(payload)
+
+    assert not result.valid
+    assert result.policy is None
+    assert "invalid_policy:payload:non_string_key" in result.reasons
+
+
+def test_regression_parser_rejects_non_string_mapping_keys_without_exception() -> None:
+    payload = _payload(
+        regressions=[
+            {
+                "scenario": "kickoff",
+                "severity": "warning",
+                "details": "stable",
+                1: "unexpected",
+            }
+        ]
+    )
+
+    result = parse_evaluation_evidence(payload)
+
+    assert not result.valid
+    assert "invalid_evidence:regressions:0:non_string_key" in result.reasons
+
+
+def test_evidence_loader_rejects_path_subclass_before_virtual_methods(
+    tmp_path,
+) -> None:
+    path = tmp_path / "evidence.json"
+    path.write_text(json.dumps(_payload()), encoding="utf-8")
+
+    result = load_evaluation_evidence(_ExplodingPath(path))
+
+    assert not result.valid
+    assert result.evidence is None
+    assert result.reasons == ("invalid_evidence:path:not_path",)
