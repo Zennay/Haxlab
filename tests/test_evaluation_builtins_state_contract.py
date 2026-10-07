@@ -10,6 +10,10 @@ EVALUATION_ROOT = REPO_ROOT / "src" / "haxlab" / "evaluation"
 
 BUILTIN_HELPERS = {"delattr", "getattr", "globals", "setattr", "vars"}
 BUILTIN_TYPES = {"dict"}
+IMPLICIT_ALIASES = {
+    name: f"builtins.{name}"
+    for name in BUILTIN_HELPERS | BUILTIN_TYPES
+}
 MUTATING_MAPPING_METHODS = {
     "clear",
     "pop",
@@ -25,6 +29,7 @@ OPERATOR_MUTATORS = {
     "operator.delitem",
     "operator.ior",
 }
+SCOPE_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
 MODULE_GLOBALS = "<module-globals>"
 
 
@@ -41,8 +46,6 @@ def _canonical_name(node: ast.AST | None, aliases: dict[str, str]) -> str | None
     if isinstance(node, ast.Name):
         if node.id == "__builtins__":
             return "builtins.__dict__"
-        if node.id in BUILTIN_HELPERS | BUILTIN_TYPES:
-            return f"builtins.{node.id}"
         return aliases.get(node.id)
 
     if isinstance(node, ast.Attribute):
@@ -91,10 +94,87 @@ def _canonical_name(node: ast.AST | None, aliases: dict[str, str]) -> str | None
     return None
 
 
-def _collect_aliases(tree: ast.AST) -> dict[str, str]:
-    aliases: dict[str, str] = {}
+def _assignment_names(node: ast.AST) -> list[str]:
+    if isinstance(node, ast.Name):
+        return [node.id]
+    if isinstance(node, (ast.Tuple, ast.List)):
+        names: list[str] = []
+        for element in node.elts:
+            names.extend(_assignment_names(element))
+        return names
+    return []
 
-    for node in ast.walk(tree):
+
+def _scope_nodes(root: ast.AST) -> list[ast.AST]:
+    nodes: list[ast.AST] = []
+
+    def visit(node: ast.AST, *, scope_root: bool = False) -> None:
+        nodes.append(node)
+        if not scope_root and isinstance(node, SCOPE_NODES):
+            return
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    visit(root, scope_root=True)
+    return nodes
+
+
+def _function_locals(
+    node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda,
+) -> tuple[set[str], set[str]]:
+    nodes = _scope_nodes(node)
+    globals_: set[str] = set()
+    for current in nodes:
+        if isinstance(current, ast.Global):
+            globals_.update(current.names)
+
+    locals_: set[str] = set()
+    args = node.args
+    for argument in (
+        list(args.posonlyargs)
+        + list(args.args)
+        + list(args.kwonlyargs)
+    ):
+        locals_.add(argument.arg)
+    if args.vararg:
+        locals_.add(args.vararg.arg)
+    if args.kwarg:
+        locals_.add(args.kwarg.arg)
+
+    for current in nodes:
+        if isinstance(current, ast.Name) and isinstance(current.ctx, ast.Store):
+            if current.id not in globals_:
+                locals_.add(current.id)
+        elif (
+            current is not node
+            and isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and current.name not in globals_
+        ):
+            locals_.add(current.name)
+        elif isinstance(current, ast.Import):
+            for alias in current.names:
+                local = alias.asname or alias.name.split(".", 1)[0]
+                if local not in globals_:
+                    locals_.add(local)
+        elif isinstance(current, ast.ImportFrom):
+            for alias in current.names:
+                if alias.name == "*":
+                    continue
+                local = alias.asname or alias.name
+                if local not in globals_:
+                    locals_.add(local)
+
+    return locals_, globals_
+
+
+def _collect_scope_aliases(
+    nodes: list[ast.AST],
+    *,
+    inherited: dict[str, str],
+) -> dict[str, str]:
+    aliases = dict(inherited)
+
+    for node in nodes:
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.name in {"builtins", "operator", "sys"}:
@@ -118,37 +198,32 @@ def _collect_aliases(tree: ast.AST) -> dict[str, str]:
     # already canonical object and the production tree is finite.
     for _ in range(16):
         changed = False
-        for node in ast.walk(tree):
-            target: ast.Name | None = None
+        for node in nodes:
             value: ast.AST | None = None
-            if (
-                isinstance(node, ast.Assign)
-                and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-            ):
-                target = node.targets[0]
+            targets: list[ast.AST] = []
+            if isinstance(node, ast.Assign):
                 value = node.value
-            elif (
-                isinstance(node, ast.AnnAssign)
-                and isinstance(node.target, ast.Name)
-                and node.value is not None
-            ):
-                target = node.target
+                targets = list(node.targets)
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
                 value = node.value
-            elif (
-                isinstance(node, ast.NamedExpr)
-                and isinstance(node.target, ast.Name)
-            ):
-                target = node.target
+                targets = [node.target]
+            elif isinstance(node, ast.NamedExpr):
                 value = node.value
+                targets = [node.target]
 
-            if target is None or value is None:
+            if value is None:
                 continue
 
             resolved = _canonical_name(value, aliases)
-            if resolved and aliases.get(target.id) != resolved:
-                aliases[target.id] = resolved
-                changed = True
+            if resolved is None:
+                continue
+
+            for target in targets:
+                for local in _assignment_names(target):
+                    if aliases.get(local) != resolved:
+                        aliases[local] = resolved
+                        changed = True
+
         if not changed:
             break
 
@@ -189,12 +264,14 @@ def _is_builtin_namespace_mutation_root(name: str | None) -> bool:
     )
 
 
-def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
-    tree = ast.parse(source, filename=filename)
-    aliases = _collect_aliases(tree)
+def _scan_nodes(
+    nodes: list[ast.AST],
+    *,
+    aliases: dict[str, str],
+) -> list[str]:
     findings: list[str] = []
 
-    for node in ast.walk(tree):
+    for node in nodes:
         if isinstance(node, ast.Call):
             target = _canonical_name(node.func, aliases)
 
@@ -268,6 +345,51 @@ def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
                         f"line {node.lineno}: builtins namespace deletion: {root}"
                     )
 
+    return findings
+
+
+def _scan_scope(
+    root: ast.Module | ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda | ast.ClassDef,
+    *,
+    inherited_aliases: dict[str, str],
+) -> list[str]:
+    nodes = _scope_nodes(root)
+    visible = dict(inherited_aliases)
+
+    if isinstance(root, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        locals_, globals_ = _function_locals(root)
+        visible = {
+            name: canonical
+            for name, canonical in visible.items()
+            if name not in locals_ or name in globals_
+        }
+
+    aliases = _collect_scope_aliases(nodes, inherited=visible)
+    findings = _scan_nodes(nodes, aliases=aliases)
+
+    # Function/lambda bodies can close over aliases from an enclosing function.
+    # Class-local names are different: methods do not resolve unqualified names
+    # through the class namespace, so nested scopes below a class inherit the
+    # lexical aliases that were visible before the class body instead.
+    nested_inherited = (
+        inherited_aliases if isinstance(root, ast.ClassDef) else aliases
+    )
+    for node in nodes:
+        if node is root or not isinstance(node, SCOPE_NODES):
+            continue
+        findings.extend(
+            _scan_scope(
+                node,
+                inherited_aliases=nested_inherited,
+            )
+        )
+
+    return findings
+
+
+def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
+    tree = ast.parse(source, filename=filename)
+    findings = _scan_scope(tree, inherited_aliases=IMPLICIT_ALIASES)
     return sorted(set(findings))
 
 
@@ -364,6 +486,44 @@ def test_contract_resolves_assignment_operator_and_inplace_aliases() -> None:
     assert "operator.delitem" in findings
     assert "operator.setitem" in findings
     assert "augmented assignment: builtins.__dict__" in findings
+
+
+def test_contract_resolves_function_local_and_closure_aliases() -> None:
+    source = textwrap.dedent(
+        """
+        import builtins
+
+        def outer():
+            namespace = vars(builtins)
+
+            def inner():
+                namespace["open"] = lambda *args, **kwargs: None
+
+            return inner
+        """
+    )
+
+    findings = "\n".join(scan_source(source))
+    assert "builtins.__dict__" in findings
+
+
+def test_contract_allows_shadowed_builtin_aliases_and_helpers() -> None:
+    source = textwrap.dedent(
+        """
+        import builtins as bi
+
+        def first(bi, getattr):
+            bi.open = object()
+            return getattr
+
+        def second():
+            bi = {}
+            bi["open"] = object()
+            return bi
+        """
+    )
+
+    assert scan_source(source) == []
 
 
 def test_contract_allows_read_only_builtin_access_and_local_mutation() -> None:
