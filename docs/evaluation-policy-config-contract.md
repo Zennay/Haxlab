@@ -76,3 +76,8 @@ editing the file currently changes a running promotion gate.
 ## Bounded input
 
 Policy configuration is a small control-plane artifact. The loader fails closed before TOML parsing when the opened regular file exceeds 64 KiB, and its read call is capped to one byte beyond that limit so a misleading or racing size report cannot cause an unbounded allocation. The bound is part of the evaluation-validation boundary; larger files must not be treated as valid promotion policy input.
+
+
+## Special-file liveness
+
+The secure open uses both no-follow and non-blocking flags before inspecting the opened descriptor. This is required because a FIFO can otherwise block at open time before the regular-file check runs. After opening, the descriptor must still pass the regular-file `fstat` check; FIFOs, sockets, devices, directories and other special files are invalid policy inputs.
