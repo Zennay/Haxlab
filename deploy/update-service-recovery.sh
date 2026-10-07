@@ -14,12 +14,32 @@ HAXLAB_UPDATE_ACTIVE_BEFORE=()
 haxlab_capture_update_service_state() {
   HAXLAB_UPDATE_ACTIVE_BEFORE=()
 
+  local -a captured_active=()
+  local state
   local unit
+
   for unit in "${HAXLAB_UPDATE_MANAGED_SERVICES[@]}"; do
-    if systemctl is-active --quiet "${unit}" 2>/dev/null; then
-      HAXLAB_UPDATE_ACTIVE_BEFORE+=("${unit}")
+    state=""
+    if state="$(systemctl is-active "${unit}" 2>/dev/null)"; then
+      if [[ "${state}" != "active" ]]; then
+        echo "Indeterminate update service state for ${unit}: ${state:-<empty>}" >&2
+        return 1
+      fi
+      captured_active+=("${unit}")
+      continue
     fi
+
+    case "${state}" in
+      inactive|failed)
+        ;;
+      *)
+        echo "Indeterminate update service state for ${unit}: ${state:-<empty>}" >&2
+        return 1
+        ;;
+    esac
   done
+
+  HAXLAB_UPDATE_ACTIVE_BEFORE=("${captured_active[@]}")
 }
 
 haxlab_update_service_was_active() {

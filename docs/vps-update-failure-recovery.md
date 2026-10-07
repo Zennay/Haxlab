@@ -17,6 +17,14 @@ are active:
 - `haxlab-worker.service`;
 - `haxlab-ingest.service`.
 
+Snapshot capture is fail-closed. Only stable `active`, `inactive` and
+`failed` states are accepted: `active` is captured, while `inactive` and
+`failed` are treated as not active. Unknown units, transient states such as
+`activating`/`deactivating`/`reloading`, empty state output, or an
+otherwise indeterminate service-manager query abort the update before the first
+service stop. The global snapshot is committed only after the complete scan, so
+a late query failure cannot leave a partially populated recovery snapshot.
+
 The snapshot is in stop order. Failure recovery restores the exact managed
 service activation set rather than only restoring availability. It first stops
 every managed unit that was inactive in the snapshot, using the normal stop
