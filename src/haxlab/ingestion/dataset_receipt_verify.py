@@ -39,14 +39,15 @@ def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 def load_receipt(path: Path) -> dict[str, object]:
     nofollow = getattr(os, "O_NOFOLLOW", None)
-    if nofollow is None:
+    nonblock = getattr(os, "O_NONBLOCK", None)
+    if nofollow is None or nonblock is None:
         raise DatasetReceiptVerificationError(
-            "O_NOFOLLOW is required for receipt verification"
+            "O_NOFOLLOW and O_NONBLOCK are required for receipt verification"
         )
 
     fd = -1
     try:
-        fd = os.open(Path(path), os.O_RDONLY | nofollow)
+        fd = os.open(Path(path), os.O_RDONLY | nofollow | nonblock)
         metadata = os.fstat(fd)
         if not stat.S_ISREG(metadata.st_mode):
             raise DatasetReceiptVerificationError(
