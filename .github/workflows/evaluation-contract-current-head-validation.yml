@@ -1,0 +1,90 @@
+name: Evaluation contract current-head validation
+
+on:
+  push:
+    branches:
+      - validation/evaluation-contract-current-head-20261007
+    paths:
+      - "src/haxlab/evaluation/models.py"
+      - "src/haxlab/evaluation/promotion.py"
+      - "src/haxlab/evaluation/calibration_resume.py"
+      - "src/haxlab/evaluation/closed_loop_arena.py"
+      - "tests/test_evaluation_model_schema_contract.py"
+      - "tests/test_evaluation_workflow_module_contract.py"
+      - "tests/test_promotion.py"
+      - ".github/workflows/closed-loop-arena-v2-calibration.yml"
+      - ".github/workflows/evaluation-contract-current-head-validation.yml"
+  pull_request:
+    branches:
+      - feature/arena-v2-current-main-20261004
+    paths:
+      - "src/haxlab/evaluation/models.py"
+      - "src/haxlab/evaluation/promotion.py"
+      - "src/haxlab/evaluation/calibration_resume.py"
+      - "src/haxlab/evaluation/closed_loop_arena.py"
+      - "tests/test_evaluation_model_schema_contract.py"
+      - "tests/test_evaluation_workflow_module_contract.py"
+      - "tests/test_promotion.py"
+      - ".github/workflows/closed-loop-arena-v2-calibration.yml"
+      - ".github/workflows/evaluation-contract-current-head-validation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-evaluation-contract-current-head-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  focused:
+    name: Exact-head evaluation contract
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout exact event SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Verify exact source checkout
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          test "$ACTUAL_SHA" = "$EXPECTED_SHA"
+          echo "HAXLAB_EVALUATION_CONTRACT_EXACT_HEAD=$ACTUAL_SHA"
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .evaluation-contract-venv
+          python3 -m venv .evaluation-contract-venv
+          .evaluation-contract-venv/bin/pip install --upgrade pip
+          .evaluation-contract-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile evaluation package
+        shell: bash
+        run: |
+          set -euo pipefail
+          .evaluation-contract-venv/bin/python -m compileall -q src/haxlab/evaluation
+
+      - name: Run current-head evaluation contract regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          .evaluation-contract-venv/bin/pytest -q \
+            tests/test_evaluation_model_schema_contract.py \
+            tests/test_evaluation_workflow_module_contract.py \
+            tests/test_promotion.py
+
+      - name: Record focused proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HAXLAB_EVALUATION_CONTRACT_RESULT=green"
