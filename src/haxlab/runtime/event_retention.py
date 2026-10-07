@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sqlite3
 import stat
 from dataclasses import asdict, dataclass
@@ -87,6 +86,22 @@ def _validate_schema(connection: sqlite3.Connection) -> None:
             f"expected={EXPECTED_COLUMNS!r} actual={columns!r}"
         )
 
+    malformed = int(
+        connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM runtime_events
+            WHERE created_at IS NULL
+               OR strftime('%Y-%m-%d %H:%M:%S', created_at) IS NULL
+               OR strftime('%Y-%m-%d %H:%M:%S', created_at) != created_at
+            """
+        ).fetchone()[0]
+    )
+    if malformed:
+        raise EventRetentionError(
+            f"runtime_events contains {malformed} non-canonical created_at value(s)"
+        )
+
 
 def apply_event_retention(
     state_db: Path,
@@ -98,10 +113,12 @@ def apply_event_retention(
 ) -> RetentionReceipt:
     """Delete only old runtime events outside the newest-row safety floor."""
 
-    if isinstance(keep_hours, bool) or keep_hours < 1:
+    if not isinstance(keep_hours, int) or isinstance(keep_hours, bool) or keep_hours < 1:
         raise EventRetentionError("keep_hours must be an integer >= 1")
-    if isinstance(keep_latest, bool) or keep_latest < 0:
+    if not isinstance(keep_latest, int) or isinstance(keep_latest, bool) or keep_latest < 0:
         raise EventRetentionError("keep_latest must be an integer >= 0")
+    if not isinstance(dry_run, bool):
+        raise EventRetentionError("dry_run must be a boolean")
 
     database = _validate_db_path(Path(state_db))
     now = _canonical_utc(evaluated_at or datetime.now(timezone.utc))
@@ -137,7 +154,7 @@ def apply_event_retention(
         last_eligible_id = int(eligible[2]) if eligible[2] is not None else None
 
         if not dry_run and rows_eligible:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 WITH newest AS (
                     SELECT id
@@ -151,8 +168,18 @@ def apply_event_retention(
                 """,
                 (keep_latest, _format_sqlite_timestamp(cutoff)),
             )
+            if cursor.rowcount not in (-1, rows_eligible):
+                raise EventRetentionError(
+                    "runtime_events deletion count changed inside retention transaction"
+                )
 
-        rows_after = rows_before if dry_run else rows_before - rows_eligible
+        rows_after_actual = int(
+            connection.execute("SELECT COUNT(*) FROM runtime_events").fetchone()[0]
+        )
+        rows_after = rows_before if dry_run else rows_after_actual
+        if not dry_run and rows_after != rows_before - rows_eligible:
+            raise EventRetentionError("runtime_events row-count invariant failed")
+
         if dry_run:
             connection.rollback()
         else:
@@ -209,6 +236,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "error": str(exc),
                 },
                 sort_keys=True,
+                separators=(",", ":"),
             )
         )
         return 2
