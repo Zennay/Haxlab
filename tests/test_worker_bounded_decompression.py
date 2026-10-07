@@ -63,6 +63,13 @@ def test_probe_returns_size_instead_of_retaining_decompressed_payload() -> None:
     assert decompressed_bytes == len(payload)
 
 
+def test_probe_preserves_valid_empty_payload_semantics() -> None:
+    header, decompressed_bytes = _probe_verified_replay(_hbr2(b"", total_frames=0))
+
+    assert header.total_frames == 0
+    assert decompressed_bytes == 0
+
+
 def test_probe_rejects_truncated_deflate_stream() -> None:
     replay = _hbr2(b"A" * 8192)
 
