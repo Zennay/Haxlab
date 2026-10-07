@@ -15,9 +15,8 @@ and retain at module scope:
 - `_thread._local()`.
 
 The same rule applies through direct imports, module aliases, simple assignment
-aliases, annotated/named aliases, constant `getattr(...)`, and constructor calls
-nested inside an eagerly evaluated module-level value. Subclassing the thread-local
-storage primitives is also forbidden.
+aliases, annotated/named aliases, constant `getattr(...)`, `module.__dict__` / `vars(module)` reflection, and constructor calls
+nested inside an eagerly evaluated module-level value. Wildcard imports from the tracked state modules fail closed because they hide constructor provenance. Subclassing the thread-local storage primitives is also forbidden.
 
 Per-call temporary construction remains allowed because it does not retain state
 between independent evaluation calls by itself. Ordinary synchronization
