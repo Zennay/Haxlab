@@ -64,6 +64,10 @@ class DynamicCodeExecutionVisitor(ast.NodeVisitor):
                 continue
             qualified = f"{node.module}.{alias.name}"
             self.aliases[alias.asname or alias.name] = qualified
+            if qualified in BANNED_RUNTIME_CODE_CALLS:
+                self.violations.append(
+                    f"line {node.lineno}: binding runtime code builtin is forbidden: {qualified!r}"
+                )
 
         self.generic_visit(node)
 
@@ -73,6 +77,10 @@ class DynamicCodeExecutionVisitor(ast.NodeVisitor):
             for target in node.targets:
                 if isinstance(target, ast.Name):
                     self.aliases[target.id] = resolved
+                    if resolved in BANNED_RUNTIME_CODE_CALLS:
+                        self.violations.append(
+                            f"line {node.lineno}: binding runtime code builtin is forbidden: {resolved!r}"
+                        )
         self.generic_visit(node)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
@@ -80,6 +88,10 @@ class DynamicCodeExecutionVisitor(ast.NodeVisitor):
             resolved = self._qualified_name(node.value)
             if resolved is not None:
                 self.aliases[node.target.id] = resolved
+                if resolved in BANNED_RUNTIME_CODE_CALLS:
+                    self.violations.append(
+                        f"line {node.lineno}: binding runtime code builtin is forbidden: {resolved!r}"
+                    )
         self.generic_visit(node)
 
     def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
@@ -87,6 +99,10 @@ class DynamicCodeExecutionVisitor(ast.NodeVisitor):
             resolved = self._qualified_name(node.value)
             if resolved is not None:
                 self.aliases[node.target.id] = resolved
+                if resolved in BANNED_RUNTIME_CODE_CALLS:
+                    self.violations.append(
+                        f"line {node.lineno}: binding runtime code builtin is forbidden: {resolved!r}"
+                    )
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
@@ -182,8 +198,12 @@ def test_evaluation_package_has_no_runtime_dynamic_code_execution() -> None:
         ("import builtins\nbuiltins.eval('1 + 1')\n", "builtins.eval"),
         ("import builtins as b\nb.exec('value = 1')\n", "builtins.exec"),
         ("from builtins import compile as make_code\nmake_code('1', '<m>', 'eval')\n", "builtins.compile"),
+        ("from builtins import eval as evaluator\n", "builtins.eval"),
+        ("runner = eval\n", "eval"),
         ("runner = eval\nrunner('1 + 1')\n", "eval"),
+        ("runner: object = exec\n", "exec"),
         ("runner: object = exec\nrunner('value = 1')\n", "exec"),
+        ("(runner := compile)\n", "compile"),
         ("(runner := compile)('1', '<m>', 'eval')\n", "compile"),
         ("import builtins\ngetattr(builtins, 'eval')('1 + 1')\n", "builtins.eval"),
         ("getattr(__builtins__, 'exec')('value = 1')\n", "builtins.exec"),
