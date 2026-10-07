@@ -234,6 +234,37 @@ def _entry_exists(parent_fd: int, name: str) -> bool:
     return True
 
 
+def _preflight_dataset_root(root: Path) -> None:
+    root_fd = _open_directory(root)
+    try:
+        for name in M0_ARTIFACTS:
+            fd = -1
+            try:
+                fd = os.open(
+                    name,
+                    os.O_RDONLY
+                    | _required_flag("O_NOFOLLOW")
+                    | _required_flag("O_NONBLOCK"),
+                    dir_fd=root_fd,
+                )
+                metadata = os.fstat(fd)
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise GenerationStoreError(
+                        f"dataset artifact is not a regular file: {name}"
+                    )
+            except GenerationStoreError:
+                raise
+            except OSError as exc:
+                raise GenerationStoreError(
+                    f"unsafe or unreadable dataset artifact: {name}"
+                ) from exc
+            finally:
+                if fd >= 0:
+                    os.close(fd)
+    finally:
+        os.close(root_fd)
+
+
 def _cleanup_stage(generations_fd: int, stage_name: str) -> None:
     stage_fd = -1
     try:
@@ -278,6 +309,7 @@ def _validate_existing_generation(
         commit = parse_generation_commit_bytes(commit_payload)
         if commit != expected_commit:
             raise GenerationStoreError("existing generation commit does not match receipt")
+        _preflight_dataset_root(generation_root)
         receipt = build_dataset_receipt(generation_root)
         if build_generation_commit(receipt) != expected_commit:
             raise GenerationStoreError("existing generation artifacts do not match commit")
@@ -298,6 +330,7 @@ def publish_generation(
     source_root = Path(source_root)
     store_root = Path(store_root)
     try:
+        _preflight_dataset_root(source_root)
         source_receipt = build_dataset_receipt(source_root)
         commit = build_generation_commit(source_receipt)
     except (DatasetReceiptError, GenerationCommitError) as exc:
@@ -478,6 +511,7 @@ def resolve_current_generation(store_root: Path) -> ResolvedGeneration:
 
     generation_root = store_root / GENERATIONS_DIRECTORY / str(pointer["generation_id"])
     try:
+        _preflight_dataset_root(generation_root)
         receipt = build_dataset_receipt(generation_root)
         if build_generation_commit(receipt) != commit:
             raise GenerationStoreError("resolved generation artifacts do not match commit")
