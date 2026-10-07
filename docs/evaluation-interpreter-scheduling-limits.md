@@ -11,7 +11,7 @@ This additive contract recursively scans `src/haxlab/evaluation/**/*.py` and rej
 
 The zero-argument `threading.stack_size()` getter and read-only `sys.getrecursionlimit()`, `sys.getswitchinterval()`, and `sys.get_int_max_str_digits()` remain allowed.
 
-The AST guard resolves ordinary and wildcard imports, assignment/chained/tuple aliases, constant-string `getattr(...)`, and mapping reflection through `vars(module)[...]` / `module.__dict__[...]`. Function and class rebinding plus function parameters shadow inherited aliases, avoiding false positives on unrelated objects.
+The AST guard resolves ordinary and wildcard imports, assignment/chained/tuple aliases, constant and statically-concatenated string `getattr(...)`, and mapping reflection through `vars(module)[...]`, `module.__dict__[...]`, `vars(module).get(...)`, and `module.__dict__.get(...)`. Function and class rebinding plus function parameters shadow inherited aliases, avoiding false positives on unrelated objects.
 
 ## Ownership boundary
 
