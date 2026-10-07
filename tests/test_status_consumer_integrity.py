@@ -80,6 +80,9 @@ def test_status_consumer_accepts_canonical_snapshot(
         ("analysis_rate_per_minute_5m", math.inf),
         ("analysis_rate_per_minute_5m", -0.1),
         ("analysis_rate_per_minute_5m", "1.0"),
+        ("duration_seconds_probed", 10**400),
+        ("probe_rate_per_minute_5m", 10**400),
+        ("analysis_rate_per_minute_5m", 10**400),
     ],
 )
 def test_status_consumer_rejects_malformed_snapshot_values(
