@@ -245,3 +245,16 @@ def test_audit_rejects_symlinked_manifest(tmp_path: Path) -> None:
 
     with pytest.raises(ManifestAuditError, match="regular non-symlink"):
         audit_training_manifest(link)
+
+
+def test_audit_rejects_analysis_path_parent_traversal(tmp_path: Path) -> None:
+    path, manifest = _real_manifest(tmp_path)
+    broken = copy.deepcopy(manifest)
+    rows = broken["train_replays"] or broken["holdout_replays"]
+    rows[0]["analysis_path"] = str(
+        Path(broken["analysis_root"]) / ".." / "escape" / f"{REPLAY_SHA}.json"
+    )
+    _write(path, broken)
+
+    with pytest.raises(ManifestAuditError, match="escapes analysis_root"):
+        audit_training_manifest(path)
