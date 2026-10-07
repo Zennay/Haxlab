@@ -121,7 +121,9 @@ def _healthy_candidate(
         samples = _native_int(0 if raw_samples is None else raw_samples)
         if (
             player_id is None
+            or player_id < 0
             or team_id is None
+            or team_id not in {0, 1, 2}
             or samples is None
             or samples < 0
             or player_id in player_ids
@@ -130,9 +132,13 @@ def _healthy_candidate(
         player_ids.add(player_id)
         players.append(player)
 
-    simulation = payload.get("simulation") or {}
-    if not isinstance(simulation, dict):
+    raw_simulation = payload.get("simulation")
+    if raw_simulation is None:
+        simulation: dict[str, Any] = {}
+    elif not isinstance(raw_simulation, dict):
         return None
+    else:
+        simulation = raw_simulation
     expected_sampled_states = _native_int(sampled_states)
     if expected_sampled_states is None or expected_sampled_states <= 0:
         return None
