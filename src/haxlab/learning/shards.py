@@ -16,6 +16,14 @@ from haxlab.learning.selector import MANIFEST_SCHEMA
 INDEX_SCHEMA = "haxlab-imitation-shard-index-v2"
 
 
+def _require_native_int(name: str, value: int, *, minimum: int) -> int:
+    if type(value) is not int or value < minimum:
+        raise ValueError(
+            f"{name} must be an exact native integer >= {minimum}"
+        )
+    return value
+
+
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary_name = tempfile.mkstemp(
@@ -142,6 +150,20 @@ def build_shards(
     timeout_seconds: int = 180,
     force: bool = False,
 ) -> dict[str, Any]:
+    sample_every_ticks = _require_native_int(
+        "sample_every_ticks",
+        sample_every_ticks,
+        minimum=1,
+    )
+    workers = _require_native_int("workers", workers, minimum=1)
+    timeout_seconds = _require_native_int(
+        "timeout_seconds",
+        timeout_seconds,
+        minimum=30,
+    )
+    if limit is not None:
+        limit = _require_native_int("limit", limit, minimum=0)
+
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("schema") != MANIFEST_SCHEMA:
         raise ValueError(
@@ -154,7 +176,7 @@ def build_shards(
     source_key = f"{split}_replays"
     entries = list(manifest.get(source_key) or [])
     if limit is not None:
-        entries = entries[: max(0, limit)]
+        entries = entries[:limit]
 
     output_dir = output_root / split
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -162,15 +184,15 @@ def build_shards(
     results: list[dict[str, Any]] = []
     failures: list[dict[str, str]] = []
 
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
+    with ThreadPoolExecutor(max_workers=workers) as executor:
         future_map = {
             executor.submit(
                 _extract_one,
                 entry,
                 node_script=node_script,
                 output_dir=output_dir,
-                sample_every_ticks=max(1, sample_every_ticks),
-                timeout_seconds=max(30, timeout_seconds),
+                sample_every_ticks=sample_every_ticks,
+                timeout_seconds=timeout_seconds,
                 force=force,
             ): entry
             for entry in entries
@@ -198,7 +220,7 @@ def build_shards(
         "manifest_schema": manifest.get("schema"),
         "analysis_version": manifest.get("analysis_version"),
         "split": split,
-        "sample_every_ticks": max(1, sample_every_ticks),
+        "sample_every_ticks": sample_every_ticks,
         "requested_replays": len(entries),
         "successful_replays": len(results),
         "failed_replays": len(failures),
@@ -258,10 +280,10 @@ def main() -> int:
         split=args.split,
         output_root=args.output_root,
         node_script=args.node_script,
-        sample_every_ticks=max(1, args.sample_every_ticks),
-        workers=max(1, args.workers),
+        sample_every_ticks=args.sample_every_ticks,
+        workers=args.workers,
         limit=args.limit,
-        timeout_seconds=max(30, args.timeout_seconds),
+        timeout_seconds=args.timeout_seconds,
         force=args.force,
     )
 
