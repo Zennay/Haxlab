@@ -79,6 +79,41 @@ def test_ingest_cli_accepts_existing_real_export_directory(tmp_path: Path) -> No
     assert args.export_root == export_root
 
 
+def test_ingest_cli_accepts_relative_real_export_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    export_root = workspace / "export"
+    export_root.mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    args = _build_parser().parse_args(
+        ["ingest", "workspace/export", "--output", "output"]
+    )
+
+    assert args.export_root == Path("workspace/export")
+
+
+def test_ingest_cli_accepts_normalized_parent_segments_without_symlinks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    export_root = workspace / "export"
+    export_root.mkdir()
+    (tmp_path / "other").mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    args = _build_parser().parse_args(
+        ["ingest", "other/../workspace/export", "--output", "output"]
+    )
+
+    assert args.export_root == Path("other/../workspace/export")
+
+
 @pytest.mark.parametrize("kind", ["missing", "file", "symlink"])
 def test_ingest_cli_rejects_invalid_export_root(
     kind: str,
