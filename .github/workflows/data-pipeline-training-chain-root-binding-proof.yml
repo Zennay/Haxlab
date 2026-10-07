@@ -1,0 +1,56 @@
+name: HaxLab training chain root-binding proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact branch SHA to prove
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-training-chain-root-binding-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate exact-head training chain root binding
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    env:
+      EXPECTED_HEAD: ${{ inputs.expected_sha }}
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+
+      - name: Assert exact head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Run focused integrity proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .training-chain-root-proof-venv
+          python3 -m venv .training-chain-root-proof-venv
+          .training-chain-root-proof-venv/bin/pip install -q --upgrade pip
+          .training-chain-root-proof-venv/bin/pip install -q -e '.[dev]'
+          .training-chain-root-proof-venv/bin/python -m compileall -q src tests
+          .training-chain-root-proof-venv/bin/pytest -q \
+            tests/test_training_chain_audit.py \
+            tests/test_shard_bundle_audit.py \
+            tests/test_shard_audit.py \
+            tests/test_data_pipeline_audit_readonly_contract.py \
+            tests/test_data_pipeline_audit_determinism_contract.py \
+            tests/test_data_pipeline_audit_exception_boundary.py \
+            tests/test_data_pipeline_audit_runtime_output_purity_contract.py
+          .training-chain-root-proof-venv/bin/pytest --collect-only -q >/dev/null
+          echo "HAXLAB_TRAINING_CHAIN_ROOT_BINDING_PROOF=success"
