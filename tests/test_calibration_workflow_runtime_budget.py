@@ -12,4 +12,5 @@ def test_full_calibration_has_bounded_eight_hour_runtime_budget() -> None:
     job_block = text[calibrate:batch]
 
     assert "timeout-minutes: 480" in job_block
-    assert "timeout-minutes: 360" not in job_block\n    assert "timeout-minutes: 180" not in job_block
+    assert "timeout-minutes: 360" not in job_block
+    assert "timeout-minutes: 180" not in job_block

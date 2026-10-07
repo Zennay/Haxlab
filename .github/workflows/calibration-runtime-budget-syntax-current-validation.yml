@@ -1,0 +1,60 @@
+name: Calibration runtime-budget syntax current-head proof
+
+on:
+  push:
+    branches:
+      - validation/calibration-runtime-budget-syntax-current-20261007
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-calibration-runtime-budget-syntax-current-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Verify exact live branch head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          remote_head="$(git ls-remote origin "refs/heads/$GITHUB_REF_NAME" | awk 'NR == 1 {print $1}')"
+          test -n "$remote_head"
+          test "$remote_head" = "$GITHUB_SHA"
+          echo "HAXLAB_CALIBRATION_RUNTIME_BUDGET_SYNTAX_HEAD=$remote_head"
+
+      - name: Compile repaired contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tests/test_calibration_workflow_runtime_budget.py
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv .proof-venv
+          .proof-venv/bin/python -m pip install --disable-pip-version-check --no-input pytest
+
+      - name: Run focused runtime-budget contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          .proof-venv/bin/python -m pytest -q tests/test_calibration_workflow_runtime_budget.py
+
+      - name: Record green result
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HAXLAB_CALIBRATION_RUNTIME_BUDGET_SYNTAX_RESULT=green"
