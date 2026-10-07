@@ -154,9 +154,11 @@ class ProcessStateAliasVisitor(ast.NodeVisitor):
 
         normalized = target[len("builtins.") :] if target.startswith("builtins.") else target
         if normalized in {
+            "delattr",
             "dict",
             "getattr",
             "list",
+            "setattr",
         } or target in {
             "builtins.getattr",
             "builtins",
@@ -243,6 +245,19 @@ class ProcessStateAliasVisitor(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call) -> None:
         target = self.canonical(node.func)
         normalized = self._normalize_builtin(target)
+
+        if normalized in {"setattr", "delattr"} and len(node.args) >= 2:
+            owner = self.canonical(node.args[0])
+            attribute = _constant_string(node.args[1])
+            guarded_attribute = (
+                (owner == "os" and attribute == "environ")
+                or (owner == "sys" and attribute in {"modules", "path"})
+            )
+            if guarded_attribute:
+                self.findings.append(
+                    f"line {node.lineno}: reflective process-state mutation: "
+                    f"{normalized}({owner}.{attribute})"
+                )
 
         if target in FORBIDDEN_CALLS:
             self.findings.append(
@@ -365,6 +380,14 @@ def test_evaluation_package_has_no_process_state_alias_mutation() -> None:
             "list.append(sys.path",
         ),
         (
+            "import sys\nsystem = sys\nmutate = setattr\nmutate(system, 'path', [])\n",
+            "setattr(sys.path",
+        ),
+        (
+            "import os\nstate = os\nremove = delattr\nremove(state, 'environ')\n",
+            "delattr(os.environ",
+        ),
+        (
             "from sys import settrace as trace\nalias = trace\nalias(lambda *args: None)\n",
             "sys.settrace",
         ),
@@ -398,6 +421,13 @@ def test_contract_rejects_assignment_and_bound_alias_bypasses(
             "def second():\n"
             "    env = {}\n"
             "    env.update({'local': True})\n"
+        ),
+        (
+            "mutate = setattr\n"
+            "class Local:\n"
+            "    pass\n"
+            "obj = Local()\n"
+            "mutate(obj, 'value', 1)\n"
         ),
     ],
 )
