@@ -4,6 +4,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from haxlab.learning.selector import (
     _holdout_bucket,
     build_training_manifest,
@@ -462,3 +464,40 @@ def test_training_manifest_rejects_symlinked_analysis_artifact(
     assert manifest["stats"]["quality_rejection_reasons"] == {
         "invalid_analysis_provenance": 1
     }
+
+
+
+def test_training_manifest_fails_closed_on_duplicate_replay_provenance(
+    tmp_path: Path,
+) -> None:
+    analysis_root = tmp_path / "analysis"
+    (analysis_root / "one").mkdir(parents=True)
+    (analysis_root / "two").mkdir(parents=True)
+    leaderboard_path = tmp_path / "leaderboard.json"
+    leaderboard_path.write_text(
+        json.dumps({"analysis_version": "state-pass-v4", "rows": []}),
+        encoding="utf-8",
+    )
+    replay_sha = "b" * 64
+    payload = {
+        "schemaVersion": 4,
+        "totalFrames": 18000,
+        "simulation": {"sampledStateCount": 1200},
+        "featureSummary": {"touches": 100},
+        "players": [{}, {}, {}, {}],
+    }
+    for directory in ("one", "two"):
+        (analysis_root / directory / f"{replay_sha}.json").write_text(
+            json.dumps(payload),
+            encoding="utf-8",
+        )
+
+    with pytest.raises(
+        ValueError,
+        match=f"duplicate analysis provenance for replay {replay_sha}",
+    ):
+        build_training_manifest(
+            analysis_root=analysis_root,
+            leaderboard_path=leaderboard_path,
+            raw_root=tmp_path / "raw",
+        )
