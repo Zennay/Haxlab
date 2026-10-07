@@ -93,9 +93,14 @@ def validate_receipt_payload(payload: dict[str, object]) -> dict[str, object]:
         "artifacts",
         "receipt_sha256",
     }
-    if set(payload) != expected_top_keys:
+    actual_top_keys = set(payload)
+    if actual_top_keys not in (expected_top_keys, expected_top_keys | {"ok"}):
         raise DatasetReceiptVerificationError(
             "receipt top-level keys do not match schema"
+        )
+    if "ok" in payload and payload["ok"] is not True:
+        raise DatasetReceiptVerificationError(
+            "receipt CLI success marker must be exactly true"
         )
 
     if payload["schema"] != RECEIPT_SCHEMA:
