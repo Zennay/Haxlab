@@ -9,6 +9,20 @@ import haxlab.learning.shards as shards
 from haxlab.learning.selector import MANIFEST_SCHEMA
 
 
+def _write_manifest(path: Path, *, train_replays=None, holdout_replays=None) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "schema": MANIFEST_SCHEMA,
+                "analysis_version": "state-pass-v4",
+                "train_replays": list(train_replays or []),
+                "holdout_replays": list(holdout_replays or []),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_extract_one_uses_cached_valid_shard(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -77,6 +91,129 @@ def test_build_shards_rejects_wrong_manifest_schema(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("sample_every_ticks", 0),
+        ("sample_every_ticks", -1),
+        ("sample_every_ticks", True),
+        ("sample_every_ticks", 1.0),
+        ("sample_every_ticks", "1"),
+        ("workers", 0),
+        ("workers", -1),
+        ("workers", False),
+        ("workers", 2.0),
+        ("workers", "2"),
+        ("timeout_seconds", 29),
+        ("timeout_seconds", -1),
+        ("timeout_seconds", True),
+        ("timeout_seconds", 30.0),
+        ("timeout_seconds", "30"),
+        ("limit", -1),
+        ("limit", False),
+        ("limit", 1.0),
+        ("limit", "1"),
+    ],
+)
+def test_build_shards_rejects_malformed_numeric_config_before_publication(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    manifest = tmp_path / "manifest.json"
+    _write_manifest(manifest)
+    output_root = tmp_path / "out"
+
+    with pytest.raises(ValueError, match=field):
+        shards.build_shards(
+            manifest_path=manifest,
+            split="train",
+            output_root=output_root,
+            node_script=tmp_path / "extract.js",
+            **{field: value},
+        )
+
+    assert not output_root.exists()
+
+
+def test_build_shards_preserves_valid_numeric_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry = {
+        "replay_sha256": "e" * 64,
+        "raw_path": str(tmp_path / "e.hbr2"),
+        "selected_players": [
+            {
+                "replay_player_id": 1,
+                "identity": "name:e",
+                "samples": 100,
+            }
+        ],
+    }
+    manifest = tmp_path / "manifest.json"
+    _write_manifest(manifest, train_replays=[entry])
+    seen: list[tuple[int, int]] = []
+
+    def fake_extract(entry, **kwargs):
+        seen.append(
+            (kwargs["sample_every_ticks"], kwargs["timeout_seconds"])
+        )
+        return {
+            "schema": "haxlab-imitation-extract-summary-v2",
+            "replay_sha256": str(entry["replay_sha256"]),
+            "samples": 1,
+            "compressedBytes": 1,
+            "selectedPlayersSeen": 1,
+            "skippedUnknownInput": 0,
+            "status": "ok",
+        }
+
+    monkeypatch.setattr(shards, "_extract_one", fake_extract)
+
+    index = shards.build_shards(
+        manifest_path=manifest,
+        split="train",
+        output_root=tmp_path / "out",
+        node_script=tmp_path / "extract.js",
+        sample_every_ticks=7,
+        workers=1,
+        limit=1,
+        timeout_seconds=31,
+    )
+
+    assert seen == [(7, 31)]
+    assert index["sample_every_ticks"] == 7
+    assert index["requested_replays"] == 1
+
+
+def test_build_shards_accepts_zero_limit(tmp_path: Path) -> None:
+    manifest = tmp_path / "manifest.json"
+    _write_manifest(
+        manifest,
+        train_replays=[
+            {
+                "replay_sha256": "f" * 64,
+                "raw_path": str(tmp_path / "f.hbr2"),
+                "selected_players": [],
+            }
+        ],
+    )
+
+    index = shards.build_shards(
+        manifest_path=manifest,
+        split="train",
+        output_root=tmp_path / "out",
+        node_script=tmp_path / "extract.js",
+        workers=1,
+        limit=0,
+        timeout_seconds=30,
+    )
+
+    assert index["requested_replays"] == 0
+    assert index["failed_replays"] == 0
+
+
 def test_build_shards_honors_split_and_limit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -113,16 +250,10 @@ def test_build_shards_honors_split_and_limit(
         }
     ]
     manifest = tmp_path / "manifest.json"
-    manifest.write_text(
-        json.dumps(
-            {
-                "schema": MANIFEST_SCHEMA,
-                "analysis_version": "state-pass-v4",
-                "train_replays": train,
-                "holdout_replays": holdout,
-            }
-        ),
-        encoding="utf-8",
+    _write_manifest(
+        manifest,
+        train_replays=train,
+        holdout_replays=holdout,
     )
 
     seen: list[str] = []
