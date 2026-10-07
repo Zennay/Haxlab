@@ -525,6 +525,20 @@ class RuntimeState:
         }
 
     def event(self, event_type: str, subject: str = "", detail: str = "") -> None:
+        if (
+            type(event_type) is not str
+            or not event_type
+            or event_type.strip() != event_type
+        ):
+            raise ValueError(
+                "event_type must be a native non-empty string without "
+                "leading or trailing whitespace"
+            )
+        if type(subject) is not str:
+            raise ValueError("event subject must be a native string")
+        if type(detail) is not str:
+            raise ValueError("event detail must be a native string")
+
         self.connection.execute(
             """
             INSERT INTO runtime_events (event_type, subject, detail)
