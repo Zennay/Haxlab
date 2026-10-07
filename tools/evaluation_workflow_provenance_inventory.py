@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import json
 import os
 import re
@@ -438,11 +439,19 @@ def build_inventory(
             continue
         reports.append(audit_workflow_text(relative, text))
 
-    finding_count = sum(len(report["findings"]) for report in reports)
+    finding_totals = Counter(
+        finding
+        for report in reports
+        for finding in report["findings"]
+    )
+    finding_count = sum(finding_totals.values())
+    workflows_with_findings = sum(bool(report["findings"]) for report in reports)
     return {
         "schema": SCHEMA,
         "workflow_count": len(reports),
+        "workflows_with_findings": workflows_with_findings,
         "finding_count": finding_count,
+        "finding_totals": dict(sorted(finding_totals.items())),
         "missing_workflows": missing,
         "workflows": reports,
     }
