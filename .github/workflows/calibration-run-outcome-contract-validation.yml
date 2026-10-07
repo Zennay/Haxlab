@@ -1,0 +1,59 @@
+name: Calibration Run Outcome Contract Validation
+
+on:
+  push:
+    branches:
+      - validation/calibration-run-outcome-contract-20261007
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-calibration-run-outcome-contract
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[calibration-outcome-proof]')
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Verify exact source checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          if [ "$ACTUAL_SHA" != "$GITHUB_SHA" ]; then
+            echo "::error title=Calibration outcome provenance mismatch::checked out $ACTUAL_SHA, expected $GITHUB_SHA"
+            exit 1
+          fi
+          echo "CALIBRATION_OUTCOME_EXACT_SOURCE_SHA=$ACTUAL_SHA"
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .calibration-outcome-venv
+          python3 -m venv .calibration-outcome-venv
+          .calibration-outcome-venv/bin/pip install --upgrade pip
+          .calibration-outcome-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile diagnostic contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          .calibration-outcome-venv/bin/python -m py_compile             src/haxlab/evaluation/calibration_run_outcome.py             tests/test_calibration_run_outcome.py
+
+      - name: Run focused calibration outcome regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          .calibration-outcome-venv/bin/python -m pytest -q             tests/test_calibration_run_outcome.py
