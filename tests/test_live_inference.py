@@ -481,3 +481,52 @@ def test_live_pointer_rejects_symlinked_validation_stage_dir(
     with pytest.raises(FileNotFoundError):
         resolve_version_dir(tmp_path)
 
+def test_live_pointer_rejects_duplicate_json_keys(tmp_path: Path) -> None:
+    _version(tmp_path, "champion-v1")
+    _live_pointer(tmp_path, "champion-v1")
+    live_path = tmp_path / "live.json"
+    original = live_path.read_text(encoding="utf-8")
+    live_path.write_text(
+        '{"version_id":"shadow-v2",' + original.lstrip()[1:],
+        encoding="utf-8",
+    )
+
+    with pytest.raises(FileNotFoundError):
+        resolve_version_dir(tmp_path)
+
+
+def test_live_pointer_rejects_non_standard_json_constants(
+    tmp_path: Path,
+) -> None:
+    _version(tmp_path, "champion-v1")
+    _live_pointer(tmp_path, "champion-v1")
+    live_path = tmp_path / "live.json"
+    original = live_path.read_text(encoding="utf-8")
+    live_path.write_text(
+        '{"unexpected":NaN,' + original.lstrip()[1:],
+        encoding="utf-8",
+    )
+
+    with pytest.raises(FileNotFoundError):
+        resolve_version_dir(tmp_path)
+
+
+def test_live_pointer_rejects_duplicate_validation_evidence_keys(
+    tmp_path: Path,
+) -> None:
+    _version(tmp_path, "champion-v1")
+    evidence_path = _live_pointer(tmp_path, "champion-v1")
+    original = evidence_path.read_text(encoding="utf-8")
+    evidence_path.write_text(
+        '{"validated":false,' + original.lstrip()[1:],
+        encoding="utf-8",
+    )
+    evidence_sha = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+    live_path = tmp_path / "live.json"
+    payload = json.loads(live_path.read_text(encoding="utf-8"))
+    payload["validation_evidence_sha256"] = evidence_sha
+    live_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    with pytest.raises(FileNotFoundError):
+        resolve_version_dir(tmp_path)
+
