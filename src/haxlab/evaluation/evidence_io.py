@@ -46,6 +46,9 @@ def _native_non_empty_string(
     if not value.strip():
         failures.append(f"invalid_evidence:{label}:empty")
         return ""
+    if value != value.strip():
+        failures.append(f"invalid_evidence:{label}:surrounding_whitespace")
+        return ""
     return value
 
 
