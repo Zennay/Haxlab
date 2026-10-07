@@ -105,6 +105,36 @@ def test_verify_cli_reports_receipt_inside_export_root(
     }
 
 
+def test_verify_accepts_receipt_in_prefix_sibling_directory(tmp_path: Path) -> None:
+    export_root = tmp_path / "export"
+    export_root.mkdir()
+    _source_tree(export_root)
+    receipt_root = tmp_path / "export-evidence"
+    receipt_root.mkdir()
+    receipt_path = receipt_root / "receipt.json"
+    expected = _write_receipt(export_root, receipt_path)
+
+    result = verify.verify_source_bundle(export_root, receipt_path)
+
+    assert result["clean"] is True
+    assert result["expected_receipt_sha256"] == expected["receipt_sha256"]
+
+
+def test_verify_normalizes_dotdot_before_root_separation_check(tmp_path: Path) -> None:
+    export_root = tmp_path / "export"
+    export_root.mkdir()
+    _source_tree(export_root)
+    receipt_path = export_root / "receipt.json"
+    _write_receipt(export_root, receipt_path)
+    aliased_receipt = export_root / "subdir" / ".." / "receipt.json"
+
+    with pytest.raises(
+        verify.SourceBundleVerifyError,
+        match="receipt_inside_source_root",
+    ):
+        verify.verify_source_bundle(export_root, aliased_receipt)
+
+
 def test_verify_reports_changed_source_bytes(tmp_path: Path) -> None:
     export_root = tmp_path / "export"
     export_root.mkdir()
