@@ -10,7 +10,7 @@ The same rule applies to:
 - the first two SHA-256 prefix directories;
 - all staging, duplicate-verification and publication I/O below those descriptors.
 
-For file operations, the implementation uses `/proc/self/fd/<directory-fd>/...` paths on the Linux HaxLab runtime. Those paths remain bound to the opened directory inode even if an outside pathname is renamed while an ingest is active. Before a new ledger row is committed—and again before returning—the configured logical `raw_root` is reopened through the no-follow chain and must still identify the original root inode.
+For file operations, the implementation uses `/proc/self/fd/<directory-fd>/...` paths on the Linux HaxLab runtime. Those paths remain bound to the opened directory inode even if an outside pathname is renamed while an ingest is active. Immediately before a new ledger row is committed, the configured logical `raw_root` is reopened through the no-follow chain and must still identify the original root inode. Duplicate verification performs the same identity check before returning. Later administrative pathname replacement remains detectable by the existing archive/analysis integrity checks.
 
 The persisted `raw_replays.archive_path` and `ArchiveResult.archive_path` remain normal paths under the configured `raw_root`; descriptor paths are execution-only and are never stored as provenance.
 
