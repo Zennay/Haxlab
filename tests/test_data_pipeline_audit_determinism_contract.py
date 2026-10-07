@@ -42,6 +42,7 @@ _WILDCARD_SENSITIVE_MODULES = {
     "builtins",
     "datetime",
     "os",
+    "numpy",
     "numpy.random",
     "random",
     "secrets",
@@ -245,6 +246,7 @@ def test_data_pipeline_auditors_have_no_ambient_nondeterminism() -> None:
         ("from random import Random\nvalue = Random()", "random_entropy"),
         ("import secrets\nvalue = secrets.token_hex()", "secrets_entropy"),
         ("import numpy as np\nvalue = np.random.random()", "numpy_random_entropy"),
+        ("from numpy import *\nvalue = random.random()", "wildcard_sensitive_import:numpy"),
         (
             "from numpy import random as rng\nvalue = rng.default_rng()",
             "numpy_random_entropy",
