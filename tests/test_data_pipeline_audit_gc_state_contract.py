@@ -30,7 +30,12 @@ CALLBACK_MUTATORS = {
     "remove",
     "reverse",
     "sort",
+    "__setitem__",
+    "__delitem__",
+    "__iadd__",
+    "__imul__",
 }
+GC_MUTABLE_LISTS = {"gc.callbacks", "gc.garbage"}
 
 
 def _audit_paths() -> list[Path]:
@@ -134,10 +139,10 @@ def _aliases(tree: ast.AST) -> dict[str, str]:
     return aliases
 
 
-def _callback_target(node: ast.AST, aliases: dict[str, str]) -> bool:
+def _gc_registry_target(node: ast.AST, aliases: dict[str, str]) -> bool:
     if isinstance(node, ast.Subscript):
-        return _canonical_name(node.value, aliases) == "gc.callbacks"
-    return _canonical_name(node, aliases) == "gc.callbacks"
+        return _canonical_name(node.value, aliases) in GC_MUTABLE_LISTS
+    return _canonical_name(node, aliases) in GC_MUTABLE_LISTS
 
 
 def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
@@ -170,22 +175,34 @@ def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
                 findings.append(
                     f"line {node.lineno}: garbage-collector mutation: {target}"
                 )
-            elif target and target.startswith("gc.callbacks."):
+            elif target and any(
+                target.startswith(f"{registry}.") for registry in GC_MUTABLE_LISTS
+            ):
                 method = target.rsplit(".", 1)[-1]
                 if method in CALLBACK_MUTATORS:
                     findings.append(
-                        f"line {node.lineno}: gc callback registry mutation: {method}"
+                        f"line {node.lineno}: gc registry mutation: {target}"
                     )
+            elif (
+                target in {"setattr", "builtins.setattr", "delattr", "builtins.delattr"}
+                and len(node.args) >= 2
+                and _canonical_name(node.args[0], aliases) == "gc"
+                and isinstance(node.args[1], ast.Constant)
+                and node.args[1].value in {"callbacks", "garbage"}
+            ):
+                findings.append(
+                    f"line {node.lineno}: gc registry attribute mutation"
+                )
         elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            if any(_callback_target(target, aliases) for target in targets):
+            if any(_gc_registry_target(target, aliases) for target in targets):
                 findings.append(
-                    f"line {node.lineno}: gc callback registry assignment"
+                    f"line {node.lineno}: gc registry assignment"
                 )
         elif isinstance(node, ast.Delete):
-            if any(_callback_target(target, aliases) for target in node.targets):
+            if any(_gc_registry_target(target, aliases) for target in node.targets):
                 findings.append(
-                    f"line {node.lineno}: gc callback registry deletion"
+                    f"line {node.lineno}: gc registry deletion"
                 )
 
     return sorted(set(findings))
@@ -215,10 +232,15 @@ def test_data_pipeline_auditors_do_not_mutate_gc_state() -> None:
         ("import gc\ngc.freeze()\n", "gc.freeze"),
         ("import gc\ngc.unfreeze()\n", "gc.unfreeze"),
         ("import gc\ngc.collect()\n", "gc.collect"),
-        ("import gc\ngc.callbacks.append(lambda phase, info: None)\n", "callback registry mutation"),
-        ("import gc\ncallbacks = gc.callbacks\ncallbacks.clear()\n", "callback registry mutation"),
-        ("import gc\ngc.callbacks[:] = []\n", "callback registry assignment"),
-        ("import gc\ndel gc.callbacks[:]\n", "callback registry deletion"),
+        ("import gc\ngc.callbacks.append(lambda phase, info: None)\n", "gc registry mutation"),
+        ("import gc\ncallbacks = gc.callbacks\ncallbacks.clear()\n", "gc registry mutation"),
+        ("import gc\ngc.callbacks.__setitem__(0, None)\n", "gc registry mutation"),
+        ("import gc\ngc.callbacks[:] = []\n", "gc registry assignment"),
+        ("import gc\ndel gc.callbacks[:]\n", "gc registry deletion"),
+        ("import gc\ngc.garbage.clear()\n", "gc registry mutation"),
+        ("import gc\ngc.garbage[:] = []\n", "gc registry assignment"),
+        ("import gc\nsetattr(gc, 'callbacks', [])\n", "gc registry attribute mutation"),
+        ("import gc\ndelattr(gc, 'garbage')\n", "gc registry attribute mutation"),
         (
             "import gc\nname = choose_capability()\ngetattr(gc, name)()\n",
             "dynamic garbage-collector capability",
@@ -244,6 +266,7 @@ def audit():
         "stats": gc.get_stats(),
         "frozen": gc.get_freeze_count(),
         "callbacks": tuple(gc.callbacks),
+        "garbage": tuple(gc.garbage),
     }
 """
     assert scan_source(source) == []
