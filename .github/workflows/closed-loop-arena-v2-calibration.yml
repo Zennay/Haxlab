@@ -1,4 +1,5 @@
 name: Closed-Loop Arena v2 Frozen Policy Validation
+# Exact-head calibration rebind after summary import integration.
 
 on:
   push:
