@@ -63,7 +63,7 @@ def test_register_raw_rejects_non_native_nonnegative_size(
         assert _count(state, "raw_replays") == 0
 
 
-@pytest.mark.parametrize("bad_path", [None, True, "", " ", " /tmp/replay.hbr2"])
+@pytest.mark.parametrize("bad_path", [None, True, "", " "])
 def test_register_raw_rejects_malformed_archive_path(
     tmp_path: Path,
     bad_path: object,
@@ -178,7 +178,7 @@ def test_processing_write_rejects_invalid_duration_without_row(
         assert _count(state, "replay_processing") == 0
 
 
-@pytest.mark.parametrize("bad_stage", [None, True, "", " ", " probe", "probe "])
+@pytest.mark.parametrize("bad_stage", [None, True, "", " "])
 def test_processing_write_rejects_malformed_parser_stage_without_row(
     tmp_path: Path,
     bad_stage: object,
@@ -353,3 +353,50 @@ def test_valid_runtime_write_evidence_round_trips_unchanged(tmp_path: Path) -> N
         "raw_event_count": 12,
         "tick_count": 600,
     }
+
+
+def test_required_runtime_text_is_preserved_without_normalization(
+    tmp_path: Path,
+) -> None:
+    sha = "3" * 64
+    archive_path = "  " + str(tmp_path / "raw.hbr2") + "  "
+    parser_stage = " custom stage "
+    analyzer_version = " custom-version "
+
+    with RuntimeState(tmp_path / "state.sqlite3") as state:
+        state.register_raw(
+            sha256=sha,
+            archive_path=archive_path,
+            size_bytes=1,
+        )
+        state.mark_replay_processing(
+            sha256=sha,
+            status="ok",
+            parser_stage=parser_stage,
+        )
+        state.mark_replay_analysis(
+            sha256=sha,
+            status="ok",
+            analyzer_version=analyzer_version,
+        )
+
+        raw_value = state.connection.execute(
+            "SELECT archive_path FROM raw_replays WHERE sha256 = ?",
+            (sha,),
+        ).fetchone()["archive_path"]
+        processing_value = state.connection.execute(
+            "SELECT parser_stage FROM replay_processing WHERE sha256 = ?",
+            (sha,),
+        ).fetchone()["parser_stage"]
+        analysis_value = state.connection.execute(
+            """
+            SELECT analyzer_version
+            FROM replay_analysis_versions
+            WHERE sha256 = ?
+            """,
+            (sha,),
+        ).fetchone()["analyzer_version"]
+
+    assert raw_value == archive_path
+    assert processing_value == parser_stage
+    assert analysis_value == analyzer_version
