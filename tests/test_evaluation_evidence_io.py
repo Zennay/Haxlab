@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+import haxlab.evaluation.evidence_io as evidence_io
 from haxlab.evaluation.evidence_io import (
     load_evaluation_evidence,
     load_promotion_policy,
@@ -506,3 +507,37 @@ def test_regressions_require_exact_json_list_type() -> None:
 
     assert not result.valid
     assert "invalid_evidence:regressions:not_list" in result.reasons
+
+
+def test_evidence_loader_rejects_path_swap_between_lstat_and_open(
+    tmp_path, monkeypatch
+) -> None:
+    path = tmp_path / "evidence.json"
+    replacement = tmp_path / "replacement.json"
+    path.write_text(json.dumps(_payload()), encoding="utf-8")
+    replacement.write_text(
+        json.dumps(_payload(challenger_id="replacement-model")),
+        encoding="utf-8",
+    )
+
+    real_open = evidence_io.os.open
+    swapped = False
+
+    def swap_before_open(target, flags, *args, **kwargs):
+        nonlocal swapped
+        if not swapped and target == path:
+            path.unlink()
+            replacement.replace(path)
+            swapped = True
+        return real_open(target, flags, *args, **kwargs)
+
+    monkeypatch.setattr(evidence_io.os, "open", swap_before_open)
+
+    result = load_evaluation_evidence(path)
+
+    assert swapped
+    assert not result.valid
+    assert result.evidence is None
+    assert result.reasons == (
+        "invalid_evidence:path:unreadable_or_invalid_json",
+    )
