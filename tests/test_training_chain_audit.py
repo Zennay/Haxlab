@@ -350,6 +350,18 @@ def test_chain_audit_rejects_physical_split_root_alias(
     )
     shared = tmp_path / "shared"
     shared.mkdir()
+    train_index, holdout_index = _indexes()
+    snapshots = iter(
+        (
+            (train_index, _json_bytes(train_index)),
+            (holdout_index, _json_bytes(holdout_index)),
+        )
+    )
+    monkeypatch.setattr(
+        shard_bundle_audit,
+        "_load_index_snapshot",
+        lambda path: next(snapshots),
+    )
 
     receipt = audit_training_chain(
         manifest_path=MANIFEST_PATH,
@@ -385,7 +397,6 @@ def test_chain_audit_rejects_byte_identical_root_replacement(
         monkeypatch,
         stub_roots=False,
     )
-    clean_bundle = shard_bundle_audit.audit_shard_bundle
 
     def replace_then_report(**kwargs) -> dict:
         train.rename(original)
