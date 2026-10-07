@@ -25,6 +25,13 @@ For every artifact the receipt records:
 - exact byte size;
 - SHA-256 of the bytes read from the opened file descriptor.
 
+Each artifact's open-file metadata is sampled before and after hashing. Size,
+inode, mtime or ctime drift fails closed. The already-open dataset directory
+is likewise sampled before the first artifact and after the fifth; directory
+metadata drift fails closed. This prevents a receipt from silently combining
+files across an atomic-replace publication that changes while the receipt is
+being built.
+
 The top-level `receipt_sha256` is the SHA-256 of canonical compact JSON over
 `schema`, `artifact_count` and the ordered artifact records. Absolute
 paths, mtimes and inode numbers are deliberately excluded, so relocating an
