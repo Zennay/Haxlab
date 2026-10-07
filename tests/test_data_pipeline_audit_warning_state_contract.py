@@ -154,15 +154,30 @@ def _state_name(node: ast.AST | None, aliases: dict[str, str]) -> str | None:
     return name if name in WARNING_STATE else None
 
 
-def _mutation_target_name(
+def _direct_mutation_target_name(
     node: ast.AST | None,
     aliases: dict[str, str],
 ) -> str | None:
     if node is None:
         return None
-    state = _state_name(node, aliases)
-    if state:
-        return state
+    if isinstance(node, ast.Subscript):
+        return _state_name(node.value, aliases)
+    if isinstance(node, ast.Attribute):
+        name = _canonical_name(node, aliases)
+        return name if name in WARNING_STATE else None
+    return None
+
+
+def _inplace_mutation_target_name(
+    node: ast.AST | None,
+    aliases: dict[str, str],
+) -> str | None:
+    direct = _direct_mutation_target_name(node, aliases)
+    if direct:
+        return direct
+    if isinstance(node, ast.Name):
+        name = aliases.get(node.id)
+        return name if name in WARNING_STATE else None
     return None
 
 
@@ -224,7 +239,7 @@ def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
 
         if isinstance(node, ast.Assign):
             for target in node.targets:
-                state = _mutation_target_name(target, aliases)
+                state = _direct_mutation_target_name(target, aliases)
                 if state:
                     findings.append(
                         f"line {node.lineno}: warning state assignment: {state}"
@@ -236,14 +251,14 @@ def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
                     f"line {node.lineno}: warning state assignment: {state}"
                 )
         elif isinstance(node, ast.AugAssign):
-            state = _mutation_target_name(node.target, aliases)
+            state = _inplace_mutation_target_name(node.target, aliases)
             if state:
                 findings.append(
                     f"line {node.lineno}: warning state augmented mutation: {state}"
                 )
         elif isinstance(node, ast.Delete):
             for target in node.targets:
-                state = _mutation_target_name(target, aliases)
+                state = _direct_mutation_target_name(target, aliases)
                 if state:
                     findings.append(
                         f"line {node.lineno}: warning state deletion: {state}"
