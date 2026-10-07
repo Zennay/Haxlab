@@ -108,6 +108,12 @@ class RawReplayRecord:
     size_bytes: int
 
 
+def _positive_queue_limit(limit: int) -> int:
+    if type(limit) is not int or limit <= 0:
+        raise ValueError("queue limit must be a native positive integer")
+    return limit
+
+
 class RuntimeState:
     def __init__(self, path: Path):
         self.path = path
@@ -220,6 +226,7 @@ class RuntimeState:
         self.connection.commit()
 
     def list_unprocessed_replays(self, limit: int = 100) -> list[RawReplayRecord]:
+        validated_limit = _positive_queue_limit(limit)
         rows = self.connection.execute(
             """
             SELECT r.sha256, r.archive_path, r.size_bytes
@@ -229,7 +236,7 @@ class RuntimeState:
             ORDER BY r.first_archived_at, r.sha256
             LIMIT ?
             """,
-            (max(1, limit),),
+            (validated_limit,),
         ).fetchall()
         return [RawReplayRecord(**dict(row)) for row in rows]
 
@@ -238,6 +245,7 @@ class RuntimeState:
         limit: int = 100,
         analyzer_version: str = CURRENT_ANALYZER_VERSION,
     ) -> list[RawReplayRecord]:
+        validated_limit = _positive_queue_limit(limit)
         rows = self.connection.execute(
             """
             SELECT r.sha256, r.archive_path, r.size_bytes
@@ -250,7 +258,7 @@ class RuntimeState:
             ORDER BY r.first_archived_at, r.sha256
             LIMIT ?
             """,
-            (analyzer_version, max(1, limit)),
+            (analyzer_version, validated_limit),
         ).fetchall()
         return [RawReplayRecord(**dict(row)) for row in rows]
 
@@ -478,9 +486,6 @@ class RuntimeState:
             if count <= 0:
                 return 0.0
             elapsed = float(row["elapsed_minutes"] or 0.0)
-            # A one-minute floor avoids noisy instant rates at startup. Once a
-            # pass has been active for five minutes this naturally becomes a
-            # rolling five-minute throughput rate.
             denominator = min(5.0, max(1.0, elapsed))
             return float(count) / denominator
 
