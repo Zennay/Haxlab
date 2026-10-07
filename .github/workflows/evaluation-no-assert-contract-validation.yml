@@ -1,0 +1,78 @@
+name: Evaluation optimization-safety validation
+
+on:
+  push:
+    branches:
+      - validation/evaluation-no-assert-contract-20261007
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-evaluation-no-assert-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Verify immutable checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          echo "HAXLAB_EVALUATION_NO_ASSERT_HEAD=$(git rev-parse HEAD)"
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .evaluation-no-assert-venv
+          python3 -m venv .evaluation-no-assert-venv
+          .evaluation-no-assert-venv/bin/pip install --upgrade pip
+          .evaluation-no-assert-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile evaluation package and contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          .evaluation-no-assert-venv/bin/python -m compileall -q src/haxlab/evaluation tests/test_evaluation_no_assert_contract.py
+
+      - name: Run optimization-safety regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" .evaluation-no-assert-venv/bin/pytest -q tests/test_evaluation_no_assert_contract.py
+
+      - name: Prove optimized imports remain available
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" .evaluation-no-assert-venv/bin/python -O - <<'PY'
+          import pkgutil
+          import haxlab.evaluation
+
+          modules = sorted(
+              module.name
+              for module in pkgutil.iter_modules(haxlab.evaluation.__path__)
+          )
+          if not modules:
+              raise SystemExit("no evaluation modules discovered")
+          for name in modules:
+              __import__(f"haxlab.evaluation.{name}")
+          print(f"HAXLAB_EVALUATION_OPTIMIZED_IMPORTS={len(modules)}")
+          PY
+
+      - name: Record green marker
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HAXLAB_EVALUATION_NO_ASSERT_RESULT=green"
