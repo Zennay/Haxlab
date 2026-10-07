@@ -1,10 +1,77 @@
 from __future__ import annotations
 
+import math
+
 from haxlab.quality.models import (
     MatchQualityAssessment,
     MatchQualityEvidence,
     QualityTier,
 )
+
+
+def _is_native_int(value: object) -> bool:
+    return type(value) is int
+
+
+def _is_finite_number(value: object) -> bool:
+    return type(value) in (int, float) and math.isfinite(float(value))
+
+
+def _invalid_evidence_reasons(evidence: MatchQualityEvidence) -> tuple[str, ...]:
+    invalid: list[str] = []
+
+    if type(evidence.replay_valid) is not bool:
+        invalid.append("invalid_replay_valid")
+
+    if evidence.duration_seconds is not None and (
+        not _is_finite_number(evidence.duration_seconds)
+        or float(evidence.duration_seconds) < 0.0
+    ):
+        invalid.append("invalid_duration_seconds")
+
+    if evidence.expected_player_count is not None and (
+        not _is_native_int(evidence.expected_player_count)
+        or evidence.expected_player_count <= 0
+    ):
+        invalid.append("invalid_expected_player_count")
+
+    if evidence.observed_player_count is not None and (
+        not _is_native_int(evidence.observed_player_count)
+        or evidence.observed_player_count < 0
+    ):
+        invalid.append("invalid_observed_player_count")
+
+    if evidence.disconnect_count is not None and (
+        not _is_native_int(evidence.disconnect_count)
+        or evidence.disconnect_count < 0
+    ):
+        invalid.append("invalid_disconnect_count")
+
+    if evidence.activity_ratio is not None and (
+        not _is_finite_number(evidence.activity_ratio)
+        or not 0.0 <= float(evidence.activity_ratio) <= 1.0
+    ):
+        invalid.append("invalid_activity_ratio")
+
+    if evidence.parser_completeness is not None and (
+        not _is_finite_number(evidence.parser_completeness)
+        or not 0.0 <= float(evidence.parser_completeness) <= 1.0
+    ):
+        invalid.append("invalid_parser_completeness")
+
+    if (
+        evidence.stadium_supported is not None
+        and type(evidence.stadium_supported) is not bool
+    ):
+        invalid.append("invalid_stadium_supported")
+
+    if (
+        evidence.has_reliable_player_identities is not None
+        and type(evidence.has_reliable_player_identities) is not bool
+    ):
+        invalid.append("invalid_player_identity_confidence")
+
+    return tuple(sorted(invalid))
 
 
 def assess_match_quality(evidence: MatchQualityEvidence) -> MatchQualityAssessment:
@@ -13,6 +80,15 @@ def assess_match_quality(evidence: MatchQualityEvidence) -> MatchQualityAssessme
     The policy only scores evidence we actually know. Missing values remain visible
     instead of silently being interpreted as good.
     """
+    invalid = _invalid_evidence_reasons(evidence)
+    if invalid:
+        return MatchQualityAssessment(
+            tier=QualityTier.REJECTED,
+            weight=0.0,
+            reasons=invalid,
+            missing_evidence=(),
+        )
+
     reasons: list[str] = []
     missing: list[str] = []
 
@@ -100,8 +176,6 @@ def assess_match_quality(evidence: MatchQualityEvidence) -> MatchQualityAssessme
     else:
         tier = QualityTier.ELITE
 
-    # Missing evidence caps confidence in the label. We do not call a match Elite
-    # merely because the known fields look good.
     if missing and tier == QualityTier.ELITE:
         tier = QualityTier.GOLD
         reasons.append("elite_capped_by_missing_evidence")
