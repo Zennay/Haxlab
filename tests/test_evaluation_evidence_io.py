@@ -603,3 +603,34 @@ def test_evidence_loader_rejects_path_subclass_before_virtual_methods(
     assert not result.valid
     assert result.evidence is None
     assert result.reasons == ("invalid_evidence:path:not_path",)
+
+
+def test_evidence_loader_rejects_file_growth_during_descriptor_read(
+    tmp_path, monkeypatch
+) -> None:
+    path = tmp_path / "evidence.json"
+    path.write_text(json.dumps(_payload()), encoding="utf-8")
+
+    real_read = evidence_io.os.read
+    appended = False
+
+    def append_after_first_read(fd, count):
+        nonlocal appended
+        chunk = real_read(fd, count)
+        if not appended:
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(" ")
+                handle.flush()
+            appended = True
+        return chunk
+
+    monkeypatch.setattr(evidence_io.os, "read", append_after_first_read)
+
+    result = load_evaluation_evidence(path)
+
+    assert appended
+    assert not result.valid
+    assert result.evidence is None
+    assert result.reasons == (
+        "invalid_evidence:path:unreadable_or_invalid_json",
+    )
