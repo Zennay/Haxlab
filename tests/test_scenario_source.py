@@ -186,6 +186,7 @@ def _candidate_files(tmp_path: Path) -> tuple[Path, Path, str]:
         json.dumps(
             {
                 "schemaVersion": 4,
+                "sourceFile": raw.name,
                 "totalFrames": 10800,
                 "featureSummary": {"touches": 100},
                 "simulation": {"sampledStateCount": 100},
@@ -640,4 +641,23 @@ def test_selector_skips_malformed_database_replay_sha(
 
     assert result["sha256"] == "a" * 64
     assert "not-a-sha" not in seen
+
+@pytest.mark.parametrize("bad_source_file", ["other-replay.hbr2", 123, None])
+def test_healthy_candidate_rejects_analysis_bound_to_other_source(
+    tmp_path: Path,
+    bad_source_file,
+) -> None:
+    raw, analysis, raw_sha = _candidate_files(tmp_path)
+    payload = json.loads(analysis.read_text(encoding="utf-8"))
+    payload["sourceFile"] = bad_source_file
+    analysis.write_text(json.dumps(payload), encoding="utf-8")
+
+    candidate = scenario_source._healthy_candidate(
+        sha256=raw_sha,
+        raw_path=str(raw),
+        analysis_path=str(analysis),
+        sampled_states=100,
+    )
+
+    assert candidate is None
 
