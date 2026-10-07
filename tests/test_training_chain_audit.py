@@ -339,6 +339,7 @@ def test_chain_audit_detects_manifest_mutation_during_validation(
     assert receipt["clean"] is False
     assert "manifest_changed_during_chain_audit" in receipt["errors"]
 
+
 def test_chain_audit_rejects_physical_split_root_alias(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
