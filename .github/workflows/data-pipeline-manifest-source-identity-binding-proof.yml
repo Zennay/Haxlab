@@ -1,0 +1,56 @@
+name: HaxLab manifest source identity-binding proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact branch SHA to prove
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-manifest-source-identity-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate exact-head manifest source identity binding
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    env:
+      EXPECTED_HEAD: ${{ inputs.expected_sha }}
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+
+      - name: Assert exact head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Run focused integrity proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .manifest-source-identity-proof-venv
+          python3 -m venv .manifest-source-identity-proof-venv
+          .manifest-source-identity-proof-venv/bin/pip install -q --upgrade pip
+          .manifest-source-identity-proof-venv/bin/pip install -q -e '.[dev]'
+          .manifest-source-identity-proof-venv/bin/python -m compileall -q src tests
+          .manifest-source-identity-proof-venv/bin/pytest -q \
+            tests/test_training_manifest_source_audit.py \
+            tests/test_training_manifest_audit.py \
+            tests/test_skill_leaderboard_audit.py \
+            tests/test_data_pipeline_audit_readonly_contract.py \
+            tests/test_data_pipeline_audit_determinism_contract.py \
+            tests/test_data_pipeline_audit_exception_boundary.py \
+            tests/test_data_pipeline_audit_runtime_output_purity_contract.py
+          .manifest-source-identity-proof-venv/bin/pytest --collect-only -q >/dev/null
+          echo "HAXLAB_MANIFEST_SOURCE_IDENTITY_PROOF=success"
