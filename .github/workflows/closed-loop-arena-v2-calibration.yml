@@ -20,7 +20,7 @@ jobs:
     # otherwise healthy exact-head evidence at the previous 180-minute limit.
     # Exact-head calibration evidence is rebound by marker commits after gate changes.
     # Composite evaluation-validation workflow hardening is now included on this head.
-    timeout-minutes: 360
+    timeout-minutes: 480
 
     steps:
       - name: Checkout exact event SHA
