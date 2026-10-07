@@ -16,6 +16,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
+          clean: true
 
       - name: Verify exact and live branch head
         shell: bash
