@@ -5,7 +5,7 @@ import hashlib
 import json
 import math
 import tomllib
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +18,12 @@ _EVALUATION_KEYS = {
     "minimum_games_vs_champion",
     "minimum_score_rate_lower_bound",
     "minimum_frozen_scenario_pass_rate",
+}
+_POLICY_FIELDS = {
+    "minimum_games",
+    "minimum_score_rate_lower_bound",
+    "minimum_scenario_pass_rate",
+    "allow_critical_regressions",
 }
 
 
@@ -46,6 +52,20 @@ def _require_probability(value: Any, label: str) -> float:
     if not 0.0 <= number <= 1.0:
         raise ValueError(f"{label} must be within [0, 1]")
     return number
+
+
+def _require_runtime_policy_schema() -> None:
+    try:
+        actual_fields = {field.name for field in fields(PromotionPolicy)}
+    except TypeError as exc:
+        raise ValueError("promotion policy runtime model must be a dataclass") from exc
+    if actual_fields != _POLICY_FIELDS:
+        missing = sorted(_POLICY_FIELDS - actual_fields)
+        extra = sorted(actual_fields - _POLICY_FIELDS)
+        raise ValueError(
+            "promotion policy runtime schema mismatch: "
+            f"missing={missing}, extra={extra}"
+        )
 
 
 def load_promotion_policy_config(path: Path) -> LoadedPromotionPolicy:
@@ -81,6 +101,8 @@ def load_promotion_policy_config(path: Path) -> LoadedPromotionPolicy:
             "promotion policy evaluation keyset mismatch: "
             f"missing={missing}, extra={extra}"
         )
+
+    _require_runtime_policy_schema()
 
     policy = PromotionPolicy(
         minimum_games=_require_native_int(
