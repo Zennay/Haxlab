@@ -11,17 +11,19 @@ from typing import Any, Sequence
 
 
 SCHEMA = "haxlab-source-bundle-receipt-v1"
-_DIR_FLAGS = (
-    os.O_RDONLY
-    | getattr(os, "O_CLOEXEC", 0)
-    | getattr(os, "O_DIRECTORY", 0)
-    | getattr(os, "O_NOFOLLOW", 0)
-)
 _FILE_FLAGS = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
 
 
 class SourceBundleReceiptError(ValueError):
     """Raised when immutable import-source evidence cannot be trusted."""
+
+
+def _directory_open_flags() -> int:
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    directory = getattr(os, "O_DIRECTORY", None)
+    if nofollow is None or directory is None:
+        raise SourceBundleReceiptError("source_directory_descriptors_unsupported")
+    return os.O_RDONLY | nofollow | directory | getattr(os, "O_CLOEXEC", 0)
 
 
 def _kind_for_name(name: str) -> str | None:
@@ -67,7 +69,7 @@ def _open_root_directory(root: Path) -> tuple[int, Path]:
         raise SourceBundleReceiptError("source_root_not_absolute")
 
     try:
-        current_fd = os.open(os.sep, _DIR_FLAGS)
+        current_fd = os.open(os.sep, _directory_open_flags())
     except OSError as exc:
         raise SourceBundleReceiptError(f"source_root_open_failed:{exc}") from exc
 
@@ -91,7 +93,7 @@ def _open_root_directory(root: Path) -> tuple[int, Path]:
                     f"source_root_component_not_directory:{relative}"
                 )
             try:
-                next_fd = os.open(component, _DIR_FLAGS, dir_fd=current_fd)
+                next_fd = os.open(component, _directory_open_flags(), dir_fd=current_fd)
             except OSError as exc:
                 raise SourceBundleReceiptError(
                     f"source_root_component_open_failed:{relative}:{exc}"
@@ -169,7 +171,7 @@ def _inventory_paths(
 
             if stat.S_ISDIR(child_stat.st_mode):
                 try:
-                    child_fd = os.open(name, _DIR_FLAGS, dir_fd=directory_fd)
+                    child_fd = os.open(name, _directory_open_flags(), dir_fd=directory_fd)
                 except OSError as exc:
                     raise SourceBundleReceiptError(
                         f"source_directory_open_failed:{relative}:{exc}"
@@ -237,7 +239,7 @@ def _open_bound_parent(
                     f"source_directory_identity_changed:{relative}"
                 )
             try:
-                next_fd = os.open(component, _DIR_FLAGS, dir_fd=current_fd)
+                next_fd = os.open(component, _directory_open_flags(), dir_fd=current_fd)
             except OSError as exc:
                 raise SourceBundleReceiptError(
                     f"source_directory_open_failed:{relative}:{exc}"
