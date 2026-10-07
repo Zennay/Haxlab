@@ -32,6 +32,11 @@ class MemoizationStateVisitor(ast.NodeVisitor):
         if node.module is not None:
             for alias in node.names:
                 if alias.name == "*":
+                    if node.module == "functools":
+                        self.violations.append(
+                            f"line {node.lineno}: wildcard functools import can "
+                            "expose stateful memoization helpers"
+                        )
                     continue
                 self.aliases[alias.asname or alias.name] = (
                     f"{node.module}.{alias.name}"
@@ -106,7 +111,7 @@ class MemoizationStateVisitor(ast.NodeVisitor):
             accessor = self._qualified_name(node.func)
             if (
                 accessor in {"getattr", "builtins.getattr"}
-                and len(node.args) == 2
+                and len(node.args) in {2, 3}
                 and not node.keywords
                 and isinstance(node.args[1], ast.Constant)
                 and isinstance(node.args[1].value, str)
@@ -114,6 +119,32 @@ class MemoizationStateVisitor(ast.NodeVisitor):
                 owner = self._qualified_name(node.args[0])
                 if owner is not None:
                     return f"{owner}.{node.args[1].value}"
+
+            if (
+                accessor in {"vars", "builtins.vars"}
+                and len(node.args) == 1
+                and not node.keywords
+            ):
+                owner = self._qualified_name(node.args[0])
+                if owner is not None:
+                    return f"{owner}.__dict__"
+
+            if (
+                accessor == "functools.__dict__.get"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+            ):
+                return f"functools.{node.args[0].value}"
+
+        if isinstance(node, ast.Subscript):
+            owner = self._qualified_name(node.value)
+            if (
+                owner == "functools.__dict__"
+                and isinstance(node.slice, ast.Constant)
+                and isinstance(node.slice.value, str)
+            ):
+                return f"functools.{node.slice.value}"
         return None
 
 
@@ -152,6 +183,12 @@ def test_evaluation_package_has_no_stateful_memoization() -> None:
         ("import functools as ft\nmemo = getattr(ft, 'lru_cache')\n@memo(maxsize=None)\ndef f(x):\n    return x\n", "functools.lru_cache"),
         ("from functools import cached_property as cp\nwrapper = cp\nclass C:\n    @wrapper\n    def value(self):\n        return 1\n", "functools.cached_property"),
         ("from functools import cache\n@cache\nclass C:\n    pass\n", "functools.cache"),
+        ("import functools\nmemo = getattr(functools, 'cache', None)\nwrapped = memo(lambda x: x)\n", "functools.cache"),
+        ("import functools\nmemo = functools.__dict__['lru_cache']\n@memo(maxsize=8)\ndef f(x):\n    return x\n", "functools.lru_cache"),
+        ("import functools\nmemo = vars(functools)['cache']\nwrapped = memo(lambda x: x)\n", "functools.cache"),
+        ("import functools\nmemo = functools.__dict__.get('cached_property')\nclass C:\n    @memo\n    def value(self):\n        return 1\n", "functools.cached_property"),
+        ("import functools\nmemo = vars(functools).get('lru_cache')\n@memo()\ndef f(x):\n    return x\n", "functools.lru_cache"),
+        ("from functools import *\n", "wildcard functools"),
     ],
 )
 def test_detector_rejects_stateful_memoization(

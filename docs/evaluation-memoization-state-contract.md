@@ -14,7 +14,9 @@ Production modules recursively below `src/haxlab/evaluation/` must not use:
 
 The contract rejects those helpers when used as decorators or ordinary wrappers.
 It resolves direct imports, module aliases, simple assignment aliases, annotated
-or named assignment aliases, and constant `getattr(...)` spellings.
+or named assignment aliases, constant `getattr(...)` (including default-value)
+spellings, `functools.__dict__`/`vars(functools)` lookups, and rejects wildcard
+`functools` imports that would expose memoizers without an auditable binding.
 
 Stateless helpers such as `functools.partial`, `functools.reduce`, and
 `functools.wraps` remain allowed. Per-call local dictionaries also remain allowed:
@@ -39,7 +41,8 @@ reusing an old decision.
 
 `tests/test_evaluation_memoization_state_contract.py` recursively parses the
 complete evaluation package and regression-tests direct, imported, aliased,
-factory-call and constant-`getattr` memoization spellings.
+factory-call, reflective mapping lookup, wildcard-import, and constant-`getattr`
+memoization spellings.
 
 The branch-scoped self-hosted workflow compiles the evaluation package and
 contract, runs the focused detector, then runs adjacent canonical Arena-v2
