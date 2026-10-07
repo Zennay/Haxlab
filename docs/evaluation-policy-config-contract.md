@@ -24,8 +24,9 @@ and then be swapped to a symlink before the read. Platforms without a no-follow
 open primitive fail closed rather than silently weakening this provenance
 boundary. Receipt
 v1 also requires the runtime `PromotionPolicy` dataclass to expose exactly the
-four bound fields; a future extra/defaulted field fails closed instead of being
-silently omitted from the config contract.
+four bound fields with their current runtime types (`int`, `float`, `float`,
+`bool`); a future extra/defaulted or retyped field fails closed instead of being
+silently omitted or accepting a loader/runtime type mismatch.
 
 ## Immutable source provenance
 
