@@ -327,3 +327,49 @@ def test_cli_returns_machine_readable_failure(
     assert payload["schema"] == shard_audit.AUDIT_SCHEMA
     assert payload["clean"] is False
     assert payload["errors"]
+
+
+@pytest.mark.skipif(
+    not hasattr(Path, "symlink_to"),
+    reason="symlinks unsupported",
+)
+def test_audit_rejects_symlinked_shard_root(
+    tmp_path: Path,
+) -> None:
+    fixture_root = tmp_path / "target"
+    fixture_root.mkdir()
+    target = _fixture(fixture_root)
+    link = tmp_path / "linked-train"
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation unavailable")
+
+    with pytest.raises(
+        shard_audit.AuditInputError,
+        match="shard_root_must_be_regular_directory",
+    ):
+        shard_audit.audit_shard_directory(link)
+
+
+def test_audit_rejects_index_aggregate_count_drift(
+    tmp_path: Path,
+) -> None:
+    shard_dir = _fixture(tmp_path)
+    index_path = shard_dir / "_index.json"
+    index = _load(index_path)
+    index["compressed_bytes"] += 1
+    index["selected_players_seen"] += 1
+    _write_json(index_path, index)
+
+    receipt = shard_audit.audit_shard_directory(shard_dir)
+
+    assert receipt["clean"] is False
+    assert any(
+        error.startswith("compressed_bytes_mismatch:")
+        for error in receipt["errors"]
+    )
+    assert any(
+        error.startswith("selected_players_seen_mismatch:")
+        for error in receipt["errors"]
+    )
