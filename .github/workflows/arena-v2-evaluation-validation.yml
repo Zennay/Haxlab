@@ -29,6 +29,19 @@ jobs:
           ref: ${{ github.sha }}
           clean: true
 
+      - name: Verify exact validation head
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "::error title=Arena evaluation provenance mismatch::checked out $ACTUAL_SHA, expected $EXPECTED_SHA"
+            exit 1
+          fi
+          echo "ARENA_EVALUATION_VALIDATION_HEAD=$ACTUAL_SHA"
+
       - name: Create isolated test environment
         shell: bash
         run: |
