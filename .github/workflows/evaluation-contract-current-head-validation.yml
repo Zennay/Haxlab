@@ -1,4 +1,19 @@
+name: Evaluation contract current-head validation
+
 on:
+  push:
+    branches:
+      - validation/evaluation-contract-current-head-20261007
+    paths:
+      - "src/haxlab/evaluation/models.py"
+      - "src/haxlab/evaluation/promotion.py"
+      - "src/haxlab/evaluation/calibration_resume.py"
+      - "src/haxlab/evaluation/closed_loop_arena.py"
+      - "tests/test_evaluation_model_schema_contract.py"
+      - "tests/test_evaluation_workflow_module_contract.py"
+      - "tests/test_evaluation_cross_workflow_contract.py"
+      - "tests/test_promotion.py"
+      - ".github/workflows/*.yml"
   pull_request:
     branches:
       - feature/arena-v2-current-main-20261004
@@ -13,6 +28,7 @@ on:
       - "tests/test_promotion.py"
       - ".github/workflows/*.yml"
   workflow_dispatch:
+
 permissions:
   contents: read
 
