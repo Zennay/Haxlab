@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,10 @@ class ScanSummary:
     disappeared: int = 0
 
 
+def _native_finite_number(value: object) -> bool:
+    return type(value) in (int, float) and math.isfinite(float(value))
+
+
 def scan_once(
     incoming_root: Path,
     raw_root: Path,
@@ -26,10 +31,18 @@ def scan_once(
     minimum_file_age_seconds: float = 30.0,
     now: float | None = None,
 ) -> ScanSummary:
-    if incoming_root.is_symlink():
-        raise ValueError("incoming_root_must_not_be_symlink")
+    if (
+        not _native_finite_number(minimum_file_age_seconds)
+        or float(minimum_file_age_seconds) < 0.0
+    ):
+        raise ValueError("minimum_file_age_seconds_must_be_finite_and_nonnegative")
 
     now = time.time() if now is None else now
+    if not _native_finite_number(now):
+        raise ValueError("now_must_be_finite")
+
+    if incoming_root.is_symlink():
+        raise ValueError("incoming_root_must_not_be_symlink")
     discovered = unchanged = archived = duplicates = failed = disappeared = 0
 
     paths = sorted(
