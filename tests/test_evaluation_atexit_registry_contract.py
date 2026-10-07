@@ -108,13 +108,20 @@ def scan_source(source: str, *, filename: str = "<memory>") -> list[str]:
     findings: list[str] = []
 
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        target = _canonical_name(node.func, aliases)
-        if target in FORBIDDEN_ATEXIT_CALLS:
-            findings.append(
-                f"line {node.lineno}: process-exit callback registry mutation: {target}"
-            )
+        if isinstance(node, ast.Call):
+            target = _canonical_name(node.func, aliases)
+            if target in FORBIDDEN_ATEXIT_CALLS:
+                findings.append(
+                    f"line {node.lineno}: process-exit callback registry mutation: {target}"
+                )
+
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for decorator in node.decorator_list:
+                target = _canonical_name(decorator, aliases)
+                if target == "atexit.register":
+                    findings.append(
+                        f"line {decorator.lineno}: process-exit callback decorator: {target}"
+                    )
 
     return sorted(set(findings))
 
@@ -151,6 +158,14 @@ def test_evaluation_package_does_not_mutate_atexit_registry() -> None:
         (
             "from atexit import _run_exitfuncs as run\nrun()\n",
             "atexit._run_exitfuncs",
+        ),
+        (
+            "import atexit\n@atexit.register\ndef cleanup():\n    pass\n",
+            "atexit.register",
+        ),
+        (
+            "from atexit import register as on_exit\n@on_exit\nasync def cleanup():\n    pass\n",
+            "atexit.register",
         ),
     ],
 )
