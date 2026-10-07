@@ -1,0 +1,59 @@
+name: HaxLab runtime write integrity proof
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/haxlab/runtime/state.py"
+      - "tests/test_runtime_state_write_integrity.py"
+      - "tests/test_source_status_write_contract.py"
+      - "tests/test_processing_status_write_contract.py"
+      - "tests/test_analysis_status_write_contract.py"
+      - "docs/runtime-state-write-integrity.md"
+      - ".github/workflows/data-pipeline-runtime-write-integrity-proof.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-runtime-write-integrity-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate exact-head runtime write contract
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Assert exact head
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          echo "HAXLAB_RUNTIME_WRITE_EXACT_HEAD=$EXPECTED_HEAD"
+
+      - name: Run focused runtime-write regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .runtime-write-venv
+          python3 -m venv .runtime-write-venv
+          .runtime-write-venv/bin/pip install -q --upgrade pip
+          .runtime-write-venv/bin/pip install -q -e '.[dev]'
+          .runtime-write-venv/bin/python -m compileall -q src/haxlab
+          .runtime-write-venv/bin/pytest -q \
+            tests/test_runtime_state_write_integrity.py \
+            tests/test_source_status_write_contract.py \
+            tests/test_processing_status_write_contract.py \
+            tests/test_analysis_status_write_contract.py \
+            tests/test_runtime_event_write_contract.py \
+            tests/test_runtime_queue_limits.py
+          echo "HAXLAB_RUNTIME_WRITE_RESULT=green"
