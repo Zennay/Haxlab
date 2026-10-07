@@ -36,6 +36,24 @@ class SourceBundleVerifyError(ValueError):
     """Raised when expected source-receipt evidence cannot be trusted."""
 
 
+ReceiptBinding = tuple[tuple[int, int], ...]
+
+
+def _directory_open_flags() -> int:
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    directory = getattr(os, "O_DIRECTORY", None)
+    if nofollow is None or directory is None:
+        raise SourceBundleVerifyError("receipt_directory_descriptors_unsupported")
+    return os.O_RDONLY | nofollow | directory | getattr(os, "O_CLOEXEC", 0)
+
+
+def _file_open_flags() -> int:
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    if nofollow is None:
+        raise SourceBundleVerifyError("receipt_nofollow_unsupported")
+    return os.O_RDONLY | nofollow | getattr(os, "O_CLOEXEC", 0)
+
+
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     value: dict[str, Any] = {}
     for key, item in pairs:
@@ -59,60 +77,137 @@ def _stat_identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
     )
 
 
-def _read_receipt_bytes(path: Path) -> bytes:
-    try:
-        before = path.lstat()
-    except OSError as exc:
-        raise SourceBundleVerifyError(f"receipt_unreadable:{exc}") from exc
-    if stat.S_ISLNK(before.st_mode):
-        raise SourceBundleVerifyError("receipt_symlink")
-    if not stat.S_ISREG(before.st_mode):
-        raise SourceBundleVerifyError("receipt_not_regular")
-    if before.st_size > _MAX_RECEIPT_BYTES:
-        raise SourceBundleVerifyError("receipt_too_large")
+def _open_receipt_parent(path: Path) -> tuple[int, str, ReceiptBinding]:
+    logical_path = Path(os.path.abspath(os.fspath(path)))
+    parts = logical_path.parts
+    if len(parts) < 2 or parts[0] != os.sep:
+        raise SourceBundleVerifyError("receipt_path_invalid")
 
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags = _directory_open_flags()
     try:
-        fd = os.open(path, flags)
+        current_fd = os.open(os.sep, flags)
     except OSError as exc:
-        raise SourceBundleVerifyError(f"receipt_open_failed:{exc}") from exc
+        raise SourceBundleVerifyError(f"receipt_parent_open_failed:{exc}") from exc
 
-    chunks: list[bytes] = []
-    total = 0
+    identities: list[tuple[int, int]] = []
     try:
-        opened = os.fstat(fd)
-        if not stat.S_ISREG(opened.st_mode):
+        root_stat = os.fstat(current_fd)
+        identities.append((root_stat.st_dev, root_stat.st_ino))
+        traversed: list[str] = []
+        for component in parts[1:-1]:
+            traversed.append(component)
+            relative = "/".join(traversed)
+            try:
+                before = os.stat(component, dir_fd=current_fd, follow_symlinks=False)
+            except OSError as exc:
+                raise SourceBundleVerifyError(
+                    f"receipt_parent_unreadable:{relative}:{exc}"
+                ) from exc
+            if stat.S_ISLNK(before.st_mode):
+                raise SourceBundleVerifyError(f"receipt_parent_symlink:{relative}")
+            if not stat.S_ISDIR(before.st_mode):
+                raise SourceBundleVerifyError(
+                    f"receipt_parent_not_directory:{relative}"
+                )
+            try:
+                next_fd = os.open(component, flags, dir_fd=current_fd)
+            except OSError as exc:
+                raise SourceBundleVerifyError(
+                    f"receipt_parent_open_failed:{relative}:{exc}"
+                ) from exc
+            try:
+                opened = os.fstat(next_fd)
+                before_identity = (before.st_dev, before.st_ino)
+                opened_identity = (opened.st_dev, opened.st_ino)
+                if not stat.S_ISDIR(opened.st_mode) or opened_identity != before_identity:
+                    raise SourceBundleVerifyError(
+                        f"receipt_parent_identity_changed:{relative}"
+                    )
+            except BaseException:
+                os.close(next_fd)
+                raise
+            identities.append(opened_identity)
+            os.close(current_fd)
+            current_fd = next_fd
+        return current_fd, parts[-1], tuple(identities)
+    except BaseException:
+        os.close(current_fd)
+        raise
+
+
+def _read_receipt_bytes(
+    path: Path,
+    *,
+    expected_binding: ReceiptBinding | None = None,
+) -> tuple[bytes, ReceiptBinding]:
+    parent_fd, name, parent_binding = _open_receipt_parent(path)
+    try:
+        try:
+            before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        except OSError as exc:
+            raise SourceBundleVerifyError(f"receipt_unreadable:{exc}") from exc
+        if stat.S_ISLNK(before.st_mode):
+            raise SourceBundleVerifyError("receipt_symlink")
+        if not stat.S_ISREG(before.st_mode):
             raise SourceBundleVerifyError("receipt_not_regular")
-        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
-            raise SourceBundleVerifyError("receipt_identity_changed")
+        if before.st_size > _MAX_RECEIPT_BYTES:
+            raise SourceBundleVerifyError("receipt_too_large")
 
-        while True:
-            chunk = os.read(fd, min(1024 * 1024, _MAX_RECEIPT_BYTES + 1 - total))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            total += len(chunk)
-            if total > _MAX_RECEIPT_BYTES:
-                raise SourceBundleVerifyError("receipt_too_large")
+        try:
+            fd = os.open(name, _file_open_flags(), dir_fd=parent_fd)
+        except OSError as exc:
+            raise SourceBundleVerifyError(f"receipt_open_failed:{exc}") from exc
 
-        after = os.fstat(fd)
-        if _stat_identity(after) != _stat_identity(opened) or total != after.st_size:
-            raise SourceBundleVerifyError("receipt_changed_during_read")
+        chunks: list[bytes] = []
+        total = 0
+        try:
+            opened = os.fstat(fd)
+            if not stat.S_ISREG(opened.st_mode):
+                raise SourceBundleVerifyError("receipt_not_regular")
+            if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+                raise SourceBundleVerifyError("receipt_identity_changed")
+
+            while True:
+                chunk = os.read(
+                    fd,
+                    min(1024 * 1024, _MAX_RECEIPT_BYTES + 1 - total),
+                )
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+                if total > _MAX_RECEIPT_BYTES:
+                    raise SourceBundleVerifyError("receipt_too_large")
+
+            after = os.fstat(fd)
+            if _stat_identity(after) != _stat_identity(opened) or total != after.st_size:
+                raise SourceBundleVerifyError("receipt_changed_during_read")
+        finally:
+            os.close(fd)
+
+        try:
+            final = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        except OSError as exc:
+            raise SourceBundleVerifyError(
+                f"receipt_changed_after_read:{exc}"
+            ) from exc
+        if stat.S_ISLNK(final.st_mode) or _stat_identity(final) != _stat_identity(after):
+            raise SourceBundleVerifyError("receipt_changed_after_read")
+
+        binding = parent_binding + ((after.st_dev, after.st_ino),)
+        if expected_binding is not None and binding != expected_binding:
+            raise SourceBundleVerifyError(
+                "receipt_path_identity_changed_during_verification"
+            )
+        return b"".join(chunks), binding
     finally:
-        os.close(fd)
-
-    try:
-        final = path.lstat()
-    except OSError as exc:
-        raise SourceBundleVerifyError(f"receipt_changed_after_read:{exc}") from exc
-    if stat.S_ISLNK(final.st_mode) or _stat_identity(final) != _stat_identity(after):
-        raise SourceBundleVerifyError("receipt_changed_after_read")
-
-    return b"".join(chunks)
+        os.close(parent_fd)
 
 
-def _load_receipt(path: Path) -> tuple[dict[str, Any], bytes]:
-    raw = _read_receipt_bytes(path)
+def _load_receipt(
+    path: Path,
+) -> tuple[dict[str, Any], bytes, ReceiptBinding]:
+    raw, binding = _read_receipt_bytes(path)
     try:
         payload = json.loads(
             raw,
@@ -123,7 +218,7 @@ def _load_receipt(path: Path) -> tuple[dict[str, Any], bytes]:
         raise SourceBundleVerifyError(f"invalid_receipt_json:{exc}") from exc
     if not isinstance(payload, dict):
         raise SourceBundleVerifyError("receipt_not_object")
-    return payload, raw
+    return payload, raw, binding
 
 
 def _canonical_bytes(value: dict[str, Any]) -> bytes:
@@ -222,12 +317,15 @@ def validate_source_receipt(payload: dict[str, Any]) -> None:
 
 
 def verify_source_bundle(export_root: Path, receipt_path: Path) -> dict[str, Any]:
-    expected, first_raw = _load_receipt(Path(receipt_path))
+    expected, first_raw, receipt_binding = _load_receipt(Path(receipt_path))
     validate_source_receipt(expected)
 
     current = create_source_bundle_receipt(Path(export_root))
 
-    second_raw = _read_receipt_bytes(Path(receipt_path))
+    second_raw, _ = _read_receipt_bytes(
+        Path(receipt_path),
+        expected_binding=receipt_binding,
+    )
     if second_raw != first_raw:
         raise SourceBundleVerifyError("receipt_changed_during_verification")
 
