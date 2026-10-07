@@ -2,9 +2,70 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 from haxlab.runtime.state import RuntimeState
+
+
+def _require_nonnegative_int(snapshot: dict[str, object], key: str) -> int:
+    value = snapshot.get(key)
+    if type(value) is not int or value < 0:
+        raise ValueError(f"invalid_status_snapshot:{key}")
+    return value
+
+
+def _require_nonnegative_finite(
+    snapshot: dict[str, object],
+    key: str,
+) -> float:
+    value = snapshot.get(key)
+    if (
+        type(value) not in (int, float)
+        or not math.isfinite(float(value))
+        or float(value) < 0.0
+    ):
+        raise ValueError(f"invalid_status_snapshot:{key}")
+    return float(value)
+
+
+def _validate_status_snapshot(snapshot: dict[str, object]) -> dict[str, float | int]:
+    raw_unique = _require_nonnegative_int(snapshot, "raw_unique_replays")
+    processing_ok = _require_nonnegative_int(snapshot, "processing_ok")
+    processing_failed = _require_nonnegative_int(snapshot, "processing_failed")
+    processing_pending = _require_nonnegative_int(snapshot, "processing_pending")
+    analysis_ok = _require_nonnegative_int(snapshot, "analysis_ok")
+    analysis_failed = _require_nonnegative_int(snapshot, "analysis_failed")
+    analysis_pending = _require_nonnegative_int(snapshot, "analysis_pending")
+
+    if processing_ok + processing_failed + processing_pending > raw_unique:
+        raise ValueError("invalid_status_snapshot:processing_counts_exceed_raw")
+    if analysis_ok + analysis_failed + analysis_pending > processing_ok:
+        raise ValueError(
+            "invalid_status_snapshot:analysis_counts_exceed_processing_ok"
+        )
+
+    return {
+        "raw_unique_replays": raw_unique,
+        "processing_ok": processing_ok,
+        "processing_failed": processing_failed,
+        "processing_pending": processing_pending,
+        "analysis_ok": analysis_ok,
+        "analysis_failed": analysis_failed,
+        "analysis_pending": analysis_pending,
+        "duration_seconds_probed": _require_nonnegative_finite(
+            snapshot,
+            "duration_seconds_probed",
+        ),
+        "probe_rate_per_minute_5m": _require_nonnegative_finite(
+            snapshot,
+            "probe_rate_per_minute_5m",
+        ),
+        "analysis_rate_per_minute_5m": _require_nonnegative_finite(
+            snapshot,
+            "analysis_rate_per_minute_5m",
+        ),
+    }
 
 
 def main() -> int:
@@ -19,22 +80,24 @@ def main() -> int:
     with RuntimeState(args.state_db) as state:
         snapshot = state.status_snapshot()
 
+    metrics = _validate_status_snapshot(snapshot)
+
     snapshot["duration_hours_probed"] = round(
-        snapshot["duration_seconds_probed"] / 3600.0,
+        metrics["duration_seconds_probed"] / 3600.0,
         2,
     )
 
-    probe_rate = float(snapshot.get("probe_rate_per_minute_5m", 0.0))
-    probe_pending = int(snapshot.get("processing_pending", 0))
+    probe_rate = float(metrics["probe_rate_per_minute_5m"])
+    probe_pending = int(metrics["processing_pending"])
     snapshot["estimated_probe_minutes_remaining"] = (
         round(probe_pending / probe_rate, 1)
         if probe_pending > 0 and probe_rate > 0
         else None
     )
 
-    raw_unique = int(snapshot.get("raw_unique_replays", 0))
-    processing_ok = int(snapshot.get("processing_ok", 0))
-    analysis_ok = int(snapshot.get("analysis_ok", 0))
+    raw_unique = int(metrics["raw_unique_replays"])
+    processing_ok = int(metrics["processing_ok"])
+    analysis_ok = int(metrics["analysis_ok"])
 
     snapshot["processing_progress_percent"] = (
         round(100.0 * processing_ok / raw_unique, 2)
@@ -49,11 +112,11 @@ def main() -> int:
     snapshot["analysis_complete"] = (
         raw_unique > 0
         and analysis_ok == raw_unique
-        and int(snapshot.get("analysis_failed", 0)) == 0
+        and int(metrics["analysis_failed"]) == 0
     )
 
-    analysis_rate = float(snapshot.get("analysis_rate_per_minute_5m", 0.0))
-    analysis_pending = int(snapshot.get("analysis_pending", 0))
+    analysis_rate = float(metrics["analysis_rate_per_minute_5m"])
+    analysis_pending = int(metrics["analysis_pending"])
     snapshot["estimated_analysis_minutes_remaining"] = (
         round(analysis_pending / analysis_rate, 1)
         if analysis_pending > 0 and analysis_rate > 0
