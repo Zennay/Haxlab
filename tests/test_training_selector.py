@@ -501,3 +501,32 @@ def test_training_manifest_fails_closed_on_duplicate_replay_provenance(
             leaderboard_path=leaderboard_path,
             raw_root=tmp_path / "raw",
         )
+
+
+
+@pytest.mark.parametrize(
+    ("modulus", "bucket"),
+    [
+        (0, 0),
+        (1, 0),
+        (True, 0),
+        (10, -1),
+        (10, 10),
+        (10, True),
+    ],
+)
+def test_training_manifest_rejects_invalid_holdout_partition_before_scan(
+    tmp_path: Path,
+    modulus: int,
+    bucket: int,
+) -> None:
+    missing_leaderboard = tmp_path / "missing-leaderboard.json"
+
+    with pytest.raises(ValueError):
+        build_training_manifest(
+            analysis_root=tmp_path / "analysis",
+            leaderboard_path=missing_leaderboard,
+            raw_root=tmp_path / "raw",
+            holdout_modulus=modulus,
+            holdout_bucket=bucket,
+        )
