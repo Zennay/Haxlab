@@ -21,6 +21,7 @@ FORBIDDEN_CALLS = {
     "tracemalloc.start",
     "tracemalloc.stop",
     "tracemalloc.reset_peak",
+    "tracemalloc.clear_traces",
     "threading.settrace",
     "threading.setprofile",
     "threading.settrace_all_threads",
