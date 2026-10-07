@@ -6,20 +6,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = ROOT / "src"
-AUDIT_ROOTS = (
-    SRC_ROOT / "haxlab" / "ingestion",
-    SRC_ROOT / "haxlab" / "learning",
-    SRC_ROOT / "haxlab" / "runtime",
-)
+AUDIT_ROOT = SRC_ROOT / "haxlab"
 
 
 def _audit_paths() -> list[Path]:
     return sorted(
         (
             path
-            for root in AUDIT_ROOTS
-            if root.exists()
-            for path in root.rglob("*_audit.py")
+            for path in AUDIT_ROOT.rglob("*_audit.py")
             if path.is_file()
         ),
         key=lambda path: path.as_posix(),
@@ -190,7 +184,7 @@ def _first_cycle(graph: dict[str, set[str]]) -> tuple[str, ...] | None:
 
 def test_data_pipeline_auditor_runtime_import_graph_is_acyclic() -> None:
     graph = _runtime_graph()
-    assert graph, "expected data-pipeline *_audit.py modules"
+    assert graph, "expected HaxLab *_audit.py modules"
 
     cycle = _first_cycle(graph)
     assert cycle is None, "data-pipeline auditor runtime import cycle: " + " -> ".join(
@@ -223,11 +217,13 @@ def test_runtime_import_extraction_handles_absolute_relative_and_child_modules()
         "haxlab.learning.manifest_source_audit",
         "haxlab.learning.shard_audit",
         "haxlab.learning.shard_bundle_audit",
+        "haxlab.skill.leaderboard_audit",
     }
     source = """
 from haxlab.learning import manifest_audit
 from .shard_audit import audit_shard
 from . import shard_bundle_audit
+from haxlab.skill import leaderboard_audit
 """
     assert _runtime_dependencies(
         source,
@@ -237,6 +233,7 @@ from . import shard_bundle_audit
         "haxlab.learning.manifest_audit",
         "haxlab.learning.shard_audit",
         "haxlab.learning.shard_bundle_audit",
+        "haxlab.skill.leaderboard_audit",
     }
 
 
