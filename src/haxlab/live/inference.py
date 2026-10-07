@@ -16,7 +16,7 @@ import numpy as np
 
 
 DEFAULT_CHAMPION_ROOT = Path("/var/lib/haxlab/derived/champions/elite-player")
-ROLE_KEYS = ("role_order", "role_names", "role_labels", "roles")
+ROLE_KEYS = ("role_ids", "role_order", "role_names", "role_labels", "roles")
 DEFAULT_ROLE_ORDER = ("gk", "dm", "am", "st")
 
 
@@ -350,17 +350,7 @@ class LiveChampion:
             )
         self.window = remaining // len(self.base_columns)
 
-        runtime_payload: dict[str, Any] = {}
-        runtime_path = self.metrics.get("runtime_model_path")
-        if runtime_path:
-            path = Path(str(runtime_path))
-            if path.is_file():
-                try:
-                    runtime_payload = _load_json(path)
-                except Exception:
-                    runtime_payload = {}
-
-        self.role_order = _resolve_role_order(runtime_payload)
+        self.role_order = _resolve_role_order(self.metrics)
         self.role = (role or os.environ.get("HAXLAB_LIVE_ROLE", "st")).casefold()
         if self.role not in self.role_order:
             raise ValueError(f"unknown role {self.role!r}; expected one of {self.role_order}")
