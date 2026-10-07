@@ -24,6 +24,8 @@ The v1 audit checks:
 - failed source rows cannot claim an archived replay SHA;
 - failed and retry analysis rows retain the original non-empty failure evidence;
 - statuses use the runtime's declared state vocabulary;
+- source/raw/processing/analysis/event timestamps use canonical SQLite
+  `CURRENT_TIMESTAMP` form, with `last_seen_at >= first_seen_at`;
 - archived/duplicate source records resolve to a raw replay with the same byte size;
 - every versioned analysis row is backed by a successfully processed replay;
 - successful analysis rows cannot reuse the same output path;
@@ -52,4 +54,6 @@ branch pushes cannot execute its self-hosted job; proof requires either manual
 dispatch or an explicit commit whose message contains
 `[runtime-ledger-proof]`. Integration into VPS control should happen only
 after that focused proof is green and after the current serialized HaxLab runner
-owner releases the self-hosted runner.
+owner releases the self-hosted runner. The focused proof also performs full
+repository pytest collection, and its own regression suite locks self-hosted
+HaxLab labels, read-only workflow permissions, and the explicit proof gate.
