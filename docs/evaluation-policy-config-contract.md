@@ -50,7 +50,7 @@ Any malformed policy config exits non-zero through the CLI parser.
 `configs/autonomy.toml` values to the current `PromotionPolicy` defaults,
 binds provenance to the exact file bytes, proves semantically equal byte-drift
 changes the provenance hash, locks the versioned deterministic JSON receipt,
-rejects runtime policy-schema drift, and covers the fail-closed input boundary.
+rejects runtime policy-schema drift, proves an explicitly loaded policy changes the existing `decide_promotion` gate at the configured threshold, and covers the fail-closed input boundary.
 
 ## Runtime wiring status
 
