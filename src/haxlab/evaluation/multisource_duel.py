@@ -132,10 +132,46 @@ def decide_multisource_duel_gate(
     policy: MultisourceDuelPolicy = MultisourceDuelPolicy(),
     duel_policy: DuelGatePolicy = DuelGatePolicy(),
 ) -> MultisourceDuelDecision:
+    if not isinstance(payload, dict):
+        return MultisourceDuelDecision(
+            eligible_to_replace_champion=False,
+            reasons=("invalid_multisource_payload:object_type",),
+            checks={},
+        )
+    if not isinstance(policy, MultisourceDuelPolicy):
+        return MultisourceDuelDecision(
+            eligible_to_replace_champion=False,
+            reasons=("invalid_policy:object_type",),
+            checks={},
+        )
+    if not isinstance(duel_policy, DuelGatePolicy):
+        return MultisourceDuelDecision(
+            eligible_to_replace_champion=False,
+            reasons=("invalid_duel_policy:object_type",),
+            checks={},
+        )
+
     failures: list[str] = []
+    minimum_sources_raw = policy.minimum_sources
+    if isinstance(minimum_sources_raw, bool) or not isinstance(
+        minimum_sources_raw,
+        int,
+    ):
+        failures.append("invalid_policy:minimum_sources:not_integer")
+        minimum_sources = 1
+    elif minimum_sources_raw < 1:
+        failures.append(
+            "invalid_policy:minimum_sources:below_minimum:"
+            f"{minimum_sources_raw}<1"
+        )
+        minimum_sources = 1
+    else:
+        minimum_sources = minimum_sources_raw
+
     checks: dict[str, Any] = {
         "evaluation_schema": payload.get("schema"),
         "evaluation_mode": payload.get("evaluation_mode"),
+        "minimum_sources": minimum_sources,
     }
     if payload.get("schema") != MULTISOURCE_DUEL_SCHEMA:
         failures.append(
@@ -166,9 +202,9 @@ def decide_multisource_duel_gate(
     if not champion_model:
         failures.append("missing_champion_model")
     checks["source_count"] = len(sources)
-    if len(sources) < policy.minimum_sources:
+    if len(sources) < minimum_sources:
         failures.append(
-            f"insufficient_sources:{len(sources)}<{policy.minimum_sources}"
+            f"insufficient_sources:{len(sources)}<{minimum_sources}"
         )
 
     scenario_hashes: list[str] = []
