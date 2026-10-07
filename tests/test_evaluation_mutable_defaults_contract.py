@@ -125,6 +125,18 @@ class MutableDefaultVisitor(ast.NodeVisitor):
             if parent is None:
                 return None
             return f"{parent}.{node.attr}"
+        if (
+            isinstance(node, ast.Call)
+            and self._qualified_name(node.func) in {"getattr", "builtins.getattr"}
+            and len(node.args) == 2
+            and not node.keywords
+            and isinstance(node.args[1], ast.Constant)
+            and isinstance(node.args[1].value, str)
+        ):
+            parent = self._qualified_name(node.args[0])
+            if parent is None:
+                return None
+            return f"{parent}.{node.args[1].value}"
         return None
 
 
@@ -164,6 +176,8 @@ def test_evaluation_package_has_no_mutable_default_arguments() -> None:
         "from builtins import list as MutableList\ndef f(cache=MutableList()):\n    return cache\n",
         "Factory = dict\ndef f(cache=Factory()):\n    return cache\n",
         "import collections\nQueue = collections.deque\ndef f(queue=Queue()):\n    return queue\n",
+        "import collections\ndef f(queue=getattr(collections, 'deque')()):\n    return queue\n",
+        "import builtins\ndef f(cache=getattr(builtins, 'list')()):\n    return cache\n",
     ],
 )
 def test_detector_rejects_mutable_defaults(source: str) -> None:
