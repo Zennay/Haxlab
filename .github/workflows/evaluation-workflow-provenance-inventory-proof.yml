@@ -1,0 +1,101 @@
+name: Evaluation workflow provenance inventory proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Exact 40-character branch HEAD to prove
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  prove:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    steps:
+      - name: Validate immutable requested SHA
+        shell: bash
+        env:
+          TARGET_SHA: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error title=Mutable proof ref::workflow_dispatch requires an exact lowercase commit SHA"
+            exit 1
+          fi
+
+      - name: Checkout exact candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 1
+          clean: true
+          persist-credentials: false
+
+      - name: Verify exact and live branch head
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.ref }}
+          BRANCH_NAME: validation/evaluation-workflow-provenance-inventory-20261007
+        run: |
+          set -euo pipefail
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "::error title=Proof checkout mismatch::checked out $ACTUAL_SHA, expected $EXPECTED_SHA"
+            exit 1
+          fi
+          LIVE_SHA="$(git ls-remote origin "refs/heads/$BRANCH_NAME" | awk '{print $1}')"
+          if [ -z "$LIVE_SHA" ] || [ "$LIVE_SHA" != "$EXPECTED_SHA" ]; then
+            echo "::error title=Superseded proof head::live $BRANCH_NAME is $LIVE_SHA, expected $EXPECTED_SHA"
+            exit 1
+          fi
+
+      - name: Create isolated proof environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .evaluation-provenance-venv
+          python3 -m venv .evaluation-provenance-venv
+          .evaluation-provenance-venv/bin/pip install --upgrade pip
+          .evaluation-provenance-venv/bin/pip install -e '.[dev]'
+
+      - name: Run focused inventory proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          .evaluation-provenance-venv/bin/python -m py_compile tools/evaluation_workflow_provenance_inventory.py tests/test_evaluation_workflow_provenance_inventory.py
+          .evaluation-provenance-venv/bin/pytest -q tests/test_evaluation_workflow_provenance_inventory.py
+          .evaluation-provenance-venv/bin/python tools/evaluation_workflow_provenance_inventory.py > /tmp/haxlab-evaluation-workflow-provenance-inventory.json
+          .evaluation-provenance-venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(
+              Path("/tmp/haxlab-evaluation-workflow-provenance-inventory.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          assert report["schema"] == "haxlab-evaluation-workflow-provenance-inventory-v1"
+          assert report["workflow_count"] == 20
+          assert report["missing_workflows"] == []
+          print(
+              "HAXLAB_EVALUATION_WORKFLOW_PROVENANCE_FINDINGS="
+              f'{report["finding_count"]}'
+          )
+          PY
+
+      - name: Verify proof leaves tracked source clean
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .evaluation-provenance-venv .pytest_cache
+          find tools tests -type d -name __pycache__ -prune -exec rm -rf {} +
+          if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+            git status --short
+            echo "::error title=Proof mutated repository::working tree is not clean"
+            exit 1
+          fi
+          echo "HAXLAB_EVALUATION_WORKFLOW_PROVENANCE_PROOF=green"
