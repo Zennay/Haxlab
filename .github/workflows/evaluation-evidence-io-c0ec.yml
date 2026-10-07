@@ -1,0 +1,80 @@
+name: Evaluation Evidence IO Canonical c0ec
+
+on:
+  push:
+    branches:
+      - validation/evaluation-evidence-io-c0ec-20261007
+    paths:
+      - src/haxlab/evaluation/evidence_io.py
+      - tests/test_evaluation_evidence_io.py
+      - .github/workflows/evaluation-evidence-io-c0ec.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-evaluation-evidence-io-c0ec
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Verify exact validation head
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          ACTUAL_SHA="$(git rev-parse HEAD)"
+          if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+            echo "::error title=Evidence IO validation provenance mismatch::checked out $ACTUAL_SHA, expected $EXPECTED_SHA"
+            exit 1
+          fi
+          LIVE_SHA="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk '{print $1}')"
+          if [ -z "$LIVE_SHA" ] || [ "$LIVE_SHA" != "$EXPECTED_SHA" ]; then
+            echo "::error title=Evidence IO live-head mismatch::live $LIVE_SHA, expected $EXPECTED_SHA"
+            exit 1
+          fi
+          echo "HAXLAB_EVALUATION_EVIDENCE_IO_HEAD=$ACTUAL_SHA"
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .evaluation-evidence-io-venv
+          python3 -m venv .evaluation-evidence-io-venv
+          .evaluation-evidence-io-venv/bin/pip install --upgrade pip
+          .evaluation-evidence-io-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile evidence boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          .evaluation-evidence-io-venv/bin/python -m py_compile \
+            src/haxlab/evaluation/evidence_io.py \
+            src/haxlab/evaluation/models.py \
+            src/haxlab/evaluation/promotion.py
+
+      - name: Run evidence IO and adjacent promotion regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .evaluation-evidence-io-venv/bin/python -m pytest -q \
+              tests/test_evaluation_evidence_io.py \
+              tests/test_promotion.py
+
+      - name: Record focused proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HAXLAB_EVALUATION_EVIDENCE_IO_CONTRACT=success"
