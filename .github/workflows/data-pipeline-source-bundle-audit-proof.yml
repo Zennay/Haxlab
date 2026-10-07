@@ -1,0 +1,57 @@
+name: HaxLab source bundle audit proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact branch SHA to prove
+        required: true
+        type: string
+  push:
+    branches:
+      - feature/data-pipeline-source-bundle-audit-20261007
+    paths:
+      - "src/haxlab/ingestion/source_bundle_audit.py"
+      - "tests/test_source_bundle_audit.py"
+      - "docs/source-bundle-audit.md"
+      - ".github/workflows/data-pipeline-source-bundle-audit-proof.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-source-bundle-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate exact-head source bundle auditor
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    env:
+      EXPECTED_HEAD: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_sha || github.sha }}
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+
+      - name: Assert exact head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Run focused proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .source-bundle-audit-venv
+          python3 -m venv .source-bundle-audit-venv
+          .source-bundle-audit-venv/bin/pip install -q --upgrade pip
+          .source-bundle-audit-venv/bin/pip install -q -e '.[dev]'
+          .source-bundle-audit-venv/bin/python -m compileall -q src/haxlab/ingestion
+          .source-bundle-audit-venv/bin/python -m haxlab.ingestion.source_bundle_audit --help >/dev/null
+          .source-bundle-audit-venv/bin/pytest -q tests/test_source_bundle_audit.py
+          .source-bundle-audit-venv/bin/pytest --collect-only -q >/dev/null
