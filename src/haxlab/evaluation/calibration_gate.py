@@ -78,6 +78,15 @@ def decide_calibration_gate(
                 failures, row, "promotion_eligible_sources", label
             ),
         }
+        source_count = counts[label]["sources"]
+        for count_key in ("behavior_passes", "promotion_eligible_sources"):
+            count = counts[label][count_key]
+            if source_count >= 0 and count >= 0 and count > source_count:
+                failures.append(
+                    "aggregate_count_exceeds_sources:"
+                    f"{label}:{count_key}:{count}>{source_count}"
+                )
+
         structural[label] = row.get("all_structurally_valid") is True
         if not structural[label]:
             failures.append(f"structural_evidence_invalid:{label}")
