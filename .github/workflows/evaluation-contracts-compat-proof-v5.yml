@@ -235,6 +235,41 @@ jobs:
           print("HAXLAB_PROMOTION_HOSTILE_SUBCLASS_DIAGNOSTIC=green")
           PY
 
+      - name: Require padded critical severity to fail closed
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" .evaluation-contract-compat-v5-venv/bin/python - <<'PY'
+          from haxlab.evaluation.models import EvaluationEvidence, Regression
+          from haxlab.evaluation.promotion import decide_promotion
+
+          evidence = EvaluationEvidence(
+              challenger_id="model-2",
+              champion_id="model-1",
+              games_vs_champion=1000,
+              score_rate_vs_champion=0.55,
+              score_rate_lower_bound=0.52,
+              frozen_scenarios_total=100,
+              frozen_scenarios_passed=100,
+              regressions=(
+                  Regression(
+                      scenario="kickoff",
+                      severity=" critical ",
+                      details="critical label padded with whitespace",
+                  ),
+              ),
+              reproducible=True,
+          )
+          decision = decide_promotion(evidence)
+          print(
+              "HAXLAB_PROMOTION_PADDED_CRITICAL "
+              f"promote={decision.promote} reasons={decision.reasons}"
+          )
+          assert not decision.promote, (
+              "padded critical severity bypassed the critical-regression block"
+          )
+          PY
+
       - name: Run adjacent canonical Arena v2 regressions
         shell: bash
         run: |
