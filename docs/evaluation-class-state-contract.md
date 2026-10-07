@@ -14,9 +14,10 @@ as `list`, `dict`, `set`, `bytearray`, `collections.deque`,
 `io` buffers, queue containers, `types.SimpleNamespace`, and weak-reference
 mapping containers.
 
-The detector resolves module/class imports, simple assignment aliases, and
-constant `getattr(...)` constructor aliases. The standard-library constructor
-set is intentionally explicit so immutable wrappers such as `MappingProxyType`
+The detector resolves module/class imports, simple assignment aliases, constant
+`getattr(...)` constructor aliases (including default-value lookups), and
+`module.__dict__` / `vars(module)` mapping lookups. The standard-library
+constructor set is intentionally explicit so immutable wrappers such as `MappingProxyType`
 remain valid while common process-lifetime mutable containers fail closed.
 
 Per-instance state remains allowed. In particular, method-local containers and
@@ -39,7 +40,8 @@ different process-lifetime state channels.
 
 `tests/test_evaluation_class_state_contract.py` parses every evaluation module
 and regression-tests plain, annotated, multi-target, aliased, nested-class, and
-constructor-based shared state while preserving legitimate per-instance state.
+constructor-based and reflectively-resolved shared state while preserving
+legitimate per-instance state.
 
 The branch-scoped self-hosted proof runs the focused contract and adjacent
 canonical Arena-v2 evaluation regressions. Green evidence is narrow validation

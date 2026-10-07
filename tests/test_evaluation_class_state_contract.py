@@ -67,7 +67,7 @@ def _qualified_name(node: ast.AST | None, aliases: dict[str, str]) -> str | None
         accessor = _qualified_name(node.func, aliases)
         if (
             accessor in {"getattr", "builtins.getattr"}
-            and len(node.args) == 2
+            and len(node.args) in {2, 3}
             and not node.keywords
             and isinstance(node.args[1], ast.Constant)
             and isinstance(node.args[1].value, str)
@@ -75,6 +75,35 @@ def _qualified_name(node: ast.AST | None, aliases: dict[str, str]) -> str | None
             owner = _qualified_name(node.args[0], aliases)
             if owner is not None:
                 return f"{owner}.{node.args[1].value}"
+
+        if (
+            accessor in {"vars", "builtins.vars"}
+            and len(node.args) == 1
+            and not node.keywords
+        ):
+            owner = _qualified_name(node.args[0], aliases)
+            if owner is not None:
+                return f"{owner}.__dict__"
+
+        if (
+            accessor is not None
+            and accessor.endswith(".__dict__.get")
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
+            owner = accessor.removesuffix(".__dict__.get")
+            return f"{owner}.{node.args[0].value}"
+
+    if isinstance(node, ast.Subscript):
+        owner = _qualified_name(node.value, aliases)
+        if (
+            owner is not None
+            and owner.endswith(".__dict__")
+            and isinstance(node.slice, ast.Constant)
+            and isinstance(node.slice.value, str)
+        ):
+            return f"{owner.removesuffix('.__dict__')}.{node.slice.value}"
     return None
 
 
@@ -222,6 +251,10 @@ def test_evaluation_package_has_no_shared_mutable_class_state() -> None:
         "import queue\nclass Gate:\n    pending = queue.SimpleQueue()\n",
         "from types import SimpleNamespace\nclass Gate:\n    state = SimpleNamespace()\n",
         "import weakref\nclass Gate:\n    cache = weakref.WeakKeyDictionary()\n",
+        "import collections\nFactory = getattr(collections, 'Counter', None)\nclass Gate:\n    state = Factory()\n",
+        "import collections\nFactory = collections.__dict__['ChainMap']\nclass Gate:\n    state = Factory()\n",
+        "import collections\nFactory = vars(collections).get('UserList')\nclass Gate:\n    state = Factory()\n",
+        "import queue as q\nFactory = vars(q)['SimpleQueue']\nclass Gate:\n    pending = Factory()\n",
     ],
 )
 def test_detector_rejects_shared_mutable_class_state(source: str) -> None:
