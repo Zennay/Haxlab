@@ -62,7 +62,7 @@ def _native_non_empty_string(
     value: Any,
     label: str,
 ) -> str:
-    if not isinstance(value, str):
+    if type(value) is not str:
         failures.append(f"invalid_evidence:{label}:not_string")
         return ""
     if not value.strip():
@@ -81,7 +81,7 @@ def _native_integer(
     *,
     minimum: int = 0,
 ) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
+    if type(value) is not int:
         failures.append(f"invalid_evidence:{label}:not_integer")
         return 0
     if value < minimum:
@@ -99,7 +99,7 @@ def _native_number(
     minimum: float | None = None,
     maximum: float | None = None,
 ) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if type(value) not in (int, float):
         failures.append(f"invalid_evidence:{label}:not_number")
         return 0.0
     number = float(value)
@@ -123,7 +123,7 @@ def _parse_regressions(
     failures: list[str],
     value: Any,
 ) -> tuple[Regression, ...]:
-    if not isinstance(value, list):
+    if type(value) is not list:
         failures.append("invalid_evidence:regressions:not_list")
         return ()
 
@@ -131,7 +131,7 @@ def _parse_regressions(
     seen: set[tuple[str, str, str]] = set()
     for index, raw in enumerate(value):
         label = f"regressions:{index}"
-        if not isinstance(raw, dict):
+        if type(raw) is not dict:
             failures.append(f"invalid_evidence:{label}:not_object")
             continue
 
@@ -150,7 +150,7 @@ def _parse_regressions(
             failures, raw.get("severity"), f"{label}:severity"
         )
         details = raw.get("details", "")
-        if not isinstance(details, str):
+        if type(details) is not str:
             failures.append(f"invalid_evidence:{label}:details:not_string")
             details = ""
 
@@ -171,7 +171,7 @@ def _parse_regressions(
 
 def parse_evaluation_evidence(payload: Any) -> EvidenceParseResult:
     """Parse serialized promotion evidence without type coercion."""
-    if not isinstance(payload, dict):
+    if type(payload) is not dict:
         return EvidenceParseResult(
             evidence=None,
             reasons=("invalid_evidence:payload:not_object",),
@@ -325,7 +325,7 @@ def _policy_integer(
     *,
     minimum: int,
 ) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
+    if type(value) is not int:
         failures.append(f"invalid_policy:{label}:not_integer")
         return minimum
     if value < minimum:
@@ -343,7 +343,7 @@ def _policy_number(
     minimum: float,
     maximum: float,
 ) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if type(value) not in (int, float):
         failures.append(f"invalid_policy:{label}:not_number")
         return minimum
     number = float(value)
@@ -365,7 +365,7 @@ def _policy_number(
 
 def parse_promotion_policy(payload: Any) -> PolicyParseResult:
     """Parse a complete machine-readable promotion policy fail-closed."""
-    if not isinstance(payload, dict):
+    if type(payload) is not dict:
         return PolicyParseResult(
             policy=None,
             reasons=("invalid_policy:payload:not_object",),
