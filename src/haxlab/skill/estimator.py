@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import fields
+import math
 
 from haxlab.skill.models import (
     PerformanceVector,
@@ -36,6 +37,15 @@ def estimate_player_skill_v0(
     This is deliberately not Elo. It aggregates normalized individual performance
     dimensions and applies only a bounded context correction.
     """
+    if type(prior_mean) not in (int, float) or not math.isfinite(float(prior_mean)):
+        raise ValueError("invalid_skill_estimator:prior_mean")
+    if (
+        type(prior_weight) not in (int, float)
+        or not math.isfinite(float(prior_weight))
+        or float(prior_weight) <= 0.0
+    ):
+        raise ValueError("invalid_skill_estimator:prior_weight")
+
     own = [item for item in observations if item.player_id == player_id]
     estimates: dict[str, SkillDimensionEstimate] = {}
 
