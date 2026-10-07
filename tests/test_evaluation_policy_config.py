@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -43,6 +44,46 @@ def test_policy_config_provenance_binds_exact_source_bytes() -> None:
     assert loaded.policy == PromotionPolicy()
     assert loaded.source_sha256 == hashlib.sha256(raw).hexdigest()
     assert loaded.source_size_bytes == len(raw)
+
+
+def test_policy_config_uses_atomic_nofollow_file_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _write_policy(
+        tmp_path,
+        "minimum_games_vs_champion = 500\n"
+        "minimum_score_rate_lower_bound = 0.51\n"
+        "minimum_frozen_scenario_pass_rate = 0.98\n",
+    )
+    real_open = os.open
+    seen_flags: list[int] = []
+
+    def tracking_open(target: Path, flags: int) -> int:
+        seen_flags.append(flags)
+        return real_open(target, flags)
+
+    monkeypatch.setattr(policy_config_module.os, "open", tracking_open)
+
+    assert load_promotion_policy(path) == PromotionPolicy()
+    assert seen_flags
+    assert all(flags & os.O_NOFOLLOW for flags in seen_flags)
+
+
+def test_policy_config_fails_closed_without_nofollow_support(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _write_policy(
+        tmp_path,
+        "minimum_games_vs_champion = 500\n"
+        "minimum_score_rate_lower_bound = 0.51\n"
+        "minimum_frozen_scenario_pass_rate = 0.98\n",
+    )
+    monkeypatch.delattr(policy_config_module.os, "O_NOFOLLOW")
+
+    with pytest.raises(ValueError, match="no-follow"):
+        load_promotion_policy(path)
 
 
 def test_semantically_equal_policy_records_byte_drift(tmp_path: Path) -> None:
