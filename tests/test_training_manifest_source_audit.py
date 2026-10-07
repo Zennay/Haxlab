@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from haxlab.learning import manifest_source_audit
 from haxlab.learning.manifest_source_audit import (
     AUDIT_SCHEMA,
     ManifestSourceAuditError,
@@ -257,3 +258,72 @@ def test_source_audit_rejects_symlinked_raw_replay(tmp_path: Path) -> None:
         match="raw replay must be a regular non-symlink file",
     ):
         audit_manifest_sources(manifest_path)
+
+def test_source_audit_rejects_byte_identical_manifest_handoff_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest_path, _, _, _, _ = _fixture(tmp_path)
+    replacement = tmp_path / "replacement-manifest.json"
+    original = tmp_path / "original-manifest.json"
+    replacement.write_bytes(manifest_path.read_bytes())
+
+    nested_audit = manifest_source_audit.audit_training_manifest
+
+    def replacing_audit(path: Path) -> dict:
+        receipt = nested_audit(path)
+        path.rename(original)
+        replacement.rename(path)
+        return receipt
+
+    monkeypatch.setattr(
+        manifest_source_audit,
+        "audit_training_manifest",
+        replacing_audit,
+    )
+
+    with pytest.raises(
+        ManifestSourceAuditError,
+        match="manifest path identity changed during source audit",
+    ):
+        audit_manifest_sources(manifest_path)
+
+
+def test_source_audit_rejects_byte_identical_leaderboard_handoff_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (
+        manifest_path,
+        _,
+        leaderboard_path,
+        _,
+        _,
+    ) = _fixture(tmp_path)
+    replacement = tmp_path / "replacement-leaderboard.json"
+    original = tmp_path / "original-leaderboard.json"
+    replacement.write_bytes(leaderboard_path.read_bytes())
+
+    nested_audit = manifest_source_audit.audit_leaderboard
+
+    def replacing_audit(path: Path) -> dict:
+        receipt = nested_audit(path)
+        path.rename(original)
+        replacement.rename(path)
+        return receipt
+
+    monkeypatch.setattr(
+        manifest_source_audit,
+        "audit_leaderboard",
+        replacing_audit,
+    )
+
+    with pytest.raises(
+        ManifestSourceAuditError,
+        match=(
+            "linked leaderboard path identity changed "
+            "during source audit"
+        ),
+    ):
+        audit_manifest_sources(manifest_path)
+
