@@ -1,3 +1,4 @@
+# Recheck idle listener after successful CLI and portal proofs, 2026-10-08T00:03Z
 name: Restore idle zCloud listener for LightUp export validation
 on:
   push:
