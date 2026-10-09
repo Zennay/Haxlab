@@ -10,14 +10,21 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+import importlib.util
 
-from tools.m0_import_snapshot_compare import (
-    ARTIFACTS,
-    SnapshotError,
-    compare,
-    main,
-    snapshot,
-)
+# CI installs only the src/ package. The standalone read-only tool intentionally
+# is not installed as a production package, so load it by its repository path.
+_TOOL_FILE = Path(__file__).resolve().parents[1] / "tools" / "m0_import_snapshot_compare.py"
+_SPEC = importlib.util.spec_from_file_location("m0_import_snapshot_compare", _TOOL_FILE)
+if _SPEC is None or _SPEC.loader is None:
+    raise RuntimeError("Could not load M0 comparator spec")
+_TOOL = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(_TOOL)
+ARTIFACTS = _TOOL.ARTIFACTS
+SnapshotError = _TOOL.SnapshotError
+compare = _TOOL.compare
+main = _TOOL.main
+snapshot = _TOOL.snapshot
 
 
 def _fixture(root: Path) -> None:
