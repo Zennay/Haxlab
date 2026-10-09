@@ -16,7 +16,13 @@ boundaries: **500 games**, **0.51 lower confidence bound** (at the policy's
 inclusive 0.51 minimum), **98/100 frozen scenarios**, distinct model identities and a
 real Boolean reproducibility witness.
 
-It verifies the following independent metamorphic properties:
+It verifies the following independent metamorphic properties, and also runs a
+108-case Cartesian product of games (499/500/501), lower bounds
+(0.49/0.51/0.52), frozen successes (97/98/100), critical-regression presence
+and Boolean reproducibility. The expected eligibility is an independently
+specified logical AND of the five gates, not a call to the implementation.
+
+It verifies these metamorphic properties:
 
 1. Repeating the decision on unchanged evidence/policy is deterministic and
    does not mutate either input.
