@@ -49,14 +49,21 @@ With the repository source and test dependencies installed:
 python -m pytest -q tests/test_evaluation_promotion_metamorphic_contract.py
 ```
 
-The standalone manual-only workflow
-`.github/workflows/evaluation-promotion-metamorphic-proof.yml` can execute
-this on the project self-hosted VPS runner only after the workflow is
-registered on the default branch or an existing approved dispatcher can invoke
-it against the exact ref. A new branch-only workflow is not assumed dispatchable. It checks out by immutable SHA, verifies that HEAD is the
-selected SHA, uses no checkout credentials, and cannot run via PR events or
-scheduled triggers. Do not dispatch it while the shared HaxLab runner is
-reserved for canonical #100 and #436 validation.
+The isolated proof workflow
+`.github/workflows/evaluation-promotion-metamorphic-proof.yml` is staged
+on this branch. Before default-branch registration, GitHub may not expose
+`workflow_dispatch` for a new workflow. A narrowly scoped **push trigger**
+provides an alternative without creating a PR: when runner sequencing permits,
+deliberately add or change
+`.github/haxlab-evaluation-promotion-metamorphic-proof.trigger` on
+`validation/evaluation-promotion-metamorphic-20261009`. Ordinary test,
+documentation and workflow commits do not match this trigger path.
+The trigger file does not exist in the staged candidate and **no run has been
+requested**. The proof uses the triggering commit as the exact source SHA,
+checks the live branch tip and the expected VPS/runner identity, and does not
+persist checkout credentials. It cannot run via PR events or schedules.
+Do not trigger it while the shared HaxLab runner is reserved for canonical
+#100 and #436 validation.
 
 ## Integration/ownership
 
