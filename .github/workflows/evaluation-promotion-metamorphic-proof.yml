@@ -1,0 +1,52 @@
+name: Evaluation promotion metamorphic proof
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-evaluation-promotion-metamorphic-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  focused-contract:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout immutable event revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          clean: true
+
+      - name: Fail closed on branch or exact-head drift
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          EXPECTED_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          test "$EXPECTED_REF" = "refs/heads/validation/evaluation-promotion-metamorphic-20261009"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          live_head="$(git ls-remote origin "$EXPECTED_REF" | awk '{print $1}')"
+          test -n "$live_head"
+          test "$live_head" = "$EXPECTED_SHA"
+
+      - name: Exercise frozen promotion metamorphic contract
+        shell: bash
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: |
+          set -euo pipefail
+          python3 -m venv /tmp/haxlab-eval-metamorphic-${{ github.run_id }}
+          venv="/tmp/haxlab-eval-metamorphic-${{ github.run_id }}"
+          trap 'rm -rf "$venv"' EXIT
+          "$venv/bin/python" -m pip install --disable-pip-version-check -e '.[dev]'
+          "$venv/bin/python" -m pytest -q -p no:cacheprovider tests/test_evaluation_promotion_metamorphic_contract.py
+          git diff --exit-code
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo "HAXLAB_EVALUATION_PROMOTION_METAMORPHIC_PROOF=success"
