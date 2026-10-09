@@ -1,0 +1,200 @@
+name: Freeze Multisource Evaluation Suite v2 Current-Main
+
+on:
+  push:
+    branches:
+      - feature/arena-v2-current-main-20261004
+    paths:
+      - "src/haxlab/evaluation/scenario_source.py"
+      - "src/haxlab/evaluation/multisource_suite.py"
+      - "tests/test_scenario_source.py"
+      - "tests/test_multisource_suite.py"
+      - "tests/test_multisource_duel.py"
+      - "src/haxlab/evaluation/calibration_resume.py"
+      - "tests/test_calibration_resume.py"
+      - ".github/workflows/closed-loop-arena-v2-calibration.yml"
+      - "configs/evaluation/multisource-suite-v2.json"
+      - "pyproject.toml"
+      - ".github/workflows/multisource-suite-v2.yml"
+      - ".github/workflows/ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  freeze:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact event SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Run multisource v2 regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .suite-ci-venv
+          python3 -m venv .suite-ci-venv
+          .suite-ci-venv/bin/pip install --upgrade pip
+          .suite-ci-venv/bin/pip install -e '.[dev]'
+          .suite-ci-venv/bin/pytest -q             tests/test_scenario_source.py             tests/test_multisource_suite.py             tests/test_multisource_duel.py
+
+      - name: Freeze v2 manifest from existing immutable multisource evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=/var/lib/haxlab/derived/evaluation/candidate-d-multisource-holdout-v1
+          STAGE="/tmp/haxlab-multisource-suite-v2-$GITHUB_RUN_ID"
+          OUT="$STAGE/frozen-manifest-v2.json"
+          CONFIG="$GITHUB_WORKSPACE/configs/evaluation/multisource-suite-v2.json"
+
+          sudo -u haxlab test -r "$ROOT/frozen-manifest.json"
+          sudo -u haxlab rm -rf "$STAGE"
+          sudo -u haxlab mkdir -p "$STAGE"
+
+          sudo -u haxlab env             ROOT="$ROOT"             STAGE="$STAGE"             OUT="$OUT"             CONFIG="$CONFIG"             PYTHONPATH="$GITHUB_WORKSPACE/src"             .suite-ci-venv/bin/python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import shutil
+          from pathlib import Path
+
+          from haxlab.evaluation.multisource_suite import (
+              build_frozen_multisource_suite,
+          )
+
+          root = Path(os.environ["ROOT"])
+          stage = Path(os.environ["STAGE"])
+          out = Path(os.environ["OUT"])
+          config = json.loads(Path(os.environ["CONFIG"]).read_text())
+          old_manifest_path = root / "frozen-manifest.json"
+          old_manifest_bytes = old_manifest_path.read_bytes()
+          old_manifest_sha = hashlib.sha256(old_manifest_bytes).hexdigest()
+          old_manifest = json.loads(old_manifest_bytes)
+
+          entries = list(old_manifest.get("sources") or [])
+          wanted = int(config["source_count"])
+          if len(entries) != wanted:
+              raise SystemExit(
+                  f"expected {wanted} frozen sources, found {len(entries)}"
+              )
+
+          source_roots = []
+          for index, entry in enumerate(entries, start=1):
+              source_id = str(entry.get("id") or f"source-{index:02d}")
+              replay_sha = str(
+                  entry.get("replay_sha256")
+                  or entry.get("sha256")
+                  or ""
+              ).strip().lower()
+              if len(replay_sha) != 64:
+                  raise SystemExit(f"{source_id}: missing replay SHA-256")
+
+              source_root = root / source_id
+              target = stage / source_id
+              target.mkdir(parents=True, exist_ok=True)
+              for name in ("stadium.hbs", "scenarios.json"):
+                  source_file = source_root / name
+                  if not source_file.is_file():
+                      raise SystemExit(f"missing frozen source artifact: {source_file}")
+                  shutil.copyfile(source_file, target / name)
+
+              provenance = dict(entry.get("source") or {})
+              provenance.update({
+                  "schema": "haxlab-replay-scenario-source-v1",
+                  "sha256": replay_sha,
+              })
+              for key in (
+                  "duration_seconds",
+                  "sampled_states",
+                  "touches",
+                  "role_confidence_min",
+                  "raw_path",
+                  "analysis_path",
+              ):
+                  if key in entry and key not in provenance:
+                      provenance[key] = entry[key]
+              (target / "source.json").write_text(
+                  json.dumps(provenance, indent=2, sort_keys=True) + "\n",
+                  encoding="utf-8",
+              )
+              source_roots.append(target)
+
+          manifest = build_frozen_multisource_suite(
+              source_roots,
+              suite_seed=int(config["suite_seed"]),
+              scenarios_per_source=int(config["scenarios_per_source"]),
+              rollout_seconds=int(config["rollout_seconds"]),
+              sample_every_ticks=int(config["sample_every_ticks"]),
+              history_window=int(config["history_window"]),
+              minimum_sources=int(config["minimum_sources"]),
+          )
+          manifest["provenance"] = {
+              "source_suite": "candidate-d-multisource-holdout-v1",
+              "source_frozen_manifest_sha256": old_manifest_sha,
+              "config_schema": config["schema"],
+              "config_sha256": hashlib.sha256(
+                  Path(os.environ["CONFIG"]).read_bytes()
+              ).hexdigest(),
+          }
+          # Recompute suite hash after attaching provenance.
+          from haxlab.evaluation.multisource_suite import canonical_sha256
+          manifest.pop("suite_sha256", None)
+          manifest["suite_sha256"] = canonical_sha256(manifest)
+          out.write_text(
+              json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+
+          if hashlib.sha256(old_manifest_path.read_bytes()).hexdigest() != old_manifest_sha:
+              raise SystemExit("source frozen manifest changed during v2 freeze")
+
+          print(json.dumps({
+              "schema": manifest["schema"],
+              "suite_sha256": manifest["suite_sha256"],
+              "source_count": manifest["source_count"],
+              "replay_sha256s": manifest["replay_sha256s"],
+              "total_scenarios": manifest["total_scenarios"],
+              "total_mirrored_matches": manifest["total_mirrored_matches"],
+              "source_frozen_manifest_sha256": old_manifest_sha,
+          }, indent=2))
+          PY
+
+          sudo -u haxlab cat "$OUT" > multisource-suite-v2-manifest.json
+          sudo -u haxlab rm -rf "$STAGE"
+
+      - name: Verify frozen manifest is self-consistent
+        shell: bash
+        run: |
+          set -euo pipefail
+          .suite-ci-venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+          from haxlab.evaluation.multisource_suite import canonical_sha256
+
+          path = Path("multisource-suite-v2-manifest.json")
+          manifest = json.loads(path.read_text())
+          expected = manifest.pop("suite_sha256")
+          actual = canonical_sha256(manifest)
+          if actual != expected:
+              raise SystemExit(f"suite hash mismatch: {actual} != {expected}")
+          if manifest.get("source_count") != 3:
+              raise SystemExit("expected exactly three frozen sources")
+          if manifest.get("evaluation", {}).get("raw_policy_only") is not True:
+              raise SystemExit("raw-policy requirement missing")
+          if len(set(manifest.get("replay_sha256s") or [])) != 3:
+              raise SystemExit("replay sources are not disjoint")
+          print("MULTISOURCE_SUITE_V2_GREEN", expected)
+          PY
+
+      - name: Upload frozen suite manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: multisource-evaluation-suite-v2
+          path: multisource-suite-v2-manifest.json
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,123 @@
+name: Replay scenario state integrity validation
+
+on:
+  push:
+    branches:
+      - validation/replay-scenario-state-integrity-20261006
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-replay-scenario-state-integrity-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Validate replay-start syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check tools/sandbox_replay_start.js
+          node --check tests/test_replay_scenario_state_integrity.js
+
+      - name: Run replay-state integrity regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          NODE_PATH=/opt/haxlab/node_modules node tests/test_replay_scenario_state_integrity.js
+
+      - name: Run adjacent Arena v2 Node regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          NODE_PATH=/opt/haxlab/node_modules node tests/test_closed_loop_arena_v2.js
+
+      - name: Validate all frozen scenario disc states
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=/var/lib/haxlab/derived/evaluation/candidate-d-multisource-holdout-v1
+          sudo -u haxlab env             NODE_PATH=/opt/haxlab/node_modules             ROOT="$ROOT"             WORKSPACE="$GITHUB_WORKSPACE"             node - <<'NODE'
+          "use strict";
+          const fs = require("fs");
+          const path = require("path");
+          const {
+            validateDiscState,
+          } = require(path.join(process.env.WORKSPACE, "tools/sandbox_replay_start"));
+
+          const roles = ["gk", "dm", "am", "st"];
+          let total = 0;
+          for (const source of ["01", "02", "03"]) {
+            const scenarioPath = path.join(
+              process.env.ROOT,
+              `source-${source}`,
+              "scenarios.json",
+            );
+            const payload = JSON.parse(fs.readFileSync(scenarioPath, "utf8"));
+            const rows = Array.isArray(payload) ? payload : payload.scenarios;
+            if (!Array.isArray(rows)) {
+              throw new Error(`source-${source} scenarios must be an array`);
+            }
+            if (rows.length !== 16) {
+              throw new Error(
+                `source-${source} expected 16 frozen scenarios; got ${rows.length}`,
+              );
+            }
+            rows.forEach((row, index) => {
+              if (!row || typeof row !== "object" || Array.isArray(row)) {
+                throw new Error(`source-${source} scenario ${index} must be an object`);
+              }
+              validateDiscState(
+                row.ball,
+                `source-${source} scenario ${index} ball`,
+              );
+              for (const team of ["1", "2"]) {
+                if (
+                  !row.teams ||
+                  !row.teams[team] ||
+                  typeof row.teams[team] !== "object" ||
+                  Array.isArray(row.teams[team])
+                ) {
+                  throw new Error(
+                    `source-${source} scenario ${index} team ${team} missing`,
+                  );
+                }
+                for (const role of roles) {
+                  validateDiscState(
+                    row.teams[team][role],
+                    `source-${source} scenario ${index} team ${team} role ${role}`,
+                  );
+                }
+              }
+              total += 1;
+            });
+          }
+          if (total !== 48) {
+            throw new Error(`expected 48 frozen scenarios; validated ${total}`);
+          }
+          console.log(
+            JSON.stringify({
+              frozen_sources: 3,
+              frozen_scenarios: total,
+              disc_state_integrity: "green",
+            }),
+          );
+          NODE
+
+      - name: Record exact-head validation evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "REPLAY_SCENARIO_STATE_INTEGRITY_HEAD=$(git rev-parse HEAD)"
+          echo "REPLAY_SCENARIO_STATE_INTEGRITY_RESULT=green"

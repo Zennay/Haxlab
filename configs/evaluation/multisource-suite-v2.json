@@ -1,0 +1,13 @@
+{
+  "schema": "haxlab-multisource-evaluation-config-v2",
+  "suite_seed": 1337,
+  "minimum_sources": 3,
+  "source_count": 3,
+  "scenarios_per_source": 16,
+  "rollout_seconds": 30,
+  "sample_every_ticks": 6,
+  "history_window": 8,
+  "mirror_sides": true,
+  "raw_policy_only": true,
+  "selection_algorithm": "state-pass-v4-sampled-states-desc-sha256-asc"
+}
