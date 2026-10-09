@@ -29,6 +29,8 @@ jobs:
           EXPECTED_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
+          test "$RUNNER_NAME" = "vps-bb300bba-haxlab"
+          test "$(hostname -s)" = "vps-bb300bba"
           test "$EXPECTED_REF" = "refs/heads/validation/evaluation-promotion-metamorphic-20261009"
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           live_head="$(git ls-remote origin "$EXPECTED_REF" | awk '{print $1}')"
