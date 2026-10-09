@@ -22,7 +22,7 @@ def _passing_evidence() -> EvaluationEvidence:
         champion_id="champion-frozen",
         games_vs_champion=500,
         score_rate_vs_champion=0.55,
-        score_rate_lower_bound=0.52,
+        score_rate_lower_bound=0.51,
         goal_difference_per_game=-0.1,
         frozen_scenarios_total=100,
         frozen_scenarios_passed=98,
