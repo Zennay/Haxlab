@@ -1,0 +1,65 @@
+# Frozen promotion metamorphic acceptance contract
+
+This lane protects the conservative `haxlab.evaluation.promotion.decide_promotion`
+decision without changing its thresholds, evidence schema, implementation or
+the champion pointer.
+
+## Scope
+
+The focused suite `tests/test_evaluation_promotion_metamorphic_contract.py`
+uses in-memory `EvaluationEvidence`, `Regression` and `PromotionPolicy`.
+It never reads training data, performs a match, opens sealed holdout evidence,
+writes to VPS runtime storage or promotes a champion.
+
+The suite starts from a valid challenger at the default inclusive acceptance
+boundaries: **500 games**, **0.52 lower confidence bound** (above the policy's
+0.51 minimum), **98/100 frozen scenarios**, distinct model identities and a
+real Boolean reproducibility witness.
+
+It verifies the following independent metamorphic properties:
+
+1. Repeating the decision on unchanged evidence/policy is deterministic and
+   does not mutate either input.
+2. Reducing games, confidence, scenario passes, or reproducibility cannot
+   turn an accepted candidate into an accepted weaker candidate.
+3. A more restrictive policy cannot let the same candidate bypass a gate.
+4. Even a near-perfect aggregate challenger remains rejected with a critical
+   frozen-scenario regression under the default policy.
+5. Only an explicit native Boolean `True` policy override can allow critical
+   regressions. This is an observation of the current conservative API, **not**
+   authorization to change the live promotion policy.
+6. Noncritical warning regressions and a finite negative goal difference are
+   diagnostic, not undocumented vetoes.
+
+These tests are **contract regressions**, not a simulation win-rate claim,
+not calibration, not fresh multisource evidence, and not a human holdout.
+They cannot alone establish Arena-v2 acceptance.
+
+## Run
+
+With the repository source and test dependencies installed:
+
+```bash
+python -m pytest -q tests/test_evaluation_promotion_metamorphic_contract.py
+```
+
+The standalone manual-only workflow
+`.github/workflows/evaluation-promotion-metamorphic-proof.yml` can execute
+this on the project self-hosted VPS runner, explicitly selecting an exact
+branch/ref. It checks out by immutable SHA, verifies that HEAD is the
+selected SHA, uses no checkout credentials, and cannot run via PR events or
+scheduled triggers. Do not dispatch it while the shared HaxLab runner is
+reserved for canonical #100 and #436 validation.
+
+## Integration/ownership
+
+This candidate is based on frozen Arena-v2
+`c0ec9ef22a54e1d65a9160aba295589fcf8f6b81`, not moving `main`.
+Only three additive paths are in scope (test, this documentation and dedicated
+manual proof). Do not modify or merge owner-controlled calibration/multisource
+workflows, evidence readers or product gate logic from this lane.
+
+Before integration, a reviewer must reconcile canonical branch drift, check
+disjoint file ownership, obtain exact-head focused green test evidence and
+the required repository checks. No evidence in this lane authorizes model
+promotion.
