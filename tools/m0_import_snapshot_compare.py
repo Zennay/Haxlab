@@ -34,11 +34,10 @@ class SnapshotError(ValueError):
     """A snapshot is missing, unsafe to read, or structurally invalid."""
 
 
-def _read_artifact(root: Path, name: str, *, keep_bytes: bool = False) -> tuple[str, bytes | None]:
-    path = root / name
+def _read_artifact(root_fd: int, name: str, *, keep_bytes: bool = False) -> tuple[str, bytes | None]:
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        fd = os.open(path, flags)
+        fd = os.open(name, flags, dir_fd=root_fd)
         with os.fdopen(fd, "rb") as stream:
             before = os.fstat(stream.fileno())
             if not stat.S_ISREG(before.st_mode):
@@ -50,7 +49,7 @@ def _read_artifact(root: Path, name: str, *, keep_bytes: bool = False) -> tuple[
                 if keep_bytes:
                     parts.append(chunk)
             after = os.fstat(stream.fileno())
-            logical = os.stat(path, follow_symlinks=False)
+            logical = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
             identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
             if identity != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
                 raise SnapshotError(f"{name}: changed while reading")
@@ -101,22 +100,37 @@ def _manifest_counts(raw: bytes) -> dict[str, int]:
 
 
 def snapshot(root: Path) -> dict[str, Any]:
+    """Read one coherent directory identity, never mixing swapped roots."""
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_DIRECTORY", 0)
     try:
-        mode = root.lstat().st_mode
+        root_fd = os.open(root, flags)
+        with os.fdopen(root_fd, "rb") as directory:
+            opened = os.fstat(directory.fileno())
+            if not stat.S_ISDIR(opened.st_mode):
+                raise SnapshotError("snapshot root must be a real directory, not a symlink")
+            original = os.stat(root, follow_symlinks=False)
+            if (opened.st_dev, opened.st_ino) != (original.st_dev, original.st_ino):
+                raise SnapshotError("snapshot root changed before read")
+            hashes: dict[str, str] = {}
+            manifest_bytes: bytes | None = None
+            for name in ARTIFACTS:
+                digest, raw = _read_artifact(
+                    directory.fileno(), name, keep_bytes=(name == "manifest.json")
+                )
+                hashes[name] = digest
+                if name == "manifest.json":
+                    manifest_bytes = raw
+            latest = os.stat(root, follow_symlinks=False)
+            if (opened.st_dev, opened.st_ino) != (latest.st_dev, latest.st_ino):
+                raise SnapshotError("snapshot root changed while reading")
+            if manifest_bytes is None:
+                raise SnapshotError("manifest.json: missing evidence")
+            return {"sha256": hashes, "counts": _manifest_counts(manifest_bytes)}
     except OSError as exc:
-        raise SnapshotError(f"invalid snapshot directory: {exc.strerror or type(exc).__name__}") from exc
-    if not stat.S_ISDIR(mode):
-        raise SnapshotError("snapshot root must be a real directory, not a symlink")
-    hashes: dict[str, str] = {}
-    manifest_bytes: bytes | None = None
-    for name in ARTIFACTS:
-        digest, raw = _read_artifact(root, name, keep_bytes=(name == "manifest.json"))
-        hashes[name] = digest
-        if name == "manifest.json":
-            manifest_bytes = raw
-    assert manifest_bytes is not None  # Constant local invariant, not input validation.
-    return {"sha256": hashes, "counts": _manifest_counts(manifest_bytes)}
-
+        raise SnapshotError(
+            f"invalid snapshot directory: {exc.strerror or type(exc).__name__}"
+        ) from exc
 
 def compare(left: Path, right: Path) -> dict[str, Any]:
     before, after = snapshot(left), snapshot(right)
