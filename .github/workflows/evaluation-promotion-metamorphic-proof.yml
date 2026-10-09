@@ -42,10 +42,10 @@ jobs:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
         run: |
           set -euo pipefail
-          python3 -m venv /tmp/haxlab-eval-metamorphic-${{ github.run_id }}
-          venv="/tmp/haxlab-eval-metamorphic-${{ github.run_id }}"
-          trap 'rm -rf "$venv"' EXIT
-          "$venv/bin/python" -m pip install --disable-pip-version-check -e '.[dev]'
+          venv="$(mktemp -d /tmp/haxlab-eval-metamorphic.XXXXXXXX)"
+          trap 'rm -rf -- "$venv"' EXIT
+          python3 -m venv "$venv"
+          "$venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir -e '.[dev]'
           "$venv/bin/python" -m pytest -q -p no:cacheprovider tests/test_evaluation_promotion_metamorphic_contract.py
           git diff --exit-code
           test -z "$(git status --porcelain --untracked-files=no)"
