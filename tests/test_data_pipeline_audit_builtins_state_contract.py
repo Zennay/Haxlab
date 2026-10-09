@@ -18,6 +18,11 @@ _MAPPING_MUTATORS = {
     "setdefault", "update",
 }
 _OPERATOR_MUTATORS = {"operator.setitem", "operator.delitem", "operator.ior"}
+_DICT_MUTATORS = {
+    f"{owner}.{method}"
+    for owner in ("dict", "builtins.dict")
+    for method in _MAPPING_MUTATORS
+}
 
 
 def _canonical(node: ast.AST | None, aliases: dict[str, str]) -> str | None:
@@ -26,6 +31,9 @@ def _canonical(node: ast.AST | None, aliases: dict[str, str]) -> str | None:
     if isinstance(node, ast.Name):
         if node.id == "__builtins__":
             return "builtins"
+        if node.id in {"builtins", "operator"} and node.id not in aliases:
+            # A local mapping named 'builtins' is not the interpreter module.
+            return None
         return aliases.get(node.id, node.id)
     if isinstance(node, ast.Attribute):
         root = _canonical(node.value, aliases)
@@ -138,6 +146,9 @@ class _BuiltinStateVisitor(ast.NodeVisitor):
                 self._reject(node, "builtin_mapping_mutator")
         if fn in {"builtins.__setattr__", "builtins.__delattr__"}:
             self._reject(node, "builtin_module_mutator")
+        if fn in _DICT_MUTATORS and node.args:
+            if _canonical(node.args[0], self.aliases) in {"builtins", "builtins.__dict__"}:
+                self._reject(node, "builtin_unbound_mapping_mutator")
         if fn in _OPERATOR_MUTATORS and node.args:
             if _canonical(node.args[0], self.aliases) in {"builtins", "builtins.__dict__"}:
                 self._reject(node, "builtin_operator_write")
@@ -191,6 +202,9 @@ def test_all_data_pipeline_auditors_preserve_builtin_namespace() -> None:
     ("import operator as op\nimport builtins\nop.setitem(builtins.__dict__, 'open', 1)", "builtin_operator_write"),
     ("from operator import delitem\nimport builtins\ndelitem(vars(builtins), 'open')", "builtin_operator_write"),
     ("import builtins\nbuiltins.__setattr__('open', None)", "builtin_module_mutator"),
+    ("import builtins\ndict.update(builtins.__dict__, {'open': 1})", "builtin_unbound_mapping_mutator"),
+    ("import builtins\ndict.__setitem__(builtins.__dict__, 'open', None)", "builtin_unbound_mapping_mutator"),
+    ("from builtins import dict as dt\nimport builtins\ndt.pop(builtins.__dict__, 'open')", "builtin_unbound_mapping_mutator"),
     ("from builtins import *", "wildcard_builtin_import"),
 ])
 def test_detects_process_builtin_mutation(code: str, reason: str) -> None:
@@ -203,6 +217,7 @@ def test_detects_process_builtin_mutation(code: str, reason: str) -> None:
     "from builtins import getattr\nvalue = getattr(object(), 'a', None)",
     "import builtins\nsnapshot = dict(vars(builtins))\nsnapshot.update({'open': 1})",
     "values = {}\nvalues['open'] = 1\nvalues.update({'open': 2})",
+    "builtins = {}\nbuiltins['open'] = None",
     "import operator\nvalues = {}\noperator.setitem(values, 'open', 1)",
     "import builtins\nname = getattr(builtins, '__name__')",
     "def audit(source):\n    return sorted(source)",
