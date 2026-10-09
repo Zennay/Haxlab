@@ -12,8 +12,8 @@ It never reads training data, performs a match, opens sealed holdout evidence,
 writes to VPS runtime storage or promotes a champion.
 
 The suite starts from a valid challenger at the default inclusive acceptance
-boundaries: **500 games**, **0.52 lower confidence bound** (above the policy's
-0.51 minimum), **98/100 frozen scenarios**, distinct model identities and a
+boundaries: **500 games**, **0.51 lower confidence bound** (at the policy's
+inclusive 0.51 minimum), **98/100 frozen scenarios**, distinct model identities and a
 real Boolean reproducibility witness.
 
 It verifies the following independent metamorphic properties:
@@ -45,8 +45,9 @@ python -m pytest -q tests/test_evaluation_promotion_metamorphic_contract.py
 
 The standalone manual-only workflow
 `.github/workflows/evaluation-promotion-metamorphic-proof.yml` can execute
-this on the project self-hosted VPS runner, explicitly selecting an exact
-branch/ref. It checks out by immutable SHA, verifies that HEAD is the
+this on the project self-hosted VPS runner only after the workflow is
+registered on the default branch or an existing approved dispatcher can invoke
+it against the exact ref. A new branch-only workflow is not assumed dispatchable. It checks out by immutable SHA, verifies that HEAD is the
 selected SHA, uses no checkout credentials, and cannot run via PR events or
 scheduled triggers. Do not dispatch it while the shared HaxLab runner is
 reserved for canonical #100 and #436 validation.
