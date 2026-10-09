@@ -62,6 +62,7 @@ jobs:
           PYTHONPATH="$GITHUB_WORKSPACE/src" \
             .data-pipeline-builtins-state-venv/bin/pytest -q \
               tests/test_data_pipeline_audit_builtins_state_contract.py
+              tests/test_data_pipeline_skill_audit_policy_coverage.py
           PYTHONPATH="$GITHUB_WORKSPACE/src" \
             .data-pipeline-builtins-state-venv/bin/pytest --collect-only -q >/dev/null
           echo "HAXLAB_DATA_PIPELINE_AUDIT_BUILTINS_STATE_RESULT=green"
