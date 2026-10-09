@@ -16,6 +16,6 @@ Ordinary reads of `builtins`, pure helpers, local mapping mutations, and copying
 
 ## Ownership and safety
 
-The regression is independent of the existing process-state contract (#197: `os`/`sys`/locale/signal/umask), logging, instrumentation, environment and ambient-entropy contracts. It changes no product, model, champion/promotion or frozen artifact paths. Skill auditors are included directly without changing the shared skill-policy bridge.
+The regression is independent of the existing process-state contract (#197: `os`/`sys`/locale/signal/umask), logging, instrumentation, environment and ambient-entropy contracts. It changes no product, model, champion/promotion or frozen artifact paths. Skill auditors are scanned directly; the shared skill-policy bridge is also extended with a live `builtins_state` scanner and smoke case, preserving its complete-manifest invariant.
 
 Run `pytest -q tests/test_data_pipeline_audit_builtins_state_contract.py` for focused checks. The manual-only proof `.github/workflows/data-pipeline-audit-builtins-state-proof.yml` requires an immutable commit and refuses stale branch heads. Do not dispatch or merge it while canonical Arena #100 → #436 owns the serialized HaxLab runner.
