@@ -26,6 +26,40 @@ def _content_address_path_matches(path: Path, sha256: str) -> bool:
     )
 
 
+def _ledger_diagnostic_text(value: object) -> str:
+    """Render an untrusted SQLite scalar without leaking it into trusted logic."""
+
+    if type(value) is str:
+        return value
+    if type(value) is bytes:
+        return f"<blob:{value.hex()}>"
+    if value is None:
+        return "<null>"
+    return f"<{type(value).__name__}:{value!r}>"
+
+
+def _validated_archive_ledger_row(row) -> tuple[str, str, int]:
+    """Validate persisted raw_replays evidence before filesystem trust."""
+
+    sha256 = row["sha256"]
+    if (
+        type(sha256) is not str
+        or len(sha256) != 64
+        or any(character not in "0123456789abcdef" for character in sha256)
+    ):
+        raise _ArchiveReadError("invalid_ledger_evidence:sha256")
+
+    archive_path = row["archive_path"]
+    if type(archive_path) is not str or archive_path == "":
+        raise _ArchiveReadError("invalid_ledger_evidence:archive_path")
+
+    size_bytes = row["size_bytes"]
+    if type(size_bytes) is not int or size_bytes < 0:
+        raise _ArchiveReadError("invalid_ledger_evidence:size_bytes")
+
+    return sha256, archive_path, size_bytes
+
+
 def _raise_open_failure(path: Path) -> None:
     """Classify the path after a failed no-follow open without trusting it."""
 
@@ -240,9 +274,23 @@ def audit_raw_archive(
 
     for row in rows:
         checked_records += 1
-        sha256 = str(row["sha256"])
-        archive_path = str(row["archive_path"])
-        expected_size = int(row["size_bytes"])
+        raw_sha256 = row["sha256"]
+        raw_archive_path = row["archive_path"]
+        try:
+            sha256, archive_path, expected_size = _validated_archive_ledger_row(row)
+        except _ArchiveReadError as exc:
+            objects_with_issues += 1
+            read_failures += 1
+            if len(issues) < max(0, max_issues):
+                issues.append(
+                    {
+                        "sha256": _ledger_diagnostic_text(raw_sha256),
+                        "archive_path": _ledger_diagnostic_text(raw_archive_path),
+                        "reasons": [str(exc)],
+                    }
+                )
+            continue
+
         path = Path(archive_path)
         reasons: list[str] = []
 
