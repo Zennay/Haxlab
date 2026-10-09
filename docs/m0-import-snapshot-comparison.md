@@ -23,10 +23,13 @@ The comparator requires exactly the standard five artifact filenames to
 exist as readable regular files: `duplicates.json`, `manifest.json`,
 `matches.jsonl`, `replays.json`, `reports.json`. It rejects a symlink
 snapshot root, symlink artifact, missing artifact, non-regular artifact,
-changed file identity during its read, malformed manifest, duplicate JSON
+changed file identity during its read, swapped snapshot directory identity,
+malformed manifest, duplicate JSON
 manifest keys, non-finite JSON constants, non-native/negative counters,
 incoherent replay counts and impossible match counts. It reads regular files
-without following their final symlink component.
+through a stable directory descriptor, without following their final symlink
+component. A replaced root path causes comparison to fail rather than mixing
+files from the old and new directory identities.
 
 ## Interpretation
 
