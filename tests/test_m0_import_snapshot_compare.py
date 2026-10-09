@@ -5,10 +5,10 @@ from __future__ import annotations
 import contextlib
 import io
 import json
-import os
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 import importlib.util
 
@@ -102,6 +102,35 @@ class M0SnapshotComparisonTests(unittest.TestCase):
         link.symlink_to(self.before, target_is_directory=True)
         with self.assertRaisesRegex(SnapshotError, "real directory"):
             snapshot(link)
+
+    def test_replaced_snapshot_root_is_not_mixed_during_read(self) -> None:
+        original_reader = _TOOL._read_artifact
+        moved = Path(self.temp.name) / "after-moved"
+
+        def swap_root(root_fd: int, name: str, **kwargs: object):
+            evidence = original_reader(root_fd, name, **kwargs)
+            if name == ARTIFACTS[0]:
+                self.after.rename(moved)
+                shutil.copytree(self.before, self.after)
+            return evidence
+
+        with mock.patch.object(_TOOL, "_read_artifact", side_effect=swap_root):
+            with self.assertRaisesRegex(SnapshotError, "root changed while reading"):
+                snapshot(self.after)
+
+    def test_comparison_does_not_modify_artifact_bytes_or_mtimes(self) -> None:
+        before = {
+            (root.name, name): ((root / name).read_bytes(), (root / name).stat().st_mtime_ns)
+            for root in (self.before, self.after)
+            for name in ARTIFACTS
+        }
+        compare(self.before, self.after)
+        after = {
+            (root.name, name): ((root / name).read_bytes(), (root / name).stat().st_mtime_ns)
+            for root in (self.before, self.after)
+            for name in ARTIFACTS
+        }
+        self.assertEqual(before, after)
 
     def test_directory_in_place_of_artifact_rejected(self) -> None:
         artifact = self.after / "reports.json"
