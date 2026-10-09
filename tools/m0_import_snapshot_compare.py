@@ -101,36 +101,49 @@ def _manifest_counts(raw: bytes) -> dict[str, int]:
 
 def snapshot(root: Path) -> dict[str, Any]:
     """Read one coherent directory identity, never mixing swapped roots."""
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    flags |= getattr(os, "O_DIRECTORY", 0)
     try:
-        root_fd = os.open(root, flags)
-        with os.fdopen(root_fd, "rb") as directory:
-            opened = os.fstat(directory.fileno())
-            if not stat.S_ISDIR(opened.st_mode):
-                raise SnapshotError("snapshot root must be a real directory, not a symlink")
-            original = os.stat(root, follow_symlinks=False)
-            if (opened.st_dev, opened.st_ino) != (original.st_dev, original.st_ino):
-                raise SnapshotError("snapshot root changed before read")
-            hashes: dict[str, str] = {}
-            manifest_bytes: bytes | None = None
-            for name in ARTIFACTS:
-                digest, raw = _read_artifact(
-                    directory.fileno(), name, keep_bytes=(name == "manifest.json")
-                )
-                hashes[name] = digest
-                if name == "manifest.json":
-                    manifest_bytes = raw
-            latest = os.stat(root, follow_symlinks=False)
-            if (opened.st_dev, opened.st_ino) != (latest.st_dev, latest.st_ino):
-                raise SnapshotError("snapshot root changed while reading")
-            if manifest_bytes is None:
-                raise SnapshotError("manifest.json: missing evidence")
-            return {"sha256": hashes, "counts": _manifest_counts(manifest_bytes)}
+        original = root.lstat()
     except OSError as exc:
         raise SnapshotError(
             f"invalid snapshot directory: {exc.strerror or type(exc).__name__}"
         ) from exc
+    if not stat.S_ISDIR(original.st_mode):
+        raise SnapshotError("snapshot root must be a real directory, not a symlink")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_DIRECTORY", 0)
+    try:
+        root_fd = os.open(root, flags)
+    except OSError as exc:
+        raise SnapshotError(
+            f"invalid snapshot directory: {exc.strerror or type(exc).__name__}"
+        ) from exc
+    try:
+        opened = os.fstat(root_fd)
+        if not stat.S_ISDIR(opened.st_mode):
+            raise SnapshotError("snapshot root is not a directory")
+        if (opened.st_dev, opened.st_ino) != (original.st_dev, original.st_ino):
+            raise SnapshotError("snapshot root changed before read")
+        hashes: dict[str, str] = {}
+        manifest_bytes: bytes | None = None
+        for name in ARTIFACTS:
+            digest, raw = _read_artifact(
+                root_fd, name, keep_bytes=(name == "manifest.json")
+            )
+            hashes[name] = digest
+            if name == "manifest.json":
+                manifest_bytes = raw
+        latest = os.stat(root, follow_symlinks=False)
+        if (opened.st_dev, opened.st_ino) != (latest.st_dev, latest.st_ino):
+            raise SnapshotError("snapshot root changed while reading")
+        if manifest_bytes is None:
+            raise SnapshotError("manifest.json: missing evidence")
+        return {"sha256": hashes, "counts": _manifest_counts(manifest_bytes)}
+    except OSError as exc:
+        raise SnapshotError(
+            f"invalid snapshot directory: {exc.strerror or type(exc).__name__}"
+        ) from exc
+    finally:
+        os.close(root_fd)
 
 def compare(left: Path, right: Path) -> dict[str, Any]:
     before, after = snapshot(left), snapshot(right)
