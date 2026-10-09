@@ -125,3 +125,34 @@ def test_default_critical_regression_veto_can_only_be_disabled_explicitly() -> N
     assert decide_promotion(
         evidence, PromotionPolicy(allow_critical_regressions=True)
     ).promote is True
+
+
+@pytest.mark.parametrize("games", [499, 500, 501])
+@pytest.mark.parametrize("lower_bound", [0.49, 0.51, 0.52])
+@pytest.mark.parametrize("scenarios_passed", [97, 98, 100])
+@pytest.mark.parametrize("critical", [False, True])
+@pytest.mark.parametrize("reproducible", [False, True])
+def test_all_independent_default_gates_compose_with_logical_and(
+    games, lower_bound, scenarios_passed, critical, reproducible
+) -> None:
+    # 108 valid combinations, including inclusive boundaries and mixed failures.
+    regression = (Regression("frozen_defence", "critical"),) if critical else ()
+    evidence = replace(
+        _passing_evidence(),
+        games_vs_champion=games,
+        score_rate_lower_bound=lower_bound,
+        frozen_scenarios_passed=scenarios_passed,
+        regressions=regression,
+        reproducible=reproducible,
+    )
+    expected = (
+        games >= 500
+        and lower_bound >= 0.51
+        and scenarios_passed >= 98
+        and not critical
+        and reproducible
+    )
+    decision = decide_promotion(evidence)
+    assert decision.promote is expected, (evidence, decision)
+    assert bool(decision.reasons)
+    assert decide_promotion(evidence) == decision
