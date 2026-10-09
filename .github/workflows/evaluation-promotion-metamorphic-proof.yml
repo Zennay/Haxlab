@@ -2,6 +2,11 @@ name: Evaluation promotion metamorphic proof
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - validation/evaluation-promotion-metamorphic-20261009
+    paths:
+      - ".github/haxlab-evaluation-promotion-metamorphic-proof.trigger"
 
 permissions:
   contents: read
