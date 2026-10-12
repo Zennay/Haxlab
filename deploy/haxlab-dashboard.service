@@ -1,0 +1,26 @@
+[Unit]
+Description=HaxLab read-only replay intelligence dashboard
+After=network.target haxlab-analyzer.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=haxlab
+Group=haxlab
+WorkingDirectory=/opt/haxlab-dashboard
+Environment=PYTHONPATH=/opt/haxlab/src
+ExecStart=/usr/bin/python3 -u /opt/haxlab-dashboard/server.py --host 127.0.0.1 --port 8767
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/haxlab/state
+RestrictSUIDSGID=true
+LockPersonality=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
