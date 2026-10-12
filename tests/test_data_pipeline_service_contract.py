@@ -45,7 +45,7 @@ def _logical_service_text(name: str) -> str:
 
 def _service_argv_from_text(unit_text: str) -> list[str]:
     """Read precisely one logical ExecStart command from a unit."""
-    logical_text = re.sub(r"\\\\\n\\s*", " ", unit_text)
+    logical_text = re.sub(r"\\\n\s*", " ", unit_text)
     commands = re.findall(r"^ExecStart=(.+)$", logical_text, flags=re.MULTILINE)
     assert len(commands) == 1, f"expected single ExecStart: found {len(commands)}"
     return shlex.split(commands[0])
@@ -256,7 +256,7 @@ def test_service_numeric_validator_rejects_nonfinite_or_invalid_values() -> None
 
 def test_service_parser_recognizes_equals_and_space_option_forms() -> None:
     argv = _service_argv_from_text(
-        "[Service]\\nExecStart=python -m worker --interval=5 --batch-size 24\\n"
+        "[Service]\nExecStart=python -m worker --interval=5 --batch-size 24\n"
     )
     assert _service_flags_from_argv(argv) == {"--interval", "--batch-size"}
     assert _argument_from_argv(argv, "--interval") == "5"
@@ -265,14 +265,14 @@ def test_service_parser_recognizes_equals_and_space_option_forms() -> None:
 
 def test_service_parser_exposes_undeclared_equals_options() -> None:
     argv = _service_argv_from_text(
-        "[Service]\\nExecStart=python -m worker --interval 5 --unknown-opt=1\\n"
+        "[Service]\nExecStart=python -m worker --interval 5 --unknown-opt=1\n"
     )
     assert "--unknown-opt" in _service_flags_from_argv(argv)
 
 
 def test_service_parser_rejects_partial_option_matches() -> None:
     argv = _service_argv_from_text(
-        "[Service]\\nExecStart=python -m worker --interval-extra=5\\n"
+        "[Service]\nExecStart=python -m worker --interval-extra=5\n"
     )
     assert _service_flags_from_argv(argv) == {"--interval-extra"}
     try:
@@ -284,17 +284,20 @@ def test_service_parser_rejects_partial_option_matches() -> None:
 
 
 def test_service_parser_preserves_shell_line_continuations() -> None:
-    argv = _service_argv_from_text(
-        "[Service]\\nExecStart=python -m worker \\\\\\n  --interval=5 \\\\\\n  --batch-size 24\\n"
+    newline = chr(92) + "\n"
+    unit = (
+        "[Service]\nExecStart=python -m worker " + newline
+        + "  --interval=5 " + newline
+        + "  --batch-size 24\n"
     )
+    argv = _service_argv_from_text(unit)
     assert _service_flags_from_argv(argv) == {"--interval", "--batch-size"}
-
 
 def test_service_parser_rejects_multiple_execstarts() -> None:
     try:
         _service_argv_from_text(
-            "[Service]\\nExecStart=python --interval 5\\n"
-            "ExecStart=python --interval 6\\n"
+            "[Service]\nExecStart=python --interval 5\n"
+            "ExecStart=python --interval 6\n"
         )
     except AssertionError as error:
         assert "expected single ExecStart" in str(error)
