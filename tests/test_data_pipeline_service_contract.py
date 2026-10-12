@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import math
 import re
+import shlex
 import tomllib
 from pathlib import Path
 
@@ -42,23 +43,41 @@ def _logical_service_text(name: str) -> str:
     return re.sub(r"\\\n\s*", " ", _service_text(name))
 
 
+def _service_argv_from_text(unit_text: str) -> list[str]:
+    """Read precisely one logical ExecStart command from a unit."""
+    logical_text = re.sub(r"\\\\\n\\s*", " ", unit_text)
+    commands = re.findall(r"^ExecStart=(.+)$", logical_text, flags=re.MULTILINE)
+    assert len(commands) == 1, f"expected single ExecStart: found {len(commands)}"
+    return shlex.split(commands[0])
+
+
+def _service_argv(name: str) -> list[str]:
+    return _service_argv_from_text(_service_text(name))
+
+
+def _argument_from_argv(argv: list[str], flag: str) -> str:
+    for index, token in enumerate(argv):
+        if token.startswith(flag + "="):
+            return token[len(flag) + 1:]
+        if token == flag and index + 1 < len(argv):
+            return argv[index + 1]
+    raise AssertionError(f"missing service option {flag}")
+
+
 def _argument(name: str, flag: str) -> str:
-    match = re.search(
-        rf"(?:^|\s){re.escape(flag)}\s+(\S+)",
-        _logical_service_text(name),
-    )
-    assert match is not None, f"{PIPELINE_SERVICES[name].name} is missing {flag}"
-    return match.group(1)
+    return _argument_from_argv(_service_argv(name), flag)
+
+
+def _service_flags_from_argv(argv: list[str]) -> set[str]:
+    return {
+        token.partition("=")[0]
+        for token in argv
+        if re.fullmatch(r"--[a-z0-9-]+(?:=.*)?", token)
+    }
 
 
 def _service_flags(name: str) -> set[str]:
-    match = re.search(
-        r"^ExecStart=(.+)$",
-        _logical_service_text(name),
-        flags=re.MULTILINE,
-    )
-    assert match is not None, f"{PIPELINE_SERVICES[name].name} is missing ExecStart"
-    return set(re.findall(r"(?<!\S)--[a-z0-9-]+(?=\s|$)", match.group(1)))
+    return _service_flags_from_argv(_service_argv(name))
 
 
 def _declared_flags(name: str) -> set[str]:
@@ -233,3 +252,51 @@ def test_service_numeric_validator_rejects_nonfinite_or_invalid_values() -> None
         "nan", "NaN", "0", "-1", "-0.5", "broken", "",
     ):
         assert not _is_positive_finite_service_number(raw), raw
+
+
+def test_service_parser_recognizes_equals_and_space_option_forms() -> None:
+    argv = _service_argv_from_text(
+        "[Service]\\nExecStart=python -m worker --interval=5 --batch-size 24\\n"
+    )
+    assert _service_flags_from_argv(argv) == {"--interval", "--batch-size"}
+    assert _argument_from_argv(argv, "--interval") == "5"
+    assert _argument_from_argv(argv, "--batch-size") == "24"
+
+
+def test_service_parser_exposes_undeclared_equals_options() -> None:
+    argv = _service_argv_from_text(
+        "[Service]\\nExecStart=python -m worker --interval 5 --unknown-opt=1\\n"
+    )
+    assert "--unknown-opt" in _service_flags_from_argv(argv)
+
+
+def test_service_parser_rejects_partial_option_matches() -> None:
+    argv = _service_argv_from_text(
+        "[Service]\\nExecStart=python -m worker --interval-extra=5\\n"
+    )
+    assert _service_flags_from_argv(argv) == {"--interval-extra"}
+    try:
+        _argument_from_argv(argv, "--interval")
+    except AssertionError as error:
+        assert "missing service option" in str(error)
+    else:
+        raise AssertionError("partial prefix must not be treated as a declared flag")
+
+
+def test_service_parser_preserves_shell_line_continuations() -> None:
+    argv = _service_argv_from_text(
+        "[Service]\\nExecStart=python -m worker \\\\\\n  --interval=5 \\\\\\n  --batch-size 24\\n"
+    )
+    assert _service_flags_from_argv(argv) == {"--interval", "--batch-size"}
+
+
+def test_service_parser_rejects_multiple_execstarts() -> None:
+    try:
+        _service_argv_from_text(
+            "[Service]\\nExecStart=python --interval 5\\n"
+            "ExecStart=python --interval 6\\n"
+        )
+    except AssertionError as error:
+        assert "expected single ExecStart" in str(error)
+    else:
+        raise AssertionError("multiple systemd ExecStart lines are ambiguous")
