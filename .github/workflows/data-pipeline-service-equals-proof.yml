@@ -1,0 +1,44 @@
+name: HaxLab pipeline equals-form service flag proof
+
+on:
+  push:
+    branches:
+      - validation/data-pipeline-service-equals-flags-20261012
+    paths:
+      - tests/test_data_pipeline_service_contract.py
+      - docs/data-pipeline-service-equals-options.md
+      - .github/workflows/data-pipeline-service-equals-proof.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-service-equals-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  focused-proof:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    env:
+      EXPECTED_HEAD: ${{ github.sha }}
+    steps:
+      - name: Checkout immutable source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+          persist-credentials: false
+      - name: Verify exact checkout before tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - name: Run static service flags contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv .service-equals-venv
+          .service-equals-venv/bin/python -m pip install -q -e '.[dev]'
+          .service-equals-venv/bin/python -m compileall -q tests/test_data_pipeline_service_contract.py
+          .service-equals-venv/bin/python -m pytest -q tests/test_data_pipeline_service_contract.py
