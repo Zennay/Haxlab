@@ -1,0 +1,103 @@
+name: HaxLab Analyzer Dashboard
+
+on:
+  push:
+    branches:
+      - main
+      - feature/haxlab-analyzer-dashboard-20261012
+    paths:
+      - "dashboard/**"
+      - "deploy/haxlab-dashboard.service"
+      - ".github/workflows/haxlab-dashboard.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "dashboard/**"
+      - "deploy/haxlab-dashboard.service"
+      - ".github/workflows/haxlab-dashboard.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-dashboard-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Read-only API and browser syntax
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 immutable
+        with:
+          persist-credentials: false
+      - name: Python API regression suite
+        env:
+          PYTHONPATH: src
+        run: python3 -m unittest discover -s dashboard -p 'test_*.py' -v
+      - name: Check browser JavaScript and static assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from html.parser import HTMLParser
+          from pathlib import Path
+          class S(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.inside = False
+                  self.scripts = []
+              def handle_starttag(self, tag, attrs):
+                  if tag == "script": self.inside = True
+              def handle_endtag(self, tag):
+                  if tag == "script": self.inside = False
+              def handle_data(self, data):
+                  if self.inside: self.scripts.append(data)
+          doc = Path("dashboard/index.html").read_text()
+          parser = S(); parser.feed(doc)
+          assert len(parser.scripts) == 1, "one inline UI controller expected"
+          Path("/tmp/haxlab-dashboard-ui.js").write_text(parser.scripts[0])
+          PY
+          node --check /tmp/haxlab-dashboard-ui.js
+          python3 -m py_compile dashboard/server.py
+
+  deploy:
+    name: Install isolated UI on HaxLab VPS
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feature/haxlab-analyzer-dashboard-20261012')
+    needs: check
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 immutable
+        with:
+          persist-credentials: false
+      - name: Verify exact branch head
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - name: Install dashboard without touching replay or champion services
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo install -d -m 0755 -o root -g root /opt/haxlab-dashboard
+          sudo install -m 0644 dashboard/server.py /opt/haxlab-dashboard/server.py
+          sudo install -m 0644 dashboard/index.html /opt/haxlab-dashboard/index.html
+          sudo install -m 0644 deploy/haxlab-dashboard.service /etc/systemd/system/haxlab-dashboard.service
+          sudo systemctl daemon-reload
+          sudo systemctl enable haxlab-dashboard.service
+          sudo systemctl restart haxlab-dashboard.service
+          for i in $(seq 1 15); do
+            if curl -fsS --max-time 3 http://127.0.0.1:8767/healthz; then
+              curl -fsS --max-time 5 http://127.0.0.1:8767/api/overview | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["raw_replays"] >= 0; print("Dashboard API OK; replays:",d["raw_replays"])'
+              echo "Dashboard live on VPS loopback: http://127.0.0.1:8767/"
+              exit 0
+            fi
+            sleep 2
+          done
+          sudo systemctl --no-pager status haxlab-dashboard.service || true
+          exit 1
