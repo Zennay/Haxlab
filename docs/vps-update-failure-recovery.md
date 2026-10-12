@@ -19,11 +19,18 @@ are active:
 
 Snapshot capture is fail-closed. Only stable `active`, `inactive` and
 `failed` states are accepted: `active` is captured, while `inactive` and
-`failed` are treated as not active. Unknown units, transient states such as
-`activating`/`deactivating`/`reloading`, empty state output, or an
-otherwise indeterminate service-manager query abort the update before the first
-service stop. The global snapshot is committed only after the complete scan, so
-a late query failure cannot leave a partially populated recovery snapshot.
+`failed` are treated as not active. Transient `activating`, `deactivating`,
+and `reloading` are **never** classified as a stable state. Each such query
+is rechecked after two seconds, for at most 30 sleeps (60 seconds per unit).
+This is necessary for the autonomy `Type=oneshot` service, whose tick can
+temporarily remain `activating` while the updater begins deployment.
+
+If a transient does not settle within the bounded retry window, or a query
+reports an unknown unit, empty result, unsupported state, or service-manager
+failure, capture aborts the update before the first service stop. The global
+snapshot is committed only after the complete scan, so a late timeout or query
+failure cannot leave a partially populated recovery snapshot. Retry cannot
+start or stop services and cannot mask an indeterminate final observation.
 
 The snapshot is in stop order. Failure recovery restores the exact managed
 service activation set rather than only restoring availability. It first stops

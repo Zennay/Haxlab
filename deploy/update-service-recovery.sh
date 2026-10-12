@@ -17,26 +17,47 @@ haxlab_capture_update_service_state() {
   local -a captured_active=()
   local state
   local unit
+  local poll
 
   for unit in "${HAXLAB_UPDATE_MANAGED_SERVICES[@]}"; do
-    state=""
-    if state="$(systemctl is-active "${unit}" 2>/dev/null)"; then
-      if [[ "${state}" != "active" ]]; then
-        echo "Indeterminate update service state for ${unit}: ${state:-<empty>}" >&2
+    # A oneshot autonomy tick can legitimately be 'activating' during capture.
+    # Never classify a transient as active/inactive; wait boundedly before
+    # making any destructive update, and fail closed if it does not settle.
+    for ((poll = 0; poll <= 30; poll++)); do
+      state=""
+      if state="$(systemctl is-active "${unit}" 2>/dev/null)"; then
+        case "${state}" in
+          active)
+            captured_active+=("${unit}")
+            break
+            ;;
+          activating|deactivating|reloading)
+            ;;
+          *)
+            echo "Indeterminate update service state for ${unit}: ${state:-<empty>}" >&2
+            return 1
+            ;;
+        esac
+      else
+        case "${state}" in
+          inactive|failed)
+            break
+            ;;
+          activating|deactivating|reloading)
+            ;;
+          *)
+            echo "Indeterminate update service state for ${unit}: ${state:-<empty>}" >&2
+            return 1
+            ;;
+        esac
+      fi
+
+      if (( poll == 30 )); then
+        echo "Indeterminate update service state for ${unit}: ${state:-<empty>} (transient timeout)" >&2
         return 1
       fi
-      captured_active+=("${unit}")
-      continue
-    fi
-
-    case "${state}" in
-      inactive|failed)
-        ;;
-      *)
-        echo "Indeterminate update service state for ${unit}: ${state:-<empty>}" >&2
-        return 1
-        ;;
-    esac
+      sleep 2
+    done
   done
 
   HAXLAB_UPDATE_ACTIVE_BEFORE=("${captured_active[@]}")
