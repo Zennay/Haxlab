@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import math
 import re
 import tomllib
 from pathlib import Path
@@ -191,6 +192,15 @@ def test_fresh_install_and_update_copy_the_same_systemd_units() -> None:
     } <= fresh_units
 
 
+def _is_positive_finite_service_number(raw: str) -> bool:
+    """Reject malformed and non-finite systemd numeric CLI arguments."""
+    try:
+        value = float(raw)
+    except (ValueError, OverflowError):
+        return False
+    return math.isfinite(value) and value > 0
+
+
 def test_pipeline_service_runtime_values_are_strictly_positive() -> None:
     numeric_arguments = {
         "ingest": ("--interval", "--minimum-file-age"),
@@ -206,5 +216,20 @@ def test_pipeline_service_runtime_values_are_strictly_positive() -> None:
 
     for service, flags in numeric_arguments.items():
         for flag in flags:
-            value = float(_argument(service, flag))
-            assert value > 0, f"{service} has non-positive {flag}: {value}"
+            raw = _argument(service, flag)
+            assert _is_positive_finite_service_number(raw), (
+                f"{service} has non-positive/non-finite {flag}: {raw!r}"
+            )
+
+
+def test_service_numeric_validator_accepts_finite_positive_values() -> None:
+    for raw in ("1", "6", "0.125", "1e3", "1e-3"):
+        assert _is_positive_finite_service_number(raw)
+
+
+def test_service_numeric_validator_rejects_nonfinite_or_invalid_values() -> None:
+    for raw in (
+        "inf", "+inf", "-inf", "Infinity", "1e9999",
+        "nan", "NaN", "0", "-1", "-0.5", "broken", "",
+    ):
+        assert not _is_positive_finite_service_number(raw), raw
