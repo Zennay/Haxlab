@@ -4,6 +4,8 @@ import shlex
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "deploy" / "update-service-recovery.sh"
@@ -122,6 +124,7 @@ def test_capture_rejects_indeterminate_state_without_partial_snapshot() -> None:
         script = f"""
 set -euo pipefail
 source {shlex.quote(str(HELPER))}
+sleep() {{ :; }}
 systemctl() {{
   if [[ "$1" != "is-active" ]]; then
     return 97
@@ -153,6 +156,90 @@ printf 'status:%s active:%s\\n' "$capture_status" "${{HAXLAB_UPDATE_ACTIVE_BEFOR
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == "status:1 active:"
         assert "Indeterminate update service state" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("transient", "settled"),
+    [
+        ("activating", "active"),
+        ("deactivating", "inactive"),
+        ("reloading", "failed"),
+    ],
+)
+def test_capture_waits_for_known_transient_to_settle(
+    transient: str, settled: str
+) -> None:
+    script = f"""
+set -euo pipefail
+source {shlex.quote(str(HELPER))}
+SLEEPS=0
+sleep() {{ SLEEPS=$(( SLEEPS + 1 )); }}
+systemctl() {{
+  if [[ "$1" != "is-active" ]]; then return 97; fi
+  if [[ "$2" == "haxlab-autonomy.service" ]]; then
+    if (( SLEEPS < 2 )); then
+      printf '{transient}\\n'
+      return 3
+    fi
+    printf '{settled}\\n'
+    if [[ '{settled}' == "active" ]]; then return 0; fi
+    return 3
+  fi
+  printf 'inactive\\n'
+  return 3
+}}
+haxlab_capture_update_service_state
+printf 'sleeps:%s\\n' "$SLEEPS"
+declare -p HAXLAB_UPDATE_ACTIVE_BEFORE
+"""
+
+    result = _run_bash(script)
+
+    assert result.returncode == 0, result.stderr
+    assert "sleeps:2" in result.stdout
+    if settled == "active":
+        assert 'haxlab-autonomy.service' in result.stdout
+    else:
+        assert 'HAXLAB_UPDATE_ACTIVE_BEFORE=()' in result.stdout
+
+
+def test_capture_permanent_transient_is_bounded_and_snapshot_is_empty() -> None:
+    script = f"""
+set -euo pipefail
+source {shlex.quote(str(HELPER))}
+SLEEPS=0
+sleep() {{ SLEEPS=$(( SLEEPS + 1 )); }}
+systemctl() {{
+  if [[ "$1" != "is-active" ]]; then return 97; fi
+  case "$2" in
+    haxlab-live-bot.service)
+      printf 'active\\n'
+      return 0
+      ;;
+    haxlab-autonomy.service)
+      printf 'activating\\n'
+      return 3
+      ;;
+    *)
+      printf 'inactive\\n'
+      return 3
+      ;;
+  esac
+}}
+set +e
+haxlab_capture_update_service_state
+status="$?"
+set -e
+printf 'status:%s sleeps:%s\\n' "$status" "$SLEEPS"
+declare -p HAXLAB_UPDATE_ACTIVE_BEFORE
+"""
+
+    result = _run_bash(script)
+
+    assert result.returncode == 0, result.stderr
+    assert "status:1 sleeps:30" in result.stdout
+    assert "HAXLAB_UPDATE_ACTIVE_BEFORE=()" in result.stdout
+    assert "haxlab-autonomy.service: activating (transient timeout)" in result.stderr
 
 
 def test_capture_and_restore_use_dependency_safe_reverse_stop_order(
