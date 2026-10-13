@@ -17,24 +17,25 @@ jobs:
           from pathlib import Path
           import json, shutil, os
           out=Path(os.environ['RUNNER_TEMP'])/'fuckball-model-export'
-          out.mkdir(exist_ok=True)
+          out=out/os.environ['GITHUB_RUN_ID']
+          out.mkdir(parents=True,exist_ok=True)
           selected=[]
           for root in [Path('/var/lib/haxlab/derived'), Path('/var/lib/haxlab/models')]:
               if not root.exists(): continue
               candidates=sorted(root.rglob('*.npz'),key=lambda p:p.stat().st_mtime,reverse=True)[:2]
               for i,p in enumerate(candidates):
-                  if p.is_symlink() or p.stat().st_size>10_000_000: continue
+                  if p.is_symlink() or p.stat().st_size>10_000_000 or not os.access(p,os.R_OK): continue
                   target=out/('model-'+str(len(selected)));target.mkdir(exist_ok=True)
                   shutil.copy2(p,target/'model.npz')
                   meta=p.with_name('metrics.json')
-                  if meta.is_file() and meta.stat().st_size<2_000_000:shutil.copy2(meta,target/'metrics.json')
+                  if meta.is_file() and os.access(meta,os.R_OK) and meta.stat().st_size<2_000_000:shutil.copy2(meta,target/'metrics.json')
                   selected.append({'source':str(p),'output':target.name})
           raw=Path('/var/lib/haxlab/raw/replays')
           count=0
           if raw.exists():
               for p in raw.rglob('*.hbr2'):
                   if count>=8:break
-                  if p.is_symlink() or not 1000<p.stat().st_size<2_000_000:continue
+                  if p.is_symlink() or not os.access(p,os.R_OK) or not 1000<p.stat().st_size<2_000_000:continue
                   shutil.copy2(p,out/('sample-'+str(count)+'.hbr2'));count+=1
           (out/'manifest.json').write_text(json.dumps({'models':selected,'sample_replays':count},indent=2))
           print(json.dumps({'models':selected,'sample_replays':count}))
@@ -42,5 +43,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: fuckball-model-export
-          path: ${{ runner.temp }}/fuckball-model-export/
+          path: ${{ runner.temp }}/fuckball-model-export/${{ github.run_id }}/
           retention-days: 3
