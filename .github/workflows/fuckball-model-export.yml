@@ -19,9 +19,9 @@ jobs:
           out=Path(os.environ['RUNNER_TEMP'])/'fuckball-model-export'
           out.mkdir(exist_ok=True)
           selected=[]
-          for root in [Path('/var/lib/haxlab/derived/champions/elite-player'), Path('/var/lib/haxlab/models/champions')]:
+          for root in [Path('/var/lib/haxlab/derived'), Path('/var/lib/haxlab/models')]:
               if not root.exists(): continue
-              candidates=sorted(root.rglob('model.npz'),key=lambda p:p.stat().st_mtime,reverse=True)[:2]
+              candidates=sorted(root.rglob('*.npz'),key=lambda p:p.stat().st_mtime,reverse=True)[:2]
               for i,p in enumerate(candidates):
                   if p.is_symlink() or p.stat().st_size>10_000_000: continue
                   target=out/('model-'+str(len(selected)));target.mkdir(exist_ok=True)
@@ -33,7 +33,7 @@ jobs:
           count=0
           if raw.exists():
               for p in raw.rglob('*.hbr2'):
-                  if count>=2:break
+                  if count>=8:break
                   if p.is_symlink() or not 1000<p.stat().st_size<2_000_000:continue
                   shutil.copy2(p,out/('sample-'+str(count)+'.hbr2'));count+=1
           (out/'manifest.json').write_text(json.dumps({'models':selected,'sample_replays':count},indent=2))
