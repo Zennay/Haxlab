@@ -1,0 +1,120 @@
+name: HaxLab / FuckBall native-engine 4v4 training
+
+on:
+  workflow_dispatch:
+    inputs:
+      episodes:
+        description: Independent 4v4 rollout matches
+        type: choice
+        options: ['6', '12', '24']
+        default: '12'
+      generations:
+        description: Tactical evolution generations
+        type: choice
+        options: ['2', '3', '6']
+        default: '3'
+  schedule:
+    - cron: '17 2 * * *'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fuckball-native-selfplay.yml'
+      - 'tools/fuckball_native_training_receipt.py'
+      - 'tests/test_fuckball_native_training_receipt.py'
+  pull_request:
+    paths:
+      - '.github/workflows/fuckball-native-selfplay.yml'
+      - 'tools/fuckball_native_training_receipt.py'
+      - 'tests/test_fuckball_native_training_receipt.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-fuckball-selfplay-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Checkout exact HaxLab source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Assert immutable HaxLab HEAD
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - name: Validate training evidence contracts
+        run: python3 -m unittest discover -s tests -p 'test_fuckball_native_training_receipt.py' -v
+
+  train:
+    needs: contract
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact HaxLab source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify HaxLab source
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - name: Checkout immutable FuckBall engine and trainer
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: Zennay/fuckball
+          ref: 783686a7f29bf4682ab80e679f7bfbf0018f2837
+          path: fuckball
+          persist-credentials: false
+      - name: Install Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Install Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+      - name: Verify original native physics and stadium
+        run: |
+          test "$(git -C fuckball rev-parse HEAD)" = "783686a7f29bf4682ab80e679f7bfbf0018f2837"
+          echo "a0f4dbef90090f6b5c85bc48d4645e8cd3159023bc91af2b8de8225da6840a4b  fuckball/dist/vendor/haxball.js" | sha256sum -c -
+          echo "48772a9e29cecb28a4bd67d6ac360f87d246fe0e1d8008b12eaeeb6ab0b7bed4  fuckball/stadiums/BFF Big v4.hbs" | sha256sum -c -
+          cd fuckball
+          npm test
+      - name: Install HaxLab NumPy trainer requirements
+        run: python -m pip install 'numpy>=2.1,<3'
+      - name: Train 4v4 DAgger challenger inside the original engine
+        working-directory: fuckball
+        env:
+          EPISODES: ${{ inputs.episodes || '12' }}
+          GENERATIONS: ${{ inputs.generations || '3' }}
+          OPENBLAS_NUM_THREADS: '1'
+          OMP_NUM_THREADS: '1'
+          PYTHONUNBUFFERED: '1'
+        run: |
+          node training/haxlab_selfplay.cjs "$GITHUB_WORKSPACE/fuckball-training-output" "$EPISODES" "$GENERATIONS"
+      - name: Seal immutable evidence and independent held-out scores
+        env:
+          EPISODES: ${{ inputs.episodes || '12' }}
+        run: |
+          python tools/fuckball_native_training_receipt.py \
+            --root "$GITHUB_WORKSPACE/fuckball-training-output" \
+            --engine-repo "$GITHUB_WORKSPACE/fuckball" \
+            --engine-commit 783686a7f29bf4682ab80e679f7bfbf0018f2837 \
+            --episodes "$EPISODES"
+      - name: Preserve the challenger and run evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fuckball-native-haxlab-${{ github.run_id }}
+          path: fuckball-training-output/
+          if-no-files-found: warn
+          retention-days: 14
