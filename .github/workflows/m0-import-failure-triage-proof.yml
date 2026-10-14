@@ -1,0 +1,50 @@
+name: HaxLab M0 import failure triage offline proof
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "tools/m0_import_failure_triage.py"
+      - "tests/test_m0_import_failure_triage.py"
+      - "docs/m0-import-failure-triage.md"
+      - ".github/workflows/m0-import-failure-triage-proof.yml"
+  push:
+    branches:
+      - "data-pipeline/m0-import-failure-stage-triage-20261013-w1"
+    paths:
+      - "tools/m0_import_failure_triage.py"
+      - "tests/test_m0_import_failure_triage.py"
+      - ".github/workflows/m0-import-failure-triage-proof.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-m0-failure-triage-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  offline-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout immutable source without credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # pinned v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          clean: true
+      - name: Verify exact candidate source
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - name: Run bounded source-only failure triage tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m compileall -q tools/m0_import_failure_triage.py tests/test_m0_import_failure_triage.py
+          python3 -m unittest discover -s tests -p 'test_m0_import_failure_triage.py' -v
+          echo "HAXLAB_M0_FAILURE_TRIAGE_OFFLINE_ONLY=1"
