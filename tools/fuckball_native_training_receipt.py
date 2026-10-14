@@ -84,6 +84,7 @@ def validate_artifacts(root: Path, episodes: int, engine_commit: str,
             if (meta.get("schema") != "haxlab-imitation-shard-v2"
                     or meta.get("episode") != episode or meta.get("stadium") != stadium
                     or meta.get("source") != "native-engine-4v4-dagger"
+                    or meta.get("sampleStride") != 4
                     or type(width) is not int or not isinstance(columns, list)
                     or len(columns) != width or len(set(columns)) != width
                     or columns[:3] != ["frame", "player_index", "team_id"]

@@ -6,9 +6,9 @@ The HaxLab workflow [fuckball-native-selfplay.yml](../.github/workflows/fuckball
 
 - Scheduled nightly at 02:17 UTC after the workflow reaches the default branch, and manually from **Actions → HaxLab / FuckBall native-engine 4v4 training → Run workflow**.
 - Runs on a dedicated GitHub-hosted runner, **not** the serialized VPS HaxLab evaluation/ingestion runner. No writes to `/opt/haxlab`, the replay archive, the model registry or the live champion pointer.
-- Fetches an immutable FuckBall source revision `783686a7f29bf4682ab80e679f7bfbf0018f2837`, checks exact checkout HEAD and the original BFF Big v4 + physics-engine SHA256 fingerprints, and runs the upstream `npm test` suite.
+- Fetches an immutable FuckBall source revision `95a27b915558e177d13b20801ae44fb97f33c0ab`, checks exact checkout HEAD and the original BFF Big v4 + physics-engine SHA256 fingerprints, and runs the upstream `npm test` suite.
 - Calls upstream `training/haxlab_selfplay.cjs` (12 episodes and three tactical generations by default). Every episode has eight bots. Two stadium variants, **BFF Big v4** and **Classic**, are used. Side and seed variation are applied.
-- Records HaxLab-compatible compressed float32 shards, trains a neural behavioral-cloning/DAgger candidate using the original HaxLab trainer ported in FuckBall, and runs a four-match side-swapped arena benchmark.
+- Records decisions every four simulation frames (previously every twelve) to capture more rare kick/contact states without touching gameplay physics. Records HaxLab-compatible compressed float32 shards, trains a neural behavioral-cloning/DAgger candidate using the original HaxLab trainer ported in FuckBall, and runs a four-match side-swapped arena benchmark.
 - Split membership is by whole match: four training matches, one calibration/validation match and one held-out test match per six episodes. No game or shard is shared across splits; the threshold is selected on validation, not the independent test.
 - The HaxLab `tools/fuckball_native_training_receipt.py` verifier rejects truncated, nonfinite or overlapping episodes, incorrect stadium labels, mismatched shards, missing independent test evidence and incomplete or duplicate arena sides.
 

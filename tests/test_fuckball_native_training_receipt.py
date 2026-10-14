@@ -34,6 +34,7 @@ class NativeTrainingReceiptTests(unittest.TestCase):
                 "schema": "haxlab-imitation-shard-v2",
                 "columns": self.columns, "rowWidth": 8,
                 "stadium": stadium, "source": "native-engine-4v4-dagger",
+                "sampleStride": 4,
                 "episode": i,
             })
             splits[split].append({"episode": i, "stadium": stadium, "shard_path": str(shard)})
@@ -96,6 +97,13 @@ class NativeTrainingReceiptTests(unittest.TestCase):
     def test_rejects_corrupt_rollout(self):
         (self.root / "match-1.f32.gz").write_bytes(gzip.compress(b"wrong-size"))
         with self.assertRaisesRegex(ValueError, "misaligned"):
+            self.check()
+
+    def test_rejects_infrequent_action_samples(self):
+        meta = json.loads((self.root / "match-1.meta.json").read_text())
+        meta["sampleStride"] = 12
+        self.put("match-1.meta.json", meta)
+        with self.assertRaisesRegex(ValueError, "schema"):
             self.check()
 
     def test_rejects_nonfinite_features(self):
