@@ -41,7 +41,7 @@ class NativeTrainingReceiptTests(unittest.TestCase):
         for split, entries in splits.items():
             self.put(split + ".json", {"entries": entries})
         self.put("candidate.json", {"schema": "fuckball-policy-v1"})
-        self.put("team-policy.json", {"schema": "fuckball-team-policy-v1"})
+        self.put("team-policy.json", {"schema": "fuckball-team-policy-v1", "training": {"seed": 123}})
         (self.root / "weights").mkdir()
         (self.root / "weights/model.npz").write_bytes(b"test-fixture")
         self.put("weights/metrics.json", {"source_kind": "native-engine-4v4-dagger",
@@ -61,7 +61,7 @@ class NativeTrainingReceiptTests(unittest.TestCase):
         target.write_text(json.dumps(payload), encoding="utf-8")
 
     def check(self):
-        return validate_artifacts(self.root, 6, "a" * 40, "engine-hash", "bff-hash")
+        return validate_artifacts(self.root, 6, "a" * 40, "engine-hash", "bff-hash", 123)
 
     def test_accepts_genuine_two_map_disjoint_split_evidence(self):
         result = self.check()
@@ -70,8 +70,20 @@ class NativeTrainingReceiptTests(unittest.TestCase):
             "train": [0, 1, 2, 3], "validation": [4], "test": [5]})
         self.assertEqual(result["stadium_episodes"], {"BFF": 4, "Classic": 2})
         self.assertEqual(result["arena_goal_difference"], 4)
+        self.assertEqual(result["seed"], 123)
         self.assertFalse(result["promotion_allowed"])
         self.assertIn("match-0.f32.gz", result["artifacts_sha256"])
+
+    def test_rejects_seed_mismatch_to_tactical_evolution(self):
+        self.put("team-policy.json", {
+            "schema": "fuckball-team-policy-v1", "training": {"seed": 124}
+        })
+        with self.assertRaisesRegex(ValueError, "team tactics"):
+            self.check()
+
+    def test_rejects_invalid_seed(self):
+        with self.assertRaisesRegex(ValueError, "seed"):
+            validate_artifacts(self.root, 6, "a" * 40, "engine-hash", "bff-hash", -1)
 
     def test_rejects_heldout_episode_leakage(self):
         index = json.loads((self.root / "train.json").read_text())
