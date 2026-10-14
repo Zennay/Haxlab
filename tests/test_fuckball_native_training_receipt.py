@@ -1,12 +1,20 @@
 """Synthetic evidence checks; never run models or mutate production state."""
 import gzip
+import importlib.util
 import json
 import struct
 import tempfile
 import unittest
 from pathlib import Path
 
-from tools.fuckball_native_training_receipt import validate_artifacts
+# HaxLab's pytest.ini puts src/ (not the repository root) on sys.path.
+# Load this standalone CLI by explicit path without widening all tests' imports.
+MODULE = Path(__file__).resolve().parents[1] / "tools/fuckball_native_training_receipt.py"
+SPEC = importlib.util.spec_from_file_location("fuckball_native_training_receipt", MODULE)
+assert SPEC is not None and SPEC.loader is not None
+RECEIPT = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(RECEIPT)
+validate_artifacts = RECEIPT.validate_artifacts
 
 
 class NativeTrainingReceiptTests(unittest.TestCase):
