@@ -41,7 +41,7 @@ concurrency:
 jobs:
   contract:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 15
     steps:
       - name: Checkout exact HaxLab source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -55,6 +55,14 @@ jobs:
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
       - name: Validate training evidence contracts
         run: python3 -m unittest discover -s tests -p 'test_fuckball_native_training_receipt.py' -v
+      - name: Install isolated HaxLab unit-test environment
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+      - name: Prove complete HaxLab Python regression without shared VPS runner
+        run: |
+          python -m pip install -e '.[dev]'
+          python -m pytest -q
 
   train:
     needs: contract
