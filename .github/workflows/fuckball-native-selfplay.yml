@@ -71,7 +71,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Zennay/fuckball
-          ref: 783686a7f29bf4682ab80e679f7bfbf0018f2837
+          ref: 95a27b915558e177d13b20801ae44fb97f33c0ab
           path: fuckball
           persist-credentials: false
       - name: Install Node 22
@@ -84,7 +84,7 @@ jobs:
           python-version: '3.11'
       - name: Verify original native physics and stadium
         run: |
-          test "$(git -C fuckball rev-parse HEAD)" = "783686a7f29bf4682ab80e679f7bfbf0018f2837"
+          test "$(git -C fuckball rev-parse HEAD)" = "95a27b915558e177d13b20801ae44fb97f33c0ab"
           echo "a0f4dbef90090f6b5c85bc48d4645e8cd3159023bc91af2b8de8225da6840a4b  fuckball/dist/vendor/haxball.js" | sha256sum -c -
           echo "48772a9e29cecb28a4bd67d6ac360f87d246fe0e1d8008b12eaeeb6ab0b7bed4  fuckball/stadiums/BFF Big v4.hbs" | sha256sum -c -
           cd fuckball
@@ -108,7 +108,7 @@ jobs:
           python tools/fuckball_native_training_receipt.py \
             --root "$GITHUB_WORKSPACE/fuckball-training-output" \
             --engine-repo "$GITHUB_WORKSPACE/fuckball" \
-            --engine-commit 783686a7f29bf4682ab80e679f7bfbf0018f2837 \
+            --engine-commit 95a27b915558e177d13b20801ae44fb97f33c0ab \
             --episodes "$EPISODES"
       - name: Preserve the challenger and run evidence
         if: always()
