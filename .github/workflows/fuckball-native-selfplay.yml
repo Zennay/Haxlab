@@ -109,7 +109,7 @@ jobs:
           if not 0 <= seed <= 0xffffffff:
               raise SystemExit("training seed out of uint32 range")
           with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as env:
-              env.write(f"TRAINING_SEED={seed}\\n")
+              env.write(f"TRAINING_SEED={seed}\n")
           print(f"native-4v4 experiment seed: {seed}")
           PY
       - name: Train 4v4 DAgger challenger inside the original engine
