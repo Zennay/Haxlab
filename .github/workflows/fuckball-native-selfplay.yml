@@ -6,13 +6,17 @@ on:
       episodes:
         description: Independent 4v4 rollout matches
         type: choice
-        options: ['6', '12', '24']
-        default: '12'
+        options: ['12', '24', '48', '96']
+        default: '48'
       generations:
         description: Tactical evolution generations
         type: choice
-        options: ['2', '3', '6']
-        default: '3'
+        options: ['3', '6', '10']
+        default: '6'
+      seed:
+        description: Optional reproducible uint32 seed; blank uses unique GitHub run ID
+        type: string
+        required: false
   schedule:
     - cron: '17 2 * * *'
   push:
@@ -71,7 +75,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Zennay/fuckball
-          ref: 95a27b915558e177d13b20801ae44fb97f33c0ab
+          ref: fac87e72b42c83a20f8e86ae01e000aeaec2faeb
           path: fuckball
           persist-credentials: false
       - name: Install Node 22
@@ -84,32 +88,50 @@ jobs:
           python-version: '3.11'
       - name: Verify original native physics and stadium
         run: |
-          test "$(git -C fuckball rev-parse HEAD)" = "95a27b915558e177d13b20801ae44fb97f33c0ab"
+          test "$(git -C fuckball rev-parse HEAD)" = "fac87e72b42c83a20f8e86ae01e000aeaec2faeb"
           echo "a0f4dbef90090f6b5c85bc48d4645e8cd3159023bc91af2b8de8225da6840a4b  fuckball/dist/vendor/haxball.js" | sha256sum -c -
           echo "48772a9e29cecb28a4bd67d6ac360f87d246fe0e1d8008b12eaeeb6ab0b7bed4  fuckball/stadiums/BFF Big v4.hbs" | sha256sum -c -
           cd fuckball
           npm test
       - name: Install HaxLab NumPy trainer requirements
         run: python -m pip install 'numpy>=2.1,<3'
+      - name: Assign unique reproducible seed to this independent training batch
+        env:
+          USER_SEED: ${{ inputs.seed || '' }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          given = os.environ["USER_SEED"]
+          if given and (not given.isascii() or not given.isdecimal() or len(given) > 10):
+              raise SystemExit("manual seed must be a decimal uint32")
+          seed = int(given) if given else int(os.environ["GITHUB_RUN_ID"]) % (2 ** 32)
+          if not 0 <= seed <= 0xffffffff:
+              raise SystemExit("training seed out of uint32 range")
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as env:
+              env.write(f"TRAINING_SEED={seed}\\n")
+          print(f"native-4v4 experiment seed: {seed}")
+          PY
       - name: Train 4v4 DAgger challenger inside the original engine
         working-directory: fuckball
         env:
-          EPISODES: ${{ inputs.episodes || '12' }}
-          GENERATIONS: ${{ inputs.generations || '3' }}
+          EPISODES: ${{ inputs.episodes || '48' }}
+          GENERATIONS: ${{ inputs.generations || '6' }}
           OPENBLAS_NUM_THREADS: '1'
           OMP_NUM_THREADS: '1'
           PYTHONUNBUFFERED: '1'
         run: |
-          node training/haxlab_selfplay.cjs "$GITHUB_WORKSPACE/fuckball-training-output" "$EPISODES" "$GENERATIONS"
+          node training/haxlab_selfplay.cjs "$GITHUB_WORKSPACE/fuckball-training-output" "$EPISODES" "$GENERATIONS" "$TRAINING_SEED"
       - name: Seal immutable evidence and independent held-out scores
         env:
-          EPISODES: ${{ inputs.episodes || '12' }}
+          EPISODES: ${{ inputs.episodes || '48' }}
         run: |
           python tools/fuckball_native_training_receipt.py \
             --root "$GITHUB_WORKSPACE/fuckball-training-output" \
             --engine-repo "$GITHUB_WORKSPACE/fuckball" \
-            --engine-commit 95a27b915558e177d13b20801ae44fb97f33c0ab \
-            --episodes "$EPISODES"
+            --engine-commit fac87e72b42c83a20f8e86ae01e000aeaec2faeb \
+            --episodes "$EPISODES" \
+            --seed "$TRAINING_SEED"
       - name: Preserve the challenger and run evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
