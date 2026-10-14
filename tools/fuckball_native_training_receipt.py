@@ -51,11 +51,13 @@ def _shard_rows(path: Path, width: int) -> int:
 
 
 def validate_artifacts(root: Path, episodes: int, engine_commit: str,
-                       engine_hash: str, stadium_hash: str) -> dict:
+                       engine_hash: str, stadium_hash: str, seed: int) -> dict:
     """Validate fixed episode splits and side-swapped arena before sealing receipt."""
     root = root.resolve()
     if not 6 <= episodes <= 200 or not re.fullmatch(r"[0-9a-f]{40}", engine_commit):
         raise ValueError("invalid training configuration")
+    if type(seed) is not int or not 0 <= seed <= 0xffffffff:
+        raise ValueError("invalid training seed")
     splits = {}
     seen = set()
     stadium_counts = {"BFF": 0, "Classic": 0}
@@ -106,7 +108,9 @@ def validate_artifacts(root: Path, episodes: int, engine_commit: str,
     _file(root, "weights/model.npz")
     if candidate.get("schema") != "fuckball-policy-v1":
         raise ValueError("invalid candidate model")
-    if tactics.get("schema") != "fuckball-team-policy-v1":
+    if (tactics.get("schema") != "fuckball-team-policy-v1"
+            or not isinstance(tactics.get("training"), dict)
+            or tactics["training"].get("seed") != seed):
         raise ValueError("invalid team tactics")
     if metrics.get("source_kind") != "native-engine-4v4-dagger" or not isinstance(metrics.get("untouched_test"), dict):
         raise ValueError("missing independent held-out test")
@@ -138,6 +142,7 @@ def validate_artifacts(root: Path, episodes: int, engine_commit: str,
         "engine_sha256": engine_hash,
         "stadium_sha256": stadium_hash,
         "episodes": episodes,
+        "seed": seed,
         "split_episodes": splits,
         "split_rows": rows_by_split,
         "stadium_episodes": stadium_counts,
@@ -154,6 +159,7 @@ def main() -> None:
     parser.add_argument("--engine-repo", type=Path, required=True)
     parser.add_argument("--engine-commit", required=True)
     parser.add_argument("--episodes", type=int, required=True)
+    parser.add_argument("--seed", type=int, required=True)
     args = parser.parse_args()
     repo = args.engine_repo.resolve(strict=True)
     commit = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
@@ -164,12 +170,12 @@ def main() -> None:
     engine_hash, stadium_hash = _sha256(engine), _sha256(stadium)
     if engine_hash != ENGINE_SHA256 or stadium_hash != BFF_SHA256:
         raise ValueError("physics or original BFF stadium fingerprint mismatch")
-    receipt = validate_artifacts(args.root, args.episodes, commit, engine_hash, stadium_hash)
+    receipt = validate_artifacts(args.root, args.episodes, commit, engine_hash, stadium_hash, args.seed)
     destination = args.root / "receipt.json"
     if destination.is_symlink():
         raise ValueError("symlinked receipt destination")
     destination.write_text(json.dumps(receipt, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"receipt": str(destination), "rows": receipt["split_rows"],
+    print(json.dumps({"receipt": str(destination), "seed": receipt["seed"], "rows": receipt["split_rows"],
                       "arena_goal_difference": receipt["arena_goal_difference"],
                       "promotion_allowed": False}))
 
