@@ -1,0 +1,46 @@
+name: zCloud listener bounded recovery probe
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/zcloud-listener-probe-20261016.yml"]
+permissions:
+  contents: read
+concurrency:
+  group: zcloud-listener-probe-20261016
+  cancel-in-progress: false
+jobs:
+  inspect:
+    if: github.repository == 'Zennay/Haxlab' && github.ref == 'refs/heads/main' && github.actor == 'Zennay' && github.run_attempt == 1
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 2
+    steps:
+      - name: Inspect only zCloud listener identity and service state
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(hostname -s)" = vps-bb300bba
+          test "$(id -un)" = ubuntu
+          test "$RUNNER_NAME" = vps-bb300bba-haxlab
+          python3 - <<'PY'
+          import json, pathlib, subprocess
+          root = pathlib.Path("/home/ubuntu/actions-runner-zcloud")
+          unit = "actions.runner.Zennay-zCloud.zcloud-vps-1.service"
+          result = subprocess.run(["systemctl", "show", unit, "--property=LoadState,ActiveState,SubState,MainPID,Result"], capture_output=True, text=True, timeout=10, check=True)
+          fields = dict(line.split("=",1) for line in result.stdout.splitlines() if "=" in line)
+          processes = []
+          for proc in pathlib.Path("/proc").iterdir():
+              if not proc.name.isdigit():
+                  continue
+              try:
+                  executable = (proc / "exe").resolve(strict=True)
+                  if executable.parent == root / "bin" and executable.name in {"Runner.Listener", "Runner.Worker"}:
+                      processes.append({"pid":int(proc.name),"kind":executable.name})
+              except (FileNotFoundError, PermissionError, ProcessLookupError):
+                  continue
+          mem = {}
+          for line in pathlib.Path("/proc/meminfo").read_text().splitlines():
+              key, value = line.split(":",1)
+              if key == "MemAvailable":
+                  mem[key] = value.strip()
+          print(json.dumps({"service":fields,"processes":processes,"memory":mem,"mutation_performed":False},sort_keys=True))
+          PY
