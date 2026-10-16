@@ -1,0 +1,85 @@
+name: Fuckball release 61ae238
+
+on:
+  push:
+    branches: [claude/fuckball-release-61ae238]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuckball-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    env:
+      APPROVED_SHA: 61ae2382955772db6e1752a9d726aabdb85ef3b7
+      APP_PORT: '3417'
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Stage and test the exact release
+        run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/fuckball-release-$GITHUB_RUN_ID"
+          git clone --no-checkout --filter=blob:none https://github.com/Zennay/fuckball.git "$stage"
+          cd "$stage"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$APPROVED_SHA"
+          git fetch --depth 1 origin "$APPROVED_SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$APPROVED_SHA"
+          npm test
+          npm run build:solo
+          node --check dist/match-ui.js
+          node --check dist/server-client.js
+          echo "RELEASE_STAGE=$stage" >> "$GITHUB_ENV"
+      - name: Install immutable release and verify live
+        run: |
+          set -euo pipefail
+          cd "$RELEASE_STAGE"
+          release="/opt/fuckball-releases/$APPROVED_SHA-$GITHUB_RUN_ID"
+          backup="/opt/fuckball-release-backups/$GITHUB_RUN_ID"
+          # Deliberately leave /opt/fuckball and the training service intact.
+          sudo -n mkdir -p "$release" "$backup"
+          if [ -e /etc/systemd/system/fuckball.service ]; then
+            sudo -n cp -a /etc/systemd/system/fuckball.service "$backup/fuckball.service"
+          fi
+          tar --exclude=.git -cf - . | sudo -n tar -xf - -C "$release"
+          sudo -n chmod -R a+rX "$release"
+          node_binary="$(command -v node)"
+          run_user="$(id -un)"
+          run_group="$(id -gn)"
+          rollback() {
+            code=$?
+            if [ -f "$backup/fuckball.service" ]; then
+              sudo -n cp "$backup/fuckball.service" /etc/systemd/system/fuckball.service
+              sudo -n systemctl daemon-reload
+              sudo -n systemctl restart fuckball.service
+            fi
+            echo "::error::Release verification failed; previous service restored."
+            exit "$code"
+          }
+          trap rollback ERR
+          # StateDirectory gives the read-only service one writable place for accounts.json.
+          printf '[Unit]\nDescription=Fuckball native engine release\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser=%s\nGroup=%s\nWorkingDirectory=%s\nEnvironment=NODE_ENV=production\nEnvironment=PORT=%s\nEnvironment=FUCKBALL_RELEASE_SHA=%s\nExecStart=%s %s/server.js\nRestart=always\nRestartSec=3\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nStateDirectory=fuckball\nStateDirectoryMode=0700\n\n[Install]\nWantedBy=multi-user.target\n' "$run_user" "$run_group" "$release" "$APP_PORT" "$APPROVED_SHA" "$node_binary" "$release" | sudo -n tee /etc/systemd/system/fuckball.service >/dev/null
+          sudo -n systemctl daemon-reload
+          sudo -n systemctl restart fuckball.service
+          ready=0
+          for attempt in $(seq 1 15); do
+            if curl -fsS --max-time 3 "http://127.0.0.1:$APP_PORT/health" >/dev/null; then ready=1; break; fi
+            sleep 1
+          done
+          test "$ready" = 1
+          node scripts/verify-live.cjs "http://127.0.0.1:$APP_PORT" "$APPROVED_SHA"
+          # Account storage must be writable in production.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data '{"username":"x","password":"short"}' "http://127.0.0.1:$APP_PORT/api/register")
+          test "$code" = 400
+          sudo -n test -d /var/lib/fuckball
+          sudo -n systemctl is-active --quiet fuckball.service
+          trap - ERR
+          echo "Fuckball release verified: $APPROVED_SHA ($release)" >> "$GITHUB_STEP_SUMMARY"
