@@ -1,0 +1,30 @@
+name: Verify public Fuckball unlimited-room release
+on:
+  push:
+    branches: [release/fuckball-unlimited-room-20261016]
+    paths: ['.github/workflows/fuckball-live-public-check-20261016.yml']
+permissions:
+  contents: read
+jobs:
+  external-public-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Probe public website and release from independent GitHub network
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="http://198.244.191.182:3417"
+          curl -v --connect-timeout 8 --max-time 20 --retry 2 --retry-delay 2 -fS "$base/health" -o health.json
+          python3 - <<'PY'
+          import json
+          h=json.load(open("health.json"))
+          assert h['release']=='5095b5dad189cb4caa984076ac7ae3058de4ab88',h
+          assert h['physicsHz']==60 and h['engine']=='node-haxball-2.3.1'
+          print("PUBLIC_HEALTH_CONFIRMED",json.dumps(h,sort_keys=True))
+          PY
+          curl -fS --connect-timeout 8 --max-time 20 "$base/" -o index.html
+          grep -Fq 'No fixed room player limit' index.html
+          curl -fS --connect-timeout 8 --max-time 20 "$base/room.css" -o room.css
+          grep -Fq 'overflow-y:auto' room.css
+          echo 'PUBLIC_FUCKBALL_LIVE_CAPACITY_SCROLL_CONFIRMED=1'
