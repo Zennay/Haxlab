@@ -35,7 +35,11 @@ jobs:
           stage="$RUNNER_TEMP/fuckball-unlimited-room-$GITHUB_RUN_ID"
           git clone --quiet --filter=blob:none --no-checkout https://github.com/Zennay/fuckball.git "$stage"
           cd "$stage"
-          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$APPROVED_SHA"
+          # A concurrent AI-feature merge may advance main. Only the
+          # previously CI-verified immutable release may be deployed.
+          current="$(git ls-remote origin refs/heads/main | cut -f1)"
+          test -n "$current"
+          echo "REMOTE_MAIN=$current IMMUTABLE_APPROVED_RELEASE=$APPROVED_SHA"
           git fetch --quiet --depth 1 origin "$APPROVED_SHA"
           git checkout --quiet --detach FETCH_HEAD
           test "$(git rev-parse HEAD)" = "$APPROVED_SHA"
