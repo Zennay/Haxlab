@@ -1,0 +1,159 @@
+name: Fuckball unlimited-room guarded live release
+
+on:
+  push:
+    branches: [release/fuckball-unlimited-room-20261016]
+    paths: ['.github/workflows/fuckball-unlimited-room-live-20261016.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuckball-unlimited-room-live-20261016
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 'Zennay/Haxlab' && github.actor == 'Zennay' && github.ref == 'refs/heads/release/fuckball-unlimited-room-20261016' && github.event_name == 'push' && github.run_attempt == 1
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    env:
+      APPROVED_SHA: 5095b5dad189cb4caa984076ac7ae3058de4ab88
+      APP_PORT: '3417'
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Stage reviewed exact source and run tests
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$RUNNER_NAME" = 'vps-bb300bba-haxlab'
+          test "$(hostname -s)" = 'vps-bb300bba'
+          test "$GITHUB_REPOSITORY" = 'Zennay/Haxlab'
+          test "$GITHUB_ACTOR" = 'Zennay'
+          stage="$RUNNER_TEMP/fuckball-unlimited-room-$GITHUB_RUN_ID"
+          git clone --quiet --filter=blob:none --no-checkout https://github.com/Zennay/fuckball.git "$stage"
+          cd "$stage"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$APPROVED_SHA"
+          git fetch --quiet --depth 1 origin "$APPROVED_SHA"
+          git checkout --quiet --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$APPROVED_SHA"
+          npm test
+          npm run build:solo
+          node --check headless/server.cjs
+          node --check dist/room-core.js
+          node --check dist/app.js
+          node --check dist/server-client.js
+          grep -Fq 'overflow-y:auto' dist/room.css
+          grep -Fq 'No fixed room player limit' dist/index.html
+          echo "RELEASE_STAGE=$stage" >> "$GITHUB_ENV"
+          echo "STAGING_GREEN=$APPROVED_SHA"
+      - name: Preserve live physics and deploy immutable release
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          unit=/etc/systemd/system/fuckball.service
+          live="$(systemctl show fuckball.service -p WorkingDirectory --value)"
+          test -n "$live"
+          test -f "$live/server.js"
+          test -f "$unit"
+          test -f "$live/shared/physics.js"
+          test -f "$RELEASE_STAGE/shared/physics.js"
+          test "$(hostname -s)" = 'vps-bb300bba'
+          sudo -n systemctl is-active --quiet fuckball.service
+          # This release must not regress Work-session physics, AI, prediction or stadium.
+          for p in shared/physics.js shared/bot.js shared/prediction.js dist/vendor/haxball.js dist/stadiums/bff-big-v4.hbs; do
+            if ! cmp -s "$live/$p" "$RELEASE_STAGE/$p"; then
+              echo "::error::LIVE_CONTENT_DIVERGENCE $p; refusing overwrite"
+              exit 2
+            fi
+          done
+          health="$RUNNER_TEMP/fuckball-room-prehealth-$GITHUB_RUN_ID.json"
+          curl -fsS --max-time 5 "http://127.0.0.1:$APP_PORT/health" > "$health"
+          node - "$health" <<'NODE'
+          const fs=require('node:fs');
+          const h=JSON.parse(fs.readFileSync(process.argv[2]));
+          if(h.engine!=='node-haxball-2.3.1'||h.physicsHz!==60)throw Error('Wrong live engine');
+          if(h.rooms!==0)throw Error('Active multiplayer rooms; will not interrupt');
+          console.log('SAFE_LIVE_BASELINE='+JSON.stringify(h));
+          NODE
+          release="/opt/fuckball-releases/$APPROVED_SHA-$GITHUB_RUN_ID"
+          backup="/opt/fuckball-release-backups/$GITHUB_RUN_ID"
+          sudo -n mkdir -p "$release" "$backup"
+          sudo -n cp -a "$unit" "$backup/fuckball.service"
+          # Preserve the full previous release and systemd unit, including durable account storage.
+          cd "$RELEASE_STAGE"
+          tar --exclude=.git -cf - . | sudo -n tar -xf - -C "$release"
+          sudo -n chmod -R a+rX "$release"
+          test -f "$release/dist/room-core.js"
+          node_binary="$(command -v node)"
+          sed -e "s|^WorkingDirectory=.*|WorkingDirectory=$release|" \
+              -e "s|^ExecStart=.*|ExecStart=$node_binary $release/server.js|" \
+              -e "s|^Environment=FUCKBALL_RELEASE_SHA=.*|Environment=FUCKBALL_RELEASE_SHA=$APPROVED_SHA|" \
+              "$backup/fuckball.service" > "$RUNNER_TEMP/fuckball-new-unit-$GITHUB_RUN_ID"
+          grep -Fxq "WorkingDirectory=$release" "$RUNNER_TEMP/fuckball-new-unit-$GITHUB_RUN_ID"
+          grep -Fxq "ExecStart=$node_binary $release/server.js" "$RUNNER_TEMP/fuckball-new-unit-$GITHUB_RUN_ID"
+          grep -Fxq "Environment=FUCKBALL_RELEASE_SHA=$APPROVED_SHA" "$RUNNER_TEMP/fuckball-new-unit-$GITHUB_RUN_ID"
+          # No live room may arrive while the release is staged.
+          curl -fsS --max-time 5 "http://127.0.0.1:$APP_PORT/health" > "$health"
+          node - "$health" <<'NODE'
+          const fs=require('node:fs'),h=JSON.parse(fs.readFileSync(process.argv[2]));
+          if(h.rooms!==0||h.engine!=='node-haxball-2.3.1')throw Error('Release admission changed');
+          NODE
+          switched=false
+          rollback(){
+            local rc=$?
+            trap - ERR
+            if [ "$switched" = true ]; then
+              sudo -n cp -a "$backup/fuckball.service" "$unit" || true
+              sudo -n systemctl daemon-reload || true
+              sudo -n systemctl restart fuckball.service || true
+              echo "::error::Verification failed: previous service restored"
+            fi
+            exit "$rc"
+          }
+          trap rollback ERR
+          switched=true
+          sudo -n install -m 0644 "$RUNNER_TEMP/fuckball-new-unit-$GITHUB_RUN_ID" "$unit"
+          sudo -n systemctl daemon-reload
+          sudo -n systemctl restart fuckball.service
+          ready=0
+          for attempt in $(seq 1 20); do
+            if curl -fsS --max-time 3 "http://127.0.0.1:$APP_PORT/health" > "$RUNNER_TEMP/fuckball-posthealth-$GITHUB_RUN_ID.json"; then ready=1;break;fi
+            sleep 1
+          done
+          test "$ready" = 1
+          node scripts/verify-live.cjs "http://127.0.0.1:$APP_PORT" "$APPROVED_SHA"
+          curl -fsS --max-time 6 "http://127.0.0.1:$APP_PORT/room.css" | grep -Fq 'overflow-y:auto'
+          curl -fsS --max-time 6 "http://127.0.0.1:$APP_PORT/" | grep -Fq 'No fixed room player limit'
+          # Real WebSocket smoke from 11 separate clients, not a mocked room.
+          node <<'NODE'
+          const sockets=[],u='ws://127.0.0.1:3417/ws';
+          async function join(id,room){
+            const ws=new WebSocket(u);sockets.push(ws);
+            return new Promise((resolve,reject)=>{
+              const timeout=setTimeout(()=>reject(Error('Room join timed out')),10000);
+              ws.onopen=()=>ws.send(JSON.stringify({type:'join',create:id===0,room,name:'Capacity smoke '+id}));
+              ws.onerror=()=>{clearTimeout(timeout);reject(Error('WebSocket failed'));};
+              ws.onmessage=e=>{
+                if(typeof e.data!=='string')return;
+                const d=JSON.parse(e.data);
+                if(d.type==='welcome'){clearTimeout(timeout);resolve(d);}
+                if(d.type==='error'){clearTimeout(timeout);reject(Error(d.message));}
+              };
+            });
+          }
+          (async()=>{try{
+            const first=await join(0);
+            for(let i=1;i<=10;i++)await join(i,first.room);
+            console.log('LIVE_PLAYER_LIMIT_REMOVED=11 joins accepted in '+first.room);
+          }finally{sockets.forEach(s=>s.close());}})().catch(e=>{console.error(e);process.exitCode=1;});
+          NODE
+          sudo -n systemctl is-active --quiet fuckball.service
+          test "$(systemctl show fuckball.service -p WorkingDirectory --value)" = "$release"
+          trap - ERR
+          echo "LIVE_RELEASE_SUCCESS sha=$APPROVED_SHA release=$release"
+          echo "### Fuckball 11-player smoke passed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Live release: $APPROVED_SHA" >> "$GITHUB_STEP_SUMMARY"
+          echo "URL: http://198.244.191.182:3417/" >> "$GITHUB_STEP_SUMMARY"
