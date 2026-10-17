@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -153,6 +154,77 @@ def _training_manifest_counts(
     return selected_players, training_replays, holdout_replays
 
 
+def _training_manifest_matches_contract(
+    manifest: object,
+    *,
+    analysis_root: Path,
+    leaderboard_path: Path,
+    leaderboard_bytes: bytes,
+    raw_root: Path,
+) -> tuple[int, int, int] | None:
+    if type(manifest) is not dict or manifest.get("schema") != MANIFEST_SCHEMA:
+        return None
+    if (
+        manifest.get("analysis_version") != CURRENT_ANALYZER_VERSION
+        or manifest.get("analysis_root") != str(analysis_root)
+        or manifest.get("leaderboard_path") != str(leaderboard_path)
+        or manifest.get("raw_root") != str(raw_root)
+    ):
+        return None
+
+    expected_leaderboard_sha256 = hashlib.sha256(leaderboard_bytes).hexdigest()
+    leaderboard_size_bytes = manifest.get("leaderboard_size_bytes")
+    if (
+        manifest.get("leaderboard_sha256") != expected_leaderboard_sha256
+        or type(leaderboard_size_bytes) is not int
+        or leaderboard_size_bytes != len(leaderboard_bytes)
+    ):
+        return None
+
+    try:
+        return _training_manifest_counts(manifest)
+    except ValueError:
+        return None
+
+
+def _completion_matches_artifacts(
+    completion: object,
+    *,
+    leaderboard_path: Path,
+    leaderboard_bytes: bytes,
+    leaderboard_players: int,
+    training_manifest_path: Path,
+    training_manifest_bytes: bytes,
+    training_counts: tuple[int, int, int],
+) -> bool:
+    if type(completion) is not dict:
+        return False
+
+    training_selected_players, training_replays, holdout_replays = training_counts
+    expected = {
+        "leaderboard_players": leaderboard_players,
+        "leaderboard_size_bytes": len(leaderboard_bytes),
+        "training_manifest_size_bytes": len(training_manifest_bytes),
+        "training_selected_players": training_selected_players,
+        "training_replays": training_replays,
+        "holdout_replays": holdout_replays,
+    }
+    if any(
+        type(completion.get(field)) is not int or completion[field] != value
+        for field, value in expected.items()
+    ):
+        return False
+
+    return (
+        completion.get("leaderboard_path") == str(leaderboard_path)
+        and completion.get("training_manifest_path") == str(training_manifest_path)
+        and completion.get("leaderboard_sha256")
+        == hashlib.sha256(leaderboard_bytes).hexdigest()
+        and completion.get("training_manifest_sha256")
+        == hashlib.sha256(training_manifest_bytes).hexdigest()
+    )
+
+
 def finalize_analysis_if_ready(
     state: RuntimeState,
     *,
@@ -222,11 +294,16 @@ def finalize_analysis_if_ready(
         / "training"
         / f"human-imitation-{CURRENT_ANALYZER_VERSION}.json"
     )
+    raw_root = derived_root.parent / "raw" / "replays"
 
-    if (
-        leaderboard_path.exists()
-        and completion_path.exists()
-        and training_manifest_path.exists()
+    reuse_artifact_paths = (
+        leaderboard_path,
+        completion_path,
+        training_manifest_path,
+    )
+    if all(
+        not path.is_symlink() and path.is_file()
+        for path in reuse_artifact_paths
     ):
         try:
             previous: object = json.loads(
@@ -234,21 +311,40 @@ def finalize_analysis_if_ready(
             )
         except (OSError, json.JSONDecodeError):
             previous = {}
+        leaderboard_bytes = b""
         try:
-            previous_leaderboard: object = json.loads(
-                leaderboard_path.read_text(encoding="utf-8")
-            )
+            leaderboard_bytes = leaderboard_path.read_bytes()
+            previous_leaderboard: object = json.loads(leaderboard_bytes)
         except (OSError, json.JSONDecodeError):
             previous_leaderboard = {}
+        training_manifest_bytes = b""
         try:
-            previous_manifest: object = json.loads(
-                training_manifest_path.read_text(encoding="utf-8")
-            )
+            training_manifest_bytes = training_manifest_path.read_bytes()
+            previous_manifest: object = json.loads(training_manifest_bytes)
         except (OSError, json.JSONDecodeError):
             previous_manifest = {}
 
+        training_counts = _training_manifest_matches_contract(
+            previous_manifest,
+            analysis_root=analysis_root,
+            leaderboard_path=leaderboard_path,
+            leaderboard_bytes=leaderboard_bytes,
+            raw_root=raw_root,
+        )
+        leaderboard_rows = (
+            previous_leaderboard.get("rows")
+            if type(previous_leaderboard) is dict
+            else None
+        )
+        leaderboard_players = (
+            len(leaderboard_rows)
+            if type(leaderboard_rows) is list
+            else -1
+        )
+
         if (
-            _completion_matches_snapshot(
+            training_counts is not None
+            and _completion_matches_snapshot(
                 previous,
                 raw_unique=raw_unique,
                 analysis_ok=analysis_ok,
@@ -260,8 +356,15 @@ def finalize_analysis_if_ready(
                 min_matches=validated_min_matches,
                 min_minutes=validated_min_minutes,
             )
-            and type(previous_manifest) is dict
-            and previous_manifest.get("schema") == MANIFEST_SCHEMA
+            and _completion_matches_artifacts(
+                previous,
+                leaderboard_path=leaderboard_path,
+                leaderboard_bytes=leaderboard_bytes,
+                leaderboard_players=leaderboard_players,
+                training_manifest_path=training_manifest_path,
+                training_manifest_bytes=training_manifest_bytes,
+                training_counts=training_counts,
+            )
         ):
             return {
                 "status": "already_finalized",
@@ -304,7 +407,7 @@ def finalize_analysis_if_ready(
     training_manifest = build_training_manifest(
         analysis_root=analysis_root,
         leaderboard_path=leaderboard_path,
-        raw_root=derived_root.parent / "raw" / "replays",
+        raw_root=raw_root,
     )
     (
         training_selected_players,
@@ -312,6 +415,9 @@ def finalize_analysis_if_ready(
         holdout_replays,
     ) = _training_manifest_counts(training_manifest)
     _atomic_json(training_manifest_path, training_manifest)
+
+    leaderboard_bytes = leaderboard_path.read_bytes()
+    training_manifest_bytes = training_manifest_path.read_bytes()
 
     completion = {
         "schema": "haxlab-analysis-completion-v1",
@@ -326,7 +432,13 @@ def finalize_analysis_if_ready(
         "analysis_raw_events": current_events,
         "leaderboard_players": len(rows),
         "leaderboard_path": str(leaderboard_path),
+        "leaderboard_sha256": hashlib.sha256(leaderboard_bytes).hexdigest(),
+        "leaderboard_size_bytes": len(leaderboard_bytes),
         "training_manifest_path": str(training_manifest_path),
+        "training_manifest_sha256": hashlib.sha256(
+            training_manifest_bytes
+        ).hexdigest(),
+        "training_manifest_size_bytes": len(training_manifest_bytes),
         "training_selected_players": training_selected_players,
         "training_replays": training_replays,
         "holdout_replays": holdout_replays,
