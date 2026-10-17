@@ -58,6 +58,64 @@ def test_replay_file_rejects_noncanonical_digest(digest: object) -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("path", "file_name"),
+    [
+        ("/raw/session/replay.hbr2", "replay.hbr2"),
+        ("relative/replay.hbr2", "replay.hbr2"),
+        ("replay.hbr2", "replay.hbr2"),
+    ],
+)
+def test_replay_file_requires_path_basename_identity(
+    path: str,
+    file_name: str,
+) -> None:
+    replay = ReplayFile(
+        path=path,
+        file_name=file_name,
+        size_bytes=1,
+        sha256="a" * 64,
+    )
+
+    assert replay.file_name == file_name
+
+
+@pytest.mark.parametrize(
+    ("path", "file_name"),
+    [
+        ("/raw/replay.hbr2", "other.hbr2"),
+        ("/raw/replay.hbr2", "nested/replay.hbr2"),
+        ("relative/replay.hbr2", "../replay.hbr2"),
+    ],
+)
+def test_replay_file_rejects_incoherent_path_identity(
+    path: str,
+    file_name: str,
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match="file_name must equal the basename of ReplayFile.path",
+    ):
+        ReplayFile(
+            path=path,
+            file_name=file_name,
+            size_bytes=1,
+            sha256="a" * 64,
+        )
+
+
+def test_replay_file_from_path_preserves_basename_identity(tmp_path) -> None:
+    replay_path = tmp_path / "nested" / "replay.hbr2"
+    replay_path.parent.mkdir()
+    replay_path.write_bytes(b"hbr2")
+
+    replay = ReplayFile.from_path(replay_path, "a" * 64)
+
+    assert replay.path == str(replay_path)
+    assert replay.file_name == replay_path.name
+    assert replay.size_bytes == 4
+
+
 @pytest.mark.parametrize("size_bytes", [True, 1.5, "1", -1, None])
 def test_replay_size_rejects_coercion(size_bytes: object) -> None:
     with pytest.raises((TypeError, ValueError)):

@@ -128,8 +128,12 @@ class ReplayFile:
     sha256: str
 
     def __post_init__(self) -> None:
-        _require_string(self.path, "ReplayFile.path")
-        _require_string(self.file_name, "ReplayFile.file_name")
+        path = _require_string(self.path, "ReplayFile.path")
+        file_name = _require_string(self.file_name, "ReplayFile.file_name")
+        if Path(path).name != file_name:
+            raise ValueError(
+                "ReplayFile.file_name must equal the basename of ReplayFile.path"
+            )
         _require_nonnegative_int(self.size_bytes, "ReplayFile.size_bytes")
         _require_sha256(self.sha256, "ReplayFile.sha256")
 
