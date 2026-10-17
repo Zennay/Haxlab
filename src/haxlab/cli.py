@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import stat
 from pathlib import Path
 
@@ -22,6 +23,18 @@ def _export_root_arg(value: str) -> Path:
     if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
         raise argparse.ArgumentTypeError(
             "export root must be an existing non-symlink directory"
+        )
+
+    lexical_path = Path(os.path.abspath(path))
+    try:
+        resolved_path = path.resolve(strict=True)
+    except OSError as exc:
+        raise argparse.ArgumentTypeError(
+            "export root must be an existing non-symlink directory"
+        ) from exc
+    if resolved_path != lexical_path:
+        raise argparse.ArgumentTypeError(
+            "export root must not be reached through a symlinked ancestor"
         )
     return path
 
