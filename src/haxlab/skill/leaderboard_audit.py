@@ -166,6 +166,18 @@ def _secure_read(path: Path) -> bytes:
             _fail("leaderboard file metadata changed during audit read")
         if len(first) != after.st_size:
             _fail("leaderboard byte count does not match file size")
+
+        try:
+            current = path.lstat()
+        except OSError as exc:
+            _fail(f"leaderboard logical path changed during audit: {exc}")
+        if (
+            stat.S_ISLNK(current.st_mode)
+            or not stat.S_ISREG(current.st_mode)
+            or (current.st_dev, current.st_ino, current.st_size)
+            != (after.st_dev, after.st_ino, after.st_size)
+        ):
+            _fail("leaderboard logical path identity changed during audit")
         return first
     except OSError as exc:
         _fail(f"leaderboard read failed: {exc}")
