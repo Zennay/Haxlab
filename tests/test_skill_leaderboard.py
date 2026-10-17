@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import sys
 
+from haxlab.learning.selector import build_training_manifest
 from haxlab.skill.leaderboard import (
     _bounded_match_contexts,
     _normalizers,
@@ -231,7 +232,22 @@ def test_skill_cli_can_write_json_snapshot(
 
     assert printed["schema"] == "haxlab-skill-leaderboard-v1"
     assert saved["schema"] == "haxlab-skill-leaderboard-v1"
+    assert printed["analysis_version"] == tmp_path.name
+    assert saved["analysis_version"] == tmp_path.name
     assert saved["rows"][0]["name"] == "Alpha"
+
+    manifest = build_training_manifest(
+        analysis_root=tmp_path,
+        leaderboard_path=output,
+        raw_root=tmp_path / "raw",
+        top_fraction_per_role=1.0,
+        min_players_per_role=1,
+        min_matches=1,
+        min_minutes=0.0,
+        max_uncertainty=100.0,
+    )
+    assert manifest["analysis_version"] == tmp_path.name
+    assert manifest["leaderboard_path"] == str(output)
 
 
 def test_match_context_is_bounded_and_action_based() -> None:

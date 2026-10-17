@@ -479,6 +479,10 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    analysis_version = args.root.name.strip()
+    if not analysis_version:
+        parser.error("--root must identify a non-empty analysis version directory")
+
     rows = [
         row
         for row in build_leaderboard(args.root)
@@ -489,6 +493,7 @@ def main() -> int:
     snapshot = {
         "schema": "haxlab-skill-leaderboard-v1",
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "analysis_version": analysis_version,
         "source_root": str(args.root),
         "min_matches": max(1, args.min_matches),
         "min_minutes": max(0.0, args.min_minutes),
