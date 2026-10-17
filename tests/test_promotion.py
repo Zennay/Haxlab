@@ -1,4 +1,8 @@
-from haxlab.evaluation.models import EvaluationEvidence, Regression
+from haxlab.evaluation.models import (
+    EvaluationEvidence,
+    PromotionPolicy,
+    Regression,
+)
 from haxlab.evaluation.promotion import decide_promotion
 
 
@@ -43,3 +47,153 @@ def test_new_model_without_enough_games_is_rejected() -> None:
     decision = decide_promotion(_good_evidence(games_vs_champion=25))
 
     assert not decision.promote
+
+
+def test_nan_confidence_bound_fails_closed() -> None:
+    decision = decide_promotion(
+        _good_evidence(score_rate_lower_bound=float("nan"))
+    )
+
+    assert not decision.promote
+    assert (
+        "invalid_evidence:score_rate_lower_bound:non_finite"
+        in decision.reasons
+    )
+
+
+def test_passed_scenarios_cannot_exceed_total() -> None:
+    decision = decide_promotion(
+        _good_evidence(
+            frozen_scenarios_total=100,
+            frozen_scenarios_passed=101,
+        )
+    )
+
+    assert not decision.promote
+    assert (
+        "invalid_evidence:frozen_scenarios_passed_exceeds_total:101>100"
+        in decision.reasons
+    )
+
+
+def test_truthy_non_boolean_reproducible_does_not_pass() -> None:
+    decision = decide_promotion(_good_evidence(reproducible="true"))
+
+    assert not decision.promote
+    assert "run_not_reproducible" in decision.reasons
+
+
+def test_same_challenger_and_champion_is_rejected() -> None:
+    decision = decide_promotion(
+        _good_evidence(
+            challenger_id="model-1",
+            champion_id="model-1",
+        )
+    )
+
+    assert not decision.promote
+    assert "challenger_matches_champion" in decision.reasons
+
+
+def test_confidence_bound_cannot_exceed_observed_score_rate() -> None:
+    decision = decide_promotion(
+        _good_evidence(
+            score_rate_vs_champion=0.52,
+            score_rate_lower_bound=0.53,
+        )
+    )
+
+    assert not decision.promote
+    assert (
+        "invalid_evidence:score_rate_lower_bound_exceeds_score_rate"
+        in decision.reasons
+    )
+
+
+def test_non_integer_game_count_fails_closed() -> None:
+    decision = decide_promotion(_good_evidence(games_vs_champion=1000.5))
+
+    assert not decision.promote
+    assert "invalid_evidence:games_vs_champion:not_integer" in decision.reasons
+
+
+def test_nan_policy_confidence_threshold_fails_closed() -> None:
+    decision = decide_promotion(
+        _good_evidence(),
+        PromotionPolicy(minimum_score_rate_lower_bound=float("nan")),
+    )
+
+    assert not decision.promote
+    assert (
+        "invalid_policy:minimum_score_rate_lower_bound:non_finite"
+        in decision.reasons
+    )
+
+
+def test_string_policy_threshold_is_not_coerced() -> None:
+    decision = decide_promotion(
+        _good_evidence(),
+        PromotionPolicy(minimum_scenario_pass_rate="0.50"),
+    )
+
+    assert not decision.promote
+    assert (
+        "invalid_policy:minimum_scenario_pass_rate:non_numeric"
+        in decision.reasons
+    )
+
+
+def test_boolean_minimum_games_is_rejected() -> None:
+    decision = decide_promotion(
+        _good_evidence(),
+        PromotionPolicy(minimum_games=True),
+    )
+
+    assert not decision.promote
+    assert "invalid_policy:minimum_games:non_integer" in decision.reasons
+
+
+def test_out_of_range_policy_rate_fails_closed() -> None:
+    decision = decide_promotion(
+        _good_evidence(),
+        PromotionPolicy(minimum_scenario_pass_rate=1.01),
+    )
+
+    assert not decision.promote
+    assert any(
+        reason.startswith(
+            "invalid_policy:minimum_scenario_pass_rate:above_maximum"
+        )
+        for reason in decision.reasons
+    )
+
+
+def test_truthy_string_cannot_allow_critical_regressions() -> None:
+    evidence = _good_evidence(
+        regressions=(
+            Regression(
+                scenario="kickoff",
+                severity="critical",
+                details="regressed",
+            ),
+        )
+    )
+
+    decision = decide_promotion(
+        evidence,
+        PromotionPolicy(allow_critical_regressions="false"),
+    )
+
+    assert not decision.promote
+    assert (
+        "invalid_policy:allow_critical_regressions:not_boolean"
+        in decision.reasons
+    )
+    assert any(reason.startswith("critical_regressions") for reason in decision.reasons)
+
+
+def test_non_policy_object_fails_closed() -> None:
+    decision = decide_promotion(_good_evidence(), None)
+
+    assert not decision.promote
+    assert decision.reasons == ("invalid_policy:object_type",)
