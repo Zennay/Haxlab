@@ -19,12 +19,12 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Zennay/fuckball
-          ref: 3ad107e252fe61d2b991ac8cc73733895be98a72
+          ref: e511a658cc66071a6fb7377bbf86da6961e7e387
           clean: true
           persist-credentials: false
       - name: Check source SHA and syntax
         run: |
-          test "$(git rev-parse HEAD)" = 3ad107e252fe61d2b991ac8cc73733895be98a72
+          test "$(git rev-parse HEAD)" = e511a658cc66071a6fb7377bbf86da6961e7e387
           test -z "$(git status --porcelain)"
           node --check dist/ai/policy.js
           node --check dist/ai/selfplay.js
@@ -37,7 +37,7 @@ jobs:
           set -euo pipefail
           BASE=/opt/fuckball-releases/84f819633fad77ccdbeac1f5fe6b69374ce421d7-39214993688/dist/ai/policy.js
           test -r "$BASE"
-          echo "LIVE 84f8196 (A) vs AI candidate 3ad107e (B)"
+          echo "LIVE 84f8196 (A) vs AI candidate e511a65 (B)"
           nice -n 19 timeout 110s node training/duel.cjs "$BASE" "$GITHUB_WORKSPACE/dist/ai/policy.js" 8 900 1
           echo "PRIVATE SCENARIOS: high-press keeper, wall bounce, 2v1, backpass, 3-man defense"
           nice -n 19 timeout 120s node - <<'NODE'
