@@ -1,0 +1,93 @@
+name: Bootstrap capacity-aware VPS runner pool
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portfolio-runner-pool-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    if: >-
+      github.repository == 'Zennay/Haxlab' &&
+      github.ref == 'refs/heads/main' &&
+      github.actor == 'Zennay' &&
+      github.triggering_actor == 'Zennay' &&
+      github.run_attempt == 1
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 35
+    steps:
+      - name: Verify authorized dedicated VPS executor
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(hostname -s)" = vps-bb300bba
+          test "$(id -un)" = ubuntu
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REPOSITORY" = Zennay/Haxlab
+          test "$GITHUB_ACTOR" = Zennay
+          test "$GITHUB_TRIGGERING_ACTOR" = Zennay
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          gh auth status >/dev/null 2>&1
+          sudo -n true
+      - name: Check out exact reviewed pool implementation
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Match exact source identity
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Register parked per-repository runners
+        shell: bash
+        run: bash ops/portfolio_runner_pool.sh bootstrap
+      - name: Move all eligible hosted workflows onto the parked VPS runners
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 ops/portfolio_selfhosted_migrate.py --apply --repos 'zGuard,Woonpoints,Mixlab,ikea-enhanced-app,fuckball,Tuddy'
+      - name: Install memory-aware on-demand pool systemd controller
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo -n install -m 0755 ops/portfolio_runner_pool.sh /usr/local/bin/zennay-portfolio-runner-pool
+          sudo -n tee /etc/systemd/system/zennay-portfolio-runner-pool.service >/dev/null <<'SERVICE'
+          [Unit]
+          Description=Rotate one registered GitHub self-hosted runner with bounded VPS RAM
+          After=network-online.target
+          Wants=network-online.target
+          [Service]
+          Type=oneshot
+          User=ubuntu
+          ExecStart=/usr/local/bin/zennay-portfolio-runner-pool tick
+          TimeoutStartSec=180
+          SERVICE
+          sudo -n tee /etc/systemd/system/zennay-portfolio-runner-pool.timer >/dev/null <<'TIMER'
+          [Unit]
+          Description=Check queued GitHub self-hosted jobs without starting all runners
+          [Timer]
+          OnBootSec=2min
+          OnUnitActiveSec=2min
+          AccuracySec=15s
+          Persistent=true
+          Unit=zennay-portfolio-runner-pool.service
+          [Install]
+          WantedBy=timers.target
+          TIMER
+          sudo -n systemctl daemon-reload
+          sudo -n systemctl enable --now zennay-portfolio-runner-pool.timer
+          sudo -n systemctl start zennay-portfolio-runner-pool.service
+          systemctl is-enabled zennay-portfolio-runner-pool.timer
+          systemctl show zennay-portfolio-runner-pool.service -p Result --value
+      - name: Verify registered pool labels and standby posture
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for repo in zGuard Woonpoints Mixlab ikea-enhanced-app fuckball Tuddy; do
+            printf '%s: ' "$repo"
+            gh api "repos/Zennay/$repo/actions/runners" \
+              --jq '[.runners[] | select(.name == "vps-bb300bba-pool-'"$repo"'") | .name+":"+.status+":"+([.labels[].name]|join("+"))] | join(",")'
+          done
