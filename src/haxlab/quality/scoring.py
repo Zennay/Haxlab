@@ -14,7 +14,12 @@ def _is_native_int(value: object) -> bool:
 
 
 def _is_finite_number(value: object) -> bool:
-    return type(value) in (int, float) and math.isfinite(float(value))
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except (OverflowError, ValueError):
+        return False
 
 
 def _invalid_evidence_reasons(evidence: MatchQualityEvidence) -> tuple[str, ...]:
