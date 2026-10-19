@@ -29,6 +29,12 @@ RUNNERS = {
     "zSSH": "[self-hosted, zssh, vps]",
     "Ftmo": "[self-hosted, ftmo-research]",
     "Discordbot": "[self-hosted, Linux]",
+    "zGuard": "[self-hosted, portfolio-pool, vps]",
+    "Woonpoints": "[self-hosted, portfolio-pool, vps]",
+    "Mixlab": "[self-hosted, portfolio-pool, vps]",
+    "ikea-enhanced-app": "[self-hosted, portfolio-pool, vps]",
+    "fuckball": "[self-hosted, portfolio-pool, vps]",
+    "Tuddy": "[self-hosted, portfolio-pool, vps]",
 }
 PR_GUARD = ("((github.event_name != 'pull_request' && "
             "github.event_name != 'pull_request_target') || "
@@ -133,7 +139,13 @@ def ensure_runner(token: str, name: str):
     selector = RUNNERS[name].strip("[]").split(", ")
     for runner in registered:
         labels = {x["name"] for x in runner["labels"]}
-        if runner["status"] == "online" and set(selector).issubset(labels):
+        if not set(selector).issubset(labels):
+            continue
+        if runner["status"] == "online":
+            return runner["name"]
+        # Registered but parked pool listeners have a verified unique identity.
+        # They must be installed without starting untrusted pre-migration code.
+        if name in {"zGuard", "Woonpoints", "Mixlab", "ikea-enhanced-app", "fuckball", "Tuddy"} and runner["name"] == "vps-bb300bba-pool-" + name:
             return runner["name"]
     raise ValueError("no matching ONLINE self-hosted runner")
 
