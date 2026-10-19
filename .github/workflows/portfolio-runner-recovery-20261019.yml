@@ -21,7 +21,7 @@ jobs:
     runs-on: [self-hosted, haxlab]
     timeout-minutes: 15
     steps:
-      - name: Repair offline portfolio runners on their own VPS
+      - name: Restore OOM-failed listeners and re-register stale runners
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -29,73 +29,77 @@ jobs:
           test "$(id -un)" = ubuntu
           test "$GITHUB_EVENT_NAME" = workflow_dispatch
           test "$GITHUB_ACTOR" = Zennay
+          test "$GITHUB_TRIGGERING_ACTOR" = Zennay
           test "$GITHUB_RUN_ATTEMPT" = 1
           sudo -n true
           gh auth status >/dev/null 2>&1
           exec 9>/tmp/zennay-portfolio-runner-recovery.lock
           flock -n 9 || { echo 'Runner recovery already in progress'; exit 0; }
 
-          echo 'zSSH: restore configured listener service when missing'
-          cd /home/ubuntu/actions-runner-zssh
-          if test -f .runner && test -x svc.sh; then
-            if ! systemctl list-unit-files 'actions.runner.Zennay-zSSH.*' --no-legend | grep -q actions.runner; then
-              sudo -n ./svc.sh install ubuntu
+          # Never start a second listener on top of orphaned worker processes.
+          for tuple in 'Supa:/home/ubuntu/actions-runner-supa:actions.runner.Zennay-Supa.vps-bb300bba-supa.service' 'RaiseAI:/home/ubuntu/actions-runner-raiseai:actions.runner.Zennay-RaiseAI.vps-bb300bba.service'; do
+            IFS=: read -r repo root unit <<< "$tuple"
+            if systemctl is-active --quiet "$unit"; then
+              echo "$repo service already active"
+              continue
             fi
-            if ! systemctl list-units 'actions.runner.Zennay-zSSH.*' --state=active --no-legend | grep -q actions.runner; then
-              sudo -n ./svc.sh start
+            if pgrep -u ubuntu -f "^$root/bin/Runner.(Listener|Worker)" >/dev/null; then
+              echo "$repo: residual worker or listener; start refused"
+              continue
             fi
-          else
-            echo 'zSSH registration missing; skipped'
-          fi
-
-          echo 'LightUp: register once and install service'
-          cd /home/ubuntu/actions-runner-lightup-proof
-          if test -x config.sh && test -x svc.sh; then
-            if ! test -f .runner; then
-              token="$(gh api -X POST repos/Zennay/Lightup/actions/runners/registration-token --jq .token)"
-              ./config.sh --unattended --url https://github.com/Zennay/Lightup --token "$token" --name vps-bb300bba-lightup --labels lightup,vps --work _work
-              unset token
-            fi
-            if ! systemctl list-unit-files 'actions.runner.Zennay-Lightup.*' --no-legend | grep -q actions.runner; then
-              sudo -n ./svc.sh install ubuntu
-            fi
-            if ! systemctl list-units 'actions.runner.Zennay-Lightup.*' --state=active --no-legend | grep -q actions.runner; then
-              sudo -n ./svc.sh start
-            fi
-          else
-            echo 'LightUp runner distribution missing; skipped'
-          fi
-
-          echo 'Supa and RaiseAI: bounded auto-recovery after OOM'
-          for unit in actions.runner.Zennay-Supa.vps-bb300bba-supa.service actions.runner.Zennay-RaiseAI.vps-bb300bba.service; do
-            if ! systemctl is-active --quiet "$unit"; then
-              sudo -n install -d -m 0755 "/etc/systemd/system/$unit.d"
-              printf '[Service]\nRestart=on-failure\nRestartSec=60s\nMemoryHigh=1500M\nMemoryMax=2500M\n' | sudo -n tee "/etc/systemd/system/$unit.d/90-oom-recovery.conf" >/dev/null
-            fi
+            sudo -n install -d -m 0755 "/etc/systemd/system/$unit.d"
+            printf '[Service]\nRestart=on-failure\nRestartSec=60s\nMemoryHigh=1500M\nMemoryMax=2500M\n' | sudo -n tee "/etc/systemd/system/$unit.d/90-oom-recovery.conf" >/dev/null
+            sudo -n systemctl daemon-reload
+            sudo -n systemctl reset-failed "$unit"
+            sudo -n systemctl start "$unit"
+            echo "$repo: $(systemctl is-active "$unit")"
           done
-          sudo -n systemctl daemon-reload
 
-          if ! systemctl is-active --quiet actions.runner.Zennay-Supa.vps-bb300bba-supa.service; then
-            if pgrep -u ubuntu -f '^/home/ubuntu/actions-runner-supa/bin/Runner.(Listener|Worker)' >/dev/null; then
-              echo 'Supa: orphan runner present, refused restart'
-            else
-              sudo -n systemctl reset-failed actions.runner.Zennay-Supa.vps-bb300bba-supa.service
-              sudo -n systemctl start actions.runner.Zennay-Supa.vps-bb300bba-supa.service
+          restore_registration () {
+            local repo="$1" root="$2" agent="$3" labels="$4" unit="$5"
+            cd "$root"
+            if ! test -x config.sh || ! test -x svc.sh; then
+              echo "$repo: runner binary distribution missing"
+              return 1
             fi
-          fi
-          if ! systemctl is-active --quiet actions.runner.Zennay-RaiseAI.vps-bb300bba.service; then
-            if pgrep -u ubuntu -f '^/home/ubuntu/actions-runner-raiseai/bin/Runner.(Listener|Worker)' >/dev/null; then
-              echo 'RaiseAI: orphan runner present, refused restart'
-            else
-              sudo -n systemctl reset-failed actions.runner.Zennay-RaiseAI.vps-bb300bba.service
-              sudo -n systemctl start actions.runner.Zennay-RaiseAI.vps-bb300bba.service
+            local status
+            status="$(gh api "repos/Zennay/$repo/actions/runners" --jq '.runners | map(select(.name == "'"$agent"'")) | .[0].status // "missing"')"
+            if test "$status" = online && systemctl is-active --quiet "$unit"; then
+              echo "$repo: existing registered runner online"
+              return 0
             fi
-          fi
+            if systemctl is-active --quiet "$unit"; then
+              echo "$repo: service active but registration not online; refused interrupt"
+              return 1
+            fi
+            if pgrep -u ubuntu -f "^$root/bin/Runner.(Listener|Worker)" >/dev/null; then
+              echo "$repo: orphaned listener/worker; refused re-registration"
+              return 1
+            fi
+            # A stale, deleted GitHub runner registration must not be restarted.
+            # Keep local secrets backed up on the VPS, never in logs or artifacts.
+            local backup="/home/ubuntu/.runner-registration-backups/$repo-$GITHUB_RUN_ID"
+            install -d -m 0700 "$backup"
+            if systemctl list-unit-files "$unit" --no-legend | grep -q actions.runner; then
+              sudo -n ./svc.sh uninstall
+            fi
+            for file in .runner .runner_migrated .credentials .credentials_rsaparams .service; do
+              if test -f "$file"; then mv "$file" "$backup/"; fi
+            done
+            local token
+            token="$(gh api -X POST "repos/Zennay/$repo/actions/runners/registration-token" --jq .token)"
+            ./config.sh --unattended --url "https://github.com/Zennay/$repo" --token "$token" --name "$agent" --labels "$labels" --work _work --replace
+            unset token
+            sudo -n ./svc.sh install ubuntu
+            sudo -n ./svc.sh start
+            echo "$repo: service $(systemctl is-active "$unit")"
+          }
 
-          echo 'Final service status:'
-          systemctl list-units 'actions.runner.Zennay-*' --all --no-legend --no-pager | head -35
-          echo 'GitHub registered runner status:'
-          for repo in Supa RaiseAI Lightup zSSH; do
+          restore_registration zSSH /home/ubuntu/actions-runner-zssh zssh-vps-1 zssh,vps actions.runner.Zennay-zSSH.zssh-vps-1.service || echo 'zSSH recovery needs inspection'
+          restore_registration Lightup /home/ubuntu/actions-runner-lightup-proof vps-bb300bba-lightup lightup,vps actions.runner.Zennay-Lightup.vps-bb300bba-lightup.service || echo 'LightUp recovery needs inspection'
+
+          echo 'Registered runner states (no secrets):'
+          for repo in Supa RaiseAI zSSH Lightup; do
             printf '%s: ' "$repo"
             gh api "repos/Zennay/$repo/actions/runners" --jq '[.runners[] | .name + ":" + .status] | join(",")'
           done
