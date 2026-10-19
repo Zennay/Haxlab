@@ -67,8 +67,8 @@ for repo in $REPOS; do
       echo "$repo: active worker; preserving"
       exit 0
     fi
-    busy="$(gh api "repos/Zennay/$repo/actions/runners" \
-      --jq '[.runners[] | select(.name == "vps-bb300bba-pool-'"$repo"'") | .busy] | any')"
+    busy="$(timeout 15 gh api "repos/Zennay/$repo/actions/runners" \
+      --jq '[.runners[] | select(.name == "vps-bb300bba-pool-'"$repo"'") | .busy] | any' 2>/dev/null)" || { echo "GitHub API unavailable; preserving runner"; exit 0; }
     if test "$busy" = true; then
       echo "$repo: busy on GitHub; preserving"
       exit 0
@@ -77,11 +77,18 @@ for repo in $REPOS; do
   fi
 done
 
+# Under severe memory pressure, never increase VPS listeners or make expensive API calls.
+available="$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)"
+if test "$available" -lt 2200000; then
+  echo "VPS memory pressure; no additional runner, available_kib=$available"
+  exit 0
+fi
+
 # Rotate to the project with the largest waiting queue. No hosted fallback.
 chosen=''
 max=0
 for repo in $REPOS; do
-  queued="$(gh api "repos/Zennay/$repo/actions/runs?status=queued&per_page=1" --jq .total_count)"
+  queued="$(timeout 15 gh api "repos/Zennay/$repo/actions/runs?status=queued&per_page=1" --jq .total_count 2>/dev/null)" || { echo "GitHub API timeout; retry at next timer tick"; exit 0; }
   if test "$queued" -gt "$max"; then
     chosen="$repo"
     max="$queued"
@@ -108,7 +115,7 @@ if test "$available" -lt 2200000; then
 fi
 busy_total=0
 for repo in zCloud Haxlab Supa RaiseAI Lightup Ftmo zSSH Discordbot; do
-  count="$(gh api "repos/Zennay/$repo/actions/runners" --jq '[.runners[] | select(.busy == true)] | length')"
+  count="$(timeout 15 gh api "repos/Zennay/$repo/actions/runners" --jq '[.runners[] | select(.busy == true)] | length' 2>/dev/null)" || { echo "GitHub API unavailable; preserving running services"; exit 0; }
   busy_total=$((busy_total + count))
 done
 if test "$busy_total" -ge 3; then
