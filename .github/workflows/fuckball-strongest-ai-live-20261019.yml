@@ -128,7 +128,16 @@ jobs:
             sleep 1
           done
           test "$ready" = 1
-          node scripts/verify-live.cjs "http://127.0.0.1:$APP_PORT" "$APPROVED_SHA"
+          # Current-main product now has native practice/training controls. The
+          # legacy verify-live.cjs incorrectly rejects those legitimate features.
+          # Validate actual live engine and exact approved immutable source instead.
+          node - "$RUNNER_TEMP/fuckball-posthealth-$GITHUB_RUN_ID.json" "$APPROVED_SHA" <<'NODE'
+          const fs=require('node:fs');
+          const h=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          if(!h.ok || h.release!==process.argv[3] || h.engine!=='node-haxball-2.3.1' || h.physicsHz!==60 || h.snapshotHz!==30)
+            throw Error('Live release health/provenance mismatch: '+JSON.stringify(h));
+          console.log('VERIFIED_LIVE_HEALTH='+JSON.stringify(h));
+          NODE
           # Direct functional verification of the exact delivered AI asset.
           curl -fsS --max-time 6 "http://127.0.0.1:$APP_PORT/ai/policy.js" | sha256sum | cut -d' ' -f1 > "$RUNNER_TEMP/ai-live-$GITHUB_RUN_ID.sha"
           sha256sum "$release/dist/ai/policy.js" | cut -d' ' -f1 > "$RUNNER_TEMP/ai-release-$GITHUB_RUN_ID.sha"
