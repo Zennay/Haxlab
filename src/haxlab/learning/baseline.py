@@ -73,16 +73,32 @@ def _load_shard(entry: dict[str, Any]) -> tuple[np.ndarray, list[str]]:
             shard_path.name.removesuffix(".f32.gz") + ".meta.json"
         )
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    row_width = int(meta["rowWidth"])
-    columns = list(meta["columns"])
+    row_width = meta.get("rowWidth")
+    columns = meta.get("columns")
+    if type(row_width) is not int or row_width <= 0:
+        raise ValueError(f"{meta_path}: rowWidth must be a native positive integer")
+    if (
+        type(columns) is not list
+        or not columns
+        or any(type(name) is not str or not name for name in columns)
+        or len(set(columns)) != len(columns)
+    ):
+        raise ValueError(f"{meta_path}: columns must be unique non-empty strings")
+    if row_width != len(columns):
+        raise ValueError(
+            f"{meta_path}: rowWidth {row_width} does not match "
+            f"{len(columns)} declared columns"
+        )
 
     with gzip.open(shard_path, "rb") as handle:
         raw = handle.read()
     values = np.frombuffer(raw, dtype="<f4")
-    if row_width <= 0 or values.size % row_width != 0:
+    if values.size % row_width != 0:
         raise ValueError(
             f"{shard_path}: invalid float32 size {values.size} for row width {row_width}"
         )
+    if not np.isfinite(values).all():
+        raise ValueError(f"{shard_path}: non-finite float32 value")
     rows = values.reshape(-1, row_width)
     return rows, columns
 
@@ -114,10 +130,20 @@ def _extract_xy(
     input_columns = [columns[i] for i in input_indices]
     x = rows[:, input_indices].astype(np.float32, copy=False)
 
-    dx = np.clip(np.rint(rows[:, dx_i]), -1, 1).astype(np.int8)
-    dy = np.clip(np.rint(rows[:, dy_i]), -1, 1).astype(np.int8)
+    dx_raw = rows[:, dx_i]
+    dy_raw = rows[:, dy_i]
+    kick_raw = rows[:, kick_i]
+    if not np.isin(dx_raw, (-1.0, 0.0, 1.0)).all():
+        raise ValueError("invalid dir_x action label; expected -1, 0, or 1")
+    if not np.isin(dy_raw, (-1.0, 0.0, 1.0)).all():
+        raise ValueError("invalid dir_y action label; expected -1, 0, or 1")
+    if not np.isin(kick_raw, (0.0, 1.0)).all():
+        raise ValueError("invalid kick action label; expected 0 or 1")
+
+    dx = dx_raw.astype(np.int8)
+    dy = dy_raw.astype(np.int8)
     direction = ((dy + 1) * 3 + (dx + 1)).astype(np.int64)
-    kick = (rows[:, kick_i] > 0.5).astype(np.float32)
+    kick = kick_raw.astype(np.float32)
     return x, direction, kick, input_columns
 
 
@@ -313,6 +339,7 @@ def _iter_batches(
     batch_size: int,
     rng: np.random.Generator,
     shuffle: bool,
+    expected_input_columns: list[str] | None = None,
 ):
     entries = list(index["entries"])
     if shuffle:
@@ -320,7 +347,12 @@ def _iter_batches(
 
     for entry in entries:
         rows, columns = _load_shard(entry)
-        x, direction, kick, _ = _extract_xy(rows, columns)
+        x, direction, kick, shard_input_columns = _extract_xy(rows, columns)
+        if (
+            expected_input_columns is not None
+            and shard_input_columns != expected_input_columns
+        ):
+            raise ValueError("inconsistent shard column layout")
         x = ((x - mean) / std).astype(np.float32, copy=False)
         order = np.arange(x.shape[0])
         if shuffle:
@@ -337,6 +369,7 @@ def evaluate(
     params: dict[str, np.ndarray],
     mean: np.ndarray,
     std: np.ndarray,
+    input_columns: list[str] | None = None,
     batch_size: int = 8192,
     kick_threshold: float = 0.5,
 ) -> dict[str, Any]:
@@ -357,6 +390,7 @@ def evaluate(
         batch_size=batch_size,
         rng=rng,
         shuffle=False,
+        expected_input_columns=input_columns,
     ):
         _, dir_prob, kick_prob = _forward(x, params)
         dir_pred = dir_prob.argmax(axis=1)
@@ -448,6 +482,7 @@ def train_baseline(
             batch_size=max(32, batch_size),
             rng=rng,
             shuffle=True,
+            expected_input_columns=input_columns,
         ):
             grads, loss = _train_batch(
                 x,
@@ -475,6 +510,7 @@ def train_baseline(
             params=params,
             mean=mean,
             std=std,
+            input_columns=input_columns,
             batch_size=max(32, batch_size),
         )
         history.append(
@@ -512,6 +548,7 @@ def train_baseline(
             params=params,
             mean=mean,
             std=std,
+            input_columns=input_columns,
             batch_size=max(32, batch_size),
             kick_threshold=float(candidate),
         )
