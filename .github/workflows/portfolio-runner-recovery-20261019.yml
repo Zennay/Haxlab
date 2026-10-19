@@ -1,0 +1,101 @@
+name: Portfolio VPS runner recovery
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portfolio-runner-recovery-20261019
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    if: >-
+      github.repository == 'Zennay/Haxlab' &&
+      github.ref == 'refs/heads/main' &&
+      github.actor == 'Zennay' &&
+      github.triggering_actor == 'Zennay' &&
+      github.run_attempt == 1
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    steps:
+      - name: Repair offline portfolio runners on their own VPS
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(hostname -s)" = vps-bb300bba
+          test "$(id -un)" = ubuntu
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_ACTOR" = Zennay
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          sudo -n true
+          gh auth status >/dev/null 2>&1
+          exec 9>/tmp/zennay-portfolio-runner-recovery.lock
+          flock -n 9 || { echo 'Runner recovery already in progress'; exit 0; }
+
+          echo 'zSSH: restore configured listener service when missing'
+          cd /home/ubuntu/actions-runner-zssh
+          if test -f .runner && test -x svc.sh; then
+            if ! systemctl list-unit-files 'actions.runner.Zennay-zSSH.*' --no-legend | grep -q actions.runner; then
+              sudo -n ./svc.sh install ubuntu
+            fi
+            if ! systemctl list-units 'actions.runner.Zennay-zSSH.*' --state=active --no-legend | grep -q actions.runner; then
+              sudo -n ./svc.sh start
+            fi
+          else
+            echo 'zSSH registration missing; skipped'
+          fi
+
+          echo 'LightUp: register once and install service'
+          cd /home/ubuntu/actions-runner-lightup-proof
+          if test -x config.sh && test -x svc.sh; then
+            if ! test -f .runner; then
+              token="$(gh api -X POST repos/Zennay/Lightup/actions/runners/registration-token --jq .token)"
+              ./config.sh --unattended --url https://github.com/Zennay/Lightup --token "$token" --name vps-bb300bba-lightup --labels lightup,vps --work _work
+              unset token
+            fi
+            if ! systemctl list-unit-files 'actions.runner.Zennay-Lightup.*' --no-legend | grep -q actions.runner; then
+              sudo -n ./svc.sh install ubuntu
+            fi
+            if ! systemctl list-units 'actions.runner.Zennay-Lightup.*' --state=active --no-legend | grep -q actions.runner; then
+              sudo -n ./svc.sh start
+            fi
+          else
+            echo 'LightUp runner distribution missing; skipped'
+          fi
+
+          echo 'Supa and RaiseAI: bounded auto-recovery after OOM'
+          for unit in actions.runner.Zennay-Supa.vps-bb300bba-supa.service actions.runner.Zennay-RaiseAI.vps-bb300bba.service; do
+            if ! systemctl is-active --quiet "$unit"; then
+              sudo -n install -d -m 0755 "/etc/systemd/system/$unit.d"
+              printf '[Service]\nRestart=on-failure\nRestartSec=60s\nMemoryHigh=1500M\nMemoryMax=2500M\n' | sudo -n tee "/etc/systemd/system/$unit.d/90-oom-recovery.conf" >/dev/null
+            fi
+          done
+          sudo -n systemctl daemon-reload
+
+          if ! systemctl is-active --quiet actions.runner.Zennay-Supa.vps-bb300bba-supa.service; then
+            if pgrep -u ubuntu -f '^/home/ubuntu/actions-runner-supa/bin/Runner.(Listener|Worker)' >/dev/null; then
+              echo 'Supa: orphan runner present, refused restart'
+            else
+              sudo -n systemctl reset-failed actions.runner.Zennay-Supa.vps-bb300bba-supa.service
+              sudo -n systemctl start actions.runner.Zennay-Supa.vps-bb300bba-supa.service
+            fi
+          fi
+          if ! systemctl is-active --quiet actions.runner.Zennay-RaiseAI.vps-bb300bba.service; then
+            if pgrep -u ubuntu -f '^/home/ubuntu/actions-runner-raiseai/bin/Runner.(Listener|Worker)' >/dev/null; then
+              echo 'RaiseAI: orphan runner present, refused restart'
+            else
+              sudo -n systemctl reset-failed actions.runner.Zennay-RaiseAI.vps-bb300bba.service
+              sudo -n systemctl start actions.runner.Zennay-RaiseAI.vps-bb300bba.service
+            fi
+          fi
+
+          echo 'Final service status:'
+          systemctl list-units 'actions.runner.Zennay-*' --all --no-legend --no-pager | head -35
+          echo 'GitHub registered runner status:'
+          for repo in Supa RaiseAI Lightup zSSH; do
+            printf '%s: ' "$repo"
+            gh api "repos/Zennay/$repo/actions/runners" --jq '[.runners[] | .name + ":" + .status] | join(",")'
+          done
