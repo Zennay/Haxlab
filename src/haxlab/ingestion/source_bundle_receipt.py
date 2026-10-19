@@ -193,6 +193,13 @@ def _inventory_paths(
             kind = _kind_for_name(name)
             if kind is None:
                 continue
+            # The canonical verifier forbids literal backslashes in any receipt
+            # path. Reject at the source boundary, including parent directories,
+            # rather than emitting evidence the verifier cannot accept (#407).
+            if "\\" in relative:
+                raise SourceBundleReceiptError(
+                    "source_path_noncanonical_backslash"
+                )
             if not stat.S_ISREG(child_stat.st_mode):
                 raise SourceBundleReceiptError(
                     f"source_file_not_regular:{relative}"
