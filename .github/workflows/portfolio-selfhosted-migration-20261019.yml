@@ -1,0 +1,55 @@
+name: Enforce self-hosted portfolio workflows
+
+on:
+  workflow_dispatch:
+    inputs:
+      repos:
+        description: Comma-separated approved repositories with verified online VPS runners
+        required: true
+        type: string
+        default: Haxlab,zCloud,Supa,RaiseAI,Lightup,zSSH,Ftmo,Discordbot
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portfolio-selfhosted-workflow-migration
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    if: >-
+      github.repository == 'Zennay/Haxlab' &&
+      github.ref == 'refs/heads/main' &&
+      github.actor == 'Zennay' &&
+      github.triggering_actor == 'Zennay' &&
+      github.run_attempt == 1
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 35
+    steps:
+      - name: Prove trusted canonical host
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(hostname -s)" = vps-bb300bba
+          test "$(id -un)" = ubuntu
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REPOSITORY" = Zennay/Haxlab
+          test "$GITHUB_ACTOR" = Zennay
+          test "$GITHUB_TRIGGERING_ACTOR" = Zennay
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          gh auth status >/dev/null 2>&1
+      - name: Checkout immutable runner-policy source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Confirm exact GitHub source identity
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Atomically route repository CI through existing VPS registrations
+        env:
+          PORTFOLIO_REPOS: ${{ inputs.repos }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 ops/portfolio_selfhosted_migrate.py --apply --repos "$PORTFOLIO_REPOS"
