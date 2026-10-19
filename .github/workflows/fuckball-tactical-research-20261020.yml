@@ -1,0 +1,58 @@
+name: Private Fuckball tactical head-to-head (self-hosted)
+on:
+  push:
+    branches:
+      - ops/fuckball-tactical-research-20261020
+    paths:
+      - .github/workflows/fuckball-tactical-research-20261020.yml
+permissions:
+  contents: read
+concurrency:
+  group: haxlab-fuckball-private-match
+  cancel-in-progress: false
+jobs:
+  research-only:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 6
+    steps:
+      - name: Checkout immutable Fuckball AI challenger (no credentials persisted)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: Zennay/fuckball
+          ref: 3ad107e252fe61d2b991ac8cc73733895be98a72
+          clean: true
+          persist-credentials: false
+      - name: Check source SHA and syntax
+        run: |
+          test "$(git rev-parse HEAD)" = 3ad107e252fe61d2b991ac8cc73733895be98a72
+          test -z "$(git status --porcelain)"
+          node --check dist/ai/policy.js
+          node --check dist/ai/selfplay.js
+          node --check training/ball-telemetry.cjs
+      - name: Compare private 4v4 against the deployed tactical policy
+        env:
+          OPENBLAS_NUM_THREADS: '1'
+          OMP_NUM_THREADS: '1'
+        run: |
+          set -euo pipefail
+          BASE=/opt/fuckball-releases/84f819633fad77ccdbeac1f5fe6b69374ce421d7-39214993688/dist/ai/policy.js
+          test -r "$BASE"
+          echo "LIVE 84f8196 (A) vs AI candidate 3ad107e (B)"
+          nice -n 19 timeout 110s node training/duel.cjs "$BASE" "$GITHUB_WORKSPACE/dist/ai/policy.js" 8 900 1
+          echo "PRIVATE SCENARIOS: high-press keeper, wall bounce, 2v1, backpass, 3-man defense"
+          nice -n 19 timeout 120s node - <<'NODE'
+          const AI=require('./dist/ai/policy.js'),SP=require('./dist/ai/selfplay.js');
+          const {makeRoom}=require('./training/selfplay.cjs');
+          for(const scenario of [4,5,6,7,8]){
+            const g=SP.match(makeRoom,AI.defaultProfile,AI.defaultProfile,1,
+              20261020+scenario,'BFF',900,null,null,12,scenario);
+            const e=g.events||{};
+            console.log(JSON.stringify({scenario,score:[g.goals,g.conceded],
+              passes:e.passAttempts,completed:e.passCompleted,
+              completionsToTarget:e.passToTarget,intercepted:e.passIntercepted,
+              shots:e.shotAttempts,onTargetProjected:e.shotProjectedOnTarget,
+              goalkeeperClearances:e.keeperClearances,
+              goalkeeperDistributions:e.keeperDistributionsCompleted,
+              goalkeeperTurnovers:e.keeperTurnovers}));
+          }
+          NODE
