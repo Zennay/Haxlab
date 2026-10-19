@@ -35,12 +35,12 @@ PR_GUARD = ("((github.event_name != 'pull_request' && "
             "(github.event.pull_request.head.repo.full_name == github.repository "
             "&& github.actor == 'Zennay'))")
 JOB = re.compile(r"^  [A-Za-z0-9_.-]+:[ \t]*(?:#.*)?$")
-HOSTED = re.compile(r"^ubuntu-(?:latest|[0-9]{2}\\.[0-9]{2})(?:-[a-z0-9-]+)?$")
+HOSTED = re.compile(r"^ubuntu-(?:latest|[0-9]{2}\.[0-9]{2})(?:-[a-z0-9-]+)?$")
 
 
 def migrate_yaml(source: str, selector: str) -> tuple[str, int, list[str]]:
     lines = source.splitlines(keepends=True)
-    start = next((i for i, x in enumerate(lines) if re.fullmatch(r"jobs:\\s*", x.strip())), None)
+    start = next((i for i, x in enumerate(lines) if re.fullmatch(r"jobs:\s*", x.strip())), None)
     if start is None:
         return source, 0, ["no_jobs_mapping"]
     boundaries = [i for i in range(start + 1, len(lines)) if JOB.match(lines[i])]
@@ -52,7 +52,7 @@ def migrate_yaml(source: str, selector: str) -> tuple[str, int, list[str]]:
     jobs_moved = 0
     for lo, hi in zip(boundaries, boundaries[1:]):
         name = lines[lo].strip().split(":")[0]
-        found = [(i, re.match(r"^    runs-on:\\s*(.*?)\\s*(?:#.*)?$", lines[i].rstrip("\n")))
+        found = [(i, re.match(r"^    runs-on:\s*(.*?)\s*(?:#.*)?$", lines[i].rstrip("\n")))
                  for i in range(lo + 1, hi)]
         found = [(i, m) for i, m in found if m]
         for idx, match in found:
@@ -68,7 +68,7 @@ def migrate_yaml(source: str, selector: str) -> tuple[str, int, list[str]]:
                 problems.append(name + ":github_hosted_environment_contract")
                 continue
             existing_if = next((p for p in range(lo + 1, hi)
-                                if re.match(r"^    if:\\s*", lines[p])), None)
+                                if re.match(r"^    if:\s*", lines[p])), None)
             guard_insert = None
             if existing_if is None:
                 guard_insert = (idx, idx, ["    if: " + PR_GUARD + "\n"])
@@ -155,7 +155,7 @@ def run_repo(token: str, name: str):
     workflows = [
         entry for entry in tree["tree"]
         if entry["type"] == "blob"
-        and re.fullmatch(r"\\.github/workflows/[^/]+\\.ya?ml", entry["path"])
+        and re.fullmatch(r"\.github/workflows/[^/]+\.ya?ml", entry["path"])
     ]
     changes = []
     report = []
