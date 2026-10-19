@@ -40,7 +40,8 @@ concurrency:
 
 jobs:
   contract:
-    runs-on: ubuntu-latest
+    if: ((github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || (github.event.pull_request.head.repo.full_name == github.repository && github.actor == 'Zennay'))
+    runs-on: [self-hosted, haxlab]
     timeout-minutes: 15
     steps:
       - name: Checkout exact HaxLab source
@@ -66,8 +67,8 @@ jobs:
 
   train:
     needs: contract
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    runs-on: ubuntu-latest
+    if: (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && ((github.event_name != 'pull_request' && github.event_name != 'pull_request_target') || (github.event.pull_request.head.repo.full_name == github.repository && github.actor == 'Zennay'))
+    runs-on: [self-hosted, haxlab]
     timeout-minutes: 60
     steps:
       - name: Checkout exact HaxLab source
