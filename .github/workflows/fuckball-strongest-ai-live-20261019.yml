@@ -1,0 +1,142 @@
+name: Fuckball strongest tactical AI guarded live release
+
+on:
+  push:
+    branches: [release/fuckball-strongest-ai-20261019]
+    paths: ['.github/workflows/fuckball-strongest-ai-live-20261019.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuckball-strongest-ai-live-20261019
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 'Zennay/Haxlab' && github.actor == 'Zennay' && github.ref == 'refs/heads/release/fuckball-strongest-ai-20261019' && github.event_name == 'push' && github.run_attempt == 1
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    env:
+      APPROVED_SHA: 84f819633fad77ccdbeac1f5fe6b69374ce421d7
+      APP_PORT: '3417'
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Stage CI-verified exact AI source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$RUNNER_NAME" = 'vps-bb300bba-haxlab'
+          test "$(hostname -s)" = 'vps-bb300bba'
+          test "$GITHUB_REPOSITORY" = 'Zennay/Haxlab'
+          test "$GITHUB_ACTOR" = 'Zennay'
+          stage="$RUNNER_TEMP/fuckball-strongest-ai-$GITHUB_RUN_ID"
+          git clone --quiet --filter=blob:none --no-checkout https://github.com/Zennay/fuckball.git "$stage"
+          cd "$stage"
+          # A concurrent AI-feature merge may advance main. Only the
+          # previously CI-verified immutable release may be deployed.
+          current="$(git ls-remote origin refs/heads/main | cut -f1)"
+          test -n "$current"
+          echo "REMOTE_MAIN=$current IMMUTABLE_APPROVED_RELEASE=$APPROVED_SHA"
+          git fetch --quiet --depth 1 origin "$APPROVED_SHA"
+          git checkout --quiet --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$APPROVED_SHA"
+          # Mandatory source-head CI was completed prior to merge.
+          # No separate QA/regression suite is launched by this release.
+          npm run build:solo
+          node --check headless/server.cjs
+          node --check dist/room-core.js
+          node --check dist/app.js
+          node --check dist/server-client.js
+          node --check dist/ai/policy.js
+          echo "RELEASE_STAGE=$stage" >> "$GITHUB_ENV"
+          echo "STAGING_GREEN=$APPROVED_SHA"
+      - name: Preserve live physics and deploy immutable release
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          unit=/etc/systemd/system/fuckball.service
+          live="$(systemctl show fuckball.service -p WorkingDirectory --value)"
+          test -n "$live"
+          test -f "$live/server.js"
+          test -f "$unit"
+          test -f "$live/shared/physics.js"
+          test -f "$RELEASE_STAGE/shared/physics.js"
+          test "$(hostname -s)" = 'vps-bb300bba'
+          sudo -n systemctl is-active --quiet fuckball.service
+          # This release must not regress Work-session physics, AI, prediction or stadium.
+          for p in shared/physics.js shared/bot.js shared/prediction.js dist/vendor/haxball.js dist/stadiums/bff-big-v4.hbs; do
+            if ! cmp -s "$live/$p" "$RELEASE_STAGE/$p"; then
+              echo "::error::LIVE_CONTENT_DIVERGENCE $p; refusing overwrite"
+              exit 2
+            fi
+          done
+          health="$RUNNER_TEMP/fuckball-room-prehealth-$GITHUB_RUN_ID.json"
+          curl -fsS --max-time 5 "http://127.0.0.1:$APP_PORT/health" > "$health"
+          node - "$health" <<'NODE'
+          const fs=require('node:fs');
+          const h=JSON.parse(fs.readFileSync(process.argv[2]));
+          if(h.engine!=='node-haxball-2.3.1'||h.physicsHz!==60)throw Error('Wrong live engine');
+          if(h.rooms!==0)throw Error('Active multiplayer rooms; will not interrupt');
+          console.log('SAFE_LIVE_BASELINE='+JSON.stringify(h));
+          NODE
+          release="/opt/fuckball-releases/$APPROVED_SHA-$GITHUB_RUN_ID"
+          backup="/opt/fuckball-release-backups/$GITHUB_RUN_ID"
+          sudo -n mkdir -p "$release" "$backup"
+          sudo -n cp -a "$unit" "$backup/fuckball.service"
+          # Preserve the full previous release and systemd unit, including durable account storage.
+          cd "$RELEASE_STAGE"
+          tar --exclude=.git -cf - . | sudo -n tar -xf - -C "$release"
+          sudo -n chmod -R a+rX "$release"
+          test -f "$release/dist/room-core.js"
+          node_binary="$(command -v node)"
+          sed -e "s|^WorkingDirectory=.*|WorkingDirectory=$release|" \
+              -e "s|^ExecStart=.*|ExecStart=$node_binary $release/server.js|" \
+              -e "s|^Environment=FUCKBALL_RELEASE_SHA=.*|Environment=FUCKBALL_RELEASE_SHA=$APPROVED_SHA|" \
+              "$backup/fuckball.service" > "$RUNNER_TEMP/fuckball-new-unit-$GITHUB_RUN_ID"
+          grep -Fxq "WorkingDirectory=$release" "$RUNNER_TEMP/fuckball-new-unit-$GITHUB_RUN_ID"
+          grep -Fxq "ExecStart=$node_binary $release/server.js" "$RUNNER_TEMP/fuckball-new-unit-$GITHUB_RUN_ID"
+          grep -Fxq "Environment=FUCKBALL_RELEASE_SHA=$APPROVED_SHA" "$RUNNER_TEMP/fuckball-new-unit-$GITHUB_RUN_ID"
+          # No live room may arrive while the release is staged.
+          curl -fsS --max-time 5 "http://127.0.0.1:$APP_PORT/health" > "$health"
+          node - "$health" <<'NODE'
+          const fs=require('node:fs'),h=JSON.parse(fs.readFileSync(process.argv[2]));
+          if(h.rooms!==0||h.engine!=='node-haxball-2.3.1')throw Error('Release admission changed');
+          NODE
+          switched=false
+          rollback(){
+            local rc=$?
+            trap - ERR
+            if [ "$switched" = true ]; then
+              sudo -n cp -a "$backup/fuckball.service" "$unit" || true
+              sudo -n systemctl daemon-reload || true
+              sudo -n systemctl restart fuckball.service || true
+              echo "::error::Verification failed: previous service restored"
+            fi
+            exit "$rc"
+          }
+          trap rollback ERR
+          switched=true
+          sudo -n install -m 0644 "$RUNNER_TEMP/fuckball-new-unit-$GITHUB_RUN_ID" "$unit"
+          sudo -n systemctl daemon-reload
+          sudo -n systemctl restart fuckball.service
+          ready=0
+          for attempt in $(seq 1 20); do
+            if curl -fsS --max-time 3 "http://127.0.0.1:$APP_PORT/health" > "$RUNNER_TEMP/fuckball-posthealth-$GITHUB_RUN_ID.json"; then ready=1;break;fi
+            sleep 1
+          done
+          test "$ready" = 1
+          node scripts/verify-live.cjs "http://127.0.0.1:$APP_PORT" "$APPROVED_SHA"
+          # Direct functional verification of the exact delivered AI asset.
+          curl -fsS --max-time 6 "http://127.0.0.1:$APP_PORT/ai/policy.js" | sha256sum | cut -d' ' -f1 > "$RUNNER_TEMP/ai-live-$GITHUB_RUN_ID.sha"
+          sha256sum "$release/dist/ai/policy.js" | cut -d' ' -f1 > "$RUNNER_TEMP/ai-release-$GITHUB_RUN_ID.sha"
+          cmp "$RUNNER_TEMP/ai-live-$GITHUB_RUN_ID.sha" "$RUNNER_TEMP/ai-release-$GITHUB_RUN_ID.sha"
+          sudo -n systemctl is-active --quiet fuckball.service
+          test "$(systemctl show fuckball.service -p WorkingDirectory --value)" = "$release"
+          trap - ERR
+          echo "LIVE_RELEASE_SUCCESS sha=$APPROVED_SHA release=$release"
+          echo "### Fuckball AI release verified" >> "$GITHUB_STEP_SUMMARY"
+          echo "Live release: $APPROVED_SHA" >> "$GITHUB_STEP_SUMMARY"
+          echo "URL: http://198.244.191.182:3417/" >> "$GITHUB_STEP_SUMMARY"
