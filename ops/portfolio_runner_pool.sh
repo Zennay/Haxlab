@@ -24,23 +24,26 @@ if test "$1" = bootstrap; then
   for repo in $REPOS; do
     runner_root="$(root_for "$repo")"
     unit="$(unit_for "$repo")"
-    if test -e "$runner_root/.runner"; then
-      echo "$repo: local runner already registered"
-      continue
+    if ! test -e "$runner_root/.runner"; then
+      install -d -m 0700 "$runner_root"
+      # Copy ONLY static binaries; never duplicate existing credentials or workspaces.
+      if ! test -x "$runner_root/config.sh"; then
+        tar -C "$TEMPLATE" --exclude='./_work' --exclude='./_diag' \
+          --exclude='./.runner' --exclude='./.runner_migrated' \
+          --exclude='./.credentials*' --exclude='./.service' \
+          --exclude='./.env' --exclude='./.path' -cf - . | tar -C "$runner_root" -xf -
+      fi
+      cd "$runner_root"
+      token="$(gh api -X POST "repos/Zennay/$repo/actions/runners/registration-token" --jq .token)"
+      ./config.sh --unattended --url "https://github.com/Zennay/$repo" \
+        --token "$token" --name "vps-bb300bba-pool-$repo" --labels portfolio-pool,vps \
+        --work _work --replace
+      unset token
     fi
-    install -d -m 0700 "$runner_root"
-    # Copy ONLY static runner distribution; no another repo's credentials or jobs.
-    tar -C "$TEMPLATE" --exclude='./_work' --exclude='./_diag' \
-      --exclude='./.runner' --exclude='./.runner_migrated' \
-      --exclude='./.credentials*' --exclude='./.service' \
-      --exclude='./.env' --exclude='./.path' -cf - . | tar -C "$runner_root" -xf -
     cd "$runner_root"
-    token="$(gh api -X POST "repos/Zennay/$repo/actions/runners/registration-token" --jq .token)"
-    ./config.sh --unattended --url "https://github.com/Zennay/$repo" \
-      --token "$token" --name "vps-bb300bba-pool-$repo" --labels portfolio-pool,vps \
-      --work _work --replace
-    unset token
-    sudo -n ./svc.sh install ubuntu
+    if ! systemctl list-unit-files "$unit" --no-legend | grep -q actions.runner; then
+      sudo -n ./svc.sh install ubuntu
+    fi
     sudo -n systemctl disable "$unit"
     sudo -n systemctl set-property "$unit" MemoryHigh=900M MemoryMax=1800M
     echo "$repo: registered, installed and parked for on-demand scheduling"
