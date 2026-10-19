@@ -109,11 +109,13 @@ def match_replays_to_reports(
 ) -> list[MatchCandidate]:
     """Greedy one-to-one matching using explicit evidence and confidence."""
     # Never allow malformed caller policy to create arbitrary zero-evidence pairs.
-    if (
-        type(minimum_confidence) not in (int, float)
-        or not math.isfinite(float(minimum_confidence))
-        or not 0.0 <= float(minimum_confidence) <= 1.0
-    ):
+    if type(minimum_confidence) not in (int, float):
+        raise ValueError("invalid_minimum_confidence")
+    try:
+        confidence = float(minimum_confidence)
+    except (OverflowError, ValueError) as exc:
+        raise ValueError("invalid_minimum_confidence") from exc
+    if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
         raise ValueError("invalid_minimum_confidence")
 
     scored: list[tuple[float, str, str, ReplayFile, MatchReport, tuple[str, ...]]] = []
