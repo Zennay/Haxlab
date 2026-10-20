@@ -11,6 +11,8 @@ from typing import Any, Sequence
 
 
 SCHEMA = "haxlab-source-bundle-receipt-v1"
+# Keep the producer compatible with the verifier's bounded receipt reader.
+_MAX_RECEIPT_BYTES = 32 * 1024 * 1024
 _FILE_FLAGS = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
 
 
@@ -199,6 +201,15 @@ def _inventory_paths(
             if "\\" in relative:
                 raise SourceBundleReceiptError(
                     "source_path_noncanonical_backslash"
+                )
+            # Linux can enumerate names containing undecodable filename bytes
+            # through Python's surrogateescape convention. Those surrogate
+            # code points cannot be encoded as UTF-8 by our canonical JSON
+            # serializer; reject with a stable source reason, not a traceback
+            # or silently rewritten evidence path.
+            if any(0xD800 <= ord(char) <= 0xDFFF for char in relative):
+                raise SourceBundleReceiptError(
+                    "source_path_noncanonical_unicode"
                 )
             if not stat.S_ISREG(child_stat.st_mode):
                 raise SourceBundleReceiptError(
@@ -460,6 +471,11 @@ def create_source_bundle_receipt(export_root: Path) -> dict[str, Any]:
             "files": files,
         }
         payload["receipt_sha256"] = hashlib.sha256(_canonical_bytes(payload)).hexdigest()
+        # The downstream verifier refuses receipts larger than 32 MiB.
+        # Never claim a source receipt that cannot be consumed by its own
+        # canonical verifier. This is a post-inventory refusal, not truncation.
+        if len(_canonical_bytes(payload)) > _MAX_RECEIPT_BYTES:
+            raise SourceBundleReceiptError("source_receipt_too_large")
         return payload
     finally:
         os.close(root_fd)
