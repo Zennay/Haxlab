@@ -16,14 +16,18 @@ function invalid(reason) {
 function assertNoDuplicateSelectedPlayerKeys(raw) {
   let pos = 0;
   const skipWhitespace = () => {
-    while (pos < raw.length && /[ \\t\\r\\n]/.test(raw[pos])) pos += 1;
+    while (pos < raw.length) {
+      const code = raw.charCodeAt(pos);
+      if (code !== 32 && code !== 9 && code !== 10 && code !== 13) break;
+      pos += 1;
+    }
   };
   const readString = () => {
     const start = pos;
     if (raw[pos] !== '"') throw invalid("invalid_identity");
     pos += 1;
     while (pos < raw.length) {
-      if (raw[pos] === "\\\\") {
+      if (raw.charCodeAt(pos) === 92) {
         pos += 2;
       } else if (raw[pos] === '"') {
         pos += 1;
