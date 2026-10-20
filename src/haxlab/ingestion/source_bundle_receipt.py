@@ -508,6 +508,13 @@ def _save_private_receipt(
     except SourceBundleReceiptError as exc:
         raise SourceBundleReceiptError("source_receipt_output_parent_invalid") from exc
 
+    # Stage names must not be movable by other local users during the
+    # no-clobber publication window. A shared-writable target directory
+    # cannot guarantee the binding between staged bytes and the final name.
+    if os.fstat(parent_fd).st_mode & 0o022:
+        os.close(parent_fd)
+        raise SourceBundleReceiptError("source_receipt_output_parent_shared")
+
     stage_name = f".haxlab-receipt-{secrets.token_hex(12)}.tmp"
     stage_fd: int | None = None
     staged_identity: tuple[int, int] | None = None
@@ -562,6 +569,22 @@ def _save_private_receipt(
                 "source_receipt_output_atomic_link_unsupported"
             ) from exc
         published = True
+        # Confirm the published name still references the already-flushed
+        # private staging inode before claiming export success.
+        try:
+            final = os.stat(
+                output_path.name, dir_fd=parent_fd, follow_symlinks=False
+            )
+            if (
+                not stat.S_ISREG(final.st_mode)
+                or _directory_identity(final) != staged_identity
+                or (stat.S_IMODE(final.st_mode) & 0o077) != 0
+            ):
+                raise OSError("published inode not private staging inode")
+        except OSError as exc:
+            raise SourceBundleReceiptError(
+                "source_receipt_output_identity_changed"
+            ) from exc
         try:
             os.fsync(parent_fd)
         except OSError as exc:
