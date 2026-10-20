@@ -57,8 +57,10 @@ de definitieve `.json`-bestandsnaam **atomair create-only** gepubliceerd via
 een hardlink binnen dezelfde directory. Een bestaande naam (ook een symlink)
 wordt nooit overschreven. Het tijdelijke bestand wordt uitsluitend verwijderd
 wanneer de inode nog aantoonbaar van deze run is, en de directory wordt
-gesynchroniseerd. Kan het filesysteem geen atomische hardlink maken, dan
-faalt de export expliciet zonder onveilig `rename/replace`-alternatief.
+gesynchroniseerd. Kan het filesysteem geen atomische hardlink maken of een aanmaakmodus
+`0600` niet daadwerkelijk honoreren (sommige externe mounts), dan faalt de
+export expliciet met respectievelijk `source_receipt_output_atomic_link_unsupported`
+of `source_receipt_output_private_mode_unavailable`, zonder onveilige fallback.
 Een voortijdig gestopt proces mag hoogstens een privé staging-bestand
 achterlaten, niet een halfgeschreven definitieve receipt. De doelbestemming moet **buiten** de bronroot
 liggen; anders zou een toekomstige scan zijn eigen receipt als importbron
