@@ -100,6 +100,30 @@ sampled (currently normally every 6 ticks, about 10 Hz):
 Full reconstructed-frame counts are stored separately so completeness can be
 verified.
 
+### Sampling cadence contract
+
+Derived analysis publishes the sampling cadence as
+`simulation.sampleEveryTicks`; imitation extraction publishes the same cadence as
+`sampleEveryTicks` in its extraction summary/shard metadata. Both producers use
+the same parser and default to 6 ticks when no cadence is supplied. An explicit producer cadence must be a canonical positive base-10
+integer and must fit in JavaScript's safe-integer range; values such as `0`,
+negative numbers, floats, prefixed/partial strings, or coercible text are invalid
+instead of being rounded, clamped, or defaulted.
+
+Serialized producer cadence is always a native positive integer. Consumers that
+convert sample counts to time or rates must use the cadence bound to the exact
+artifact rather than assuming a fixed 10 Hz sampling rate, and malformed cadence
+evidence must not be coerced into a valid observation.
+
+### Imitation selection input contract
+
+The imitation extractor accepts selected replay players as a JSON object mapping
+canonical non-negative integer replay player IDs to non-empty identity strings.
+The mapping must contain at least one player. Numeric-looking aliases such as
+`"01"`, negative/fractional IDs, unsafe integers, arrays/scalars, empty maps,
+and non-string or blank identities are invalid; the producer must reject them
+instead of coercing them with `Number(...)` or `String(...)`.
+
 ## Sparse event streams — schema v4
 
 `state-pass-v4` adds compact sparse event arrays on top of full state

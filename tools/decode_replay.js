@@ -4,6 +4,7 @@
 const fs = require("fs");
 const crypto = require("crypto");
 const path = require("path");
+const { parseSampleEveryTicks } = require("./sample_cadence");
 const initAPI = require("node-haxball");
 
 const API = initAPI();
@@ -38,7 +39,13 @@ function usage() {
 const replayPath = process.argv[2];
 if (!replayPath) usage();
 
-const sampleEvery = Math.max(1, Number.parseInt(process.argv[3] || "6", 10) || 6);
+let sampleEvery;
+try {
+  sampleEvery = parseSampleEveryTicks(process.argv[3]);
+} catch (error) {
+  console.error(`Invalid sampleEveryTicks: ${error.message}`);
+  usage();
+}
 // node-haxball currently constructs DataView from data.buffer and does not
 // account for Buffer.byteOffset. Small Node Buffers are often slices of the
 // shared <4 KiB pool, so passing fs.readFileSync() directly can make a valid
