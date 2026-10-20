@@ -47,11 +47,16 @@ python -m haxlab.ingestion.source_bundle_receipt \
 
 De opgegeven uitvoermap moet **al bestaan** en mag geen symlink-ancestor
 bevatten. De schrijver opent de ontvangende map via vastgepinde no-follow
-directorydescriptors, creëert uitsluitend een niet-bestaand `.json`-bestand
-met mode `0600`, schrijft de volledig canonieke manifestbytes, en doet een
-`fsync` op bestand én directory. Een bestaand bestand of symlink wordt **nooit
-overschreven**; bij een mislukte gedeeltelijke write wordt alleen de aantoonbaar
-eigen nieuwe inode opgeruimd. De doelbestemming moet **buiten** de bronroot
+directorydescriptors en schrijft de canonieke bytes eerst volledig naar
+een nieuw `0600` staging-bestand. Na `fsync` van het staging-bestand wordt
+de definitieve `.json`-bestandsnaam **atomair create-only** gepubliceerd via
+een hardlink binnen dezelfde directory. Een bestaande naam (ook een symlink)
+wordt nooit overschreven. Het tijdelijke bestand wordt uitsluitend verwijderd
+wanneer de inode nog aantoonbaar van deze run is, en de directory wordt
+gesynchroniseerd. Kan het filesysteem geen atomische hardlink maken, dan
+faalt de export expliciet zonder onveilig `rename/replace`-alternatief.
+Een voortijdig gestopt proces mag hoogstens een privé staging-bestand
+achterlaten, niet een halfgeschreven definitieve receipt. De doelbestemming moet **buiten** de bronroot
 liggen; anders zou een toekomstige scan zijn eigen receipt als importbron
 meenemen. De producer handhaaft het 32 MiB-maximaal-formaat van de bestaande
 verifier.
