@@ -37,20 +37,33 @@ def estimate_player_skill_v0(
     This is deliberately not Elo. It aggregates normalized individual performance
     dimensions and applies only a bounded context correction.
     """
-    if type(prior_mean) not in (int, float) or not math.isfinite(float(prior_mean)):
-        raise ValueError("invalid_skill_estimator:prior_mean")
-    if (
-        type(prior_weight) not in (int, float)
-        or not math.isfinite(float(prior_weight))
-        or float(prior_weight) <= 0.0
-    ):
-        raise ValueError("invalid_skill_estimator:prior_weight")
+    # Native numbers can still overflow on float conversion (e.g. an
+    # unbounded configuration integer). Normalize before arithmetic so all
+    # invalid priors give stable admission errors, not OverflowError/NaN.
+    def finite_prior(value: object, name: str, positive: bool = False) -> float:
+        if type(value) not in (int, float):
+            raise ValueError("invalid_skill_estimator:" + name)
+        try:
+            numeric = float(value)
+        except (ValueError, OverflowError) as exc:
+            raise ValueError("invalid_skill_estimator:" + name) from exc
+        if not math.isfinite(numeric) or (positive and numeric <= 0.0):
+            raise ValueError("invalid_skill_estimator:" + name)
+        return numeric
+
+    prior_mean = finite_prior(prior_mean, "prior_mean")
+    prior_weight = finite_prior(prior_weight, "prior_weight", positive=True)
+    # Two individually finite priors can still overflow when multiplied.
+    # Refuse an impossible starting statistic before reading match evidence.
+    prior_sum = prior_mean * prior_weight
+    if not math.isfinite(prior_sum):
+        raise ValueError("invalid_skill_estimator:prior_product")
 
     own = [item for item in observations if item.player_id == player_id]
     estimates: dict[str, SkillDimensionEstimate] = {}
 
     for field in fields(PerformanceVector):
-        weighted_sum = prior_mean * prior_weight
+        weighted_sum = prior_sum
         total_weight = prior_weight
         value_count = 0
 
