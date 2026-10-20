@@ -32,3 +32,10 @@ geen QA-werk of nieuwe PR. Uitrol van modeluitkomsten, training,
 kampioenselectie en runtime blijft uitdrukkelijk buiten deze wijziging.
 Exact-head verplichte CI en onafhankelijke acceptatie bepalen of dit
 veilig op main mag landen.
+
+The overall player `effective_weight` is now accumulated with the same
+finite-only contract even if every per-dimension metric is missing: extremely
+large, otherwise valid exposure weights cannot produce a non-finite top-level
+result. The source rejects it before constructing `PlayerSkillEstimate` with
+`invalid_skill_estimator:effective_weight_overflow`. All routine values,
+missing-dimension behavior, and default weights are unchanged.
