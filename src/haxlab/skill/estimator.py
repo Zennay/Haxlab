@@ -75,12 +75,21 @@ def estimate_player_skill_v0(
             quality = max(0.0, min(1.0, observation.match_quality_weight))
             exposure = max(0.0, observation.minutes_or_possessions_weight)
             weight = quality * exposure
+            if not math.isfinite(weight):
+                raise ValueError("invalid_skill_estimator:observation_weight")
             if weight <= 0:
                 continue
 
             adjusted = value + _context_adjustment(observation)
-            weighted_sum += adjusted * weight
+            if not math.isfinite(adjusted):
+                raise ValueError("invalid_skill_estimator:adjusted_performance")
+            contribution = adjusted * weight
+            if not math.isfinite(contribution):
+                raise ValueError("invalid_skill_estimator:weighted_performance")
+            weighted_sum += contribution
             total_weight += weight
+            if not math.isfinite(weighted_sum) or not math.isfinite(total_weight):
+                raise ValueError("invalid_skill_estimator:aggregate_overflow")
             value_count += 1
 
         mean = weighted_sum / total_weight
