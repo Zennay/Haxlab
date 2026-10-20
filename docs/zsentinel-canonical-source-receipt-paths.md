@@ -40,13 +40,17 @@ Dezelfde bestaande PR biedt nu een optionele, echte CLI-uitvoer naar een **nieuw
 privébestand, bedoeld voor een groot extern replay-/Discord-bronarchief:
 
 ```bash
+mkdir -m 700 -p /home/ubuntu/private-receipts
 python -m haxlab.ingestion.source_bundle_receipt \
   /media/replays/immutable-export \
   --output /home/ubuntu/private-receipts/source-20261020.json
 ```
 
-De opgegeven uitvoermap moet **al bestaan** en mag geen symlink-ancestor
-bevatten. De schrijver opent de ontvangende map via vastgepinde no-follow
+De opgegeven uitvoermap moet **al bestaan**, mag geen symlink-ancestor
+of groeps-/wereldschrijfrechten bevatten, en moet de nieuwe privébestanden
+kunnen opslaan. Anders faalt dit pad met `source_receipt_output_parent_shared`
+of `source_receipt_output_parent_invalid` in plaats van in een gedeelde map
+te publiceren. De schrijver opent de ontvangende map via vastgepinde no-follow
 directorydescriptors en schrijft de canonieke bytes eerst volledig naar
 een nieuw `0600` staging-bestand. Na `fsync` van het staging-bestand wordt
 de definitieve `.json`-bestandsnaam **atomair create-only** gepubliceerd via
@@ -69,3 +73,9 @@ geprint. De integriteitscontrole, importbronbestanden, hashberekening,
 canonicalisatie en downstream verifier zijn niet veranderd. Er wordt geen
 externe opslag automatisch gemount, aangemaakt, opgeruimd of gemigreerd.
 Echte CI, onafhankelijk review en releaseautorisatie blijven verplicht.
+
+Het finale bestandsdescriptoorgegeven resultaat wordt nog vergeleken met de
+privé staging-inode; afwijkende identiteit of onverwachte leesrechten leveren
+een expliciete fout, geen geslaagde publicatiemelding. Op een filesysteem
+zonder hardlink-ondersteuning moet een ander privé-uitvoerpad worden gekozen;
+er is bewust geen onveilige vervangende publicatieroute.
