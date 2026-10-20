@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import fields
+import math
 
 from haxlab.skill.models import (
     PerformanceVector,
@@ -36,11 +37,33 @@ def estimate_player_skill_v0(
     This is deliberately not Elo. It aggregates normalized individual performance
     dimensions and applies only a bounded context correction.
     """
+    # Native numbers can still overflow on float conversion (e.g. an
+    # unbounded configuration integer). Normalize before arithmetic so all
+    # invalid priors give stable admission errors, not OverflowError/NaN.
+    def finite_prior(value: object, name: str, positive: bool = False) -> float:
+        if type(value) not in (int, float):
+            raise ValueError("invalid_skill_estimator:" + name)
+        try:
+            numeric = float(value)
+        except (ValueError, OverflowError) as exc:
+            raise ValueError("invalid_skill_estimator:" + name) from exc
+        if not math.isfinite(numeric) or (positive and numeric <= 0.0):
+            raise ValueError("invalid_skill_estimator:" + name)
+        return numeric
+
+    prior_mean = finite_prior(prior_mean, "prior_mean")
+    prior_weight = finite_prior(prior_weight, "prior_weight", positive=True)
+    # Two individually finite priors can still overflow when multiplied.
+    # Refuse an impossible starting statistic before reading match evidence.
+    prior_sum = prior_mean * prior_weight
+    if not math.isfinite(prior_sum):
+        raise ValueError("invalid_skill_estimator:prior_product")
+
     own = [item for item in observations if item.player_id == player_id]
     estimates: dict[str, SkillDimensionEstimate] = {}
 
     for field in fields(PerformanceVector):
-        weighted_sum = prior_mean * prior_weight
+        weighted_sum = prior_sum
         total_weight = prior_weight
         value_count = 0
 
@@ -52,12 +75,21 @@ def estimate_player_skill_v0(
             quality = max(0.0, min(1.0, observation.match_quality_weight))
             exposure = max(0.0, observation.minutes_or_possessions_weight)
             weight = quality * exposure
+            if not math.isfinite(weight):
+                raise ValueError("invalid_skill_estimator:observation_weight")
             if weight <= 0:
                 continue
 
             adjusted = value + _context_adjustment(observation)
-            weighted_sum += adjusted * weight
+            if not math.isfinite(adjusted):
+                raise ValueError("invalid_skill_estimator:adjusted_performance")
+            contribution = adjusted * weight
+            if not math.isfinite(contribution):
+                raise ValueError("invalid_skill_estimator:weighted_performance")
+            weighted_sum += contribution
             total_weight += weight
+            if not math.isfinite(weighted_sum) or not math.isfinite(total_weight):
+                raise ValueError("invalid_skill_estimator:aggregate_overflow")
             value_count += 1
 
         mean = weighted_sum / total_weight
@@ -71,11 +103,19 @@ def estimate_player_skill_v0(
             effective_weight=round(total_weight - prior_weight, 6),
         )
 
-    effective_weight = sum(
-        max(0.0, min(1.0, item.match_quality_weight))
-        * max(0.0, item.minutes_or_possessions_weight)
-        for item in own
-    )
+    # Effective weight is also reported for players without any populated
+    # performance dimensions. Validate this independent total instead of
+    # allowing an overflowing observation collection to reach the public
+    # PlayerSkillEstimate constructor with a non-finite ranking statistic.
+    effective_weight = 0.0
+    for item in own:
+        contribution = (
+            max(0.0, min(1.0, item.match_quality_weight))
+            * max(0.0, item.minutes_or_possessions_weight)
+        )
+        effective_weight += contribution
+        if not math.isfinite(effective_weight):
+            raise ValueError("invalid_skill_estimator:effective_weight_overflow")
 
     return PlayerSkillEstimate(
         player_id=player_id,
