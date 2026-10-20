@@ -20,13 +20,17 @@ def _require_nonnegative_finite(
     key: str,
 ) -> float:
     value = snapshot.get(key)
-    if (
-        type(value) not in (int, float)
-        or not math.isfinite(float(value))
-        or float(value) < 0.0
-    ):
+    if type(value) not in (int, float):
         raise ValueError(f"invalid_status_snapshot:{key}")
-    return float(value)
+
+    try:
+        numeric = float(value)
+    except (OverflowError, ValueError) as exc:
+        raise ValueError(f"invalid_status_snapshot:{key}") from exc
+
+    if not math.isfinite(numeric) or numeric < 0.0:
+        raise ValueError(f"invalid_status_snapshot:{key}")
+    return numeric
 
 
 def _validate_status_snapshot(snapshot: dict[str, object]) -> dict[str, float | int]:
