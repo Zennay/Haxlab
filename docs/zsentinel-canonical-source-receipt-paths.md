@@ -33,3 +33,34 @@ Dit is **broncode op bestaande [PR #581](https://github.com/Zennay/Haxlab/pull/5
 niet op main of live bronarchief. Bestaande exacte-head CI,
 onafhankelijke review, release-autorisatie en bronintegriteitsgates
 blijven gelden. Geen QA-/regressietests geschreven of gestart.
+
+## 20 oktober · Privé receipt-bestand voor grote externe bronarchieven
+
+Dezelfde bestaande PR biedt nu een optionele, echte CLI-uitvoer naar een **nieuw**
+privébestand, bedoeld voor een groot extern replay-/Discord-bronarchief:
+
+```bash
+python -m haxlab.ingestion.source_bundle_receipt \
+  /media/replays/immutable-export \
+  --output /home/ubuntu/private-receipts/source-20261020.json
+```
+
+De opgegeven uitvoermap moet **al bestaan** en mag geen symlink-ancestor
+bevatten. De schrijver opent de ontvangende map via vastgepinde no-follow
+directorydescriptors, creëert uitsluitend een niet-bestaand `.json`-bestand
+met mode `0600`, schrijft de volledig canonieke manifestbytes, en doet een
+`fsync` op bestand én directory. Een bestaand bestand of symlink wordt **nooit
+overschreven**; bij een mislukte gedeeltelijke write wordt alleen de aantoonbaar
+eigen nieuwe inode opgeruimd. De doelbestemming moet **buiten** de bronroot
+liggen; anders zou een toekomstige scan zijn eigen receipt als importbron
+meenemen. De producer handhaaft het 32 MiB-maximaal-formaat van de bestaande
+verifier.
+
+Met `--output` geeft stdout alleen een beperkte succes-samenvatting met
+file-/typeaantallen, totale bytes en receipt-SHA256: geen bronpaden, geen
+inhoud, geen privé-uitvoerpad. Zonder `--output` blijft het bestaande CLI-
+contract intact: de volledige receipt wordt zoals voorheen op stdout
+geprint. De integriteitscontrole, importbronbestanden, hashberekening,
+canonicalisatie en downstream verifier zijn niet veranderd. Er wordt geen
+externe opslag automatisch gemount, aangemaakt, opgeruimd of gemigreerd.
+Echte CI, onafhankelijk review en releaseautorisatie blijven verplicht.
