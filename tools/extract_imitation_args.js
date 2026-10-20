@@ -10,6 +10,55 @@ function invalid(reason) {
   return error;
 }
 
+// JSON.parse silently keeps the LAST value of a repeated object key. Walk the
+// already-syntax-checked top-level string map so repeated decoded keys (including
+// escaped spelling such as "\\u0031" and "1") cannot change caller provenance.
+function assertNoDuplicateSelectedPlayerKeys(raw) {
+  let pos = 0;
+  const skipWhitespace = () => {
+    while (pos < raw.length && /[ \\t\\r\\n]/.test(raw[pos])) pos += 1;
+  };
+  const readString = () => {
+    const start = pos;
+    if (raw[pos] !== '"') throw invalid("invalid_identity");
+    pos += 1;
+    while (pos < raw.length) {
+      if (raw[pos] === "\\\\") {
+        pos += 2;
+      } else if (raw[pos] === '"') {
+        pos += 1;
+        return JSON.parse(raw.slice(start, pos));
+      } else {
+        pos += 1;
+      }
+    }
+    throw invalid("invalid_json");
+  };
+
+  skipWhitespace();
+  if (raw[pos++] !== "{") throw invalid("not_object");
+  skipWhitespace();
+  if (raw[pos] === "}") return;
+
+  const seen = new Set();
+  while (pos < raw.length) {
+    const key = readString();
+    if (seen.has(key)) throw invalid("duplicate_player_id");
+    seen.add(key);
+    skipWhitespace();
+    if (raw[pos++] !== ":") throw invalid("invalid_json");
+    skipWhitespace();
+    // Non-string values are invalid anyway; refuse them before interpreting
+    // nested JSON as another source of top-level selection identities.
+    readString();
+    skipWhitespace();
+    if (raw[pos] === "}") return;
+    if (raw[pos++] !== ",") throw invalid("invalid_json");
+    skipWhitespace();
+  }
+  throw invalid("invalid_json");
+}
+
 function parseSelectedPlayerMapJson(rawValue) {
   if (typeof rawValue !== "string") throw invalid("not_json_text");
 
@@ -24,6 +73,7 @@ function parseSelectedPlayerMapJson(rawValue) {
     throw invalid("not_object");
   }
 
+  assertNoDuplicateSelectedPlayerKeys(rawValue);
   const entries = Object.entries(payload);
   if (entries.length === 0) throw invalid("empty");
 
