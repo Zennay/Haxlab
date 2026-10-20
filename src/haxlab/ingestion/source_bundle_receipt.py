@@ -535,6 +535,14 @@ def _save_private_receipt(
         try:
             opened = os.fstat(stage_fd)
             staged_identity = _directory_identity(opened)
+            # Some external-storage mounts ignore requested POSIX file modes.
+            # Reject before publication if 0600 cannot actually be enforced.
+            if not stat.S_ISREG(opened.st_mode) or (
+                stat.S_IMODE(opened.st_mode) & 0o077
+            ):
+                raise SourceBundleReceiptError(
+                    "source_receipt_output_private_mode_unavailable"
+                )
             remaining = memoryview(encoded)
             while remaining:
                 written = os.write(stage_fd, remaining)
