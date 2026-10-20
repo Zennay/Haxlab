@@ -2,7 +2,18 @@
 
 HBR2 v3 stores one raw-DEFLATE member after the 12-byte replay header. `decompress_replay_payload()` treats that member as the complete payload boundary.
 
-## Contract
+## File identity contract
+
+Both `read_replay_header()` and `decompress_replay_payload()` consume replay bytes only from a stable regular-file identity:
+
+- the lexical replay path must name a regular file directly, not a symlink;
+- non-regular filesystem objects are rejected before content is trusted;
+- the file descriptor opened for reading must still match the device/inode observed for the lexical path immediately before open;
+- `O_NOFOLLOW` support is required; the helper fails closed when the host cannot guarantee a no-follow final-component open.
+
+A pathname replacement race therefore fails closed as `unsafe_replay_path:identity_changed` instead of silently consuming bytes from a different replay.
+
+## DEFLATE contract
 
 - the HBR2 magic and supported version are validated before decompression;
 - malformed raw-DEFLATE bytes fail as `deflate_error`;
