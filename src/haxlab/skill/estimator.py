@@ -103,11 +103,19 @@ def estimate_player_skill_v0(
             effective_weight=round(total_weight - prior_weight, 6),
         )
 
-    effective_weight = sum(
-        max(0.0, min(1.0, item.match_quality_weight))
-        * max(0.0, item.minutes_or_possessions_weight)
-        for item in own
-    )
+    # Effective weight is also reported for players without any populated
+    # performance dimensions. Validate this independent total instead of
+    # allowing an overflowing observation collection to reach the public
+    # PlayerSkillEstimate constructor with a non-finite ranking statistic.
+    effective_weight = 0.0
+    for item in own:
+        contribution = (
+            max(0.0, min(1.0, item.match_quality_weight))
+            * max(0.0, item.minutes_or_possessions_weight)
+        )
+        effective_weight += contribution
+        if not math.isfinite(effective_weight):
+            raise ValueError("invalid_skill_estimator:effective_weight_overflow")
 
     return PlayerSkillEstimate(
         player_id=player_id,
