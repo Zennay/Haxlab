@@ -4,7 +4,9 @@ The selected replay-player map is part of the derived imitation shard's provenan
 
 Accepted input is a non-empty JSON object mapping canonical decimal, non-negative JavaScript-safe player IDs to non-empty string identities. Only the literal `0` can begin with zero; `01`, `+1`, `1.0`, `1e0`, negative IDs, whitespace and numbers outside the safe integer range are rejected. Object values must already be strings with at least one non-whitespace character.
 
-Valid values are preserved byte-for-byte as JavaScript strings (including their surrounding spaces when present): they are not trimmed or coerced into strings. Validation rejects arrays, null, empty maps, malformed JSON and numeric/boolean/null identity values. The extractor's row sampling, timing and replay semantics are unchanged.
+Valid values are preserved byte-for-byte as JavaScript strings (including their surrounding spaces when present): they are not trimmed or coerced into strings. Validation rejects arrays, null, empty maps, malformed JSON and numeric/boolean/null identity values.
+
+Repeated object keys are rejected **before** `JSON.parse`'s last-value-wins behavior can alter the selection. This includes identical raw keys (`{\"1\":\"Alice\",\"1\":\"Bob\"}`) and semantically identical keys written with JSON escapes (`{\"\\u0031\":\"Alice\",\"1\":\"Bob\"}`). The extractor reports `INVALID_SELECTED_PLAYER_MAP` / `invalid_selected_player_map:duplicate_player_id` and does not open a replay or publish a shard. Distinct canonical keys and all accepted identity strings retain their previous interpretation. This change affects input integrity only; sample cadence and the underlying replay remain unchanged. The extractor's row sampling, timing and replay semantics are unchanged.
 
 The reusable `tools/extract_imitation_args.js` parser is dependency-free; `tools/extract_imitation.js` uses the same parser before creating output. This source-only change does not authorize replay ingest, learning runs, training/model promotion, a VPS job or production release. Required existing exact-head CI and reviewer/owner gates remain in place.
 
