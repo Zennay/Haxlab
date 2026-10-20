@@ -74,8 +74,8 @@ canonicalisatie en downstream verifier zijn niet veranderd. Er wordt geen
 externe opslag automatisch gemount, aangemaakt, opgeruimd of gemigreerd.
 Echte CI, onafhankelijk review en releaseautorisatie blijven verplicht.
 
-Het finale bestandsdescriptoorgegeven resultaat wordt nog vergeleken met de
-privé staging-inode; afwijkende identiteit of onverwachte leesrechten leveren
+De definitieve bestandsnaam wordt nog gecontroleerd tegen de identiteit en
+privérechten van de staging-inode; afwijkingen leveren
 een expliciete fout, geen geslaagde publicatiemelding. Op een filesysteem
 zonder hardlink-ondersteuning moet een ander privé-uitvoerpad worden gekozen;
 er is bewust geen onveilige vervangende publicatieroute.
