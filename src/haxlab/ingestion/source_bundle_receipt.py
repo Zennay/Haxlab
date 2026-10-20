@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import secrets
 import stat
 import sys
 from pathlib import Path
@@ -484,12 +485,12 @@ def create_source_bundle_receipt(export_root: Path) -> dict[str, Any]:
 def _save_private_receipt(
     receipt: dict[str, Any], destination: Path, export_root: Path
 ) -> None:
-    """Publish a verifier-readable receipt to an explicit new 0600 file only.
+    """Publish complete private receipts atomically, with no overwrite.
 
-    Do not write it under the scanned export root: the next scan would
-    accidentally treat the receipt itself as newly imported Discord JSON.
-    The parent must already exist without symlink components. Never overwrite
-    or follow a destination link and never emit private paths to stdout.
+    A freshly created 0600 staging inode is fully flushed before an atomic
+    no-clobber hard link makes the final filename visible. Incomplete staging
+    bytes are never published at the requested destination. Neither source
+    data nor a previously existing destination can be changed.
     """
     output_path = _absolute_root(destination)
     source_root = _absolute_root(export_root)
@@ -507,9 +508,10 @@ def _save_private_receipt(
     except SourceBundleReceiptError as exc:
         raise SourceBundleReceiptError("source_receipt_output_parent_invalid") from exc
 
-    fd: int | None = None
-    created_identity: tuple[int, int] | None = None
-    complete = False
+    stage_name = f".haxlab-receipt-{secrets.token_hex(12)}.tmp"
+    stage_fd: int | None = None
+    staged_identity: tuple[int, int] | None = None
+    published = False
     try:
         flags = (
             os.O_WRONLY
@@ -519,45 +521,69 @@ def _save_private_receipt(
             | getattr(os, "O_NOFOLLOW", 0)
         )
         try:
-            fd = os.open(output_path.name, flags, 0o600, dir_fd=parent_fd)
-        except FileExistsError as exc:
-            raise SourceBundleReceiptError("source_receipt_output_exists") from exc
+            stage_fd = os.open(stage_name, flags, 0o600, dir_fd=parent_fd)
         except OSError as exc:
             raise SourceBundleReceiptError("source_receipt_output_open_failed") from exc
 
-        opened = os.fstat(fd)
-        created_identity = _directory_identity(opened)
         try:
+            opened = os.fstat(stage_fd)
+            staged_identity = _directory_identity(opened)
             remaining = memoryview(encoded)
             while remaining:
-                written = os.write(fd, remaining)
+                written = os.write(stage_fd, remaining)
                 if written <= 0:
                     raise OSError("zero-byte write")
                 remaining = remaining[written:]
-            os.fsync(fd)
+            os.fsync(stage_fd)
             current = os.stat(
-                output_path.name, dir_fd=parent_fd, follow_symlinks=False
+                stage_name, dir_fd=parent_fd, follow_symlinks=False
             )
             if not stat.S_ISREG(current.st_mode) or (
-                _directory_identity(current) != created_identity
+                _directory_identity(current) != staged_identity
             ):
-                raise OSError("destination identity changed")
-            os.fsync(parent_fd)
-            complete = True
+                raise OSError("staging inode changed")
         except OSError as exc:
             raise SourceBundleReceiptError("source_receipt_output_write_failed") from exc
+
+        # Hard-link publication is an atomic create-only directory operation.
+        # No rename/replace path can erase an existing destination file.
+        try:
+            os.link(
+                stage_name,
+                output_path.name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileExistsError as exc:
+            raise SourceBundleReceiptError("source_receipt_output_exists") from exc
+        except OSError as exc:
+            raise SourceBundleReceiptError(
+                "source_receipt_output_atomic_link_unsupported"
+            ) from exc
+        published = True
+        try:
+            os.fsync(parent_fd)
+        except OSError as exc:
+            raise SourceBundleReceiptError(
+                "source_receipt_output_directory_sync_failed"
+            ) from exc
     finally:
-        if fd is not None:
-            os.close(fd)
-        if not complete and created_identity is not None:
-            # Remove only our own incomplete newly created inode. Never delete
-            # an unrelated file substituted by another process.
+        if stage_fd is not None:
+            os.close(stage_fd)
+        # Only unlink our verified staging inode, not a substituted file.
+        if staged_identity is not None:
             try:
-                current = os.stat(
-                    output_path.name, dir_fd=parent_fd, follow_symlinks=False
-                )
-                if _directory_identity(current) == created_identity:
-                    os.unlink(output_path.name, dir_fd=parent_fd)
+                current = os.stat(stage_name, dir_fd=parent_fd, follow_symlinks=False)
+                if _directory_identity(current) == staged_identity:
+                    os.unlink(stage_name, dir_fd=parent_fd)
+            except OSError:
+                pass
+        if published:
+            # Final creation must be durable even after staging cleanup. A
+            # failed final sync is reported, not called a successful export.
+            try:
+                os.fsync(parent_fd)
             except OSError:
                 pass
         os.close(parent_fd)
