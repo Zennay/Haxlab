@@ -11,6 +11,7 @@ SKILL_AUDIT_ROOT = ROOT / "src" / "haxlab" / "skill"
 POLICIES = (
     ("atexit_state", "test_data_pipeline_audit_atexit_state_contract.py", "scan_source"),
     ("background_execution", "test_data_pipeline_audit_background_execution_contract.py", "scan_source"),
+    ("builtins_state", "test_data_pipeline_audit_builtins_state_contract.py", "scan_source"),
     ("ambient_determinism", "test_data_pipeline_audit_determinism_contract.py", "_ambient_violations"),
     ("exception_boundary", "test_data_pipeline_audit_exception_boundary.py", "_violations"),
     ("module_global_state", "test_data_pipeline_audit_global_state_contract.py", "scan_source"),
@@ -40,6 +41,7 @@ SMOKE_SOURCES = {
         "def audit():\n"
         "    return threading.Thread(target=lambda: None)\n"
     ),
+    "builtins_state": "import builtins\nbuiltins.open = None\n",
     "ambient_determinism": "import random\nvalue = random.random()\n",
     "exception_boundary": (
         "def audit():\n"
