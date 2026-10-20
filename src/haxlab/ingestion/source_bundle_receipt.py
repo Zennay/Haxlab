@@ -481,11 +481,97 @@ def create_source_bundle_receipt(export_root: Path) -> dict[str, Any]:
         os.close(root_fd)
 
 
+def _save_private_receipt(
+    receipt: dict[str, Any], destination: Path, export_root: Path
+) -> None:
+    """Publish a verifier-readable receipt to an explicit new 0600 file only.
+
+    Do not write it under the scanned export root: the next scan would
+    accidentally treat the receipt itself as newly imported Discord JSON.
+    The parent must already exist without symlink components. Never overwrite
+    or follow a destination link and never emit private paths to stdout.
+    """
+    output_path = _absolute_root(destination)
+    source_root = _absolute_root(export_root)
+    if output_path == source_root or output_path.is_relative_to(source_root):
+        raise SourceBundleReceiptError("source_receipt_output_inside_source_root")
+    if output_path.suffix.lower() != ".json":
+        raise SourceBundleReceiptError("source_receipt_output_requires_json_suffix")
+
+    encoded = _canonical_bytes(receipt)
+    if len(encoded) > _MAX_RECEIPT_BYTES:
+        raise SourceBundleReceiptError("source_receipt_too_large")
+
+    try:
+        parent_fd, _ = _open_root_directory(output_path.parent)
+    except SourceBundleReceiptError as exc:
+        raise SourceBundleReceiptError("source_receipt_output_parent_invalid") from exc
+
+    fd: int | None = None
+    created_identity: tuple[int, int] | None = None
+    complete = False
+    try:
+        flags = (
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        try:
+            fd = os.open(output_path.name, flags, 0o600, dir_fd=parent_fd)
+        except FileExistsError as exc:
+            raise SourceBundleReceiptError("source_receipt_output_exists") from exc
+        except OSError as exc:
+            raise SourceBundleReceiptError("source_receipt_output_open_failed") from exc
+
+        opened = os.fstat(fd)
+        created_identity = _directory_identity(opened)
+        try:
+            remaining = memoryview(encoded)
+            while remaining:
+                written = os.write(fd, remaining)
+                if written <= 0:
+                    raise OSError("zero-byte write")
+                remaining = remaining[written:]
+            os.fsync(fd)
+            current = os.stat(
+                output_path.name, dir_fd=parent_fd, follow_symlinks=False
+            )
+            if not stat.S_ISREG(current.st_mode) or (
+                _directory_identity(current) != created_identity
+            ):
+                raise OSError("destination identity changed")
+            os.fsync(parent_fd)
+            complete = True
+        except OSError as exc:
+            raise SourceBundleReceiptError("source_receipt_output_write_failed") from exc
+    finally:
+        if fd is not None:
+            os.close(fd)
+        if not complete and created_identity is not None:
+            # Remove only our own incomplete newly created inode. Never delete
+            # an unrelated file substituted by another process.
+            try:
+                current = os.stat(
+                    output_path.name, dir_fd=parent_fd, follow_symlinks=False
+                )
+                if _directory_identity(current) == created_identity:
+                    os.unlink(output_path.name, dir_fd=parent_fd)
+            except OSError:
+                pass
+        os.close(parent_fd)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m haxlab.ingestion.source_bundle_receipt"
     )
     parser.add_argument("export_root", type=Path)
+    parser.add_argument(
+        "--output", type=Path,
+        help="write a new private JSON receipt outside the source root (never overwrite)",
+    )
     return parser
 
 
@@ -493,6 +579,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
         receipt = create_source_bundle_receipt(args.export_root)
+        if args.output is not None:
+            _save_private_receipt(receipt, args.output, args.export_root)
     except SourceBundleReceiptError as exc:
         print(
             json.dumps(
@@ -504,9 +592,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
 
+    visible = receipt if args.output is None else {
+        "schema": SCHEMA,
+        "clean": True,
+        "saved_private_receipt": True,
+        "receipt_sha256": receipt["receipt_sha256"],
+        "file_count": receipt["file_count"],
+        "hbr2_count": receipt["hbr2_count"],
+        "discord_json_count": receipt["discord_json_count"],
+        "total_size_bytes": receipt["total_size_bytes"],
+    }
     print(
         json.dumps(
-            receipt,
+            visible,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
