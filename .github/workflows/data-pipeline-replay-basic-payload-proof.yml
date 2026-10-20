@@ -1,0 +1,60 @@
+name: HaxLab replay basic payload proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact branch SHA to prove
+        required: true
+        type: string
+  push:
+    branches:
+      - feature/data-pipeline-replay-basic-payload-current-main-20261007
+    paths:
+      - "src/haxlab/replay/validation.py"
+      - "tests/test_replay_validation.py"
+      - "docs/replay-basic-payload-contract.md"
+      - ".github/workflows/data-pipeline-replay-basic-payload-proof.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-replay-basic-payload-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate exact-head replay basic payload contract
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    env:
+      EXPECTED_HEAD: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_sha || github.sha }}
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+
+      - name: Assert exact head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Run focused proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .replay-basic-payload-venv
+          python3 -m venv .replay-basic-payload-venv
+          .replay-basic-payload-venv/bin/pip install -q --upgrade pip
+          .replay-basic-payload-venv/bin/pip install -q -e '.[dev]'
+          .replay-basic-payload-venv/bin/python -m compileall -q src tests
+          .replay-basic-payload-venv/bin/pytest -q \
+            tests/test_replay_validation.py \
+            tests/test_pipeline.py \
+            tests/test_runtime_archive.py
+          .replay-basic-payload-venv/bin/pytest --collect-only -q >/dev/null
+          echo "HAXLAB_REPLAY_BASIC_PAYLOAD_PROOF=success"

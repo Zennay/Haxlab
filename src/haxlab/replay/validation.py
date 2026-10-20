@@ -16,9 +16,10 @@ class ReplayValidation:
 
 
 def validate_replay_basic(path: Path) -> ReplayValidation:
-    """Cheap HBR2 v3 header validation before deeper parsing/decompression."""
+    """Cheap HBR2 v3 header/payload-presence validation before decompression."""
     try:
         header = read_replay_header(path)
+        size_bytes = path.stat().st_size
     except OSError as exc:
         return ReplayValidation(False, (f"read_failed:{exc}",))
     except ReplayFormatError as exc:
@@ -28,6 +29,15 @@ def validate_replay_basic(path: Path) -> ReplayValidation:
         return ReplayValidation(
             False,
             ("invalid_total_frames",),
+            version=header.version,
+            total_frames=header.total_frames,
+            duration_seconds=header.duration_seconds,
+        )
+
+    if size_bytes <= 12:
+        return ReplayValidation(
+            False,
+            ("truncated_payload",),
             version=header.version,
             total_frames=header.total_frames,
             duration_seconds=header.duration_seconds,
