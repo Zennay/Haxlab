@@ -2,6 +2,7 @@
 "use strict";
 
 const fs = require("fs");
+const crypto = require("crypto");
 const os = require("os");
 const path = require("path");
 const zlib = require("zlib");
@@ -99,8 +100,10 @@ let framesAdvanced = 0;
 let selectedPlayersSeen = new Set();
 
 fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-const temporaryPath = `${outputPath}.tmp-${process.pid}`;
-const output = fs.createWriteStream(temporaryPath);
+const temporaryPath = `${outputPath}.tmp-${process.pid}-${crypto.randomBytes(8).toString("hex")}`;
+// Exclusive private creation: never follow/truncate an existing temporary
+// path (including a symlink) when replay extraction is retried or overlaps.
+const output = fs.createWriteStream(temporaryPath, { flags: "wx", mode: 0o600 });
 const gzip = zlib.createGzip({ level: 6 });
 gzip.pipe(output);
 
@@ -315,7 +318,12 @@ function closeOutput() {
     }
 
     await closeOutput();
-    fs.renameSync(temporaryPath, outputPath);
+    // Atomic create-only publication in the SAME directory. A normal rename
+    // silently overwrites an existing shard, destroying its prior provenance.
+    // Hard linking rejects an existing output with EEXIST and leaves the
+    // already-published shard unchanged. A new shard is immediately complete.
+    fs.linkSync(temporaryPath, outputPath);
+    fs.unlinkSync(temporaryPath);
 
     process.stdout.write(
       JSON.stringify({
