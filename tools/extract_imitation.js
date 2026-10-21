@@ -145,8 +145,15 @@ const gzip = zlib.createGzip({ level: 6 });
 // one-shot listeners). Keep the failure observed rather than allowing an
 // unhandled stream error or publishing an incomplete shard.
 let writeFailure = null;
-output.on("error", (error) => { writeFailure = error; });
-gzip.on("error", (error) => { writeFailure = error; });
+let abortReplayOnWriteFailure = null;
+function recordWriteFailure(error) {
+  if (!writeFailure) writeFailure = error;
+  // Do not burn through the remaining replay after the shard sink has failed.
+  // The replay promise owns its own settlement and destroys the reader.
+  abortReplayOnWriteFailure?.(writeFailure);
+}
+output.on("error", recordWriteFailure);
+gzip.on("error", recordWriteFailure);
 // Hash exactly the compressed byte stream that is piped to the output.
 // This does not materialize a second copy of potentially large shards.
 gzip.on("data", (chunk) => { compressedDigest.update(chunk); });
@@ -301,29 +308,45 @@ function finish(resolve, reject, error = null) {
 
 function runReplay() {
   return new Promise((resolve, reject) => {
+    abortReplayOnWriteFailure = (error) => finish(resolve, reject, error);
+    if (writeFailure) {
+      abortReplayOnWriteFailure(writeFailure);
+      return;
+    }
     const callbacks = {
       onGameTick: () => {
-        sampleState();
+        if (settled) return;
+        // Replay callbacks execute asynchronously after the promise executor
+        // returns. Catch state/stream exceptions here so they reject the
+        // owning extraction instead of escaping as uncaught process errors.
+        try {
+          sampleState();
+        } catch (error) {
+          finish(resolve, reject, error);
+        }
       },
       onPlayerInputChange: (id, input) => {
-        currentInputs.set(Number(id), Number(input));
+        if (!settled) currentInputs.set(Number(id), Number(input));
       },
     };
 
     const fastRAF = (callback) => setImmediate(() => callback(Date.now()));
     const fastCancelRAF = (handle) => clearImmediate(handle);
 
-    reader = Replay.read(data, callbacks, {
-      requestAnimationFrame: fastRAF,
-      cancelAnimationFrame: fastCancelRAF,
-    });
-
-    reader.onEnd = () => finish(resolve, reject);
-    timeout = setTimeout(
-      () => finish(resolve, reject, new Error("extractor_timeout")),
-      120000,
-    );
-    reader.setSpeed(100000);
+    try {
+      reader = Replay.read(data, callbacks, {
+        requestAnimationFrame: fastRAF,
+        cancelAnimationFrame: fastCancelRAF,
+      });
+      reader.onEnd = () => finish(resolve, reject);
+      timeout = setTimeout(
+        () => finish(resolve, reject, new Error("extractor_timeout")),
+        120000,
+      );
+      reader.setSpeed(100000);
+    } catch (error) {
+      finish(resolve, reject, error);
+    }
   });
 }
 
