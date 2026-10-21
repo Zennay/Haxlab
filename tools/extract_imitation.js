@@ -420,17 +420,21 @@ function closeOutput() {
     fs.unlinkSync(temporaryPath);
     process.stdout.write(JSON.stringify(summary));
   } catch (error) {
-    try {
-      gzip.destroy();
-      output.destroy();
-    } catch (_) {}
-    try {
-      fs.unlinkSync(temporaryPath);
-    } catch (_) {}
+    // fs.createWriteStream may still be opening asynchronously when replay
+    // validation fails. Deleting the temp path *before* "close" races the
+    // pending open, potentially leaving orphaned private partial shards.
+    // Wait for stream teardown, then unlink our private temporary artifacts.
+    const closed = output.closed
+      ? Promise.resolve()
+      : new Promise((resolve) => output.once("close", resolve));
+    gzip.destroy();
+    output.destroy();
+    await closed;
+    try { fs.unlinkSync(temporaryPath); } catch (_) {}
     if (receiptTemporaryPath) {
       try { fs.unlinkSync(receiptTemporaryPath); } catch (_) {}
     }
     console.error(error?.stack || String(error));
-    process.exit(1);
+    process.exitCode = 1;
   }
 })();
