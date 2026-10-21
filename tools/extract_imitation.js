@@ -55,7 +55,16 @@ function requireAvailableDestination(destination, role) {
   throw new Error(role + "_destination_already_exists");
 }
 requireAvailableDestination(outputPath, "shard");
-if (receiptPath) requireAvailableDestination(receiptPath, "receipt");
+if (receiptPath) {
+  requireAvailableDestination(receiptPath, "receipt");
+  // A second private output is optional, but its directory must already
+  // exist. Do not decode a large replay only to discover a missing receipt
+  // directory after the final shard has already been published.
+  const receiptParent = fs.statSync(path.dirname(receiptPath));
+  if (!receiptParent.isDirectory()) {
+    throw new Error("receipt_parent_is_not_a_directory");
+  }
+}
 
 const selectedIdentities = Array.from(
   new Set(selectedByReplayId.values()),
