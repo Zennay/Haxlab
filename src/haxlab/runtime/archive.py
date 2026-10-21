@@ -183,6 +183,36 @@ def _assert_archive_root_identity(raw_root: Path, expected_fd: int) -> None:
         os.close(reopened_fd)
 
 
+def _assert_archive_prefix_identity(
+    raw_root_fd: int, first_prefix_fd: int, second_prefix_fd: int, sha256: str
+) -> None:
+    """Prove the logical SHA path still resolves through both bound directories.
+
+    Root-name checks alone miss a replaced first/second SHA directory while
+    the root stays unchanged. No filesystem writes are performed here.
+    """
+    flags = _directory_open_flags()
+    first_now: int | None = None
+    second_now: int | None = None
+    try:
+        first_now = os.open(sha256[:2], flags, dir_fd=raw_root_fd)
+        second_now = os.open(sha256[2:4], flags, dir_fd=first_now)
+        for retained, reopened in (
+            (first_prefix_fd, first_now), (second_prefix_fd, second_now)
+        ):
+            old = os.fstat(retained)
+            new = os.fstat(reopened)
+            if (old.st_dev, old.st_ino) != (new.st_dev, new.st_ino):
+                raise RuntimeError("raw_archive_prefix_changed")
+    except OSError as exc:
+        raise RuntimeError("raw_archive_prefix_changed") from exc
+    finally:
+        if second_now is not None:
+            os.close(second_now)
+        if first_now is not None:
+            os.close(first_now)
+
+
 def _open_verified_source(source_path: Path) -> tuple[int, os.stat_result]:
     try:
         initial = source_path.lstat()
@@ -438,6 +468,9 @@ def archive_replay(
                 second_prefix_fd, reason="raw_archive_destination_sync_failed"
             )
             _assert_archive_root_identity(raw_root, raw_root_fd)
+            _assert_archive_prefix_identity(
+                raw_root_fd, first_prefix_fd, second_prefix_fd, sha256
+            )
         else:
             _publish_archive_no_clobber(staging_path, destination_io, sha256)
             # The verified no-clobber directory entry must be durable before
@@ -450,6 +483,9 @@ def archive_replay(
             # persistent pathname, later administrative replacement is
             # detected by downstream archive/analysis integrity checks.
             _assert_archive_root_identity(raw_root, raw_root_fd)
+            _assert_archive_prefix_identity(
+                raw_root_fd, first_prefix_fd, second_prefix_fd, sha256
+            )
             state.register_raw(
                 sha256=sha256,
                 archive_path=str(destination),
