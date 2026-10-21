@@ -15,7 +15,7 @@ const { Replay, Utils } = API;
 function usage() {
   console.error(
     "Usage: node tools/extract_imitation.js <replay.hbr2> <output.jsonl.gz> " +
-      "<selectedPlayerMapJson> [sampleEveryTicks]",
+      "<selectedPlayerMapJson> [sampleEveryTicks] [receiptJsonPath]",
   );
   process.exit(2);
 }
@@ -24,6 +24,14 @@ const replayPath = process.argv[2];
 const outputPath = process.argv[3];
 const selectedPlayerMapJson = process.argv[4];
 const sampleEvery = parseSampleEveryTicks(process.argv[5]);
+const receiptPath = process.argv[6] || null;
+if (process.argv.length > 7 || (process.argv[6] !== undefined && !receiptPath)) usage();
+if (receiptPath && [
+  path.resolve(outputPath || "."),
+  path.resolve(replayPath || "."),
+].includes(path.resolve(receiptPath))) {
+  throw new Error("receipt_file_must_be_distinct_from_replay_and_shard");
+}
 
 if (!replayPath || !outputPath || !selectedPlayerMapJson) usage();
 if (os.endianness() !== "LE") {
@@ -108,6 +116,9 @@ let selectedPlayersSeen = new Set();
 
 fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 const temporaryPath = `${outputPath}.tmp-${process.pid}-${crypto.randomBytes(8).toString("hex")}`;
+const receiptTemporaryPath = receiptPath
+  ? `${receiptPath}.tmp-${process.pid}-${crypto.randomBytes(8).toString("hex")}`
+  : null;
 // Exclusive private creation: never follow/truncate an existing temporary
 // path (including a symlink) when replay extraction is retried or overlaps.
 const output = fs.createWriteStream(temporaryPath, { flags: "wx", mode: 0o600 });
@@ -337,50 +348,59 @@ function closeOutput() {
     await closeOutput();
     if (writeFailure) throw writeFailure;
     const shardCompressedSha256 = compressedDigest.digest("hex");
-    // Atomic create-only publication in the SAME directory. A normal rename
-    // silently overwrites an existing shard, destroying its prior provenance.
-    // Hard linking rejects an existing output with EEXIST and leaves the
-    // already-published shard unchanged. A new shard is immediately complete.
+    // Derive the receipt from the exact sealed TEMPORARY shard. Only after
+    // this do we publish its final name, never overwriting an existing shard.
+    const summary = {
+      schema: "haxlab-imitation-extract-summary-v2",
+      shardSchema: "haxlab-imitation-shard-v2",
+      format: "float32-le-gzip",
+      dtype: "float32-le",
+      rowWidth: columns.length,
+      columns,
+      canonicalAttackDirection: "+x",
+      selectedPlayers: Object.fromEntries(
+        Array.from(selectedIndex.entries()).map(([identity, index]) => [
+          String(index), identity,
+        ]),
+      ),
+      selectedReplayPlayers: Object.fromEntries(
+        Array.from(selectedByReplayId.entries()).map(([playerId, identity]) => [
+          String(playerId), identity,
+        ]),
+      ),
+      sourceFile: path.basename(replayPath),
+      sourceReplaySha256,
+      selectedPlayerMapSha256,
+      shardCompressedSha256,
+      outputPath,
+      totalFrames: replayData.totalFrames,
+      framesAdvanced,
+      sampleEveryTicks: sampleEvery,
+      samples: sampleCount,
+      selectedStateSamples,
+      skippedUnknownInput,
+      selectedPlayersRequested: selectedByReplayId.size,
+      selectedPlayersSeen: selectedPlayersSeen.size,
+      compressedBytes: fs.statSync(temporaryPath).size,
+    };
+    // Optional machine-readable provenance survives when the caller does not
+    // retain stdout. Its temporary file is private and exclusively created.
+    // Same-directory hard links are create-only, never rename-overwrite.
+    if (receiptTemporaryPath) {
+      fs.writeFileSync(receiptTemporaryPath,
+        JSON.stringify(summary, null, 2) + "\n",
+        { flag: "wx", mode: 0o600 });
+    }
     fs.linkSync(temporaryPath, outputPath);
+    if (receiptTemporaryPath) {
+      // A failure to publish the secondary receipt leaves an explicitly
+      // INCOMPLETE deliverable (no successful stdout). Never silently delete
+      // a committed shard; its immutable bytes may already be consumed.
+      fs.linkSync(receiptTemporaryPath, receiptPath);
+      fs.unlinkSync(receiptTemporaryPath);
+    }
     fs.unlinkSync(temporaryPath);
-
-    process.stdout.write(
-      JSON.stringify({
-        schema: "haxlab-imitation-extract-summary-v2",
-        shardSchema: "haxlab-imitation-shard-v2",
-        format: "float32-le-gzip",
-        dtype: "float32-le",
-        rowWidth: columns.length,
-        columns,
-        canonicalAttackDirection: "+x",
-        selectedPlayers: Object.fromEntries(
-          Array.from(selectedIndex.entries()).map(([identity, index]) => [
-            String(index),
-            identity,
-          ]),
-        ),
-        selectedReplayPlayers: Object.fromEntries(
-          Array.from(selectedByReplayId.entries()).map(([playerId, identity]) => [
-            String(playerId),
-            identity,
-          ]),
-        ),
-        sourceFile: path.basename(replayPath),
-        sourceReplaySha256,
-        selectedPlayerMapSha256,
-        shardCompressedSha256,
-        outputPath,
-        totalFrames: replayData.totalFrames,
-        framesAdvanced,
-        sampleEveryTicks: sampleEvery,
-        samples: sampleCount,
-        selectedStateSamples,
-        skippedUnknownInput,
-        selectedPlayersRequested: selectedByReplayId.size,
-        selectedPlayersSeen: selectedPlayersSeen.size,
-        compressedBytes: fs.statSync(outputPath).size,
-      }),
-    );
+    process.stdout.write(JSON.stringify(summary));
   } catch (error) {
     try {
       gzip.destroy();
@@ -389,6 +409,9 @@ function closeOutput() {
     try {
       fs.unlinkSync(temporaryPath);
     } catch (_) {}
+    if (receiptTemporaryPath) {
+      try { fs.unlinkSync(receiptTemporaryPath); } catch (_) {}
+    }
     console.error(error?.stack || String(error));
     process.exit(1);
   }
