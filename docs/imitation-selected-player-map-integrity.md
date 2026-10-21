@@ -61,3 +61,28 @@ Dit is een fail-closed bronfix binnen bestaande PR #566, niet een claim
 dat echte replays opnieuw zijn verwerkt. Bestaande verplichte CI, review
 en eigenaarschapsgrenzen blijven van kracht. Er is geen QA-suite
 toegevoegd of handmatig uitgevoerd.
+
+
+## Idempotente shardpublicatie zonder overschrijven
+
+Een herhaalde extractie kon met `renameSync` een bestaand definitief
+`.jsonl.gz`-bestand vervangen, óók wanneer die shard bij een ander
+selectie- of samplerprofiel hoorde. Daardoor kon een eerdere dataset
+stilzwijgend verdwijnen en de provenance van downstream training
+onbetrouwbaar worden.
+
+De extractie maakt nu een willekeurig benoemd, exclusief gecreëerd
+privé-tijdelijk bestand (`wx`, mode 0600) aan. Na succesvolle,
+niet-lege compressie wordt het via een atomische hardlink in
+**dezelfde directory** uitsluitend onder een **nog niet bestaande**
+definitieve bestandsnaam gepubliceerd. Bij `EEXIST` blijft de
+bestaande shard intact en wordt de nieuwe tijdelijke output volgens
+de bestaande foutafhandeling opgeruimd. Filesystemen zonder
+hardlinkondersteuning weigeren de publicatie liever dan een
+niet-atomisch of overschrijvend alternatief te gebruiken.
+Ook vroege schrijf- of compressiefouten worden vóór publicatie zichtbaar.
+
+Dit verandert niet het binaire sampleformat, de labels, cadence
+of replaytraining. Om een andere dataset te bouwen, kiest de
+operator een nieuwe outputnaam. Geen bestaande shard, manifest,
+model of productie-queue is in deze bronwijziging aangepast.
