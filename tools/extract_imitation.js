@@ -143,6 +143,8 @@ let selectedStateSamples = 0;
 let skippedUnknownInput = 0;
 let framesAdvanced = 0;
 let selectedPlayersSeen = new Set();
+let replayPausedForBackpressure = false;
+let backpressurePauseCount = 0;
 
 fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 const temporaryPath = `${outputPath}.tmp-${process.pid}-${crypto.randomBytes(8).toString("hex")}`;
@@ -166,6 +168,16 @@ function recordWriteFailure(error) {
 }
 output.on("error", recordWriteFailure);
 gzip.on("error", recordWriteFailure);
+// Stop advancing replay while gzip cannot accept another sample. Node's
+// writable high-water mark is a backpressure signal, not an error.
+// Resuming only on "drain" keeps live compression and slow disk writes
+// from accumulating an unbounded backlog of Float32 row buffers.
+gzip.on("drain", () => {
+  if (settled || !replayPausedForBackpressure || writeFailure) return;
+  replayPausedForBackpressure = false;
+  try { reader?.setSpeed(100000); }
+  catch (error) { recordWriteFailure(error); }
+});
 // Hash exactly the compressed byte stream that is piped to the output.
 // This does not materialize a second copy of potentially large shards.
 gzip.on("data", (chunk) => { compressedDigest.update(chunk); });
@@ -278,8 +290,17 @@ function writeSample(player, statePlayers, ballDisc) {
   ];
 
   const values = new Float32Array(sample);
-  gzip.write(Buffer.from(values.buffer, values.byteOffset, values.byteLength));
+  const canAcceptMore = gzip.write(
+    Buffer.from(values.buffer, values.byteOffset, values.byteLength),
+  );
   sampleCount += 1;
+  if (!canAcceptMore && !replayPausedForBackpressure && !settled) {
+    replayPausedForBackpressure = true;
+    backpressurePauseCount += 1;
+    // setSpeed(0) pauses the node-haxball non-blocking Replay reader
+    // without destroying game state or losing the selected frame.
+    reader?.setSpeed(0);
+  }
 }
 
 function sampleState() {
@@ -435,6 +456,7 @@ function closeOutput() {
       selectedPlayersRequested: selectedByReplayId.size,
       selectedPlayersSeen: selectedPlayersSeen.size,
       compressedBytes: fs.statSync(temporaryPath).size,
+      backpressurePauseCount,
     };
     // Optional machine-readable provenance survives when the caller does not
     // retain stdout. Its temporary file is private and exclusively created.
