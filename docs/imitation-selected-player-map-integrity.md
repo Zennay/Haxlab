@@ -232,3 +232,35 @@ geen claim dat een verwerking onder iedere opslag- of RAM-druk kan
 slagen. Een write-error, time-out of ontbrekende diskruimte blijft een
 expliciete mislukking met tijdelijke-bestandopruiming. Alleen een
 volledig gesloten, niet-lege shard kan create-only gepubliceerd worden.
+
+
+## End-to-end SHA-256-herkomst: extractor naar bestaande shardauditor
+
+De extractor rapporteert de exacte originele replayhash, de letterlijke
+selectieargument-hash en de gecomprimeerde shardhash. De bestaande
+`src/haxlab/learning/shard_audit.py` leest de door
+`haxlab.learning.shards` geschreven metadata en opende al shards via
+zijn bestaande `nofollow`- en descriptoridentiteitscontroles. Dit pad
+controleert nu óók deze nieuwe receiptvelden:
+
+- Nieuwe receiptvelden zijn **als drietal verplicht** wanneer minstens
+  één ervan aanwezig is; gemengde/afgebroken provenance wordt afgekeurd.
+  Oudere metadata zonder dit veldentrio blijft leesbaar onder de
+  bestaande overige controles.
+- Alle aanwezige waarden moeten een canonieke SHA-256 voorstellen.
+  `sourceReplaySha256` moet gelijk zijn aan de opname-SHA in het
+  manifest en de metadata.
+- `shardCompressedSha256` moet exact overeenkomen met de hash van de
+  daadwerkelijk door de auditor gelezen, gecomprimeerde bytes. Dat
+  gebruikt de bestaande nofollow- en root-/bestandidentiteitsbewaking,
+  dus geen afzonderlijke onbeveiligde heropening.
+- `selectedPlayerMapSha256` wordt syntactisch gevalideerd en via
+  de bestaande index/metadatagelijkheid meegenomen. Zonder origineel
+  exact commandline-argument bewijst de auditor daarmee **niet**
+  onafhankelijk dat de selectiebytes gelijk zijn; daarvoor moet
+  ook de producerinput bewaard zijn.
+
+Een mislukte vergelijking is een product-/data-integriteitsfout,
+**geen** automatische opdracht om shard, manifest of model opnieuw te
+bouwen of vrij te geven. Er is geen trainingsjob gestart, geen
+bestaande data herschreven en geen QA-suite gebouwd of gedraaid.
