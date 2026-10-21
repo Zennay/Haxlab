@@ -264,3 +264,53 @@ Een mislukte vergelijking is een product-/data-integriteitsfout,
 **geen** automatische opdracht om shard, manifest of model opnieuw te
 bouwen of vrij te geven. Er is geen trainingsjob gestart, geen
 bestaande data herschreven en geen QA-suite gebouwd of gedraaid.
+
+
+## Offline receiptverificatie na overdracht naar andere opslag
+
+Naast de extractor is een zelfstandige read-only CLI beschikbaar:
+`tools/verify_imitation_receipt.js`. Hiermee kan de operator een
+eerder gecreëerde gzip-shard en de aparte private JSON-receipt
+**zonder replaydecodering, nieuw bestand of trainingsrun** vergelijken:
+
+```sh
+node tools/verify_imitation_receipt.js \
+  /private/shards/game-001.f32.gz \
+  /private/receipts/game-001.receipt.json
+```
+
+Optioneel kunnen de **exacte** originele replaybytes en de letterlijke
+JSON-spelersselectie opnieuw gebonden worden aan de receipt:
+
+```sh
+node tools/verify_imitation_receipt.js \
+  /private/shards/game-001.f32.gz \
+  /private/receipts/game-001.receipt.json \
+  /private/replays/game-001.hbr2 \
+  '{"1":"selected-player"}'
+```
+
+Voor alleen de JSON-selectie zonder aanwezige replay is het derde
+argument letterlijk `-`. De controle opent bronbestanden als
+reguliere bestanden met `O_NOFOLLOW`, weigert ongeldige/te grote
+receipts en merkt gewijzigde bestanden tijdens de bronlezing op.
+Het gzipbestand wordt in blokken gehasht, zonder volledige
+bestandsgrootte in RAM en zonder te decomprimeren.
+`compressedBytes` en `shardCompressedSha256` moeten overeenkomen.
+De twee optionele bronverificaties controleren de originele
+replaybytes en de **exacte commandline-JSON-bytes**.
+
+Het JSON-resultaat onderscheidt daarom
+`shard_sha256_verified`, `original_replay_bytes_verified` en
+`original_selection_argument_verified`. Zonder optionele bron
+blijven die laatste twee uitdrukkelijk `false`. Het resultaat
+vermeldt daarnaast `no_model_release_authority=true`.
+Bij afwijkende hashes of ontbrekende/ongeldige bron wordt
+niet alsnog succes geprint en blijft de bron onaangeroerd.
+
+Dit is uitsluitend bewijs dat lokale bytes bij de opgegeven
+**mogelijk onbetrouwbare** receipt passen; het bewijst niet dat
+die receipt door een geautoriseerde datasetproducer is ondertekend,
+de dataset kwalitatief goed is, het model trainbaar is of een
+releasegate is behaald. De bestaande productie-/onderzoeksgates
+blijven ongewijzigd.
