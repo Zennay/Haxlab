@@ -36,3 +36,28 @@ Dit is geen replayconversie, datamigratie of autorisatie voor training,
 modelpromotie of het draaien van echte replaydata. De bestaande
 exact-head CI, onafhankelijke review, bron-eigenaarschap en
 deploymentvoorwaarden blijven intact.
+
+
+## Geen lege trainingsshards als geslaagde extractie
+
+De extractor kan een syntactisch geldige selectie ontvangen waarvan geen
+enkele speler in gesamplede states voorkomt, of alle geselecteerde states
+kunnen een onbekende/ongeldige inputlabel hebben. Voorheen verscheen dan
+toch een succesvol gecomprimeerd outputbestand met **nul trainingsrijen**.
+Downstream training of datasetcatalogi konden dat verwarren met een
+bruikbare shard.
+
+Bij `sampleCount === 0` weigert de bron nu finalisatie van de shard:
+`no_selected_players_in_sampled_states` (geen speler waargenomen) of
+`no_selected_samples_with_known_input` (wel staten, geen bruikbaar
+inputlabel). De bestaande foutafhandeling vernietigt de schrijfstroom en
+verwijdert de tijdelijke output. Alleen bij minstens één bruikbare
+gesamplede trainingsrij mag de tijdelijke shard worden gepubliceerd als
+definitief bestand. Een fout verleent geen toestemming voor herhaalde
+replayverwerking, training of modelpromotie; de operator controleert
+de geselecteerde IDs en de replay-/inputherkomst.
+
+Dit is een fail-closed bronfix binnen bestaande PR #566, niet een claim
+dat echte replays opnieuw zijn verwerkt. Bestaande verplichte CI, review
+en eigenaarschapsgrenzen blijven van kracht. Er is geen QA-suite
+toegevoegd of handmatig uitgevoerd.
