@@ -11,3 +11,28 @@ Repeated object keys are rejected **before** `JSON.parse`'s last-value-wins beha
 The reusable `tools/extract_imitation_args.js` parser is dependency-free; `tools/extract_imitation.js` uses the same parser before creating output. This source-only change does not authorize replay ingest, learning runs, training/model promotion, a VPS job or production release. Required existing exact-head CI and reviewer/owner gates remain in place.
 
 Ported from older PR-less branch `feature/data-pipeline-imitation-player-map-integrity-20261007` onto fresh current-main branch without copying its QA/test artifacts, preserving issue #452 scope.
+
+## Sampler-interval: exacte datasetparameters
+
+Dezelfde extractor weigerde vóór deze aanvulling geen half-geparseerde
+optionele `sampleEveryTicks`-argumenten. `parseInt("6tekst", 10)` en
+`parseInt("6.5", 10)` geven allebei `6`, terwijl de gebruiker de
+werkelijke sampling-cadans niet eenduidig heeft opgegeven. Dit tast
+reproduceerbaarheid en shard-herkomst aan.
+
+Het nieuwe, herbruikbare `parseSampleEveryTicks` accepteert
+bij afwezigheid van het optionele argument nog steeds de bestaande
+standaard **6**. Bij expliciete invoer accepteert het alleen
+een canonieke, strikt positieve, veilige gehele decimale waarde
+(`1`, `6`, `250`); geen nul, negatief getal, voorloopnullen,
+decimale breuk, exponent, achtervoegsel, spaties, lege waarde of
+integer boven `Number.MAX_SAFE_INTEGER`. Ongeldige invoer veroorzaakt
+`INVALID_SAMPLE_EVERY_TICKS` / `invalid_sample_every_ticks`
+**vóór** de replay wordt gelezen of tijdelijke of definitieve
+shardbestanden worden aangemaakt. Geldige waarden blijven exact
+het bestaande samplinggedrag aansturen.
+
+Dit is geen replayconversie, datamigratie of autorisatie voor training,
+modelpromotie of het draaien van echte replaydata. De bestaande
+exact-head CI, onafhankelijke review, bron-eigenaarschap en
+deploymentvoorwaarden blijven intact.
