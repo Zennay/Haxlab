@@ -87,6 +87,13 @@ function nearestVectors(origin, candidates, sign, limit) {
 }
 
 const data = Uint8Array.from(fs.readFileSync(replayPath));
+// Bind the machine-readable extraction receipt to the exact replay bytes,
+// caller-supplied player-map JSON and final compressed artifact. Filenames
+// and apparently equivalent normalized player maps are not provenance.
+const sourceReplaySha256 = crypto.createHash("sha256").update(data).digest("hex");
+const selectedPlayerMapSha256 = crypto.createHash("sha256")
+  .update(selectedPlayerMapJson, "utf8").digest("hex");
+const compressedDigest = crypto.createHash("sha256");
 const replayData = Replay.readAll(data);
 const currentInputs = new Map();
 
@@ -111,6 +118,9 @@ const gzip = zlib.createGzip({ level: 6 });
 let writeFailure = null;
 output.on("error", (error) => { writeFailure = error; });
 gzip.on("error", (error) => { writeFailure = error; });
+// Hash exactly the compressed byte stream that is piped to the output.
+// This does not materialize a second copy of potentially large shards.
+gzip.on("data", (chunk) => { compressedDigest.update(chunk); });
 gzip.pipe(output);
 
 const columns = [
@@ -326,6 +336,7 @@ function closeOutput() {
     if (writeFailure) throw writeFailure;
     await closeOutput();
     if (writeFailure) throw writeFailure;
+    const shardCompressedSha256 = compressedDigest.digest("hex");
     // Atomic create-only publication in the SAME directory. A normal rename
     // silently overwrites an existing shard, destroying its prior provenance.
     // Hard linking rejects an existing output with EEXIST and leaves the
@@ -355,6 +366,9 @@ function closeOutput() {
           ]),
         ),
         sourceFile: path.basename(replayPath),
+        sourceReplaySha256,
+        selectedPlayerMapSha256,
+        shardCompressedSha256,
         outputPath,
         totalFrames: replayData.totalFrames,
         framesAdvanced,
