@@ -105,6 +105,12 @@ const temporaryPath = `${outputPath}.tmp-${process.pid}-${crypto.randomBytes(8).
 // path (including a symlink) when replay extraction is retried or overlaps.
 const output = fs.createWriteStream(temporaryPath, { flags: "wx", mode: 0o600 });
 const gzip = zlib.createGzip({ level: 6 });
+// Errors may happen during the replay (well before closeOutput installs its
+// one-shot listeners). Keep the failure observed rather than allowing an
+// unhandled stream error or publishing an incomplete shard.
+let writeFailure = null;
+output.on("error", (error) => { writeFailure = error; });
+gzip.on("error", (error) => { writeFailure = error; });
 gzip.pipe(output);
 
 const columns = [
@@ -317,7 +323,9 @@ function closeOutput() {
       );
     }
 
+    if (writeFailure) throw writeFailure;
     await closeOutput();
+    if (writeFailure) throw writeFailure;
     // Atomic create-only publication in the SAME directory. A normal rename
     // silently overwrites an existing shard, destroying its prior provenance.
     // Hard linking rejects an existing output with EEXIST and leaves the
