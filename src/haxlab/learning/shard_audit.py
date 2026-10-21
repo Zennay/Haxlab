@@ -562,6 +562,25 @@ def _validate_meta(
         errors.append(prefix + "columns")
     if meta.get("replay_sha256") != sha256:
         errors.append(prefix + "meta_replay_sha256")
+    # New extractor versions bind the *source bytes*, literal selection
+    # argument and gzip result with three receipts. All three must be
+    # present together. Older pre-receipt shard metadata remains readable.
+    provenance_keys = (
+        "sourceReplaySha256", "selectedPlayerMapSha256",
+        "shardCompressedSha256",
+    )
+    provenance_present = [key in meta for key in provenance_keys]
+    if any(provenance_present):
+        if not all(provenance_present):
+            errors.append(prefix + "incomplete_provenance_receipts")
+        for key in provenance_keys:
+            if key in meta and not _canonical_sha(meta[key]):
+                errors.append(prefix + "invalid_" + key)
+        if (
+            _canonical_sha(meta.get("sourceReplaySha256"))
+            and meta["sourceReplaySha256"] != sha256
+        ):
+            errors.append(prefix + "source_replay_bytes_mismatch")
     if meta.get("sourceFile") != f"{sha256}.hbr2":
         errors.append(prefix + "source_file")
     output_path = meta.get("outputPath")
@@ -793,6 +812,12 @@ def audit_shard_directory(shard_dir: Path) -> dict[str, Any]:
                     f"{replay_sha}:compressed_size:"
                     f"{actual_compressed}!={declared_compressed}"
                 )
+            # The producer hashes the exact gzip stream it publishes.
+            # Compare against bytes read through the existing nofollow,
+            # identity-reconfirmed shard descriptor, not a path re-open.
+            declared_hash = meta.get("shardCompressedSha256")
+            if _canonical_sha(declared_hash) and declared_hash != compressed_sha:
+                errors.append(f"{replay_sha}:compressed_sha256_mismatch")
             aggregate_samples += samples
             aggregate_compressed += actual_compressed
             aggregate_seen += seen
