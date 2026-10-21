@@ -301,6 +301,19 @@ function closeOutput() {
       );
     }
 
+    // Never present an empty compressed shard as successfully extracted
+    // training data. A selected map may refer to players never sampled, or
+    // every observed selected state may lack a recoverable action label.
+    // In both cases no usable imitation row exists; keep the final shard
+    // unpublished and let the existing failure cleanup remove the temp file.
+    if (sampleCount === 0) {
+      throw new Error(
+        selectedStateSamples === 0
+          ? "no_selected_players_in_sampled_states"
+          : "no_selected_samples_with_known_input",
+      );
+    }
+
     await closeOutput();
     fs.renameSync(temporaryPath, outputPath);
 
