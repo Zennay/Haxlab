@@ -207,3 +207,28 @@ Replay-readers en aan SHA-256 worden doorgegeven. Daarmee verdwijnt
 een volledige, overbodige in-memory replaykopie. Dit laat de originele
 bytes, bron-SHA-256, sampling en binaire shardindeling ongewijzigd.
 Het is geen claim over exact gemeten RAM-besparing op productiegegevens.
+
+
+## Begrensde gzip-backpressure voor lange replays
+
+Bij een lange replay kan het extraheren van Float32-samples sneller gaan
+dan de gzip-compressie of het onderliggende opslagmedium. Een
+`gzip.write()` die `false` retourneert is een Node.js-signaal dat
+de interne schrijfbuffers vol raken. Het eerdere pad negeerde dit en
+bleef op replay-snelheid samples toevoegen.
+
+De extractor pauzeert nu de ondersteunde asynchrone replayreader met
+`setSpeed(0)` zodra de gzip-schrijfstroom backpressure signaleert.
+Pas op diens `drain`-event wordt de reader hervat met de bestaande
+extractiesnelheid `setSpeed(100000)`. Een fout of beëindigde
+replay mag geen nieuwe hervatting activeren. De machineleesbare
+succesreceipt vermeldt optioneel `backpressurePauseCount` zodat de
+operator kan zien hoe vaak de extractor op outputcapaciteit wachtte.
+Bestaande samplevelden en de gecomprimeerde output blijven
+ongewijzigd.
+
+Dit is een functionele bescherming tegen onbegrensd bufferopstapelen,
+geen claim dat een verwerking onder iedere opslag- of RAM-druk kan
+slagen. Een write-error, time-out of ontbrekende diskruimte blijft een
+expliciete mislukking met tijdelijke-bestandopruiming. Alleen een
+volledig gesloten, niet-lege shard kan create-only gepubliceerd worden.
