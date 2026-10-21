@@ -112,3 +112,43 @@ Deze receipts tonen **byte-identiteit**, niet de kwaliteit van labels,
 compleetheid van een trainingsdataset, actuele owner/CI-status of
 toestemming voor een modelrelease. Geen replaydata is voor deze wijziging
 verwerkt, geen bestaande shards of modellen zijn gemigreerd.
+
+
+## Optionele persistente provenance-receipt naast de shard
+
+De bestaande extractor print bij succesvolle omzetting al een
+machineleesbare samenvatting met drie SHA-256's. De meeste
+offline batch-/workerprocessen bewaren stdout echter niet automatisch.
+Daarom is nu **optioneel** een vijfde positioneel argument na
+`sampleEveryTicks` beschikbaar: het doelpad voor een afzonderlijke,
+privé provenance-JSON.
+
+```sh
+node tools/extract_imitation.js replay.hbr2   /private/shards/game-001.jsonl.gz '{"1":"selected-player"}' 6   /private/receipts/game-001.receipt.json
+```
+
+De ontvangende directories moeten vooraf bestaan en onder beheer van
+de bevoegde operator staan. Bij opgegeven receipt-bestemming schrijft
+de extractor **eerst** de complete JSON-samenvatting naar een
+willekeurig exclusief aangemaakt tijdelijk bestand met mode 0600.
+Na volledig gesloten, niet-lege compressie publiceert hij de shard
+en vervolgens de receipt via afzonderlijke **create-only hardlinks**
+in hun respectieve directory. Geen bestaand doelbestand wordt
+overschreven; de receipt mag niet hetzelfde pad gebruiken als de
+shard of originele replay.
+
+Omdat twee verschillende bestandsnamen niet atomair in één
+bestandssysteemtransactie gepubliceerd kunnen worden, is de receipt
+een **tweede, expliciete leveringsstap**. Als publiceren van de
+receipt mislukt, eindigt het proces met een fout en géén succesbericht
+op stdout. De eerder al gepubliceerde shard kan dan bestaan zonder
+complete provenance-levering; verwijder of herschrijf die niet
+blindelings en geef de dataset geen vrijgave. Inspecteer haar
+`shardCompressedSha256` en een nieuw toegestaan uitvoerpad.
+Een gewone run zonder receipt-argument blijft exact één
+`.jsonl.gz` plus de bestaande JSON-uitvoer op stdout leveren.
+
+De receipt legt identiteitsbewijzen vast, geen oordeel over dataset- of
+modelkwaliteit, een workerclaim, review of productiepromotie.
+Geen replay, bestaande shard, trainingsjob of broker is door deze
+bronimplementatie gestart of aangepast.
