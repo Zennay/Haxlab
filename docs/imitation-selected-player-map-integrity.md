@@ -152,3 +152,25 @@ De receipt legt identiteitsbewijzen vast, geen oordeel over dataset- of
 modelkwaliteit, een workerclaim, review of productiepromotie.
 Geen replay, bestaande shard, trainingsjob of broker is door deze
 bronimplementatie gestart of aangepast.
+
+
+## Vroege doelcontrole en volledige foutopruiming
+
+Een herhaalde extractie naar een al bestaande shard- of receiptnaam
+hoeft niet langer de volledige replay te decoderen voordat de
+`create-only`-publicatie op `EEXIST` faalt. Na validatie van de
+spelersselectie en **vóór** het inlezen en reconstrueren van de replay
+controleert de extractor beide definitieve bestemmingen met
+`lstatSync`. Dit weigert óók dangling symlinks en maakt geen
+bestemmingsbestand aan. De definitieve `linkSync` blijft nodig:
+een ander proces kan immers ná de controle alsnog de naam innemen.
+
+Ook het opruimen bij een fout is verbeterd. Een `WriteStream` kan
+asynchroon zijn bestand nog openen wanneer een replayfout optreedt.
+Vroeg verwijderen vóór de stream werkelijk `close` uitzendt kon
+daardoor alsnog een onbedoeld privé-temporair bestand achterlaten.
+De foutafhandeling vernietigt nu eerst de stromen, wacht hun
+output-`close` af en verwijdert daarna uitsluitend de eigen
+tijdelijke shard en eventuele tijdelijke receipt. Reeds gepubliceerde
+eindbestanden blijven ongemoeid. Een mislukte extractie meldt
+niet alsnog succes en start geen modeltraining of serviceherstel.
