@@ -106,7 +106,7 @@ function parseSelectedPlayerMapJson(rawValue) {
  */
 function parseSampleEveryTicks(rawValue) {
   if (rawValue === undefined) return 6;
-  if (typeof rawValue !== "string" || !/^[1-9]\\d*$/.test(rawValue)) {
+  if (typeof rawValue !== "string" || !/^[1-9][0-9]*$/.test(rawValue)) {
     const error = new TypeError("invalid_sample_every_ticks");
     error.code = "INVALID_SAMPLE_EVERY_TICKS";
     throw error;
