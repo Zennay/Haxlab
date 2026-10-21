@@ -6,7 +6,7 @@ const os = require("os");
 const path = require("path");
 const zlib = require("zlib");
 const initAPI = require("node-haxball");
-const { parseSelectedPlayerMapJson } = require("./extract_imitation_args");
+const { parseSelectedPlayerMapJson, parseSampleEveryTicks } = require("./extract_imitation_args");
 
 const API = initAPI();
 const { Replay, Utils } = API;
@@ -22,10 +22,7 @@ function usage() {
 const replayPath = process.argv[2];
 const outputPath = process.argv[3];
 const selectedPlayerMapJson = process.argv[4];
-const sampleEvery = Math.max(
-  1,
-  Number.parseInt(process.argv[5] || "6", 10) || 6,
-);
+const sampleEvery = parseSampleEveryTicks(process.argv[5]);
 
 if (!replayPath || !outputPath || !selectedPlayerMapJson) usage();
 if (os.endianness() !== "LE") {
