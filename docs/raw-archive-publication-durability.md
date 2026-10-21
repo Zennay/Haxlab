@@ -13,3 +13,28 @@ The HaxLab raw replay archive uses no-clobber hard links to store immutable `.hb
 A crash after hard-link publication but before the directory sync/ledger commit may leave a recoverable orphan, not a falsely confirmed raw ledger row. A crash after the successful sync and ledger commit has a durable destination directory entry, subject to underlying filesystem guarantees and the separately governed SQLite durability policy.
 
 This source-only product change does not rewrite, delete or inspect live archive files. It does not alter archive naming, replay validation, worker/learner/evaluation behavior, models or champion state. There are no QA files or manual tests in this PR. Existing exact-head automatic CI, independent review, and authorization gates remain mandatory before merge/deploy. Tracked by HaxLab #246.
+
+
+## 21 October · Preserve both logical SHA-prefix path identities
+
+The ledger persists a **logical archive path**
+`raw_root/sha[0:2]/sha[2:4]/<sha>.hbr2`, but replay publication and SHA
+verification intentionally operate through already-open directory FDs
+under `/proc/self/fd/`. A stable root directory by itself is
+insufficient evidence that its **two SHA-prefix child names** still
+refer to the same bound descriptors. A concurrent pathname replacement
+could otherwise let the ledger point to a different directory despite
+successful publication and fsync on the original directory.
+
+The pre-ledger boundary now reopens both child components from the
+descriptor-bound archive root using `O_DIRECTORY|O_NOFOLLOW` and compares
+their device/inode identities to the retained prefix FDs. Either a
+missing/replaced first or second prefix fails closed as
+`raw_archive_prefix_changed`, before a new ledger row is written.
+The same check also protects the verified duplicate-return path.
+
+The check does **not** claim atomic protection against a hostile actor
+replacing components *after* the final inspection; directory ownership,
+permissions and the downstream archive integrity scanner remain
+important. No existing replay/archive files, SQLite state, models,
+workers, or deployment services were mutated by this source change.
