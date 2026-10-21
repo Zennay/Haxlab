@@ -121,7 +121,10 @@ function nearestVectors(origin, candidates, sign, limit) {
   return result;
 }
 
-const data = Uint8Array.from(fs.readFileSync(replayPath));
+// Node Buffer is a Uint8Array subclass. ReadAll/read accept the original
+// bytes directly; Uint8Array.from(Buffer) copied entire large replays and
+// doubled this stage's peak allocation before decoding even began.
+const data = fs.readFileSync(replayPath);
 // Bind the machine-readable extraction receipt to the exact replay bytes,
 // caller-supplied player-map JSON and final compressed artifact. Filenames
 // and apparently equivalent normalized player maps are not provenance.
