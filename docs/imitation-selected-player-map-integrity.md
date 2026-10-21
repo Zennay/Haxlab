@@ -194,3 +194,16 @@ vervalt. Succesvol gereconstrueerde frames, samplingcadence, team-
 coördinaten, labeldefinitie en binaire shardlessen zijn ongewijzigd.
 Er is geen replay uitgevoerd, geen bestaande data gemigreerd en geen
 worker/modelpromotie gestart.
+
+
+## Geen dubbele replayallocatie bij grote bestanden
+
+De inlezer gebruikte voorheen
+`Uint8Array.from(fs.readFileSync(replayPath))`, wat alle bytes van de
+replay nogmaals in het geheugen kopieerde voordat `Replay.readAll`
+aan de parsing begon. Omdat een Node `Buffer` al een subclass van
+`Uint8Array` is, kan `fs.readFileSync` direct aan beide bestaande
+Replay-readers en aan SHA-256 worden doorgegeven. Daarmee verdwijnt
+een volledige, overbodige in-memory replaykopie. Dit laat de originele
+bytes, bron-SHA-256, sampling en binaire shardindeling ongewijzigd.
+Het is geen claim over exact gemeten RAM-besparing op productiegegevens.
