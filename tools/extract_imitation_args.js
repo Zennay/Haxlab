@@ -98,4 +98,26 @@ function parseSelectedPlayerMapJson(rawValue) {
   return result;
 }
 
-module.exports = { parseSelectedPlayerMapJson };
+
+/**
+ * Sampling cadence is immutable shard provenance. parseInt("6garbage") and
+ * parseInt("6.5") silently become 6, producing mislabeled dataset requests.
+ * Require an exact positive, safe decimal integer before replay/file access.
+ */
+function parseSampleEveryTicks(rawValue) {
+  if (rawValue === undefined) return 6;
+  if (typeof rawValue !== "string" || !/^[1-9]\\d*$/.test(rawValue)) {
+    const error = new TypeError("invalid_sample_every_ticks");
+    error.code = "INVALID_SAMPLE_EVERY_TICKS";
+    throw error;
+  }
+  const parsed = Number(rawValue);
+  if (!Number.isSafeInteger(parsed)) {
+    const error = new TypeError("invalid_sample_every_ticks");
+    error.code = "INVALID_SAMPLE_EVERY_TICKS";
+    throw error;
+  }
+  return parsed;
+}
+
+module.exports = { parseSelectedPlayerMapJson, parseSampleEveryTicks };
