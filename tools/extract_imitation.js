@@ -39,6 +39,24 @@ if (os.endianness() !== "LE") {
 }
 
 const selectedByReplayId = parseSelectedPlayerMapJson(selectedPlayerMapJson);
+
+// A repeat request can take minutes of replay reconstruction before a
+// create-only final hardlink discovers that the shard or receipt already
+// exists. Reject occupied names before reading/decoding the replay.
+// lstatSync also rejects dangling symlinks (existsSync would miss those).
+// The final hardlink remains the atomic authority if a race occurs later.
+function requireAvailableDestination(destination, role) {
+  try {
+    fs.lstatSync(destination);
+  } catch (error) {
+    if (error?.code === "ENOENT") return;
+    throw error;
+  }
+  throw new Error(role + "_destination_already_exists");
+}
+requireAvailableDestination(outputPath, "shard");
+if (receiptPath) requireAvailableDestination(receiptPath, "receipt");
+
 const selectedIdentities = Array.from(
   new Set(selectedByReplayId.values()),
 ).sort();
