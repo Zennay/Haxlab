@@ -86,3 +86,29 @@ Dit verandert niet het binaire sampleformat, de labels, cadence
 of replaytraining. Om een andere dataset te bouwen, kiest de
 operator een nieuwe outputnaam. Geen bestaande shard, manifest,
 model of productie-queue is in deze bronwijziging aangepast.
+
+## Brongebonden SHA-256 voor herleidbare trainingsshards
+
+De succesvolle JSON-samenvatting van de extractor bevat nu drie extra
+hexadecimale SHA-256-receipts:
+
+- `sourceReplaySha256` — de volledige originele `.hbr2`-bytes, niet
+  alleen de mogelijk gedeelde bestandsnaam.
+- `selectedPlayerMapSha256` — de **letterlijke UTF-8 JSON-argumentbytes**,
+  inclusief expliciete keyvolgorde en schrijfwijze; dit is geen genormaliseerde
+  selectiehash.
+- `shardCompressedSha256` — de werkelijk naar de outputstream gepipete
+  **gecomprimeerde gzip-bytes**, vastgesteld na volledig sluiten van de
+  output en vóór create-only publicatie.
+
+Hierdoor kunnen operators expliciet vastleggen welke bron, aangevraagde
+selectie en fysieke shard bij elkaar horen, ook bij gelijknamige replays of
+verschillende selectie-invoer. De hash wordt met de bestaande Node
+`crypto`-module opgebouwd; de gecomprimeerde shard wordt niet volledig
+opnieuw in het geheugen geladen. De bestaande JSON-samenvatting behoudt
+schema `haxlab-imitation-extract-summary-v2` en bestaande velden.
+
+Deze receipts tonen **byte-identiteit**, niet de kwaliteit van labels,
+compleetheid van een trainingsdataset, actuele owner/CI-status of
+toestemming voor een modelrelease. Geen replaydata is voor deze wijziging
+verwerkt, geen bestaande shards of modellen zijn gemigreerd.
