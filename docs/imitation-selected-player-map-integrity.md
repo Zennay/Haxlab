@@ -174,3 +174,23 @@ output-`close` af en verwijdert daarna uitsluitend de eigen
 tijdelijke shard en eventuele tijdelijke receipt. Reeds gepubliceerde
 eindbestanden blijven ongemoeid. Een mislukte extractie meldt
 niet alsnog succes en start geen modeltraining of serviceherstel.
+
+
+## Stop op de eerste mislukte schijfwrite of replaycallback
+
+Bij verlies van de outputstream tijdens een grote replay werd de fout
+eerder alleen geregistreerd en pas **na volledige reconstructie**
+gerapporteerd. De extractor kan nu de lopende replay direct laten
+afbreken als de gzip- of bestandsschrijver een fout meldt. Dezelfde
+`finish`-afhandeling stopt de replayreader en timer, waarna de
+foutstroom wordt gesloten en tijdelijk bestand wordt opgeruimd.
+Ook uitzonderingen uit een asynchrone `onGameTick`-callback worden
+naar de bestaande Promise geleid, in plaats van als onbeheerste
+procesfouten buiten de normale cleanup te belanden.
+
+Deze wijziging verlaagt verspilde CPU en het risico op achterblijvende
+tijdelijke shards wanneer outputstorage tussentijds volloopt of
+vervalt. Succesvol gereconstrueerde frames, samplingcadence, team-
+coördinaten, labeldefinitie en binaire shardlessen zijn ongewijzigd.
+Er is geen replay uitgevoerd, geen bestaande data gemigreerd en geen
+worker/modelpromotie gestart.
