@@ -4,6 +4,10 @@
 
 This is deliberately a second boundary after `manifest_audit`: internal manifest consistency and external source consistency are different failure classes.
 
+## Cross-audit file identity continuity
+
+Before the nested structural manifest or leaderboard audit starts, the outer source audit opens and holds a no-follow descriptor for the exact regular-file object. After the nested path-based audit returns, it requires the logical path to still name that same object, then reads and double-checks bytes from the held descriptor with bounded reads and metadata/path rechecks. A matching SHA-256 and byte size alone are not treated as sufficient identity evidence: a persistent byte-identical replacement across the audit handoff is rejected.
+
 ## Verification chain
 
 The source audit first requires the merged structural manifest audit to pass. It then:
