@@ -1,0 +1,82 @@
+name: Data-pipeline ingestion hermeticity proof
+
+on:
+  push:
+    branches:
+      - validation/data-pipeline-ingestion-hermeticity-20261007
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-data-pipeline-ingestion-hermeticity-${{ github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Verify exact checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          echo "HAXLAB_INGESTION_HERMETICITY_HEAD=$(git rev-parse HEAD)"
+
+      - name: Verify candidate is still the live branch head
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_head="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | awk 'NR == 1 {print $1}')"
+          test -n "$remote_head"
+          test "$remote_head" = "${{ github.sha }}"
+          echo "HAXLAB_INGESTION_HERMETICITY_LIVE_HEAD=$remote_head"
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .data-pipeline-ingestion-hermeticity-venv
+          python3 -m venv .data-pipeline-ingestion-hermeticity-venv
+          .data-pipeline-ingestion-hermeticity-venv/bin/pip install --upgrade pip
+          .data-pipeline-ingestion-hermeticity-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile repository Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          .data-pipeline-ingestion-hermeticity-venv/bin/python -m compileall -q src tests
+
+      - name: Run focused ingestion hermeticity contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .data-pipeline-ingestion-hermeticity-venv/bin/pytest -q \
+              tests/test_ingestion_hermeticity_contract.py
+
+      - name: Run adjacent ingestion regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .data-pipeline-ingestion-hermeticity-venv/bin/pytest -q \
+              tests/test_discovery.py \
+              tests/test_reports.py \
+              tests/test_matcher.py \
+              tests/test_pipeline.py
+
+      - name: Record green result
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HAXLAB_INGESTION_HERMETICITY_RESULT=green"
