@@ -1,0 +1,59 @@
+name: Arena v2 metric bounds validation
+
+on:
+  push:
+    branches:
+      - validation/arena-v2-metric-bounds-20261006
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-arena-v2-metric-bounds-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .arena-metric-bounds-venv
+          python3 -m venv .arena-metric-bounds-venv
+          .arena-metric-bounds-venv/bin/pip install --upgrade pip
+          .arena-metric-bounds-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile bounded evaluation gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          .arena-metric-bounds-venv/bin/python -m compileall -q \
+            src/haxlab/evaluation/closed_loop_arena.py \
+            tests/test_closed_loop_arena.py
+
+      - name: Run bounded Arena v2 regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .arena-metric-bounds-venv/bin/pytest -q \
+              tests/test_closed_loop_arena.py \
+              tests/test_multisource_duel.py \
+              tests/test_multisource_suite.py
+
+      - name: Record exact-head evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "ARENA_METRIC_BOUNDS_VALIDATION_HEAD=$(git rev-parse HEAD)"
+          echo "ARENA_METRIC_BOUNDS_VALIDATION_RESULT=green"
