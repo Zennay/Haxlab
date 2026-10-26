@@ -12,6 +12,8 @@ from haxlab.runtime import autonomy_status
 
 def _valid_payload() -> dict[str, object]:
     return {
+        "raw_unique_replays": 30,
+        "processing_ok": 20,
         "processing_pending": 2,
         "analysis_pending": 3,
         "processing_failed": 4,
@@ -25,6 +27,8 @@ def _valid_payload() -> dict[str, object]:
 def test_parse_autonomy_status_accepts_native_control_evidence() -> None:
     snapshot = autonomy_status.parse_autonomy_status(_valid_payload())
 
+    assert snapshot.raw_unique_replays == 30
+    assert snapshot.processing_ok == 20
     assert snapshot.processing_pending == 2
     assert snapshot.analysis_pending == 3
     assert snapshot.processing_failed == 4
@@ -82,8 +86,54 @@ def test_parse_autonomy_status_rejects_noncanonical_analysis_version(
         autonomy_status.parse_autonomy_status(payload)
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("raw_unique_replays", True),
+        ("raw_unique_replays", "30"),
+        ("raw_unique_replays", -1),
+        ("processing_ok", 20.0),
+        ("processing_ok", "20"),
+        ("processing_ok", -1),
+    ],
+)
+def test_parse_autonomy_status_rejects_invalid_capacity_counters(
+    field: str,
+    value: object,
+) -> None:
+    payload = _valid_payload()
+    payload[field] = value
+
+    with pytest.raises(autonomy_status.AutonomyStatusError):
+        autonomy_status.parse_autonomy_status(payload)
+
+
+def test_parse_autonomy_status_rejects_processing_totals_above_raw() -> None:
+    payload = _valid_payload()
+    payload["raw_unique_replays"] = 25
+
+    with pytest.raises(
+        autonomy_status.AutonomyStatusError,
+        match="processing counters cannot exceed raw_unique_replays",
+    ):
+        autonomy_status.parse_autonomy_status(payload)
+
+
+def test_parse_autonomy_status_rejects_analysis_totals_above_processing_ok() -> None:
+    payload = _valid_payload()
+    payload["processing_ok"] = 13
+
+    with pytest.raises(
+        autonomy_status.AutonomyStatusError,
+        match="analysis counters cannot exceed processing_ok",
+    ):
+        autonomy_status.parse_autonomy_status(payload)
+
+
 def test_parse_autonomy_status_requires_every_control_field() -> None:
     for field in (
+        "raw_unique_replays",
+        "processing_ok",
         "processing_pending",
         "analysis_pending",
         "processing_failed",
@@ -181,6 +231,57 @@ def test_autonomy_tick_records_retryable_state_and_stops_on_invalid_snapshot(
     assert not (tmp_path / "derived").exists()
     assert not (tmp_path / "models").exists()
 
+
+
+def test_autonomy_tick_stops_on_incoherent_status_counts(
+    tmp_path: Path,
+) -> None:
+    app_dir = tmp_path / "app"
+    bin_dir = app_dir / ".venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "python").symlink_to(sys.executable)
+
+    status_payload = _valid_payload()
+    status_payload["processing_ok"] = 13
+    status_cmd = bin_dir / "haxlab-status"
+    status_cmd.write_text(
+        "#!/usr/bin/env bash\n"
+        f"printf '%s\\n' {json.dumps(json.dumps(status_payload))}\n",
+        encoding="utf-8",
+    )
+    status_cmd.chmod(0o755)
+
+    state_dir = tmp_path / "state"
+    derived_dir = tmp_path / "derived"
+    models_dir = tmp_path / "models"
+    env = os.environ.copy()
+    env.update(
+        {
+            "HAXLAB_APP_DIR": str(app_dir),
+            "HAXLAB_STATE_DIR": str(state_dir),
+            "HAXLAB_DERIVED_DIR": str(derived_dir),
+            "HAXLAB_MODELS_DIR": str(models_dir),
+            "PYTHONPATH": str(Path.cwd() / "src"),
+        }
+    )
+
+    completed = subprocess.run(
+        ["bash", "deploy/haxlab-autonomy-tick.sh"],
+        cwd=Path.cwd(),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    status = json.loads((state_dir / "autonomy-status.json").read_text())
+    assert status["state"] == "FAILED_RETRYABLE"
+    assert status["action"] == "invalid_status_snapshot"
+    assert "downstream autonomy work was not started" in status["detail"]
+    assert "analysis counters cannot exceed processing_ok" in completed.stderr
+    assert not derived_dir.exists()
+    assert not models_dir.exists()
 
 
 def test_autonomy_tick_records_retryable_state_on_status_command_failure(

@@ -10,6 +10,8 @@ from typing import Any, Mapping
 
 
 _COUNTER_FIELDS = (
+    "raw_unique_replays",
+    "processing_ok",
     "processing_pending",
     "analysis_pending",
     "processing_failed",
@@ -25,6 +27,8 @@ class AutonomyStatusError(ValueError):
 
 @dataclass(frozen=True)
 class AutonomyStatusSnapshot:
+    raw_unique_replays: int
+    processing_ok: int
     processing_pending: int
     analysis_pending: int
     processing_failed: int
@@ -65,6 +69,25 @@ def parse_autonomy_status(payload: object) -> AutonomyStatusSnapshot:
         for field in _COUNTER_FIELDS
     }
 
+    if (
+        counters["processing_ok"]
+        + counters["processing_failed"]
+        + counters["processing_pending"]
+        > counters["raw_unique_replays"]
+    ):
+        raise AutonomyStatusError(
+            "processing counters cannot exceed raw_unique_replays"
+        )
+    if (
+        counters["analysis_ok"]
+        + counters["analysis_failed"]
+        + counters["analysis_pending"]
+        > counters["processing_ok"]
+    ):
+        raise AutonomyStatusError(
+            "analysis counters cannot exceed processing_ok"
+        )
+
     if "analysis_version" not in payload:
         raise AutonomyStatusError("missing field: analysis_version")
     version = payload["analysis_version"]
@@ -74,6 +97,8 @@ def parse_autonomy_status(payload: object) -> AutonomyStatusSnapshot:
         )
 
     return AutonomyStatusSnapshot(
+        raw_unique_replays=counters["raw_unique_replays"],
+        processing_ok=counters["processing_ok"],
         processing_pending=counters["processing_pending"],
         analysis_pending=counters["analysis_pending"],
         processing_failed=counters["processing_failed"],
