@@ -1,0 +1,58 @@
+name: HaxLab data pipeline audit memoization-state proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact branch SHA to prove
+        required: true
+        type: string
+  push:
+    branches:
+      - validation/data-pipeline-audit-memoization-state-20261007
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-audit-memoization-state-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate exact-head auditor memoization-state contract
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    env:
+      EXPECTED_HEAD: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_sha || github.sha }}
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+
+      - name: Assert exact head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Run focused and adjacent proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .audit-memoization-state-venv
+          python3 -m venv .audit-memoization-state-venv
+          .audit-memoization-state-venv/bin/pip install -q --upgrade pip
+          .audit-memoization-state-venv/bin/pip install -q -e '.[dev]'
+          .audit-memoization-state-venv/bin/python -m compileall -q \
+            tests/test_data_pipeline_audit_memoization_state_contract.py
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .audit-memoization-state-venv/bin/pytest -q \
+              tests/test_data_pipeline_audit_memoization_state_contract.py \
+              tests/test_data_pipeline_audit_global_state_contract.py \
+              tests/test_data_pipeline_audit_mutable_defaults_contract.py \
+              tests/test_data_pipeline_audit_determinism_contract.py
+          .audit-memoization-state-venv/bin/pytest --collect-only -q >/dev/null
+          echo "HAXLAB_DATA_PIPELINE_AUDIT_MEMOIZATION_STATE_RESULT=green"
