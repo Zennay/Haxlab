@@ -1,0 +1,60 @@
+name: HaxLab skill estimator prior proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact branch SHA to prove
+        required: true
+        type: string
+  push:
+    branches:
+      - feature/data-pipeline-skill-estimator-prior-contract-r2-20261007
+    paths:
+      - "src/haxlab/skill/estimator.py"
+      - "tests/test_skill.py"
+      - "docs/skill-estimator-prior-contract.md"
+      - ".github/workflows/data-pipeline-skill-estimator-prior-proof.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-skill-estimator-prior-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate exact-head skill estimator prior contract
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    env:
+      EXPECTED_HEAD: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_sha || github.sha }}
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+
+      - name: Assert exact head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Run focused proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .skill-estimator-prior-venv
+          python3 -m venv .skill-estimator-prior-venv
+          .skill-estimator-prior-venv/bin/pip install -q --upgrade pip
+          .skill-estimator-prior-venv/bin/pip install -q -e '.[dev]'
+          .skill-estimator-prior-venv/bin/python -m compileall -q src tests
+          .skill-estimator-prior-venv/bin/pytest -q \
+            tests/test_skill.py \
+            tests/test_skill_models.py \
+            tests/test_skill_leaderboard.py
+          .skill-estimator-prior-venv/bin/pytest --collect-only -q >/dev/null
+          echo "HAXLAB_SKILL_ESTIMATOR_PRIOR_PROOF=success"
