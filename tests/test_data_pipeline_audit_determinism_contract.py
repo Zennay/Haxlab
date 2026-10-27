@@ -42,6 +42,8 @@ _WILDCARD_SENSITIVE_MODULES = {
     "builtins",
     "datetime",
     "os",
+    "numpy",
+    "numpy.random",
     "random",
     "secrets",
     "time",
@@ -89,6 +91,8 @@ def _ambient_reason(name: str | None) -> str | None:
         return "ambient_clock"
     if name in _UUID_ENTROPY_CALLS:
         return "uuid_entropy"
+    if name == "numpy.random" or name.startswith("numpy.random."):
+        return "numpy_random_entropy"
     if name == "random" or name.startswith("random."):
         return "random_entropy"
     if name == "secrets" or name.startswith("secrets."):
@@ -133,7 +137,9 @@ class _AmbientNondeterminismVisitor(ast.NodeVisitor):
             local = item.asname or item.name.split(".", 1)[0]
             target = item.name if item.asname else item.name.split(".", 1)[0]
             self.aliases[local] = target
-            if item.name in {"random", "secrets"}:
+            if item.name in {"random", "secrets"} or (
+                item.name == "numpy.random" or item.name.startswith("numpy.random.")
+            ):
                 self.violations.append(
                     f"{node.lineno}:forbidden_entropy_import:{item.name}"
                 )
@@ -150,9 +156,11 @@ class _AmbientNondeterminismVisitor(ast.NodeVisitor):
             local = item.asname or item.name
             target = f"{module}.{item.name}" if module else item.name
             self.aliases[local] = target
-            if module in {"random", "secrets"}:
+            if module in {"random", "secrets"} or (
+                target == "numpy.random" or target.startswith("numpy.random.")
+            ):
                 self.violations.append(
-                    f"{node.lineno}:forbidden_entropy_import:{module}"
+                    f"{node.lineno}:forbidden_entropy_import:{target}"
                 )
         self.generic_visit(node)
 
@@ -237,6 +245,16 @@ def test_data_pipeline_auditors_have_no_ambient_nondeterminism() -> None:
         ("import random\nvalue = random.random()", "random_entropy"),
         ("from random import Random\nvalue = Random()", "random_entropy"),
         ("import secrets\nvalue = secrets.token_hex()", "secrets_entropy"),
+        ("import numpy as np\nvalue = np.random.random()", "numpy_random_entropy"),
+        ("from numpy import *\nvalue = random.random()", "wildcard_sensitive_import:numpy"),
+        (
+            "from numpy import random as rng\nvalue = rng.default_rng()",
+            "numpy_random_entropy",
+        ),
+        (
+            "from numpy.random import default_rng\nvalue = default_rng()",
+            "numpy_random_entropy",
+        ),
         ("import uuid\nvalue = uuid.uuid4()", "uuid_entropy"),
     ],
 )
@@ -276,6 +294,14 @@ def test_contract_rejects_representative_ambient_sources(
             "random_entropy",
         ),
         (
+            "import numpy as np\nrng_module = np.random\nfactory = rng_module.default_rng\nvalue = factory()",
+            "numpy_random_entropy",
+        ),
+        (
+            "import numpy as np\nrng_module = getattr(np, 'random')\nvalue = rng_module.random()",
+            "numpy_random_entropy",
+        ),
+        (
             "import uuid\nuuid_module = uuid\nfactory = getattr(uuid_module, 'uuid4')\nvalue = factory()",
             "uuid_entropy",
         ),
@@ -297,11 +323,14 @@ def test_contract_allows_explicit_deterministic_parsing_and_hashing() -> None:
     source = """
 from datetime import datetime
 import hashlib
+import numpy as np
 import uuid
 
 timestamp = datetime.fromisoformat("2026-10-07T00:00:00+00:00")
 digest = hashlib.sha256(b"explicit evidence").hexdigest()
 stable_id = uuid.UUID("12345678-1234-5678-1234-567812345678")
-ordered = sorted((digest, timestamp.isoformat(), str(stable_id)))
+array = np.asarray([1.0, 2.0, 3.0], dtype=np.float64)
+mean = float(np.mean(array))
+ordered = sorted((digest, timestamp.isoformat(), str(stable_id), str(mean)))
 """
     assert _ambient_violations(source) == []
