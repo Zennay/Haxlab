@@ -1,0 +1,134 @@
+name: Calibration pointer invariant validation
+
+on:
+  push:
+    branches:
+      - validation/calibration-pointer-invariant-20261006
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-calibration-pointer-invariant-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Verify calibration provenance inputs are readable and stable
+        shell: bash
+        run: |
+          set -euo pipefail
+          CURRENT=/var/lib/haxlab/derived/champions/elite-player/current.json
+          LIVE=/var/lib/haxlab/derived/champions/elite-player/live.json
+          CAND_D=/var/lib/haxlab/derived/training/elite-player-candidate-d/model/runtime-model.json
+          PARTNER_B=/var/lib/haxlab/derived/training/elite-player-candidate-b/model/runtime-model.json
+          PARTNER_C=/var/lib/haxlab/derived/training/elite-player-candidate-c/model/runtime-model.json
+          ROOT=/var/lib/haxlab/derived/evaluation/candidate-d-multisource-holdout-v1
+          CURRENT_RESOLVE_A="$(
+            sudo -u haxlab sha256sum "$CURRENT" | awk '{print $1}'
+          )"
+          LIVE_RUNTIME="$(
+            sudo -u haxlab /opt/haxlab/.venv/bin/python -c               'import json; print(json.load(open("/var/lib/haxlab/derived/champions/elite-player/current.json"))["runtime_model_path"])'
+          )"
+          CURRENT_RESOLVE_B="$(
+            sudo -u haxlab sha256sum "$CURRENT" | awk '{print $1}'
+          )"
+          test "$CURRENT_RESOLVE_A" = "$CURRENT_RESOLVE_B"
+
+          INPUTS=(
+            "$CURRENT"
+            "$LIVE"
+            "$LIVE_RUNTIME"
+            "$CAND_D"
+            "$PARTNER_B"
+            "$PARTNER_C"
+            "$ROOT/frozen-manifest.json"
+            "$ROOT/source-01/stadium.hbs"
+            "$ROOT/source-01/scenarios.json"
+            "$ROOT/source-02/stadium.hbs"
+            "$ROOT/source-02/scenarios.json"
+            "$ROOT/source-03/stadium.hbs"
+            "$ROOT/source-03/scenarios.json"
+          )
+          for path in "${INPUTS[@]}"; do
+            sudo -u haxlab test -r "$path"
+          done
+
+          EXPECTED_FROZEN_MANIFEST_SHA="541b635e34492e9409c5d0fbe2ffd6303c75a2cd10348aebee9e5df49669a609"
+          ACTUAL_FROZEN_MANIFEST_SHA="$(
+            sudo -u haxlab sha256sum "$ROOT/frozen-manifest.json" | awk '{print $1}'
+          )"
+          test "$ACTUAL_FROZEN_MANIFEST_SHA" = "$EXPECTED_FROZEN_MANIFEST_SHA"
+
+          snapshot() {
+            local path="$1"
+            sudo -u haxlab sha256sum "$path" | awk '{print $1}'
+          }
+
+          CURRENT_A="$(snapshot "$CURRENT")"
+          LIVE_A="$(snapshot "$LIVE")"
+          LIVE_RUNTIME_A="$(snapshot "$LIVE_RUNTIME")"
+          CAND_D_A="$(snapshot "$CAND_D")"
+          PARTNER_B_A="$(snapshot "$PARTNER_B")"
+          PARTNER_C_A="$(snapshot "$PARTNER_C")"
+          FROZEN_A="$(
+            for path in \
+              "$ROOT/frozen-manifest.json" \
+              "$ROOT/source-01/stadium.hbs" \
+              "$ROOT/source-01/scenarios.json" \
+              "$ROOT/source-02/stadium.hbs" \
+              "$ROOT/source-02/scenarios.json" \
+              "$ROOT/source-03/stadium.hbs" \
+              "$ROOT/source-03/scenarios.json"; do
+              printf '%s %s\n' "$(snapshot "$path")" "$path"
+            done | sha256sum | awk '{print $1}'
+          )"
+
+          sleep 1
+
+          test "$CURRENT_A" = "$(snapshot "$CURRENT")"
+          test "$LIVE_A" = "$(snapshot "$LIVE")"
+          test "$LIVE_RUNTIME_A" = "$(snapshot "$LIVE_RUNTIME")"
+          test "$CAND_D_A" = "$(snapshot "$CAND_D")"
+          test "$PARTNER_B_A" = "$(snapshot "$PARTNER_B")"
+          test "$PARTNER_C_A" = "$(snapshot "$PARTNER_C")"
+          FROZEN_B="$(
+            for path in \
+              "$ROOT/frozen-manifest.json" \
+              "$ROOT/source-01/stadium.hbs" \
+              "$ROOT/source-01/scenarios.json" \
+              "$ROOT/source-02/stadium.hbs" \
+              "$ROOT/source-02/scenarios.json" \
+              "$ROOT/source-03/stadium.hbs" \
+              "$ROOT/source-03/scenarios.json"; do
+              printf '%s %s\n' "$(snapshot "$path")" "$path"
+            done | sha256sum | awk '{print $1}'
+          )"
+          test "$FROZEN_A" = "$FROZEN_B"
+
+          echo "CALIBRATION_POINTER_INPUTS_STABLE"
+          echo "CURRENT_POINTER_SHA256=$CURRENT_A"
+          echo "LIVE_POINTER_SHA256=$LIVE_A"
+          echo "LIVE_RUNTIME_SHA256=$LIVE_RUNTIME_A"
+          echo "CANDIDATE_D_SHA256=$CAND_D_A"
+          echo "PARTNER_B_SHA256=$PARTNER_B_A"
+          echo "PARTNER_C_SHA256=$PARTNER_C_A"
+          echo "FROZEN_MANIFEST_SHA256=$ACTUAL_FROZEN_MANIFEST_SHA"
+          echo "FROZEN_INPUT_SET_SHA256=$FROZEN_A"
+
+      - name: Record exact-head validation evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "CALIBRATION_POINTER_VALIDATION_HEAD=$(git rev-parse HEAD)"
+          echo "CALIBRATION_POINTER_VALIDATION_RESULT=green"

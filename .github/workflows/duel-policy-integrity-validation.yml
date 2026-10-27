@@ -1,0 +1,66 @@
+name: Duel policy integrity validation
+
+on:
+  push:
+    branches:
+      - validation/duel-policy-integrity-20261006
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-duel-policy-integrity-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .duel-policy-validation-venv
+          python3 -m venv .duel-policy-validation-venv
+          .duel-policy-validation-venv/bin/pip install --upgrade pip
+          .duel-policy-validation-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile duel gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          .duel-policy-validation-venv/bin/python -m compileall -q \
+            src/haxlab/evaluation/duel_gate.py \
+            src/haxlab/evaluation/multisource_duel.py \
+            tests/test_duel_gate.py
+
+      - name: Run duel policy regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .duel-policy-validation-venv/bin/pytest -q tests/test_duel_gate.py
+
+      - name: Run duel-adjacent evaluation regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .duel-policy-validation-venv/bin/pytest -q \
+              tests/test_multisource_duel.py \
+              tests/test_closed_loop_arena.py
+
+      - name: Record exact-head validation evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "DUEL_POLICY_VALIDATION_HEAD=$(git rev-parse HEAD)"
+          echo "DUEL_POLICY_VALIDATION_RESULT=green"

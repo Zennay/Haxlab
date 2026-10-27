@@ -1,0 +1,169 @@
+name: Evaluation green integration validation
+
+on:
+  push:
+    branches:
+      - validation/evaluation-green-integration-20261006
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-evaluation-green-integration-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact integration head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Create isolated validation environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .evaluation-integration-venv
+          python3 -m venv .evaluation-integration-venv
+          .evaluation-integration-venv/bin/pip install --upgrade pip
+          .evaluation-integration-venv/bin/pip install -e '.[dev]'
+
+      - name: Validate Python and Node syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          .evaluation-integration-venv/bin/python -m compileall -q src/haxlab
+          node --check tools/elite_closed_loop_arena_v2.js
+          node --check tools/elite_policy_runtime.js
+          node --check tools/sandbox_replay_start.js
+          node --check tests/test_closed_loop_arena_v2.js
+          node --check tests/test_elite_policy_runtime_integrity.js
+          node --check tests/test_replay_scenario_state_integrity.js
+
+      - name: Run full Python regression suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src"             .evaluation-integration-venv/bin/pytest -q
+
+      - name: Run integrated Arena Node regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          NODE_PATH=/opt/haxlab/node_modules node tests/test_closed_loop_arena_v2.js
+          node tests/test_elite_policy_runtime_integrity.js
+          NODE_PATH=/opt/haxlab/node_modules node tests/test_replay_scenario_state_integrity.js
+
+      - name: Validate current runtime artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          LIVE_RUNTIME="$(
+            sudo -u haxlab /opt/haxlab/.venv/bin/python -c               'import json; print(json.load(open("/var/lib/haxlab/derived/champions/elite-player/current.json"))["runtime_model_path"])'
+          )"
+          MODELS=(
+            "$LIVE_RUNTIME"
+            "/var/lib/haxlab/derived/training/elite-player-candidate-b/model/runtime-model.json"
+            "/var/lib/haxlab/derived/training/elite-player-candidate-c/model/runtime-model.json"
+          )
+          for MODEL in "${MODELS[@]}"; do
+            sudo -u haxlab test -r "$MODEL"
+            sudo -u haxlab env               MODEL="$MODEL"               WORKSPACE="$GITHUB_WORKSPACE"               node - <<'NODE'
+          "use strict";
+          const fs = require("fs");
+          const path = require("path");
+          const { ElitePolicyRuntime } = require(
+            path.join(process.env.WORKSPACE, "tools", "elite_policy_runtime.js"),
+          );
+          const model = JSON.parse(fs.readFileSync(process.env.MODEL, "utf8"));
+          const runtime = new ElitePolicyRuntime(model);
+          const features = Object.fromEntries(
+            runtime.inputColumns.map((name) => [name, 0]),
+          );
+          const action = runtime.act({
+            agent_id: "integration-proof",
+            role: "am",
+            features,
+          });
+          for (const key of [
+            "dir_x",
+            "dir_y",
+            "kick_probability",
+            "kick_threshold",
+            "direction_probability",
+            "future_direction_probability",
+            "ood_mean_abs_z",
+            "ood_max_abs_z",
+          ]) {
+            if (!Number.isFinite(action[key])) {
+              throw new Error(`runtime emitted non-finite ${key}: ${action[key]}`);
+            }
+          }
+          console.log(JSON.stringify({
+            model: process.env.MODEL,
+            window: runtime.window,
+            input_columns: runtime.inputColumns.length,
+            integration_runtime_integrity: "green",
+          }));
+          NODE
+          done
+
+      - name: Validate all frozen scenario disc states
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=/var/lib/haxlab/derived/evaluation/candidate-d-multisource-holdout-v1
+          sudo -u haxlab env             NODE_PATH=/opt/haxlab/node_modules             ROOT="$ROOT"             WORKSPACE="$GITHUB_WORKSPACE"             node - <<'NODE'
+          "use strict";
+          const fs = require("fs");
+          const path = require("path");
+          const { validateDiscState } = require(
+            path.join(process.env.WORKSPACE, "tools/sandbox_replay_start"),
+          );
+          const roles = ["gk", "dm", "am", "st"];
+          let total = 0;
+          for (const source of ["01", "02", "03"]) {
+            const scenarioPath = path.join(
+              process.env.ROOT,
+              `source-${source}`,
+              "scenarios.json",
+            );
+            const payload = JSON.parse(fs.readFileSync(scenarioPath, "utf8"));
+            const rows = Array.isArray(payload) ? payload : payload.scenarios;
+            if (!Array.isArray(rows) || rows.length !== 16) {
+              throw new Error(`source-${source} must contain exactly 16 scenarios`);
+            }
+            rows.forEach((row, index) => {
+              validateDiscState(row.ball, `source-${source} scenario ${index} ball`);
+              for (const team of ["1", "2"]) {
+                for (const role of roles) {
+                  validateDiscState(
+                    row.teams?.[team]?.[role],
+                    `source-${source} scenario ${index} team ${team} role ${role}`,
+                  );
+                }
+              }
+              total += 1;
+            });
+          }
+          if (total !== 48) {
+            throw new Error(`expected 48 frozen scenarios; validated ${total}`);
+          }
+          console.log(JSON.stringify({
+            frozen_sources: 3,
+            frozen_scenarios: total,
+            integration_disc_state_integrity: "green",
+          }));
+          NODE
+
+      - name: Record exact integration evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "EVALUATION_GREEN_INTEGRATION_HEAD=$(git rev-parse HEAD)"
+          echo "EVALUATION_GREEN_INTEGRATION_RESULT=green"

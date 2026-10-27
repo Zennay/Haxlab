@@ -1,0 +1,754 @@
+name: Closed-Loop Arena v2 Frozen Policy Validation
+# Exact-head calibration rebind after summary import integration.
+
+on:
+  push:
+    branches:
+      - feature/arena-v2-current-main-20261004
+
+permissions:
+  contents: read
+
+jobs:
+  calibrate:
+    if: contains(github.event.head_commit.message, '[arena-v2-calibration]')
+    concurrency:
+      group: haxlab-arena-v2-calibration
+      cancel-in-progress: true
+    runs-on: [self-hosted, haxlab]
+    # A full calibrated 3-source batch can exceed three hours on the
+    # single HaxLab VPS runner. Keep a hard upper bound, but do not cancel
+    # otherwise healthy exact-head evidence at the previous 180-minute limit.
+    # Exact-head calibration evidence is rebound by marker commits after gate changes.
+    # Composite evaluation-validation workflow hardening is now included on this head.
+    timeout-minutes: 480
+
+    steps:
+      - name: Checkout exact event SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+          fetch-depth: 0
+
+      - name: Checkout frozen Candidate D source
+        uses: actions/checkout@v4
+        with:
+          ref: 4dd926b1eef89509eb271088378f129aa7e72c57
+          path: .candidate-d-source
+          clean: true
+
+      - name: Validate Arena v2 implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check tools/elite_closed_loop_arena_v2.js
+          NODE_PATH=/opt/haxlab/node_modules node tests/test_closed_loop_arena_v2.js
+          PYTHONPATH="$GITHUB_WORKSPACE/src" /opt/haxlab/.venv/bin/python - <<'PY'
+          import runpy
+
+          ns = runpy.run_path("tests/test_closed_loop_arena.py")
+          for name in (
+              "test_initial_policy_is_fail_closed_until_calibrated",
+              "test_identity_reference_passes_relative_checks",
+              "test_context_adaptation_regression_rejects_behavior_gate",
+              "test_safety_controller_invalidates_raw_policy_arena",
+              "test_calibrated_policy_adds_absolute_strength_gate",
+          ):
+              ns[name]()
+          print("test_closed_loop_arena: ok")
+          PY
+
+      - name: Prepare calibration inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=/var/lib/haxlab/derived/evaluation/candidate-d-multisource-holdout-v1
+          CAND_D=/var/lib/haxlab/derived/training/elite-player-candidate-d/model/runtime-model.json
+          PARTNER_B=/var/lib/haxlab/derived/training/elite-player-candidate-b/model/runtime-model.json
+          PARTNER_C=/var/lib/haxlab/derived/training/elite-player-candidate-c/model/runtime-model.json
+          CURRENT_POINTER=/var/lib/haxlab/derived/champions/elite-player/current.json
+          LIVE_POINTER=/var/lib/haxlab/derived/champions/elite-player/live.json
+          CURRENT_POINTER_SHA_BEFORE="$(
+            sudo -u haxlab sha256sum "$CURRENT_POINTER" | awk '{print $1}'
+          )"
+          LIVE_POINTER_SHA_BEFORE="$(
+            sudo -u haxlab sha256sum "$LIVE_POINTER" | awk '{print $1}'
+          )"
+          LIVE_RUNTIME="$(
+            sudo -u haxlab /opt/haxlab/.venv/bin/python -c               'import json; print(json.load(open("/var/lib/haxlab/derived/champions/elite-player/current.json"))["runtime_model_path"])'
+          )"
+          CURRENT_POINTER_SHA_AFTER_RESOLVE="$(
+            sudo -u haxlab sha256sum "$CURRENT_POINTER" | awk '{print $1}'
+          )"
+          if [ "$CURRENT_POINTER_SHA_BEFORE" != "$CURRENT_POINTER_SHA_AFTER_RESOLVE" ]; then
+            echo "::error title=Champion pointer race::current.json changed while resolving runtime_model_path"
+            exit 1
+          fi
+          OUT="/var/lib/haxlab/derived/evaluation/closed-loop-arena-v2-calibration-v1/${GITHUB_SHA:0:12}"
+          REUSE_SOURCE_SHA="1c186d5d8927ab55722615631e0e61e5bda56971"
+          REUSE_OUT="/var/lib/haxlab/derived/evaluation/closed-loop-arena-v2-calibration-v1/${REUSE_SOURCE_SHA:0:12}"
+          REUSE_RUNTIME_SAFE=false
+
+          # Cross-SHA reuse is allowed only for this known timed-out exact head,
+          # and only when every file that can affect Arena rollout bytes remains
+          # identical. calibration_resume performs the second fail-closed layer
+          # by rebinding model/input hashes and all evaluation request fields.
+          if git merge-base --is-ancestor "$REUSE_SOURCE_SHA" "$GITHUB_SHA" && \
+            git diff --quiet "$REUSE_SOURCE_SHA" "$GITHUB_SHA" -- \
+              package.json \
+              tools/elite_closed_loop_arena_v2.js \
+              tools/elite_policy_runtime.js \
+              tools/elite_features.js \
+              tools/elite_tactics.js \
+              tools/sandbox_replay_start.js \
+              tools/sandbox_neutral_start.js \
+              src/haxlab/evaluation/calibration_resume.py \
+              src/haxlab/evaluation/closed_loop_arena.py; then
+            REUSE_RUNTIME_SAFE=true
+          fi
+          if [ "$REUSE_RUNTIME_SAFE" = "true" ] && sudo -u haxlab test -d "$REUSE_OUT"; then
+            echo "ARENA_CROSS_SHA_REUSE_READY source_sha=$REUSE_SOURCE_SHA source_dir=$REUSE_OUT"
+          else
+            echo "ARENA_CROSS_SHA_REUSE_DISABLED source_sha=$REUSE_SOURCE_SHA"
+          fi
+
+          # Preserve only source result files so interrupted same-SHA runs can
+          # reuse expensive Arena rollouts after strict provenance/config validation.
+          # Final receipts and per-attempt invariants are always regenerated.
+          sudo -u haxlab mkdir -p "$OUT"
+          sudo -u haxlab rm -f \
+            "$OUT/calibration-summary.json" \
+            "$OUT/pointer-invariant.json" \
+            "$OUT/frozen-inputs-before.json" \
+            "$OUT/ablated-zero-policy.json"
+          rm -f \
+            /tmp/haxlab-arena-v2-calibration-latest-summary.json \
+            /tmp/haxlab-arena-v2-calibration-latest-status.json
+
+          require_readable() {
+            local label="$1"
+            local path="$2"
+            if sudo -u haxlab test -r "$path"; then
+              echo "ARENA_INPUT_OK label=$label path=$path"
+              return 0
+            fi
+            echo "::error title=Missing Arena v2 calibration input::$label is not readable: $path"
+            sudo -u haxlab ls -ld "$path" 2>/dev/null || true
+            if [ "$label" = "candidate-d" ]; then
+              echo "ARENA_CANDIDATE_D_DISCOVERY_BEGIN"
+              sudo -u haxlab find /var/lib/haxlab/derived -type f -name 'runtime-model.json' -path '*candidate-d*' -print 2>/dev/null | sort | head -n 50 || true
+              echo "ARENA_CANDIDATE_D_DISCOVERY_END"
+            fi
+            exit 1
+          }
+
+          if ! sudo -u haxlab test -r "$CAND_D"; then
+            echo "ARENA_CANDIDATE_D_REHYDRATE_BEGIN"
+            CAND_D_SOURCE="$GITHUB_WORKSPACE/.candidate-d-source"
+            CAND_D_SOURCE_SHA="$(git -C "$CAND_D_SOURCE" rev-parse HEAD)"
+            if [ "$CAND_D_SOURCE_SHA" != "4dd926b1eef89509eb271088378f129aa7e72c57" ]; then
+              echo "::error title=Candidate D provenance mismatch::historical source checkout is $CAND_D_SOURCE_SHA"
+              exit 1
+            fi
+
+            sudo -u haxlab /opt/haxlab/.venv/bin/python - <<'PY'
+          import hashlib
+          from pathlib import Path
+
+          training_indexes = {
+              Path("/var/lib/haxlab/derived/training/elite-player-candidate-b/shards/train/_index.json"):
+                  "920ca18fdbc3682130307c01f91d61ad745d6642824f19962c6a2c614ffe1923",
+              Path("/var/lib/haxlab/derived/training/elite-player-candidate-b/shards/validation/_index.json"):
+                  "baaa00830ec3906640e893344262282d931de15b7a1c5c63485df1da44d6ba27",
+              Path("/var/lib/haxlab/derived/training/elite-player-candidate-b/shards/holdout/_index.json"):
+                  "a80b9789547ba3befd993bfd4c62c84b2c2c999a6d9283d9b2ef3c08451083fe",
+          }
+          for path, historical_hash in training_indexes.items():
+              if not path.is_file():
+                  raise SystemExit(f"missing Candidate D training index: {path}")
+              actual = hashlib.sha256(path.read_bytes()).hexdigest()
+              if actual == historical_hash:
+                  print(f"ARENA_CANDIDATE_D_INDEX_BYTE_HASH_MATCH path={path} sha256={actual}")
+              else:
+                  print(
+                      "::warning title=Candidate D index byte hash changed::"
+                      f"{path}: current={actual} historical={historical_hash}; "
+                      "continuing only to deterministic rehydration, which must reproduce "
+                      "the exact historical Candidate D metrics before calibration can run"
+                  )
+
+          PY
+
+            sudo -u haxlab rm -rf /var/lib/haxlab/derived/training/elite-player-candidate-d
+            sudo -u haxlab mkdir -p /var/lib/haxlab/derived/training/elite-player-candidate-d/model
+            sudo -u haxlab env PYTHONPATH="$CAND_D_SOURCE/src" \
+              /opt/haxlab/.venv/bin/python -m haxlab.learning.elite \
+              --train-index /var/lib/haxlab/derived/training/elite-player-candidate-b/shards/train/_index.json \
+              --validation-index /var/lib/haxlab/derived/training/elite-player-candidate-b/shards/validation/_index.json \
+              --holdout-index /var/lib/haxlab/derived/training/elite-player-candidate-b/shards/holdout/_index.json \
+              --output-dir /var/lib/haxlab/derived/training/elite-player-candidate-d/model \
+              --window 8 \
+              --sequence-stride 1 \
+              --hidden-dim 128 \
+              --hidden-dim-2 96 \
+              --epochs 3 \
+              --batch-size 2048 \
+              --learning-rate 0.0008 \
+              --l2 0.00001 \
+              --future-horizon-steps 5 \
+              --future-loss-weight 0.35 \
+              --state-jitter-std 0.05 \
+              --seed 1337 \
+              --progress-path /var/lib/haxlab/derived/training/elite-player-candidate-d/progress.json \
+              > /tmp/haxlab-candidate-d-rehydrate.log
+            echo "ARENA_CANDIDATE_D_REHYDRATE_END"
+          fi
+
+          FROZEN_MANIFEST="$ROOT/frozen-manifest.json"
+          FROZEN_MANIFEST_EXPECTED_SHA="541b635e34492e9409c5d0fbe2ffd6303c75a2cd10348aebee9e5df49669a609"
+          require_readable frozen-manifest "$FROZEN_MANIFEST"
+          FROZEN_MANIFEST_ACTUAL_SHA="$(
+            sudo -u haxlab sha256sum "$FROZEN_MANIFEST" | awk '{print $1}'
+          )"
+          if [ "$FROZEN_MANIFEST_ACTUAL_SHA" != "$FROZEN_MANIFEST_EXPECTED_SHA" ]; then
+            echo "::error title=Frozen manifest provenance mismatch::actual=$FROZEN_MANIFEST_ACTUAL_SHA expected=$FROZEN_MANIFEST_EXPECTED_SHA"
+            exit 1
+          fi
+          echo "ARENA_FROZEN_MANIFEST_HASH_VERIFIED sha256=$FROZEN_MANIFEST_ACTUAL_SHA"
+
+          require_readable candidate-d "$CAND_D"
+          require_readable candidate-d-metrics /var/lib/haxlab/derived/training/elite-player-candidate-d/model/metrics.json
+          sudo -u haxlab /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+
+          metadata = json.loads(
+              Path("/var/lib/haxlab/derived/training/elite-player-candidate-d/model/metrics.json").read_text()
+          )
+          metrics = metadata.get("final_holdout")
+          if not isinstance(metrics, dict):
+              raise SystemExit(
+                  "Candidate D metrics schema mismatch: expected final_holdout mapping; "
+                  f"top-level keys={sorted(metadata)}"
+              )
+          expected = {
+              "direction_accuracy": 0.7500804545550468,
+              "joint_accuracy": 0.7444723763901492,
+              "kick_f1": 0.24412347776833754,
+              "future_direction_accuracy": 0.6633016439107772,
+              "samples": 1516384,
+          }
+          for key, wanted in expected.items():
+              actual = metrics.get(key)
+              if isinstance(wanted, int):
+                  if actual != wanted:
+                      raise SystemExit(
+                          f"Candidate D historical metric mismatch: {key}={actual!r} != {wanted!r}"
+                      )
+              elif not isinstance(actual, (int, float)) or abs(actual - wanted) > 1e-9:
+                  raise SystemExit(
+                      f"Candidate D historical metric mismatch: {key}={actual!r} != {wanted!r}"
+                  )
+          print("ARENA_CANDIDATE_D_HISTORICAL_METRICS_VERIFIED")
+          PY
+
+          require_readable live-runtime "$LIVE_RUNTIME"
+          require_readable partner-b "$PARTNER_B"
+          require_readable partner-c "$PARTNER_C"
+          for I in 01 02 03; do
+            require_readable "source-$I-stadium" "$ROOT/source-$I/stadium.hbs"
+            require_readable "source-$I-scenarios" "$ROOT/source-$I/scenarios.json"
+          done
+
+          sudo -u haxlab mkdir -p "$OUT"
+          FROZEN_INPUT_SNAPSHOT="$OUT/frozen-inputs-before.json"
+          sudo -u haxlab env \
+            ROOT="$ROOT" \
+            SNAPSHOT="$FROZEN_INPUT_SNAPSHOT" \
+            /opt/haxlab/.venv/bin/python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["ROOT"])
+          paths = [root / "frozen-manifest.json"]
+          for source in ("01", "02", "03"):
+              paths.extend(
+                  (
+                      root / f"source-{source}" / "stadium.hbs",
+                      root / f"source-{source}" / "scenarios.json",
+                  )
+              )
+
+          hashes = {
+              str(path): hashlib.sha256(path.read_bytes()).hexdigest()
+              for path in paths
+          }
+          Path(os.environ["SNAPSHOT"]).write_text(
+              json.dumps(
+                  {
+                      "schema": "haxlab-arena-v2-frozen-inputs-v1",
+                      "hashes": hashes,
+                  },
+                  indent=2,
+                  sort_keys=True,
+              ) + "\n",
+              encoding="utf-8",
+          )
+          print(
+              "ARENA_FROZEN_INPUT_SNAPSHOT_GREEN "
+              + hashlib.sha256(
+                  json.dumps(hashes, sort_keys=True).encode()
+              ).hexdigest()
+          )
+          PY
+          sudo -u haxlab env LIVE_RUNTIME="$LIVE_RUNTIME" WEAK_MODEL="$OUT/ablated-zero-policy.json"             /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          src = Path(os.environ["LIVE_RUNTIME"])
+          dst = Path(os.environ["WEAK_MODEL"])
+          model = json.loads(src.read_text())
+          weights = model.get("weights")
+          if not isinstance(weights, dict):
+              raise SystemExit("runtime model has no weights mapping")
+
+          zeroed = 0
+          def zero(value):
+              global zeroed
+              if isinstance(value, dict):
+                  return {key: zero(item) for key, item in value.items()}
+              if isinstance(value, list):
+                  return [zero(item) for item in value]
+              if isinstance(value, bool):
+                  return value
+              if isinstance(value, (int, float)):
+                  zeroed += 1
+                  return 0.0
+              return value
+
+          model["weights"] = zero(weights)
+          if zeroed < 100:
+              raise SystemExit(f"ablation unexpectedly touched only {zeroed} numeric weights")
+          model["arena_v2_ablation"] = {
+              "kind": "zero-all-policy-weights",
+              "source_runtime_model": str(src),
+              "zeroed_numeric_values": zeroed,
+          }
+          dst.write_text(json.dumps(model, separators=(",", ":")) + "\n")
+          print(json.dumps(model["arena_v2_ablation"], indent=2))
+          PY
+
+          LIVE_RUNTIME_SHA_BEFORE="$(
+            sudo -u haxlab sha256sum "$LIVE_RUNTIME" | awk '{print $1}'
+          )"
+          CAND_D_SHA_BEFORE="$(
+            sudo -u haxlab sha256sum "$CAND_D" | awk '{print $1}'
+          )"
+          PARTNER_B_SHA_BEFORE="$(
+            sudo -u haxlab sha256sum "$PARTNER_B" | awk '{print $1}'
+          )"
+          PARTNER_C_SHA_BEFORE="$(
+            sudo -u haxlab sha256sum "$PARTNER_C" | awk '{print $1}'
+          )"
+          WEAK_SHA_BEFORE="$(
+            sudo -u haxlab sha256sum "$OUT/ablated-zero-policy.json" | awk '{print $1}'
+          )"
+
+          {
+            echo "ARENA_ROOT=$ROOT"
+            echo "ARENA_CAND_D=$CAND_D"
+            echo "ARENA_PARTNER_B=$PARTNER_B"
+            echo "ARENA_PARTNER_C=$PARTNER_C"
+            echo "ARENA_LIVE=$LIVE_RUNTIME"
+            echo "ARENA_OUT=$OUT"
+            echo "ARENA_WEAK=$OUT/ablated-zero-policy.json"
+            echo "ARENA_CURRENT_POINTER=$CURRENT_POINTER"
+            echo "ARENA_LIVE_POINTER=$LIVE_POINTER"
+            echo "ARENA_CURRENT_POINTER_SHA_BEFORE=$CURRENT_POINTER_SHA_BEFORE"
+            echo "ARENA_LIVE_POINTER_SHA_BEFORE=$LIVE_POINTER_SHA_BEFORE"
+            echo "ARENA_LIVE_RUNTIME_SHA_BEFORE=$LIVE_RUNTIME_SHA_BEFORE"
+            echo "ARENA_CAND_D_SHA_BEFORE=$CAND_D_SHA_BEFORE"
+            echo "ARENA_PARTNER_B_SHA_BEFORE=$PARTNER_B_SHA_BEFORE"
+            echo "ARENA_PARTNER_C_SHA_BEFORE=$PARTNER_C_SHA_BEFORE"
+            echo "ARENA_WEAK_SHA_BEFORE=$WEAK_SHA_BEFORE"
+            echo "ARENA_FROZEN_INPUT_SNAPSHOT=$FROZEN_INPUT_SNAPSHOT"
+            echo "ARENA_REUSE_SOURCE_SHA=$REUSE_SOURCE_SHA"
+            echo "ARENA_REUSE_OUT=$REUSE_OUT"
+            echo "ARENA_REUSE_RUNTIME_SAFE=$REUSE_RUNTIME_SAFE"
+          } >> "$GITHUB_ENV"
+
+      - name: Run full frozen paired calibration batch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          run_source() {
+            local LABEL="$1"
+            local CHALLENGER="$2"
+            local I="$3"
+            local SOURCE="$ARENA_ROOT/source-$I"
+            local RESULT="$ARENA_OUT/$LABEL-source-$I.json"
+            local DECISION="$ARENA_OUT/$LABEL-source-$I-decision.json"
+
+            echo "=== arena-v2 label=$LABEL source=$I scenarios=16 ==="
+            if sudo -u haxlab test -r "$RESULT" && \
+              sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+                /opt/haxlab/.venv/bin/python -m haxlab.evaluation.calibration_resume \
+                "$RESULT" \
+                --challenger "$CHALLENGER" \
+                --champion "$ARENA_LIVE" \
+                --partner-model "$ARENA_LIVE" \
+                --partner-model "$ARENA_PARTNER_B" \
+                --partner-model "$ARENA_PARTNER_C" \
+                --stadium "$SOURCE/stadium.hbs" \
+                --scenarios "$SOURCE/scenarios.json" \
+                --max-scenarios 16 \
+                --seconds 30 \
+                --sample-every 6 \
+                --plug-repeats 1 \
+                --seed 1337; then
+              echo "ARENA_CALIBRATION_SOURCE_REUSED label=$LABEL source=$I"
+              sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+                /opt/haxlab/.venv/bin/python -m haxlab.evaluation.closed_loop_arena \
+                "$RESULT" --calibrated --output "$DECISION" >/dev/null
+              return 0
+            fi
+
+            if [ "${ARENA_REUSE_RUNTIME_SAFE:-false}" = "true" ] && [ -n "${ARENA_REUSE_OUT:-}" ]; then
+              local REUSE_RESULT="$ARENA_REUSE_OUT/$LABEL-source-$I.json"
+              if [ "$REUSE_RESULT" != "$RESULT" ] && \
+                sudo -u haxlab test -r "$REUSE_RESULT" && \
+                sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+                  /opt/haxlab/.venv/bin/python -m haxlab.evaluation.calibration_resume \
+                  "$REUSE_RESULT" \
+                  --challenger "$CHALLENGER" \
+                  --champion "$ARENA_LIVE" \
+                  --partner-model "$ARENA_LIVE" \
+                  --partner-model "$ARENA_PARTNER_B" \
+                  --partner-model "$ARENA_PARTNER_C" \
+                  --stadium "$SOURCE/stadium.hbs" \
+                  --scenarios "$SOURCE/scenarios.json" \
+                  --max-scenarios 16 \
+                  --seconds 30 \
+                  --sample-every 6 \
+                  --plug-repeats 1 \
+                  --seed 1337; then
+                sudo -u haxlab cp "$REUSE_RESULT" "$RESULT"
+                echo "ARENA_CALIBRATION_SOURCE_REUSED_CROSS_SHA label=$LABEL source=$I from=$ARENA_REUSE_SOURCE_SHA"
+                sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" \
+                  /opt/haxlab/.venv/bin/python -m haxlab.evaluation.closed_loop_arena \
+                  "$RESULT" --calibrated --output "$DECISION" >/dev/null
+                return 0
+              fi
+            fi
+
+            sudo -u haxlab rm -f "$RESULT" "$DECISION"
+            sudo -u haxlab env NODE_PATH=/opt/haxlab/node_modules node "$GITHUB_WORKSPACE/tools/elite_closed_loop_arena_v2.js" --challenger "$CHALLENGER" --champion "$ARENA_LIVE" --stadium "$SOURCE/stadium.hbs" --scenarios "$SOURCE/scenarios.json" --partner-model "$ARENA_LIVE" --partner-model "$ARENA_PARTNER_B" --partner-model "$ARENA_PARTNER_C" --max-scenarios 16 --seconds 30 --sample-every 6 --plug-repeats 1 --seed 1337 --output "$RESULT" >/dev/null
+            sudo -u haxlab env PYTHONPATH="$GITHUB_WORKSPACE/src" /opt/haxlab/.venv/bin/python -m haxlab.evaluation.closed_loop_arena "$RESULT" --calibrated --output "$DECISION" >/dev/null
+          }
+
+          for LABEL in champion-self candidate-d weak-zero; do
+            case "$LABEL" in
+              champion-self) CHALLENGER="$ARENA_LIVE" ;;
+              candidate-d) CHALLENGER="$ARENA_CAND_D" ;;
+              weak-zero) CHALLENGER="$ARENA_WEAK" ;;
+            esac
+
+            PIDS=()
+            for I in 01 02 03; do
+              run_source "$LABEL" "$CHALLENGER" "$I" &
+              PIDS+=("$!")
+            done
+            for PID in "${PIDS[@]}"; do
+              wait "$PID"
+            done
+          done
+
+      - name: Summarize calibration evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -u haxlab env \
+            PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            ARENA_OUT="$ARENA_OUT" \
+            GITHUB_SHA="$GITHUB_SHA" \
+            /opt/haxlab/.venv/bin/python - <<'PY'
+          import json
+          import os
+          import statistics
+          from pathlib import Path
+
+          from haxlab.evaluation.calibration_gate import decide_calibration_gate
+
+          root = Path(os.environ["ARENA_OUT"])
+          labels = ("champion-self", "candidate-d", "weak-zero")
+          sources = ("01", "02", "03")
+          roles = ("gk", "dm", "am", "st")
+
+          rows = []
+          for label in labels:
+              for source in sources:
+                  arena = json.loads((root / f"{label}-source-{source}.json").read_text())
+                  decision = json.loads((root / f"{label}-source-{source}-decision.json").read_text())
+                  team = arena["team_mode"]["summary"]
+                  plug = arena["plug_and_play"]
+                  role_rows = {}
+                  for role in roles:
+                      row = plug["by_role"][role]
+                      cand = row["individual"]["candidate"]
+                      ref = row["individual"]["reference"]
+                      role_rows[role] = {
+                          "proxy_match_score": row["team_outcome"]["proxy_match_score"],
+                          "boundary_rate": cand["boundary_rate"],
+                          "reference_boundary_rate": ref["boundary_rate"],
+                          "far_stall_rate": cand["far_stall_rate"],
+                          "reference_far_stall_rate": ref["far_stall_rate"],
+                          "max_held_action_seconds": cand["max_held_action_seconds"],
+                          "reference_max_held_action_seconds": ref["max_held_action_seconds"],
+                          "context_adaptation_rate": cand["context_adaptation_rate"],
+                          "reference_context_adaptation_rate": ref["context_adaptation_rate"],
+                      }
+                  rows.append({
+                      "label": label,
+                      "source": source,
+                      "team_proxy_match_score": team["proxy_match_score"],
+                      "team_formation_order_rate": team["candidate"]["formation_order_rate"],
+                      "reference_formation_order_rate": team["reference"]["formation_order_rate"],
+                      "team_collapsed_shape_rate": team["candidate"]["collapsed_shape_rate"],
+                      "reference_collapsed_shape_rate": team["reference"]["collapsed_shape_rate"],
+                      "plug_proxy_match_score": plug["summary"]["proxy_match_score"],
+                      "partner_model_count": plug["partner_model_count"],
+                      "roles": role_rows,
+                      "structurally_valid": decision["structurally_valid"],
+                      "behavior_gate_passed": decision["behavior_gate_passed"],
+                      "eligible_for_live_promotion": decision["eligible_for_live_promotion"],
+                      "reasons": decision["reasons"],
+                  })
+
+          aggregate = {}
+          for label in labels:
+              selected = [r for r in rows if r["label"] == label]
+              aggregate[label] = {
+                  "sources": len(selected),
+                  "all_structurally_valid": all(r["structurally_valid"] for r in selected),
+                  "behavior_passes": sum(bool(r["behavior_gate_passed"]) for r in selected),
+                  "promotion_eligible_sources": sum(
+                      bool(r["eligible_for_live_promotion"]) for r in selected
+                  ),
+                  "mean_team_proxy_match_score": statistics.mean(r["team_proxy_match_score"] for r in selected),
+                  "mean_plug_proxy_match_score": statistics.mean(r["plug_proxy_match_score"] for r in selected),
+                  "mean_team_formation_order_rate": statistics.mean(r["team_formation_order_rate"] for r in selected),
+                  "mean_team_collapsed_shape_rate": statistics.mean(r["team_collapsed_shape_rate"] for r in selected),
+              }
+
+          decision = decide_calibration_gate(aggregate)
+          summary = {
+              "schema": "haxlab-closed-loop-arena-v2-calibration-batch-v1",
+              "code_sha": os.environ["GITHUB_SHA"],
+              "configuration": {
+                  "sources": 3,
+                  "scenarios_per_source": 16,
+                  "seconds_per_rollout": 30,
+                  "partner_population": ["live-champion", "candidate-b", "candidate-c"],
+                  "negative_control": "zero-all-policy-weights",
+                  "raw_policy_only": True,
+              },
+              "aggregate": aggregate,
+              "runs": rows,
+              "sanity": decision.sanity,
+              "threshold_freeze_ready": decision.passed,
+              "threshold_freeze_blocker": (
+                  None if decision.passed else list(decision.reasons)
+              ),
+          }
+          if not decision.passed:
+              raise SystemExit(
+                  "frozen policy validation failed: "
+                  + ", ".join(decision.reasons)
+              )
+
+          (root / "calibration-summary.json").write_text(
+              json.dumps(summary, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(summary, indent=2))
+          PY
+
+          sudo -u haxlab cat "$ARENA_OUT/calibration-summary.json"             > /tmp/haxlab-arena-v2-calibration-latest-summary.json
+          printf '{"status":"completed","sha":"%s","output":"%s"}\n'             "$GITHUB_SHA" "$ARENA_OUT"             > /tmp/haxlab-arena-v2-calibration-latest-status.json
+
+      - name: Verify champion pointers unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          CURRENT_AFTER="$(
+            sudo -u haxlab sha256sum "$ARENA_CURRENT_POINTER" | awk '{print $1}'
+          )"
+          LIVE_AFTER="$(
+            sudo -u haxlab sha256sum "$ARENA_LIVE_POINTER" | awk '{print $1}'
+          )"
+          LIVE_RUNTIME_AFTER="$(
+            sudo -u haxlab sha256sum "$ARENA_LIVE" | awk '{print $1}'
+          )"
+          CAND_D_AFTER="$(
+            sudo -u haxlab sha256sum "$ARENA_CAND_D" | awk '{print $1}'
+          )"
+          PARTNER_B_AFTER="$(
+            sudo -u haxlab sha256sum "$ARENA_PARTNER_B" | awk '{print $1}'
+          )"
+          PARTNER_C_AFTER="$(
+            sudo -u haxlab sha256sum "$ARENA_PARTNER_C" | awk '{print $1}'
+          )"
+          WEAK_AFTER="$(
+            sudo -u haxlab sha256sum "$ARENA_WEAK" | awk '{print $1}'
+          )"
+          sudo -u haxlab env \
+            ARENA_OUT="$ARENA_OUT" \
+            CURRENT_PATH="$ARENA_CURRENT_POINTER" \
+            LIVE_PATH="$ARENA_LIVE_POINTER" \
+            LIVE_RUNTIME_PATH="$ARENA_LIVE" \
+            CAND_D_PATH="$ARENA_CAND_D" \
+            PARTNER_B_PATH="$ARENA_PARTNER_B" \
+            PARTNER_C_PATH="$ARENA_PARTNER_C" \
+            WEAK_PATH="$ARENA_WEAK" \
+            CURRENT_BEFORE="$ARENA_CURRENT_POINTER_SHA_BEFORE" \
+            CURRENT_AFTER="$CURRENT_AFTER" \
+            LIVE_BEFORE="$ARENA_LIVE_POINTER_SHA_BEFORE" \
+            LIVE_AFTER="$LIVE_AFTER" \
+            LIVE_RUNTIME_BEFORE="$ARENA_LIVE_RUNTIME_SHA_BEFORE" \
+            LIVE_RUNTIME_AFTER="$LIVE_RUNTIME_AFTER" \
+            CAND_D_BEFORE="$ARENA_CAND_D_SHA_BEFORE" \
+            CAND_D_AFTER="$CAND_D_AFTER" \
+            PARTNER_B_BEFORE="$ARENA_PARTNER_B_SHA_BEFORE" \
+            PARTNER_B_AFTER="$PARTNER_B_AFTER" \
+            PARTNER_C_BEFORE="$ARENA_PARTNER_C_SHA_BEFORE" \
+            PARTNER_C_AFTER="$PARTNER_C_AFTER" \
+            WEAK_BEFORE="$ARENA_WEAK_SHA_BEFORE" \
+            WEAK_AFTER="$WEAK_AFTER" \
+            FROZEN_INPUT_SNAPSHOT="$ARENA_FROZEN_INPUT_SNAPSHOT" \
+            /opt/haxlab/.venv/bin/python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          evidence = {
+              "schema": "haxlab-arena-v2-pointer-invariant-v1",
+              "current_pointer": os.environ["CURRENT_PATH"],
+              "live_pointer": os.environ["LIVE_PATH"],
+              "current_sha256_before": os.environ["CURRENT_BEFORE"],
+              "current_sha256_after": os.environ["CURRENT_AFTER"],
+              "live_sha256_before": os.environ["LIVE_BEFORE"],
+              "live_sha256_after": os.environ["LIVE_AFTER"],
+              "models": {
+                  "live_runtime": {
+                      "path": os.environ["LIVE_RUNTIME_PATH"],
+                      "sha256_before": os.environ["LIVE_RUNTIME_BEFORE"],
+                      "sha256_after": os.environ["LIVE_RUNTIME_AFTER"],
+                  },
+                  "candidate_d": {
+                      "path": os.environ["CAND_D_PATH"],
+                      "sha256_before": os.environ["CAND_D_BEFORE"],
+                      "sha256_after": os.environ["CAND_D_AFTER"],
+                  },
+                  "partner_b": {
+                      "path": os.environ["PARTNER_B_PATH"],
+                      "sha256_before": os.environ["PARTNER_B_BEFORE"],
+                      "sha256_after": os.environ["PARTNER_B_AFTER"],
+                  },
+                  "partner_c": {
+                      "path": os.environ["PARTNER_C_PATH"],
+                      "sha256_before": os.environ["PARTNER_C_BEFORE"],
+                      "sha256_after": os.environ["PARTNER_C_AFTER"],
+                  },
+                  "weak_zero": {
+                      "path": os.environ["WEAK_PATH"],
+                      "sha256_before": os.environ["WEAK_BEFORE"],
+                      "sha256_after": os.environ["WEAK_AFTER"],
+                  },
+              },
+          }
+          snapshot = json.loads(
+              Path(os.environ["FROZEN_INPUT_SNAPSHOT"]).read_text(
+                  encoding="utf-8"
+              )
+          )
+          before_frozen = dict(snapshot.get("hashes") or {})
+          after_frozen = {
+              path: hashlib.sha256(Path(path).read_bytes()).hexdigest()
+              for path in before_frozen
+          }
+          evidence["frozen_inputs"] = {
+              "before": before_frozen,
+              "after": after_frozen,
+          }
+          evidence["frozen_inputs_unchanged"] = (
+              before_frozen == after_frozen
+          )
+
+          evidence["current_unchanged"] = (
+              evidence["current_sha256_before"]
+              == evidence["current_sha256_after"]
+          )
+          evidence["live_unchanged"] = (
+              evidence["live_sha256_before"]
+              == evidence["live_sha256_after"]
+          )
+          evidence["models_unchanged"] = all(
+              row["sha256_before"] == row["sha256_after"]
+              for row in evidence["models"].values()
+          )
+          path = Path(os.environ["ARENA_OUT"]) / "pointer-invariant.json"
+          path.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
+          print(json.dumps(evidence, sort_keys=True))
+          if not evidence["current_unchanged"]:
+              raise SystemExit("current champion pointer changed during calibration")
+          if not evidence["live_unchanged"]:
+              raise SystemExit("live champion pointer changed during calibration")
+          if not evidence["models_unchanged"]:
+              changed = [
+                  name
+                  for name, row in evidence["models"].items()
+                  if row["sha256_before"] != row["sha256_after"]
+              ]
+              raise SystemExit(
+                  "calibration model bytes changed during run: "
+                  + ",".join(changed)
+              )
+          if not evidence["frozen_inputs_unchanged"]:
+              changed = [
+                  path
+                  for path, before in before_frozen.items()
+                  if after_frozen.get(path) != before
+              ]
+              raise SystemExit(
+                  "frozen calibration inputs changed during run: "
+                  + ",".join(changed)
+              )
+          PY
+
+      - name: Collect calibration evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf arena-v2-calibration-evidence
+          mkdir -p arena-v2-calibration-evidence
+          if [ -n "${ARENA_OUT:-}" ] && sudo -u haxlab test -d "$ARENA_OUT"; then
+            while IFS= read -r file; do
+              sudo -u haxlab cat "$file"                 > "arena-v2-calibration-evidence/$(basename "$file")"
+            done < <(sudo -u haxlab find "$ARENA_OUT" -maxdepth 1 -type f -name '*.json' | sort)
+          fi
+
+      - name: Upload calibration evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: closed-loop-arena-v2-calibration
+          path: arena-v2-calibration-evidence/
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,59 @@
+name: Multisource suite integrity validation
+
+on:
+  push:
+    branches:
+      - validation/multisource-suite-integrity-20261006
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-multisource-suite-integrity-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          clean: true
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .multisource-suite-validation-venv
+          python3 -m venv .multisource-suite-validation-venv
+          .multisource-suite-validation-venv/bin/pip install --upgrade pip
+          .multisource-suite-validation-venv/bin/pip install -e '.[dev]'
+
+      - name: Compile frozen suite code
+        shell: bash
+        run: |
+          set -euo pipefail
+          .multisource-suite-validation-venv/bin/python -m compileall -q \
+            src/haxlab/evaluation/multisource_suite.py \
+            tests/test_multisource_suite.py
+
+      - name: Run frozen suite and adjacent regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            .multisource-suite-validation-venv/bin/pytest -q \
+              tests/test_multisource_suite.py \
+              tests/test_scenario_source.py \
+              tests/test_multisource_duel.py
+
+      - name: Record exact-head evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "MULTISOURCE_SUITE_INTEGRITY_HEAD=$(git rev-parse HEAD)"
+          echo "MULTISOURCE_SUITE_INTEGRITY_RESULT=green"

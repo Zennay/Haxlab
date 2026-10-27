@@ -1,0 +1,116 @@
+name: Runtime model integrity validation
+
+on:
+  push:
+    branches:
+      - validation/runtime-model-integrity-20261006
+  pull_request:
+    branches:
+      - feature/arena-v2-current-main-20261004
+    paths:
+      - "tools/elite_policy_runtime.js"
+      - "tests/test_elite_policy_runtime_integrity.js"
+      - ".github/workflows/runtime-model-integrity-validation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haxlab-runtime-model-integrity-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact validation head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          clean: true
+
+      - name: Validate runtime Node syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check tools/elite_policy_runtime.js
+          node --check tests/test_elite_policy_runtime_integrity.js
+
+      - name: Run runtime model integrity regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tests/test_elite_policy_runtime_integrity.js
+
+      - name: Validate current runtime artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          LIVE_RUNTIME="$(
+            sudo -u haxlab /opt/haxlab/.venv/bin/python -c               'import json; print(json.load(open("/var/lib/haxlab/derived/champions/elite-player/current.json"))["runtime_model_path"])'
+          )"
+          MODELS=(
+            "$LIVE_RUNTIME"
+            "/var/lib/haxlab/derived/training/elite-player-candidate-b/model/runtime-model.json"
+            "/var/lib/haxlab/derived/training/elite-player-candidate-c/model/runtime-model.json"
+          )
+          for MODEL in "${MODELS[@]}"; do
+            sudo -u haxlab test -r "$MODEL"
+            sudo -u haxlab env               MODEL="$MODEL"               WORKSPACE="$GITHUB_WORKSPACE"               node - <<'NODE'
+          "use strict";
+          const fs = require("fs");
+          const path = require("path");
+          const { ElitePolicyRuntime } = require(
+            path.join(process.env.WORKSPACE, "tools", "elite_policy_runtime.js"),
+          );
+          const model = JSON.parse(fs.readFileSync(process.env.MODEL, "utf8"));
+          const runtime = new ElitePolicyRuntime(model);
+          const features = Object.fromEntries(
+            runtime.inputColumns.map((name) => [name, 0]),
+          );
+          const action = runtime.act({
+            agent_id: "integrity-proof",
+            role: "am",
+            features,
+          });
+          for (const key of [
+            "dir_x",
+            "dir_y",
+            "kick_probability",
+            "kick_threshold",
+            "direction_probability",
+            "future_direction_probability",
+            "ood_mean_abs_z",
+            "ood_max_abs_z",
+          ]) {
+            if (!Number.isFinite(action[key])) {
+              throw new Error(`runtime emitted non-finite ${key}: ${action[key]}`);
+            }
+          }
+          console.log(JSON.stringify({
+            model: process.env.MODEL,
+            schema: runtime.info().schema,
+            window: runtime.info().window,
+            input_columns: runtime.info().input_columns.length,
+            direction_class: action.direction_class,
+            runtime_integrity: "green",
+          }));
+          NODE
+          done
+
+      - name: Run adjacent Arena v2 Node regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          NODE_PATH=/opt/haxlab/node_modules node tests/test_closed_loop_arena_v2.js
+
+      - name: Record exact-head validation evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "RUNTIME_MODEL_INTEGRITY_HEAD=$(git rev-parse HEAD)"
+          echo "RUNTIME_MODEL_INTEGRITY_TRIGGER_SHA=${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "RUNTIME_MODEL_INTEGRITY_RESULT=green"
