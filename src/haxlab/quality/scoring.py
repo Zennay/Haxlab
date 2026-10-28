@@ -14,7 +14,12 @@ def _is_native_int(value: object) -> bool:
 
 
 def _is_finite_number(value: object) -> bool:
-    return type(value) in (int, float) and math.isfinite(float(value))
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except (OverflowError, ValueError):
+        return False
 
 
 def _invalid_evidence_reasons(evidence: MatchQualityEvidence) -> tuple[str, ...]:
@@ -80,6 +85,14 @@ def assess_match_quality(evidence: MatchQualityEvidence) -> MatchQualityAssessme
     The policy only scores evidence we actually know. Missing values remain visible
     instead of silently being interpreted as good.
     """
+    if type(evidence) is not MatchQualityEvidence:
+        return MatchQualityAssessment(
+            tier=QualityTier.REJECTED,
+            weight=0.0,
+            reasons=("invalid_quality_evidence",),
+            missing_evidence=(),
+        )
+
     invalid = _invalid_evidence_reasons(evidence)
     if invalid:
         return MatchQualityAssessment(
