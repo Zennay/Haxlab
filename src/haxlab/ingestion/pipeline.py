@@ -8,6 +8,7 @@ from typing import Any
 from haxlab.ingestion.discovery import discover_replays
 from haxlab.ingestion.discord_export import read_discord_exports
 from haxlab.ingestion.matcher import match_replays_to_reports
+from haxlab.ingestion.match_id_contract import derive_canonical_match_id, validate_unique_match_ids
 from haxlab.models import ImportFailure, ImportManifest, MatchReport, ReplayFile
 from haxlab.replay.validation import validate_replay_basic
 
@@ -103,10 +104,9 @@ def run_import(
     for match in matches:
         replay = replays_by_hash[match.replay_sha256]
         report = reports_by_id.get(match.message_id or "")
-        match_id = (
-            report.report_id
-            if report is not None and report.report_id
-            else f"hbr2:{replay.sha256[:16]}"
+        match_id = derive_canonical_match_id(
+            report_id=report.report_id if report is not None and report.report_id else None,
+            replay_sha256=replay.sha256,
         )
 
         canonical_matches.append(
@@ -123,6 +123,10 @@ def run_import(
         )
 
     canonical_matches.sort(key=lambda item: item["match_id"])
+
+    # Verify complete source-bound canonical identities before *any* M0 publication.
+    # Duplicate report IDs or fallback SHA-prefix collisions must not reach matches.jsonl.
+    validate_unique_match_ids(canonical_matches)
 
     manifest = ImportManifest(
         replay_count=len(inventory.all_files),
