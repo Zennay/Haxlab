@@ -4,10 +4,7 @@
 const fs = require("fs");
 const crypto = require("crypto");
 const path = require("path");
-const initAPI = require("node-haxball");
-
-const API = initAPI();
-const { Replay, Utils } = API;
+const { parseSampleEveryTicks } = require("./decode_replay_args");
 
 function formatFatal(error) {
   if (error == null) return "<null>";
@@ -38,7 +35,17 @@ function usage() {
 const replayPath = process.argv[2];
 if (!replayPath) usage();
 
-const sampleEvery = Math.max(1, Number.parseInt(process.argv[3] || "6", 10) || 6);
+let sampleEvery;
+try {
+  sampleEvery = parseSampleEveryTicks(process.argv[3]);
+} catch (error) {
+  console.error(error?.message || String(error));
+  usage();
+}
+
+const initAPI = require("node-haxball");
+const API = initAPI();
+const { Replay, Utils } = API;
 // node-haxball currently constructs DataView from data.buffer and does not
 // account for Buffer.byteOffset. Small Node Buffers are often slices of the
 // shared <4 KiB pool, so passing fs.readFileSync() directly can make a valid
