@@ -44,6 +44,14 @@ def _directory_open_flags() -> int:
     return flags
 
 
+def _fsync_archive_directory(fd: int, *, reason: str) -> None:
+    """Require durable directory metadata before publishing ledger success."""
+    try:
+        os.fsync(fd)
+    except OSError as exc:
+        raise RuntimeError(reason) from exc
+
+
 def _open_archive_root(raw_root: Path, *, create: bool) -> int:
     """Open a logical archive root one component at a time without symlinks."""
 
@@ -62,11 +70,13 @@ def _open_archive_root(raw_root: Path, *, create: bool) -> int:
         for component in parts[1:]:
             if component in {"", "."}:
                 continue
+            created = False
             try:
                 next_fd = os.open(component, flags, dir_fd=current_fd)
             except FileNotFoundError:
                 if not create:
                     raise RuntimeError("raw_archive_root_unsafe")
+                created = True
                 try:
                     os.mkdir(component, mode=0o755, dir_fd=current_fd)
                 except FileExistsError:
@@ -84,6 +94,19 @@ def _open_archive_root(raw_root: Path, *, create: bool) -> int:
             if not stat.S_ISDIR(opened.st_mode):
                 os.close(next_fd)
                 raise RuntimeError("raw_archive_root_unsafe")
+            if created:
+                try:
+                    # The new child's metadata and its parent's name entry
+                    # must survive a host crash before any raw ledger commit.
+                    _fsync_archive_directory(
+                        next_fd, reason="raw_archive_root_sync_failed"
+                    )
+                    _fsync_archive_directory(
+                        current_fd, reason="raw_archive_root_sync_failed"
+                    )
+                except Exception:
+                    os.close(next_fd)
+                    raise
             os.close(current_fd)
             current_fd = next_fd
 
@@ -102,11 +125,13 @@ def _open_archive_child_directory(
 ) -> int:
     flags = _directory_open_flags()
     error = f"raw_archive_directory_unsafe:{component}"
+    created = False
     try:
         child_fd = os.open(component, flags, dir_fd=parent_fd)
     except FileNotFoundError as exc:
         if not create:
             raise RuntimeError(missing_error or error) from exc
+        created = True
         try:
             os.mkdir(component, mode=0o755, dir_fd=parent_fd)
         except FileExistsError:
@@ -124,6 +149,17 @@ def _open_archive_child_directory(
     if not stat.S_ISDIR(opened.st_mode):
         os.close(child_fd)
         raise RuntimeError(error)
+    if created:
+        try:
+            _fsync_archive_directory(
+                child_fd, reason=f"raw_archive_directory_sync_failed:{component}"
+            )
+            _fsync_archive_directory(
+                parent_fd, reason=f"raw_archive_directory_sync_failed:{component}"
+            )
+        except Exception:
+            os.close(child_fd)
+            raise
     return child_fd
 
 
@@ -145,6 +181,36 @@ def _assert_archive_root_identity(raw_root: Path, expected_fd: int) -> None:
             raise RuntimeError("raw_archive_root_changed")
     finally:
         os.close(reopened_fd)
+
+
+def _assert_archive_prefix_identity(
+    raw_root_fd: int, first_prefix_fd: int, second_prefix_fd: int, sha256: str
+) -> None:
+    """Prove the logical SHA path still resolves through both bound directories.
+
+    Root-name checks alone miss a replaced first/second SHA directory while
+    the root stays unchanged. No filesystem writes are performed here.
+    """
+    flags = _directory_open_flags()
+    first_now: int | None = None
+    second_now: int | None = None
+    try:
+        first_now = os.open(sha256[:2], flags, dir_fd=raw_root_fd)
+        second_now = os.open(sha256[2:4], flags, dir_fd=first_now)
+        for retained, reopened in (
+            (first_prefix_fd, first_now), (second_prefix_fd, second_now)
+        ):
+            old = os.fstat(retained)
+            new = os.fstat(reopened)
+            if (old.st_dev, old.st_ino) != (new.st_dev, new.st_ino):
+                raise RuntimeError("raw_archive_prefix_changed")
+    except OSError as exc:
+        raise RuntimeError("raw_archive_prefix_changed") from exc
+    finally:
+        if second_now is not None:
+            os.close(second_now)
+        if first_now is not None:
+            os.close(first_now)
 
 
 def _open_verified_source(source_path: Path) -> tuple[int, os.stat_result]:
@@ -398,14 +464,28 @@ def archive_replay(
                 sha256,
                 missing_error=missing_error,
             )
+            _fsync_archive_directory(
+                second_prefix_fd, reason="raw_archive_destination_sync_failed"
+            )
             _assert_archive_root_identity(raw_root, raw_root_fd)
+            _assert_archive_prefix_identity(
+                raw_root_fd, first_prefix_fd, second_prefix_fd, sha256
+            )
         else:
             _publish_archive_no_clobber(staging_path, destination_io, sha256)
+            # The verified no-clobber directory entry must be durable before
+            # the SQLite ledger can claim the raw replay was registered.
+            _fsync_archive_directory(
+                second_prefix_fd, reason="raw_archive_destination_sync_failed"
+            )
             # Bind the logical ledger path to the same directory inode
             # immediately before committing the raw row. As with any
             # persistent pathname, later administrative replacement is
             # detected by downstream archive/analysis integrity checks.
             _assert_archive_root_identity(raw_root, raw_root_fd)
+            _assert_archive_prefix_identity(
+                raw_root_fd, first_prefix_fd, second_prefix_fd, sha256
+            )
             state.register_raw(
                 sha256=sha256,
                 archive_path=str(destination),
