@@ -2,10 +2,12 @@
 "use strict";
 
 const fs = require("fs");
+const crypto = require("crypto");
 const os = require("os");
 const path = require("path");
 const zlib = require("zlib");
 const initAPI = require("node-haxball");
+const { parseSelectedPlayerMapJson, parseSampleEveryTicks } = require("./extract_imitation_args");
 
 const API = initAPI();
 const { Replay, Utils } = API;
@@ -13,7 +15,7 @@ const { Replay, Utils } = API;
 function usage() {
   console.error(
     "Usage: node tools/extract_imitation.js <replay.hbr2> <output.jsonl.gz> " +
-      "<selectedPlayerMapJson> [sampleEveryTicks]",
+      "<selectedPlayerMapJson> [sampleEveryTicks] [receiptJsonPath]",
   );
   process.exit(2);
 }
@@ -21,21 +23,49 @@ function usage() {
 const replayPath = process.argv[2];
 const outputPath = process.argv[3];
 const selectedPlayerMapJson = process.argv[4];
-const sampleEvery = Math.max(
-  1,
-  Number.parseInt(process.argv[5] || "6", 10) || 6,
-);
+const sampleEvery = parseSampleEveryTicks(process.argv[5]);
+const receiptPath = process.argv[6] || null;
+if (process.argv.length > 7 || (process.argv[6] !== undefined && !receiptPath)) usage();
+if (receiptPath && [
+  path.resolve(outputPath || "."),
+  path.resolve(replayPath || "."),
+].includes(path.resolve(receiptPath))) {
+  throw new Error("receipt_file_must_be_distinct_from_replay_and_shard");
+}
 
 if (!replayPath || !outputPath || !selectedPlayerMapJson) usage();
 if (os.endianness() !== "LE") {
   throw new Error("haxlab imitation shards currently require little-endian host");
 }
 
-const selectedByReplayId = new Map(
-  Object.entries(JSON.parse(selectedPlayerMapJson)).map(
-    ([playerId, identity]) => [Number(playerId), String(identity)],
-  ),
-);
+const selectedByReplayId = parseSelectedPlayerMapJson(selectedPlayerMapJson);
+
+// A repeat request can take minutes of replay reconstruction before a
+// create-only final hardlink discovers that the shard or receipt already
+// exists. Reject occupied names before reading/decoding the replay.
+// lstatSync also rejects dangling symlinks (existsSync would miss those).
+// The final hardlink remains the atomic authority if a race occurs later.
+function requireAvailableDestination(destination, role) {
+  try {
+    fs.lstatSync(destination);
+  } catch (error) {
+    if (error?.code === "ENOENT") return;
+    throw error;
+  }
+  throw new Error(role + "_destination_already_exists");
+}
+requireAvailableDestination(outputPath, "shard");
+if (receiptPath) {
+  requireAvailableDestination(receiptPath, "receipt");
+  // A second private output is optional, but its directory must already
+  // exist. Do not decode a large replay only to discover a missing receipt
+  // directory after the final shard has already been published.
+  const receiptParent = fs.statSync(path.dirname(receiptPath));
+  if (!receiptParent.isDirectory()) {
+    throw new Error("receipt_parent_is_not_a_directory");
+  }
+}
+
 const selectedIdentities = Array.from(
   new Set(selectedByReplayId.values()),
 ).sort();
@@ -91,7 +121,17 @@ function nearestVectors(origin, candidates, sign, limit) {
   return result;
 }
 
-const data = Uint8Array.from(fs.readFileSync(replayPath));
+// Node Buffer is a Uint8Array subclass. ReadAll/read accept the original
+// bytes directly; Uint8Array.from(Buffer) copied entire large replays and
+// doubled this stage's peak allocation before decoding even began.
+const data = fs.readFileSync(replayPath);
+// Bind the machine-readable extraction receipt to the exact replay bytes,
+// caller-supplied player-map JSON and final compressed artifact. Filenames
+// and apparently equivalent normalized player maps are not provenance.
+const sourceReplaySha256 = crypto.createHash("sha256").update(data).digest("hex");
+const selectedPlayerMapSha256 = crypto.createHash("sha256")
+  .update(selectedPlayerMapJson, "utf8").digest("hex");
+const compressedDigest = crypto.createHash("sha256");
 const replayData = Replay.readAll(data);
 const currentInputs = new Map();
 
@@ -103,11 +143,44 @@ let selectedStateSamples = 0;
 let skippedUnknownInput = 0;
 let framesAdvanced = 0;
 let selectedPlayersSeen = new Set();
+let replayPausedForBackpressure = false;
+let backpressurePauseCount = 0;
 
 fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-const temporaryPath = `${outputPath}.tmp-${process.pid}`;
-const output = fs.createWriteStream(temporaryPath);
+const temporaryPath = `${outputPath}.tmp-${process.pid}-${crypto.randomBytes(8).toString("hex")}`;
+const receiptTemporaryPath = receiptPath
+  ? `${receiptPath}.tmp-${process.pid}-${crypto.randomBytes(8).toString("hex")}`
+  : null;
+// Exclusive private creation: never follow/truncate an existing temporary
+// path (including a symlink) when replay extraction is retried or overlaps.
+const output = fs.createWriteStream(temporaryPath, { flags: "wx", mode: 0o600 });
 const gzip = zlib.createGzip({ level: 6 });
+// Errors may happen during the replay (well before closeOutput installs its
+// one-shot listeners). Keep the failure observed rather than allowing an
+// unhandled stream error or publishing an incomplete shard.
+let writeFailure = null;
+let abortReplayOnWriteFailure = null;
+function recordWriteFailure(error) {
+  if (!writeFailure) writeFailure = error;
+  // Do not burn through the remaining replay after the shard sink has failed.
+  // The replay promise owns its own settlement and destroys the reader.
+  abortReplayOnWriteFailure?.(writeFailure);
+}
+output.on("error", recordWriteFailure);
+gzip.on("error", recordWriteFailure);
+// Stop advancing replay while gzip cannot accept another sample. Node's
+// writable high-water mark is a backpressure signal, not an error.
+// Resuming only on "drain" keeps live compression and slow disk writes
+// from accumulating an unbounded backlog of Float32 row buffers.
+gzip.on("drain", () => {
+  if (settled || !replayPausedForBackpressure || writeFailure) return;
+  replayPausedForBackpressure = false;
+  try { reader?.setSpeed(100000); }
+  catch (error) { recordWriteFailure(error); }
+});
+// Hash exactly the compressed byte stream that is piped to the output.
+// This does not materialize a second copy of potentially large shards.
+gzip.on("data", (chunk) => { compressedDigest.update(chunk); });
 gzip.pipe(output);
 
 const columns = [
@@ -217,8 +290,17 @@ function writeSample(player, statePlayers, ballDisc) {
   ];
 
   const values = new Float32Array(sample);
-  gzip.write(Buffer.from(values.buffer, values.byteOffset, values.byteLength));
+  const canAcceptMore = gzip.write(
+    Buffer.from(values.buffer, values.byteOffset, values.byteLength),
+  );
   sampleCount += 1;
+  if (!canAcceptMore && !replayPausedForBackpressure && !settled) {
+    replayPausedForBackpressure = true;
+    backpressurePauseCount += 1;
+    // setSpeed(0) pauses the node-haxball non-blocking Replay reader
+    // without destroying game state or losing the selected frame.
+    reader?.setSpeed(0);
+  }
 }
 
 function sampleState() {
@@ -259,29 +341,45 @@ function finish(resolve, reject, error = null) {
 
 function runReplay() {
   return new Promise((resolve, reject) => {
+    abortReplayOnWriteFailure = (error) => finish(resolve, reject, error);
+    if (writeFailure) {
+      abortReplayOnWriteFailure(writeFailure);
+      return;
+    }
     const callbacks = {
       onGameTick: () => {
-        sampleState();
+        if (settled) return;
+        // Replay callbacks execute asynchronously after the promise executor
+        // returns. Catch state/stream exceptions here so they reject the
+        // owning extraction instead of escaping as uncaught process errors.
+        try {
+          sampleState();
+        } catch (error) {
+          finish(resolve, reject, error);
+        }
       },
       onPlayerInputChange: (id, input) => {
-        currentInputs.set(Number(id), Number(input));
+        if (!settled) currentInputs.set(Number(id), Number(input));
       },
     };
 
     const fastRAF = (callback) => setImmediate(() => callback(Date.now()));
     const fastCancelRAF = (handle) => clearImmediate(handle);
 
-    reader = Replay.read(data, callbacks, {
-      requestAnimationFrame: fastRAF,
-      cancelAnimationFrame: fastCancelRAF,
-    });
-
-    reader.onEnd = () => finish(resolve, reject);
-    timeout = setTimeout(
-      () => finish(resolve, reject, new Error("extractor_timeout")),
-      120000,
-    );
-    reader.setSpeed(100000);
+    try {
+      reader = Replay.read(data, callbacks, {
+        requestAnimationFrame: fastRAF,
+        cancelAnimationFrame: fastCancelRAF,
+      });
+      reader.onEnd = () => finish(resolve, reject);
+      timeout = setTimeout(
+        () => finish(resolve, reject, new Error("extractor_timeout")),
+        120000,
+      );
+      reader.setSpeed(100000);
+    } catch (error) {
+      finish(resolve, reject, error);
+    }
   });
 }
 
@@ -307,52 +405,93 @@ function closeOutput() {
       );
     }
 
-    await closeOutput();
-    fs.renameSync(temporaryPath, outputPath);
+    // Never present an empty compressed shard as successfully extracted
+    // training data. A selected map may refer to players never sampled, or
+    // every observed selected state may lack a recoverable action label.
+    // In both cases no usable imitation row exists; keep the final shard
+    // unpublished and let the existing failure cleanup remove the temp file.
+    if (sampleCount === 0) {
+      throw new Error(
+        selectedStateSamples === 0
+          ? "no_selected_players_in_sampled_states"
+          : "no_selected_samples_with_known_input",
+      );
+    }
 
-    process.stdout.write(
-      JSON.stringify({
-        schema: "haxlab-imitation-extract-summary-v2",
-        shardSchema: "haxlab-imitation-shard-v2",
-        format: "float32-le-gzip",
-        dtype: "float32-le",
-        rowWidth: columns.length,
-        columns,
-        canonicalAttackDirection: "+x",
-        selectedPlayers: Object.fromEntries(
-          Array.from(selectedIndex.entries()).map(([identity, index]) => [
-            String(index),
-            identity,
-          ]),
-        ),
-        selectedReplayPlayers: Object.fromEntries(
-          Array.from(selectedByReplayId.entries()).map(([playerId, identity]) => [
-            String(playerId),
-            identity,
-          ]),
-        ),
-        sourceFile: path.basename(replayPath),
-        outputPath,
-        totalFrames: replayData.totalFrames,
-        framesAdvanced,
-        sampleEveryTicks: sampleEvery,
-        samples: sampleCount,
-        selectedStateSamples,
-        skippedUnknownInput,
-        selectedPlayersRequested: selectedByReplayId.size,
-        selectedPlayersSeen: selectedPlayersSeen.size,
-        compressedBytes: fs.statSync(outputPath).size,
-      }),
-    );
+    if (writeFailure) throw writeFailure;
+    await closeOutput();
+    if (writeFailure) throw writeFailure;
+    const shardCompressedSha256 = compressedDigest.digest("hex");
+    // Derive the receipt from the exact sealed TEMPORARY shard. Only after
+    // this do we publish its final name, never overwriting an existing shard.
+    const summary = {
+      schema: "haxlab-imitation-extract-summary-v2",
+      shardSchema: "haxlab-imitation-shard-v2",
+      format: "float32-le-gzip",
+      dtype: "float32-le",
+      rowWidth: columns.length,
+      columns,
+      canonicalAttackDirection: "+x",
+      selectedPlayers: Object.fromEntries(
+        Array.from(selectedIndex.entries()).map(([identity, index]) => [
+          String(index), identity,
+        ]),
+      ),
+      selectedReplayPlayers: Object.fromEntries(
+        Array.from(selectedByReplayId.entries()).map(([playerId, identity]) => [
+          String(playerId), identity,
+        ]),
+      ),
+      sourceFile: path.basename(replayPath),
+      sourceReplaySha256,
+      selectedPlayerMapSha256,
+      shardCompressedSha256,
+      outputPath,
+      totalFrames: replayData.totalFrames,
+      framesAdvanced,
+      sampleEveryTicks: sampleEvery,
+      samples: sampleCount,
+      selectedStateSamples,
+      skippedUnknownInput,
+      selectedPlayersRequested: selectedByReplayId.size,
+      selectedPlayersSeen: selectedPlayersSeen.size,
+      compressedBytes: fs.statSync(temporaryPath).size,
+      backpressurePauseCount,
+    };
+    // Optional machine-readable provenance survives when the caller does not
+    // retain stdout. Its temporary file is private and exclusively created.
+    // Same-directory hard links are create-only, never rename-overwrite.
+    if (receiptTemporaryPath) {
+      fs.writeFileSync(receiptTemporaryPath,
+        JSON.stringify(summary, null, 2) + "\n",
+        { flag: "wx", mode: 0o600 });
+    }
+    fs.linkSync(temporaryPath, outputPath);
+    if (receiptTemporaryPath) {
+      // A failure to publish the secondary receipt leaves an explicitly
+      // INCOMPLETE deliverable (no successful stdout). Never silently delete
+      // a committed shard; its immutable bytes may already be consumed.
+      fs.linkSync(receiptTemporaryPath, receiptPath);
+      fs.unlinkSync(receiptTemporaryPath);
+    }
+    fs.unlinkSync(temporaryPath);
+    process.stdout.write(JSON.stringify(summary));
   } catch (error) {
-    try {
-      gzip.destroy();
-      output.destroy();
-    } catch (_) {}
-    try {
-      fs.unlinkSync(temporaryPath);
-    } catch (_) {}
+    // fs.createWriteStream may still be opening asynchronously when replay
+    // validation fails. Deleting the temp path *before* "close" races the
+    // pending open, potentially leaving orphaned private partial shards.
+    // Wait for stream teardown, then unlink our private temporary artifacts.
+    const closed = output.closed
+      ? Promise.resolve()
+      : new Promise((resolve) => output.once("close", resolve));
+    gzip.destroy();
+    output.destroy();
+    await closed;
+    try { fs.unlinkSync(temporaryPath); } catch (_) {}
+    if (receiptTemporaryPath) {
+      try { fs.unlinkSync(receiptTemporaryPath); } catch (_) {}
+    }
     console.error(error?.stack || String(error));
-    process.exit(1);
+    process.exitCode = 1;
   }
 })();
