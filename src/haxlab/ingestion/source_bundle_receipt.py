@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import secrets
 import stat
 import sys
 from pathlib import Path
@@ -11,6 +12,8 @@ from typing import Any, Sequence
 
 
 SCHEMA = "haxlab-source-bundle-receipt-v1"
+# Keep the producer compatible with the verifier's bounded receipt reader.
+_MAX_RECEIPT_BYTES = 32 * 1024 * 1024
 _FILE_FLAGS = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
 
 
@@ -193,6 +196,22 @@ def _inventory_paths(
             kind = _kind_for_name(name)
             if kind is None:
                 continue
+            # The canonical verifier forbids literal backslashes in any receipt
+            # path. Reject at the source boundary, including parent directories,
+            # rather than emitting evidence the verifier cannot accept (#407).
+            if "\\" in relative:
+                raise SourceBundleReceiptError(
+                    "source_path_noncanonical_backslash"
+                )
+            # Linux can enumerate names containing undecodable filename bytes
+            # through Python's surrogateescape convention. Those surrogate
+            # code points cannot be encoded as UTF-8 by our canonical JSON
+            # serializer; reject with a stable source reason, not a traceback
+            # or silently rewritten evidence path.
+            if any(0xD800 <= ord(char) <= 0xDFFF for char in relative):
+                raise SourceBundleReceiptError(
+                    "source_path_noncanonical_unicode"
+                )
             if not stat.S_ISREG(child_stat.st_mode):
                 raise SourceBundleReceiptError(
                     f"source_file_not_regular:{relative}"
@@ -453,9 +472,152 @@ def create_source_bundle_receipt(export_root: Path) -> dict[str, Any]:
             "files": files,
         }
         payload["receipt_sha256"] = hashlib.sha256(_canonical_bytes(payload)).hexdigest()
+        # The downstream verifier refuses receipts larger than 32 MiB.
+        # Never claim a source receipt that cannot be consumed by its own
+        # canonical verifier. This is a post-inventory refusal, not truncation.
+        if len(_canonical_bytes(payload)) > _MAX_RECEIPT_BYTES:
+            raise SourceBundleReceiptError("source_receipt_too_large")
         return payload
     finally:
         os.close(root_fd)
+
+
+def _save_private_receipt(
+    receipt: dict[str, Any], destination: Path, export_root: Path
+) -> None:
+    """Publish complete private receipts atomically, with no overwrite.
+
+    A freshly created 0600 staging inode is fully flushed before an atomic
+    no-clobber hard link makes the final filename visible. Incomplete staging
+    bytes are never published at the requested destination. Neither source
+    data nor a previously existing destination can be changed.
+    """
+    output_path = _absolute_root(destination)
+    source_root = _absolute_root(export_root)
+    if output_path == source_root or output_path.is_relative_to(source_root):
+        raise SourceBundleReceiptError("source_receipt_output_inside_source_root")
+    if output_path.suffix.lower() != ".json":
+        raise SourceBundleReceiptError("source_receipt_output_requires_json_suffix")
+
+    encoded = _canonical_bytes(receipt)
+    if len(encoded) > _MAX_RECEIPT_BYTES:
+        raise SourceBundleReceiptError("source_receipt_too_large")
+
+    try:
+        parent_fd, _ = _open_root_directory(output_path.parent)
+    except SourceBundleReceiptError as exc:
+        raise SourceBundleReceiptError("source_receipt_output_parent_invalid") from exc
+
+    # Stage names must not be movable by other local users during the
+    # no-clobber publication window. A shared-writable target directory
+    # cannot guarantee the binding between staged bytes and the final name.
+    if os.fstat(parent_fd).st_mode & 0o022:
+        os.close(parent_fd)
+        raise SourceBundleReceiptError("source_receipt_output_parent_shared")
+
+    stage_name = f".haxlab-receipt-{secrets.token_hex(12)}.tmp"
+    stage_fd: int | None = None
+    staged_identity: tuple[int, int] | None = None
+    published = False
+    try:
+        flags = (
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        try:
+            stage_fd = os.open(stage_name, flags, 0o600, dir_fd=parent_fd)
+        except OSError as exc:
+            raise SourceBundleReceiptError("source_receipt_output_open_failed") from exc
+
+        try:
+            opened = os.fstat(stage_fd)
+            staged_identity = _directory_identity(opened)
+            # Some external-storage mounts ignore requested POSIX file modes.
+            # Reject before publication if 0600 cannot actually be enforced.
+            if not stat.S_ISREG(opened.st_mode) or (
+                stat.S_IMODE(opened.st_mode) & 0o077
+            ):
+                raise SourceBundleReceiptError(
+                    "source_receipt_output_private_mode_unavailable"
+                )
+            remaining = memoryview(encoded)
+            while remaining:
+                written = os.write(stage_fd, remaining)
+                if written <= 0:
+                    raise OSError("zero-byte write")
+                remaining = remaining[written:]
+            os.fsync(stage_fd)
+            current = os.stat(
+                stage_name, dir_fd=parent_fd, follow_symlinks=False
+            )
+            if not stat.S_ISREG(current.st_mode) or (
+                _directory_identity(current) != staged_identity
+            ):
+                raise OSError("staging inode changed")
+        except OSError as exc:
+            raise SourceBundleReceiptError("source_receipt_output_write_failed") from exc
+
+        # Hard-link publication is an atomic create-only directory operation.
+        # No rename/replace path can erase an existing destination file.
+        try:
+            os.link(
+                stage_name,
+                output_path.name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileExistsError as exc:
+            raise SourceBundleReceiptError("source_receipt_output_exists") from exc
+        except OSError as exc:
+            raise SourceBundleReceiptError(
+                "source_receipt_output_atomic_link_unsupported"
+            ) from exc
+        published = True
+        # Confirm the published name still references the already-flushed
+        # private staging inode before claiming export success.
+        try:
+            final = os.stat(
+                output_path.name, dir_fd=parent_fd, follow_symlinks=False
+            )
+            if (
+                not stat.S_ISREG(final.st_mode)
+                or _directory_identity(final) != staged_identity
+                or (stat.S_IMODE(final.st_mode) & 0o077) != 0
+            ):
+                raise OSError("published inode not private staging inode")
+        except OSError as exc:
+            raise SourceBundleReceiptError(
+                "source_receipt_output_identity_changed"
+            ) from exc
+        try:
+            os.fsync(parent_fd)
+        except OSError as exc:
+            raise SourceBundleReceiptError(
+                "source_receipt_output_directory_sync_failed"
+            ) from exc
+    finally:
+        if stage_fd is not None:
+            os.close(stage_fd)
+        # Only unlink our verified staging inode, not a substituted file.
+        if staged_identity is not None:
+            try:
+                current = os.stat(stage_name, dir_fd=parent_fd, follow_symlinks=False)
+                if _directory_identity(current) == staged_identity:
+                    os.unlink(stage_name, dir_fd=parent_fd)
+            except OSError:
+                pass
+        if published:
+            # Final creation must be durable even after staging cleanup. A
+            # failed final sync is reported, not called a successful export.
+            try:
+                os.fsync(parent_fd)
+            except OSError:
+                pass
+        os.close(parent_fd)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -463,6 +625,10 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="python -m haxlab.ingestion.source_bundle_receipt"
     )
     parser.add_argument("export_root", type=Path)
+    parser.add_argument(
+        "--output", type=Path,
+        help="write a new private JSON receipt outside the source root (never overwrite)",
+    )
     return parser
 
 
@@ -470,6 +636,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
         receipt = create_source_bundle_receipt(args.export_root)
+        if args.output is not None:
+            _save_private_receipt(receipt, args.output, args.export_root)
     except SourceBundleReceiptError as exc:
         print(
             json.dumps(
@@ -481,9 +649,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
 
+    visible = receipt if args.output is None else {
+        "schema": SCHEMA,
+        "clean": True,
+        "saved_private_receipt": True,
+        "receipt_sha256": receipt["receipt_sha256"],
+        "file_count": receipt["file_count"],
+        "hbr2_count": receipt["hbr2_count"],
+        "discord_json_count": receipt["discord_json_count"],
+        "total_size_bytes": receipt["total_size_bytes"],
+    }
     print(
         json.dumps(
-            receipt,
+            visible,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
