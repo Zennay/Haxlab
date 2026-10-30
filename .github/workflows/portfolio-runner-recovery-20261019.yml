@@ -1,0 +1,105 @@
+name: Portfolio VPS runner recovery
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portfolio-runner-recovery-20261019
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    if: >-
+      github.repository == 'Zennay/Haxlab' &&
+      github.ref == 'refs/heads/main' &&
+      github.actor == 'Zennay' &&
+      github.triggering_actor == 'Zennay' &&
+      github.run_attempt == 1
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 15
+    steps:
+      - name: Restore OOM-failed listeners and re-register stale runners
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(hostname -s)" = vps-bb300bba
+          test "$(id -un)" = ubuntu
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_ACTOR" = Zennay
+          test "$GITHUB_TRIGGERING_ACTOR" = Zennay
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          sudo -n true
+          gh auth status >/dev/null 2>&1
+          exec 9>/tmp/zennay-portfolio-runner-recovery.lock
+          flock -n 9 || { echo 'Runner recovery already in progress'; exit 0; }
+
+          # Never start a second listener on top of orphaned worker processes.
+          for tuple in 'Supa:/home/ubuntu/actions-runner-supa:actions.runner.Zennay-Supa.vps-bb300bba-supa.service' 'RaiseAI:/home/ubuntu/actions-runner-raiseai:actions.runner.Zennay-RaiseAI.vps-bb300bba.service'; do
+            IFS=: read -r repo root unit <<< "$tuple"
+            if systemctl is-active --quiet "$unit"; then
+              echo "$repo service already active"
+              continue
+            fi
+            if pgrep -u ubuntu -f "^$root/bin/Runner.(Listener|Worker)" >/dev/null; then
+              echo "$repo: residual worker or listener; start refused"
+              continue
+            fi
+            sudo -n install -d -m 0755 "/etc/systemd/system/$unit.d"
+            printf '[Service]\nRestart=on-failure\nRestartSec=60s\nMemoryHigh=1500M\nMemoryMax=2500M\n' | sudo -n tee "/etc/systemd/system/$unit.d/90-oom-recovery.conf" >/dev/null
+            sudo -n systemctl daemon-reload
+            sudo -n systemctl reset-failed "$unit"
+            sudo -n systemctl start "$unit"
+            echo "$repo: $(systemctl is-active "$unit")"
+          done
+
+          restore_registration () {
+            local repo="$1" root="$2" agent="$3" labels="$4" unit="$5"
+            cd "$root"
+            if ! test -x config.sh || ! test -x svc.sh; then
+              echo "$repo: runner binary distribution missing"
+              return 1
+            fi
+            local status
+            status="$(gh api "repos/Zennay/$repo/actions/runners" --jq '.runners | map(select(.name == "'"$agent"'")) | .[0].status // "missing"')"
+            if test "$status" = online && systemctl is-active --quiet "$unit"; then
+              echo "$repo: existing registered runner online"
+              return 0
+            fi
+            if systemctl is-active --quiet "$unit"; then
+              echo "$repo: service active but registration not online; refused interrupt"
+              return 1
+            fi
+            if pgrep -u ubuntu -f "^$root/bin/Runner.(Listener|Worker)" >/dev/null; then
+              echo "$repo: orphaned listener/worker; refused re-registration"
+              return 1
+            fi
+            # A stale, deleted GitHub runner registration must not be restarted.
+            # Keep local secrets backed up on the VPS, never in logs or artifacts.
+            local backup="/home/ubuntu/.runner-registration-backups/$repo-$GITHUB_RUN_ID"
+            install -d -m 0700 "$backup"
+            if systemctl list-unit-files "$unit" --no-legend | grep -q actions.runner; then
+              sudo -n ./svc.sh uninstall
+            fi
+            for file in .runner .runner_migrated .credentials .credentials_rsaparams .service; do
+              if test -f "$file"; then mv "$file" "$backup/"; fi
+            done
+            local token
+            token="$(gh api -X POST "repos/Zennay/$repo/actions/runners/registration-token" --jq .token)"
+            ./config.sh --unattended --url "https://github.com/Zennay/$repo" --token "$token" --name "$agent" --labels "$labels" --work _work --replace
+            unset token
+            sudo -n ./svc.sh install ubuntu
+            sudo -n ./svc.sh start
+            echo "$repo: service $(systemctl is-active "$unit")"
+          }
+
+          restore_registration zSSH /home/ubuntu/actions-runner-zssh zssh-vps-1 zssh,vps actions.runner.Zennay-zSSH.zssh-vps-1.service || echo 'zSSH recovery needs inspection'
+          restore_registration Lightup /home/ubuntu/actions-runner-lightup-proof vps-bb300bba-lightup lightup,vps actions.runner.Zennay-Lightup.vps-bb300bba-lightup.service || echo 'LightUp recovery needs inspection'
+
+          echo 'Registered runner states (no secrets):'
+          for repo in Supa RaiseAI zSSH Lightup; do
+            printf '%s: ' "$repo"
+            gh api "repos/Zennay/$repo/actions/runners" --jq '[.runners[] | .name + ":" + .status] | join(",")'
+          done

@@ -128,6 +128,111 @@ def _read_regular(path: Path, *, limit: int, label: str) -> bytes:
         os.close(fd)
 
 
+
+def _stat_identity(info: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    """Capture the file object and metadata used across a nested path-based audit."""
+    return (
+        info.st_dev,
+        info.st_ino,
+        info.st_mode,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+    )
+
+
+def _assert_path_identity(
+    path: Path,
+    expected: tuple[int, int, int, int, int, int],
+    *,
+    label: str,
+) -> None:
+    try:
+        current = path.lstat()
+    except OSError as exc:
+        _fail(f"{label} path changed across nested audit: {exc}")
+    if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode):
+        _fail(f"{label} path changed to an unsafe file type")
+    if _stat_identity(current) != expected:
+        _fail(f"{label} path identity changed across nested audit")
+
+
+def _open_regular_snapshot(
+    path: Path,
+    *,
+    limit: int,
+    label: str,
+) -> tuple[int, tuple[int, int, int, int, int, int]]:
+    """Hold the exact regular-file object while a nested path-based audit runs."""
+    try:
+        initial = path.lstat()
+    except OSError as exc:
+        _fail(f"{label} is not readable: {exc}")
+    if stat.S_ISLNK(initial.st_mode) or not stat.S_ISREG(initial.st_mode):
+        _fail(f"{label} must be a regular non-symlink file")
+    if initial.st_size > limit:
+        _fail(f"{label} exceeds {limit} byte limit")
+
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    nonblock = getattr(os, "O_NONBLOCK", None)
+    if nofollow is None or nonblock is None:
+        _fail("platform lacks required no-follow/non-blocking file primitives")
+    try:
+        fd = os.open(path, os.O_RDONLY | nofollow | nonblock)
+    except OSError as exc:
+        _fail(f"{label} secure open failed: {exc}")
+
+    keep_fd = False
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode):
+            _fail(f"{label} descriptor must reference a regular file")
+        identity = _stat_identity(opened)
+        if identity != _stat_identity(initial):
+            _fail(f"{label} identity changed during secure open")
+        _assert_path_identity(path, identity, label=label)
+        keep_fd = True
+        return fd, identity
+    except OSError as exc:
+        _fail(f"{label} snapshot inspection failed: {exc}")
+    finally:
+        if not keep_fd:
+            os.close(fd)
+
+
+def _read_open_snapshot(
+    path: Path,
+    fd: int,
+    expected: tuple[int, int, int, int, int, int],
+    *,
+    limit: int,
+    label: str,
+) -> bytes:
+    """Bind bytes from the held descriptor and require the path still names it."""
+    try:
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode) or _stat_identity(before) != expected:
+            _fail(f"{label} held file identity changed during nested audit")
+        if before.st_size > limit:
+            _fail(f"{label} exceeds {limit} byte limit")
+        _assert_path_identity(path, expected, label=label)
+
+        os.lseek(fd, 0, os.SEEK_SET)
+        first = _read_fd_bounded(fd, limit=limit, label=label)
+        os.lseek(fd, 0, os.SEEK_SET)
+        second = _read_fd_bounded(fd, limit=limit, label=label)
+        after = os.fstat(fd)
+        if first != second:
+            _fail(f"{label} bytes changed during source binding")
+        if _stat_identity(after) != expected:
+            _fail(f"{label} metadata changed during source binding")
+        if len(first) != after.st_size:
+            _fail(f"{label} byte count does not match file size")
+        _assert_path_identity(path, expected, label=label)
+        return first
+    except OSError as exc:
+        _fail(f"{label} held-file read failed: {exc}")
+
 def _regular_size(path: Path, *, label: str) -> int:
     try:
         initial = path.lstat()
@@ -331,16 +436,26 @@ def _expected_replay_players(
 
 
 def audit_manifest_sources(manifest_path: Path) -> dict[str, Any]:
-    try:
-        manifest_receipt = audit_training_manifest(manifest_path)
-    except ManifestAuditError as exc:
-        _fail(f"structural manifest audit failed: {exc}")
-
-    manifest_bytes = _read_regular(
+    manifest_fd, manifest_identity = _open_regular_snapshot(
         manifest_path,
         limit=MAX_LINKED_JSON_BYTES,
         label="manifest",
     )
+    try:
+        try:
+            manifest_receipt = audit_training_manifest(manifest_path)
+        except ManifestAuditError as exc:
+            _fail(f"structural manifest audit failed: {exc}")
+
+        manifest_bytes = _read_open_snapshot(
+            manifest_path,
+            manifest_fd,
+            manifest_identity,
+            limit=MAX_LINKED_JSON_BYTES,
+            label="manifest",
+        )
+    finally:
+        os.close(manifest_fd)
     manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
     if (
         manifest_sha != manifest_receipt["sha256"]
@@ -350,16 +465,26 @@ def audit_manifest_sources(manifest_path: Path) -> dict[str, Any]:
     manifest = _load_json(manifest_bytes, label="manifest")
 
     leaderboard_path = Path(manifest["leaderboard_path"])
-    try:
-        leaderboard_receipt = audit_leaderboard(leaderboard_path)
-    except LeaderboardAuditError as exc:
-        _fail(f"linked leaderboard audit failed: {exc}")
-
-    leaderboard_bytes = _read_regular(
+    leaderboard_fd, leaderboard_identity = _open_regular_snapshot(
         leaderboard_path,
         limit=MAX_LINKED_JSON_BYTES,
         label="linked leaderboard",
     )
+    try:
+        try:
+            leaderboard_receipt = audit_leaderboard(leaderboard_path)
+        except LeaderboardAuditError as exc:
+            _fail(f"linked leaderboard audit failed: {exc}")
+
+        leaderboard_bytes = _read_open_snapshot(
+            leaderboard_path,
+            leaderboard_fd,
+            leaderboard_identity,
+            limit=MAX_LINKED_JSON_BYTES,
+            label="linked leaderboard",
+        )
+    finally:
+        os.close(leaderboard_fd)
     leaderboard_sha = hashlib.sha256(leaderboard_bytes).hexdigest()
     if leaderboard_sha != manifest["leaderboard_sha256"]:
         _fail("linked leaderboard SHA-256 does not match manifest")
