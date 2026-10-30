@@ -1,0 +1,52 @@
+name: Repair on-demand VPS runner pool controller
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portfolio-runner-pool-controller-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: >-
+      github.repository == 'Zennay/Haxlab' &&
+      github.ref == 'refs/heads/main' &&
+      github.actor == 'Zennay' &&
+      github.triggering_actor == 'Zennay' &&
+      github.run_attempt == 1
+    runs-on: [self-hosted, haxlab]
+    timeout-minutes: 8
+    steps:
+      - name: Confirm trusted VPS and operator
+        run: |
+          set -Eeuo pipefail
+          test "$(hostname -s)" = vps-bb300bba
+          test "$(id -un)" = ubuntu
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REPOSITORY" = Zennay/Haxlab
+          test "$GITHUB_ACTOR" = Zennay
+          test "$GITHUB_TRIGGERING_ACTOR" = Zennay
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          sudo -n true
+      - name: Read exact source commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Install and activate resilient pool controller
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          bash -n ops/portfolio_runner_pool.sh
+          sudo -n install -m 0755 ops/portfolio_runner_pool.sh /usr/local/bin/zennay-portfolio-runner-pool
+          sudo -n systemctl reset-failed zennay-portfolio-runner-pool.service
+          sudo -n systemctl enable --now zennay-portfolio-runner-pool.timer
+          sudo -n systemctl start zennay-portfolio-runner-pool.service
+          test "$(systemctl show zennay-portfolio-runner-pool.service -p Result --value)" = success
+          systemctl is-enabled zennay-portfolio-runner-pool.timer
+          systemctl is-active zennay-portfolio-runner-pool.timer
